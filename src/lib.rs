@@ -1,6 +1,10 @@
 //! Dependency foundation for an experimental browser, not a browser implementation.
 //! TLS uses the selected RustCrypto provider explicitly, without global fallback.
 
+pub mod document;
+pub mod net;
+pub mod paint;
+
 /// Build a research TLS client with the caller's trusted roots.
 /// Certificate and hostname verification remain rustls's normal defaults.
 pub fn tls_client_config(

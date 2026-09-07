@@ -1,4 +1,4 @@
-name: Rust dependency foundation
+name: Rust browser checks
 on:
   push:
     branches: [main]
@@ -20,5 +20,23 @@ jobs:
           mkdir -p tmp
           rustc +1.91.1 --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
           tmp/check-dependencies
-      - name: Run dependency smoke tests
+      - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked
+      - name: Build browser and local fixture server
+        run: cargo +1.91.1 build --locked --bins --examples
+      - name: Exercise a local search and result click in an X11 window
+        run: |
+          target/debug/examples/journey_server > tmp/fixture-server.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in 1 2 3 4 5; do
+            if target/debug/examples/net_probe http://127.0.0.1:7878/ > /dev/null; then break; fi
+            sleep 1
+          done
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/ --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/local-journey
+      - name: Preserve rendered local journey
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-browser-journey
+          path: tmp/local-journey

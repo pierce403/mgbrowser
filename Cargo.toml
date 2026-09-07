@@ -6,6 +6,10 @@ rust-version = "1.91"
 publish = false
 description = "Experimental Rust-only browser dependency foundation"
 
+[[bin]]
+name = "mgbrowser"
+path = "src/main.rs"
+
 [dependencies]
 # Never enable rustls's default aws-lc-rs provider or ring.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
@@ -14,4 +18,10 @@ rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", r
 image = { version = "0.25", default-features = false, features = ["png"] }
 fontdue = { version = "0.9", default-features = false }
 rustybuzz = { version = "0.20", default-features = false, features = ["std"] }
-
+url = "2"
+webpki-roots = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Rust X11 protocol implementation: no Xlib/XCB FFI or toolkit renderer.
+x11rb = { version = "0.13", default-features = false }
+psl = "2"
+httpdate = "1"

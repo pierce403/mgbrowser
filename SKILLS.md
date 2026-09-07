@@ -2,6 +2,7 @@
 skills:
   curator: Maintain reusable repository procedures from observed work.
   publish-site: Refresh project status and verify a GitHub Pages release.
+  browser-check: Verify browser components and native interaction against local fixtures and specifically requested live journeys.
 ---
 
 # Skill catalog
@@ -10,3 +11,4 @@ Agents automatically select matching skills from this catalog; open the file bef
 
 - [curator](skills/curator/SKILL.md): when recurring lessons require creating, revising or consolidating procedures.
 - [publish-site](skills/publish-site/SKILL.md): when changing project status, website content or publishing the GitHub Pages site.
+- [browser-check](skills/browser-check/SKILL.md): when changing browser transport, document handling, painting or interaction; distinguishes local fixture evidence from live-site acceptance.

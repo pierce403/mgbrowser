@@ -36,7 +36,7 @@ Evidence: 2026-09-07 both skills passed quick_validate.py; instruction alias tar
 
 ## F-003 — Local document rendering
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -52,9 +52,11 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 - [ ] Repeated headless renders match under a pinned environment.
 - [ ] Linux desktop renders the same document and responds to resize.
 
+Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
+
 ## F-004 — Static web navigation
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -70,11 +72,13 @@ TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEP
 
 - [ ] Local-server tests cover redirects, failures, request/body/time limits and cancellation.
 - [ ] Manual Linux navigation and keyboard-control scenarios pass.
-- [ ] Local TLS handshake fixtures cover trusted/untrusted certificates and hostname mismatch with the selected provider.
+- [x] Local TLS handshake fixtures cover trusted/untrusted certificates and hostname mismatch with the selected provider.
+
+Evidence: 15 transport tests passed for framing, verified TLS/rejection cases, redirects, request/body/time limits and in-memory cookie scope. A real local HTTP form submission/result click completed in the native window. Async navigation ignores stale results and caps requests at two, but lacks a transport cancellation API. Full manual keyboard/history acceptance remains open.
 
 ## F-005 — Styled text and images
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -92,6 +96,8 @@ Font parsing, shaping and rasterization use Rust implementations without native 
 - [ ] Unsupported syntax and malformed input produce bounded, documented behavior.
 - [ ] Unsupported/corrupt image fixtures display a placeholder and preserve surrounding document layout and alt text.
 - [ ] Resolved font/image features contain no native implementations or implicit codec fallback.
+
+Evidence: native frames use rustybuzz/fontdue and show image placeholders/alt text. No page-image downloading or full CSS cascade yet. Current dependency guard passes; this does not satisfy the full fixture corpus.
 
 ## F-006 — Reproducible autoresearch evaluator
 
@@ -135,11 +141,13 @@ Stability: planned
 
 ### Dependencies
 
-F-007; separate engine, isolation and standards roadmap.
+Own language/runtime, DOM integration and execution-boundary roadmap; now required for F-010 before a complete static MVP release.
 
 ### Properties
 
 Future own Rust JavaScript engine and expanded platform support; no embedded existing browser/runtime shortcut.
+
+Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 
 ### Test Criteria
 
@@ -160,4 +168,26 @@ Cargo configuration pins rustls-rustcrypto and explicitly selects Rust font/imag
 - [x] Active Linux normal/build dependency graph passes the native-backend regression guard.
 - [x] GitHub CI reproduces the locked build and dependency checks.
 
-Evidence: local cargo test --locked passed all three smoke tests on 2026-09-07; GitHub Rust run 34121634459 reproduced formatting, dependency guard and smoke tests for 645d30b. docs/DEPENDENCIES.md records the initial build/dependency review. Stable refers to this dependency configuration contract, not production TLS readiness. No handshake or font-rendering validation is claimed.
+Evidence: local cargo test --locked passed all three initial smoke tests on 2026-09-07; GitHub Rust run 34121634459 reproduced formatting, dependency guard and smoke tests for 645d30b. docs/DEPENDENCIES.md records the build/dependency review. Stable refers to this dependency configuration contract, not production TLS readiness. Later handshake and font-rendering evidence is recorded under F-003/F-004 and the daily log.
+
+## F-010 — Google search to first destination
+
+Stability: in-progress
+
+### Dependencies
+
+F-003, F-004, and sufficient F-008 JavaScript/DOM support for the actual served pages.
+
+### Properties
+
+Open our native Rust browser, navigate to google.com, enter and submit a search, display Google's actual results, click the first result and attempt to load its destination. Preserve real TLS validation and the Rust-only implementation policy. A local fixture, different search engine, fabricated result, or troubleshooting link cannot substitute for Google's result.
+
+### Test Criteria
+
+- [x] Native browser window opens and renders the actual Google homepage.
+- [x] The real q field accepts input and submits the served form controls through our HTTP/TLS stack.
+- [x] The browser carries ordinary in-memory cookies and follows bounded standard HTML refreshes.
+- [ ] The actual Google search results render as actionable links.
+- [ ] Clicking the first result navigates to its actual destination, with an observed response or clear load failure.
+
+Evidence: 2026-09-07 native Google journey returned HTTP 200 homepage, submitted “Rust programming language”, and followed the served no-JavaScript refresh to a page titled “Enable JavaScript to use search”. The journey correctly exited 2 because there were no result links. Separately, the explicitly labeled localhost fixture journey completed all stages and exited 0. The user goal is not achieved.

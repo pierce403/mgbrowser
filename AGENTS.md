@@ -2,7 +2,7 @@
 
 ## Purpose and responsibilities
 
-Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. The current phase is planning and project infrastructure; no browser engine exists yet.
+Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. A native Linux HTML-flow browser now exists. The active goal is Google homepage → search → first result → destination, and it remains incomplete because the verified Google response requires JavaScript.
 
 ## Start here
 
@@ -32,7 +32,9 @@ tmp/site --check
 git diff --check
 ```
 
-The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. `Cargo.toml` now defines the experimental dependency foundation; `cargo test --locked` checks its integration smoke tests. The Rust browser and executable research harness are still planned; do not advertise these commands as browser acceptance tests.
+The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked` covers transport, parser, paint and UI state; the local X11 journey exercises the actual application handlers. A local fixture is not evidence that Google returns search results. The general autoresearch executor and JavaScript engine are not implemented.
+
+`src/document.rs` owns HTML parsing, `src/net.rs` owns HTTP/TLS/session cookies, `src/paint.rs` owns Rust shaping/rasterization, and `src/main.rs` owns layout and window/input/navigation. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
 
 ## Collaboration
 
