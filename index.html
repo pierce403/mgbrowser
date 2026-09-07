@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mgbrowser — A browser from the ground up</title>
+  <meta name="description" content="A web browser written from the ground up in Rust. Building toward a static-web MVP with reproducible research and open contribution.">
+  <link rel="canonical" href="https://mgbrowser.org/">
+  <meta name="theme-color" content="#f4f1e9">
+  <style>
+    :root{color-scheme:light;--paper:#f4f1e9;--ink:#242923;--muted:#586052;--line:#cbcdbf;--green:#345c36}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 system-ui,sans-serif}main,header,footer{max-width:1120px;margin:auto;padding:28px 32px}header{display:flex;justify-content:space-between;gap:20px;align-items:center;border-bottom:1px solid var(--line)}a{color:var(--green);text-underline-offset:4px}a:hover{text-decoration-thickness:2px}a:focus-visible{outline:3px solid var(--green);outline-offset:5px}.brand{font:700 24px/1.2 ui-monospace,monospace;text-decoration:none;color:var(--ink)}nav{display:flex;gap:24px;flex-wrap:wrap;font-size:14px}.hero{padding:64px 0 48px;max-width:940px}.eyebrow{font:12px/1.5 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--green)}h1{font-size:clamp(48px,8vw,92px);font-weight:500;letter-spacing:-.065em;line-height:1.02;margin:24px 0}h1 span{color:var(--green)}.intro{font-size:22px;max-width:690px;color:var(--muted)}.links{display:flex;gap:24px;flex-wrap:wrap;margin-top:30px}.button{display:inline-block;background:var(--green);color:white;padding:11px 20px;text-decoration:none;border-radius:3px}.note{padding:20px 24px;border-left:3px solid var(--green);background:#e8ebdf;font-size:15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;padding:40px 0;border-bottom:1px solid var(--line)}h2{font-size:27px;line-height:1.2;letter-spacing:-.03em}h3{font-size:18px}p{max-width:75ch}.muted,footer{color:var(--muted)}ol{padding-left:22px}li{margin:10px 0}.status-list{list-style:none;padding:0}.status-list li{display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line);padding:12px 0;margin:0}.status-list small{font:12px/1.8 ui-monospace,monospace;white-space:nowrap;color:var(--green)}.status{padding:30px 0}footer{font-size:13px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:24px} @media(max-width:650px){main,header,footer{padding:22px}header,footer{align-items:flex-start;flex-direction:column}.hero{padding:36px 0}.intro{font-size:19px}.grid{grid-template-columns:1fr;gap:12px}.status-list li{align-items:flex-start}.status-list span{max-width:70%}nav{gap:18px}}
+  </style>
+</head>
+<body>
+  <header><a class="brand" href="/">mg<span style="color:var(--green)">browser</span></a><nav aria-label="Main navigation"><a href="#plan">The plan</a><a href="#status">Project status</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
+  <main>
+    <section class="hero" aria-labelledby="title"><p class="eyebrow">Independent browser research · Pre-MVP</p><h1 id="title">A browser.<br><span>From the ground up.</span></h1><p class="intro">Written in Rust. Built in the open. Moving forward through small, reproducible experiments that anyone can contribute to.</p><div class="links"><a class="button" href="https://github.com/pierce403/mgbrowser/blob/main/docs/MVP.md">Read the MVP plan ↗</a><a href="https://github.com/pierce403/mgbrowser/blob/main/CONTRIBUTING.md">Help build it</a></div></section>
+    <aside class="note"><strong>We’re at the beginning.</strong> The plan and project infrastructure are taking shape. There is no runnable browser or automated research executor yet.</aside>
+    <section class="grid" id="plan"><div><p class="eyebrow">01 / The engine</p><h2>Own the path from bytes to pixels.</h2><p>Our own HTML parser, document tree, CSS cascade, layout and painting, written in Rust. The proposed first release is a Linux browser for static pages: readable text, images, links and navigation.</p><p class="muted">JavaScript and broad web compatibility follow later. Rust utility dependencies and platform interfaces will have an explicit, reviewed boundary.</p></div><div><p class="eyebrow">02 / The research loop</p><h2>Make progress reproducible.</h2><p>State a hypothesis. Make a focused change. Run a fixed corpus. Keep the evidence. Correctness comes before performance, and every result should be reproducible by another contributor.</p><p class="muted">The planned harness gives humans and agents the same evaluation contract, with bounded runs and review before merging.</p></div></section>
+    <section class="grid"><div><p class="eyebrow">03 / The route to MVP</p><h2>First a page. Then a browser.</h2><ol><li>Define fixtures and render a local document.</li><li>Add styled text, images and web navigation.</li><li>Build the repeatable experiment evaluator.</li><li>Validate, package and release the static-web MVP.</li></ol></div><div><p class="eyebrow">04 / Working in the open</p><h2>Leave a trail others can follow.</h2><p>Feature contracts define what “done” means. Daily logs preserve decisions and failed experiments. Reusable agent skills keep useful procedures close to the code.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/FEATURES.md">Feature specification</a> · <a href="https://github.com/pierce403/mgbrowser/tree/main/memory/logs">Daily logs</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/SKILLS.md">Skills</a></p><p class="muted">Our collaboration workflow draws from <a href="https://recurse.bot">Recurse</a>.</p></div></section>
+    <section class="status" id="status"><p class="eyebrow">The current state</p><h2>Progress, with receipts.</h2>
+<!-- project-status:start -->
+<p class="muted">Latest work log: <time datetime="2026-09-07">2026-09-07</time>. Status comes from the repository’s feature specification.</p>
+<ul class="status-list">
+  <li><span>F-001 — Project foundation and website</span><small>in-progress</small></li>
+  <li><span>F-002 — Agent continuity and reusable skills</span><small>in-progress</small></li>
+  <li><span>F-003 — Local document rendering</span><small>planned</small></li>
+  <li><span>F-004 — Static web navigation</span><small>planned</small></li>
+  <li><span>F-005 — Styled text and images</span><small>planned</small></li>
+  <li><span>F-006 — Reproducible autoresearch evaluator</span><small>planned</small></li>
+  <li><span>F-007 — Linux MVP release</span><small>planned</small></li>
+  <li><span>F-008 — JavaScript and broader compatibility</span><small>planned</small></li>
+</ul>
+<!-- project-status:end -->
+    </section>
+  </main>
+  <footer><span>mgbrowser.org · An independent Rust browser project</span><a href="https://github.com/pierce403/mgbrowser">Follow the work on GitHub ↗</a></footer>
+</body>
+</html>

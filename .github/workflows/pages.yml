@@ -1,0 +1,48 @@
+name: Project website
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate generated status
+        run: |
+          rustup toolchain install 1.91.1 --profile minimal
+          mkdir -p tmp
+          rustc +1.91.1 --edition=2024 tools/site.rs -o tmp/site
+          tmp/site --check
+          git diff --check
+      - name: Stage public files only
+        run: |
+          mkdir -p tmp/public
+          cp index.html CNAME .nojekyll tmp/public/
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: tmp/public
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
