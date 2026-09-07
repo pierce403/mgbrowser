@@ -104,6 +104,120 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_uses_function_and_native_prototypes_before_creating_controls() {
+    // Frozen missing-capability baseline: all prototype/metadata/constructor
+    // gates precede the real form. There are no static controls to fall back to.
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-prototype-worker-baseline".into(),
+        html: include_str!("fixtures/script/prototypes.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("Prototype fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Prototype-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.tag == "button" && node.attr("type") == Some("submit"))
+    );
+    assert!(reply.html.contains("Prototype form ready"));
+}
+
+#[test]
+fn restricted_child_typed_prototype_depth_exhaustion_is_fatal_and_latched() {
+    for operation in [
+        "p.missing;",
+        "p.missing=1;",
+        "'missing' in p;",
+        "for(var field in p){}",
+        "p[key];",
+        "p[key]=1;",
+    ] {
+        let request = mg_deps::js_browser::Request {
+            url: "https://example.test/local-prototype-depth-limit".into(),
+            html: format!(
+                "<html><head><title>Prototype depth fallback</title></head><body><p id=output>Readable prototype fallback</p><script>function User(){{}}var p=Object.create(User);if(Object.getPrototypeOf(p)!==User)throw 'Wrong identity';document.getElementById('output').setAttribute('data-prototype','ready');var key=Symbol('missing');for(var i=0;i<70;i++)p=Object.create(p);try{{{operation}document.title='Incorrect completion';}}catch(error){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>"
+            ),
+        };
+        let input = serde_json::to_vec(&request).unwrap();
+        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        assert!(
+            status.success(),
+            "{operation}: worker {status}: {stdout}\n{stderr}"
+        );
+        let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+        assert!(reply.applied);
+        assert_eq!(reply.scripts_executed, 0, "{operation}: {:?}", reply.errors);
+        assert_eq!(reply.errors.len(), 2, "{operation}: {:?}", reply.errors);
+        let first = reply.errors[0].split_once(": ").unwrap().1;
+        assert!(
+            first.contains("prototype depth limit"),
+            "{operation}: {first}"
+        );
+        assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
+        assert!(reply.navigation.is_none());
+        let report = reply.allocations.unwrap();
+        assert!(report.is_valid());
+        assert!(report.first_rejected.is_none());
+        assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+        let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+        assert_eq!(document.title, "Prototype depth fallback");
+        assert!(document.forms.is_empty());
+        let output = document.query_selector(0, "#output").unwrap().unwrap();
+        assert_eq!(document.nodes[output].attr("data-prototype"), Some("ready"));
+        assert!(reply.html.contains("Readable prototype fallback"));
+    }
+}
+
+#[test]
+fn restricted_child_primitive_prototype_error_preserves_fallback_and_later_script() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-primitive-prototype".into(),
+        html: "<html><head><title>Primitive prototype fallback</title></head><body><p>Readable primitive fallback</p><script>Object.create(7);document.title='Incorrect';location.href='/incorrect';</script><script>document.title='Recovered after prototype error';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        vec![
+            "Inline script 1: Uncaught JavaScript exception: TypeError: prototype must be an object or null"
+        ]
+    );
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Recovered after prototype error");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable primitive fallback"));
+}
+
+#[test]
 fn restricted_child_uses_real_symbols_before_creating_controls() {
     // This exact source previously stopped at ReferenceError: Symbol is not
     // defined. Identity/key/reflection/registry checks precede all form creation.

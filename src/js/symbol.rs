@@ -623,43 +623,6 @@ impl Runtime {
         self.symbol_string(&symbol)
     }
 
-    fn symbol_root(&mut self, value: &Value, create_native: bool) -> Eval<Option<usize>> {
-        Ok(match value {
-            Value::Object(id) => {
-                if *id >= self.objects.len() {
-                    return Err(exception("TypeError: unknown object"));
-                }
-                Some(*id)
-            }
-            Value::Function(id) => Some(
-                self.functions
-                    .get(*id)
-                    .ok_or_else(|| exception("TypeError: unknown function"))?
-                    .properties,
-            ),
-            Value::Native(name) => {
-                if let Some(id) = self.native_properties_id(name)? {
-                    Some(id)
-                } else if create_native {
-                    let id = self.object(Some(self.function_prototype), None)?;
-                    self.budget.allocate(64usize.saturating_add(name.len()))?;
-                    self.native_properties.push((name.clone(), id));
-                    Some(id)
-                } else {
-                    Some(self.function_prototype)
-                }
-            }
-            Value::Symbol(_) => Some(self.symbol_prototype),
-            Value::String(_) => Some(self.string_prototype),
-            Value::Number(_) => Some(self.number_prototype),
-            Value::Bool(_) => Some(self.boolean_prototype),
-            Value::Null | Value::Undefined => {
-                return Err(exception("TypeError: property access on null or undefined"));
-            }
-            Value::Host(_) => return Err(unsupported("Symbol keys on host objects")),
-        })
-    }
-
     pub(super) fn get_key(
         &mut self,
         value: &Value,
@@ -670,20 +633,10 @@ impl Runtime {
             return self.get(value, key.string().unwrap(), host);
         };
         self.admit(&Value::Symbol(symbol.clone()))?;
-        let mut current = self.symbol_root(value, false)?;
-        for _ in 0..MAX_CALLS {
-            self.budget.step()?;
-            let Some(id) = current else {
-                return Ok(Value::Undefined);
-            };
-            if let Some(property) = self.objects[id].properties.iter().find(|p| &p.key == key) {
-                return self.budget.copy(&property.value);
-            }
-            current = self.objects[id].prototype;
+        if matches!(value, Value::Host(_)) {
+            return Err(unsupported("Symbol keys on host objects"));
         }
-        Err(Fault::Fatal(
-            "JavaScript prototype depth limit exhausted".into(),
-        ))
+        self.read_property(value, KeyRef::Symbol(symbol), host)
     }
 
     pub(super) fn set_key(
@@ -708,28 +661,12 @@ impl Runtime {
         if object.primitive() {
             return Ok(());
         }
-        let id = self.symbol_root(&object, true)?.unwrap();
-        let mut current = Some(id);
-        for _ in 0..MAX_CALLS {
-            self.budget.step()?;
-            let Some(owner) = current else {
-                return self.put_symbol(id, symbol, value, true);
-            };
-            if let Some(property) = self.objects[owner]
-                .properties
-                .iter()
-                .find(|p| &p.key == key)
-            {
-                if !property.writable {
-                    return Ok(());
-                }
-                return self.put_symbol(id, symbol, value, true);
-            }
-            current = self.objects[owner].prototype;
+        let owner = self.object_identity(&object)?;
+        if self.readonly_property(owner, KeyRef::Symbol(symbol))? {
+            return Ok(());
         }
-        Err(Fault::Fatal(
-            "JavaScript prototype depth limit exhausted".into(),
-        ))
+        let id = self.identity_storage(owner)?;
+        self.put_symbol(id, symbol, value, true)
     }
 
     pub(super) fn delete_key(&mut self, object: Value, key: &PropertyKey) -> Eval<Value> {
@@ -752,7 +689,8 @@ impl Runtime {
                 return Ok(Value::Bool(true));
             }
         }
-        let id = self.symbol_root(&object, false)?.unwrap();
+        let owner = self.object_identity(&object)?;
+        let id = self.identity_storage(owner)?;
         self.budget.step()?;
         if let Some(index) = self.objects[id]
             .properties
@@ -773,47 +711,32 @@ impl Runtime {
         key: &PropertyKey,
         own_only: bool,
     ) -> Eval<bool> {
-        if let PropertyKey::String(key) = key {
-            let owner = Self::enumeration_owner(object)?;
-            let mut current = Some(owner);
-            for _ in 0..MAX_CALLS {
-                let Some(owner) = current else {
-                    return Ok(false);
-                };
-                if self.enumeration_descriptor(owner, object, key)?.is_some() {
-                    return Ok(true);
-                }
-                if own_only {
-                    return Ok(false);
-                }
-                current = self.enumeration_parent(owner)?;
+        if matches!(object, Value::Host(_)) {
+            return Err(unsupported(if matches!(key, PropertyKey::Symbol(_)) {
+                "Symbol keys on host objects"
+            } else {
+                "property inspection on host objects"
+            }));
+        }
+        if own_only && object.primitive() {
+            return Ok(false);
+        }
+        let key = match key {
+            PropertyKey::String(key) => KeyRef::String(key),
+            PropertyKey::Symbol(key) => KeyRef::Symbol(key),
+        };
+        let mut current = Some(self.object_identity(object)?);
+        for _ in 0..MAX_CALLS {
+            let Some(owner) = current else {
+                return Ok(false);
+            };
+            if self.own_descriptor(owner, key)?.is_some() {
+                return Ok(true);
             }
-        } else {
-            if matches!(object, Value::Host(_)) {
-                return Err(unsupported("Symbol keys on host objects"));
-            }
-            if own_only && object.primitive() {
+            if own_only {
                 return Ok(false);
             }
-            if let Value::Native(name) = object {
-                if own_only && self.native_properties_id(name)?.is_none() {
-                    return Ok(false);
-                }
-            }
-            let mut current = self.symbol_root(object, false)?;
-            for _ in 0..MAX_CALLS {
-                self.budget.step()?;
-                let Some(id) = current else {
-                    return Ok(false);
-                };
-                if self.objects[id].properties.iter().any(|p| &p.key == key) {
-                    return Ok(true);
-                }
-                if own_only {
-                    return Ok(false);
-                }
-                current = self.objects[id].prototype;
-            }
+            current = self.identity_parent(owner)?;
         }
         Err(Fault::Fatal(
             "JavaScript prototype depth limit exhausted".into(),
@@ -855,7 +778,8 @@ impl Runtime {
             false
         };
         if !value.primitive() && !native_missing {
-            let id = self.symbol_root(&value, false)?.unwrap();
+            let owner = self.object_identity(&value)?;
+            let id = self.identity_storage(owner)?;
             for property in &self.objects[id].properties {
                 self.budget.step()?;
                 if let PropertyKey::Symbol(symbol) = &property.key {

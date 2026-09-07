@@ -701,19 +701,20 @@ argument-conversion ordering is not full Web IDL behavior. Reference:
 
 The authored `/script-symbols` fixture is frozen byte-for-byte from its missing-API
 baseline: it previously reported ordinary ReferenceError before creating controls,
-without allocation rejection. It now completes at 57,954 accepted bytes with a
-real query/hidden/submit form. Native and external CDP paths submit its Unicode
-query, follow the local result and reach the destination; frames were inspected.
-The separate negative worker verifies its builder and first Symbol succeeded,
-then rejects Runtime 159,984 after 4,193,241 accepted bytes, with readable fallback
+without allocation rejection. At the Symbol increment it completed at 57,954
+accepted bytes with a real query/hidden/submit form. Native and external CDP paths
+submitted its Unicode query, followed the local result and reached the destination;
+frames were inspected. That increment's separate negative worker verified its
+builder and first Symbol succeeded, then rejected Runtime 159,984 after 4,193,241
+accepted bytes, with readable fallback
 and no catch/finally/later/navigation effects.
 
-All 438 debug tests and 340 selected release checks pass on default stacks,
+That increment passed all 438 debug tests and 340 selected release checks on default stacks,
 including 24 independent Symbol semantics, 14 key and 13 admission/lifetime/limit
 groups, 20 DOM and 26 actual-worker groups. Private cases verify storage allowances,
 Send/Sync, foreign well-known record admission, reserved description capacity,
 real getter copies and preflighted hook argument slots. The full three CI journey
-steps pass locally with 12 native and 12 external CDP destinations. No existing
+steps passed locally with 12 native and 12 external CDP destinations. No existing
 test was weakened; review caught and corrected readonly, coercion-order and
 public transport regressions plus new-copy charge omissions. Native string-key
 deletion retains its existing character-level fuel metering.
@@ -729,3 +730,104 @@ prototype or prove the cause. Next work independently audits object/prototype
 coverage and cumulative storage, without site-source adaptation or raised limits.
 No live script source was an implementation input. Publication evidence is in
 the daily log; local Symbol support does not establish Google acceptance.
+
+### Typed prototype identities
+
+Ordinary objects, user functions and native functions now remain distinct object
+identities when used as prototypes. The private Copy identity stores an ordinary
+object index, user-function index or stable native-identity index; it never exposes
+a function's ordinary property bag as that function. `Object.create(fn)` and
+`Object.getPrototypeOf` round-trip the actual function while the child remains
+noncallable. Function/native-valued constructor `prototype` properties participate
+in `new` and `instanceof` without falling back to `Object.prototype`. Inherited
+getters and coercion hooks retain the original receiver.
+
+Shared iterative owner/descriptor helpers cover string and Symbol reads, readonly
+writes, `in`, enumeration and constructor traversal. Native enumeration owners
+carry their actual identity rather than a root-only sentinel, so inherited native
+virtual metadata and stored fields agree with reads. The existing snapshot/shadow
+policy is unchanged. Virtual readonly String/RegExp/function/native metadata takes
+precedence over stored writable fields; deleting or shadowing a child's ordinary
+property does not mutate its prototype.
+
+First traversal/prototype use of a native identity retains one UTF-8 name and an
+ordinary property bag, precharging the existing 64-byte record allowance plus
+name length and 128-byte object allowance before retention. Stable repeated use
+does not re-admit that record. Native-name matching spends shared fuel; returning
+`Value::Native` from `getPrototypeOf` charges its real name copy. Generated native
+method names and UTF-16 function-name results are also preflighted before allocation.
+Unknown public native names may retain identity without gaining callable or Host
+authority. Native records consume the existing object cap; allocation/fuel failures
+remain fatal and latched across handlers and later calls/scripts.
+
+Measured x86_64 layouts are unchanged in allowance: Object 104 bytes, Property
+64 bytes, typed identity and optional identity 16 bytes each, native table record
+32 bytes, and public Value 32 bytes. The optional identity is the same size as the
+prior optional object index. Existing 128-byte object/property and 64-byte native
+record allowances still cover these layouts; this is logical accounting, not RSS.
+No allocation, fuel, object, parser, worker or other existing cap was raised.
+
+Exact legacy traversal edges are preserved, including their existing differences:
+
+| Operation | Existing bounded traversal policy |
+| --- | --- |
+| Ordinary/native string read | Own fields, then up to 64 ancestors; a hit at the final ancestor succeeds, but an unresolved final walk is fatal even if it just reached null |
+| User-function/primitive-wrapper string read; Symbol read; `in` | Up to 64 owners including the root; a final-owner hit succeeds, but unresolved exhaustion is fatal |
+| String readonly-write guard; for-in enumeration | Up to 64 owners including the root; terminal null after the final owner is accepted |
+| Symbol readonly-write guard | Up to 64 owners including the root; unresolved exhaustion remains fatal, including terminal null |
+| `instanceof` | Up to 64 ancestors of the left object, excluding itself; unresolved exhaustion remains fatal |
+| `getPrototypeOf`; own-only reflection | One parent, or own fields only; no ancestor-chain walk |
+
+Primitive string out-of-range indexed reads also retain their existing immediate
+undefined behavior. These boundary distinctions are regression-tested rather than
+silently normalized by increasing a shared limit.
+
+The ES5-style `Object.getPrototypeOf` policy still rejects primitives/null/undefined
+without boxing or coercion, now explicitly with TypeError. `Object.create` checks
+prototype type before rejecting unsupported descriptors. A primitive left side of
+`instanceof` returns false before accessing the constructor's prototype. Host
+prototypes, mutable prototypes, proxies, full descriptors and custom
+`Symbol.hasInstance` remain unsupported; `Function.prototype` is still the existing
+noncallable object. Existing coercion/Host exceptions may be strings rather than
+Error objects, so their readable TypeError text is not an `error.name` guarantee.
+No parser, AST, dependency, TLS, worker authority or CDP behavior was expanded.
+References: ES5.1 [Object.create](https://262.ecma-international.org/5.1/#sec-15.2.3.5),
+[Object.getPrototypeOf](https://262.ecma-international.org/5.1/#sec-15.2.3.2),
+[function construction](https://262.ecma-international.org/5.1/#sec-13.2.2), and
+[[HasInstance]](https://262.ecma-international.org/5.1/#sec-15.3.5.3).
+
+All 492 debug tests and 394 selected release checks pass on default stacks,
+including 24 independent prototype semantics groups, 17 prototype resource/boundary
+groups and eight new private layout/admission/copy regressions, plus 22 DOM and
+29 actual-worker groups. Formatting and locked binary/example builds pass. No old
+test assertion was weakened. One new DOM test was corrected to the existing
+string exception representation, retaining all hook-effect/content/navigation
+assertions; that did not expand Error-object fidelity.
+
+The frozen 2,382-byte authored fixture is now `tests/fixtures/script/prototypes.html`,
+served at `/script-prototypes`. Before implementation it stopped at
+`Object.create(User)`: ordinary TypeError, preserved fallback, zero forms/inputs/
+navigation, no heap rejection and 69,851 accepted bytes. Its unchanged SHA-256 is
+`b917aa23d76bda209589c70d4f7a3f92fd050410b0194d6076c9348aa9f0ca2d`. Actual-worker
+acceptance now completes one script without errors at 78,118 accepted bytes
+(Bootstrap 19,773, Source 2,348, Ast 42,130, FunctionCode 390, Runtime 13,477),
+creating the real controls. Separate cases cover depth failures and ordinary
+TypeError recovery. All three exact CI journey steps pass locally with 13 native
+and 13 external CDP destination successes. The new form submits its actual Unicode
+query and hidden `source=fixture`, follows the local result and reaches HTTP 200
+at the destination; the native query and CDP destination frames were inspected.
+This is generic correctness work, not evidence of Google's supplied prototype
+argument or a promise to complete its live journey.
+
+Exactly one post-prototype live checkpoint submitted the actual Google form over
+verified TLS. Homepage HTTP 200 retained 26 items/one form, three completed scripts/
+seven errors and no allocation rejection (2,506,470 accepted bytes). Search HTTP
+200 still had zero items/forms, two completed scripts/three errors: the same first
+`TypeError: prototype must be an object or null`, then Ast 387,500 rejected after
+4,107,727 accepted bytes and repeated by the next script. The inspected search
+frame remained blank; exit 2, no result or destination. This change has no observed
+benefit on that leading live diagnostic, whose supplied argument and cause remain
+unknown. Changing responses are not controlled benchmarks. Further builtin/
+prototype correctness and storage proposals require independent authored cases;
+no live-source inspection or additional retry was used. Publication remains
+pending for this increment.

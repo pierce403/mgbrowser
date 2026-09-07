@@ -617,6 +617,70 @@ fn symbol_host_keys_fail_explicitly_instead_of_aliasing_string_properties() {
 }
 
 #[test]
+fn dom_conversion_uses_original_receiver_through_function_and_native_prototypes() {
+    for prototype in ["User", "Array"] {
+        let reply = page(
+            "",
+            "",
+            &format!(
+                r#"
+            function User(){{}}
+            var parent={prototype};
+            var value=Object.create(parent);value.text='Inherited Rust & café';
+            parent[Symbol.toPrimitive]=function(hint){{
+                if(this!==value || hint!=='string')throw 'Wrong inherited receiver';
+                return this.text;
+            }};
+            document.getElementById('output').textContent=value;
+            value.text='Inherited title';document.title=value;
+            value.text='/prototype-destination';location.href=value;
+        "#
+            ),
+        );
+        assert!(reply.errors.is_empty(), "{prototype}: {:?}", reply.errors);
+        assert_eq!(reply.scripts_executed, 1);
+        assert_eq!(
+            reply.navigation.as_deref(),
+            Some("https://example.test/prototype-destination")
+        );
+        assert!(reply.allocations.unwrap().first_rejected.is_none());
+        let doc = rendered(&reply);
+        assert_eq!(doc.title, "Inherited title");
+        assert_eq!(content(&doc, "#output"), "Inherited Rust & café");
+        readable(&doc);
+    }
+}
+
+#[test]
+fn inherited_function_prototype_hook_failure_keeps_dom_target_unchanged() {
+    for prototype in ["User", "Array"] {
+        let reply = page(
+            "",
+            "",
+            &format!(
+                r#"
+            function User(){{}}
+            var parent={prototype};var value=Object.create(parent);
+            parent[Symbol.toPrimitive]=function(hint){{
+                if(this!==value || hint!=='string')throw 'Wrong inherited receiver';
+                document.title='Hook ran';return Symbol('not DOM text');
+            }};
+            try{{document.getElementById('output').textContent=value;location.href='/incorrect';}}
+            catch(error){{if(String(error)!=='TypeError: cannot convert Symbol to string')throw error;}}
+        "#
+            ),
+        );
+        assert!(reply.errors.is_empty(), "{prototype}: {:?}", reply.errors);
+        assert!(reply.navigation.is_none());
+        assert!(reply.allocations.unwrap().first_rejected.is_none());
+        let doc = rendered(&reply);
+        assert_eq!(doc.title, "Hook ran");
+        assert_eq!(content(&doc, "#output"), "Unchanged output");
+        readable(&doc);
+    }
+}
+
+#[test]
 fn fatal_dom_coercion_cannot_run_handlers_or_a_later_script() {
     let reply = page(
         "",

@@ -18,8 +18,11 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
+#[path = "prototype.rs"]
+mod prototype;
 #[path = "symbol.rs"]
 mod symbol;
+use prototype::KeyRef;
 pub use symbol::SymbolHandle;
 use symbol::{Hint, PropertyKey};
 
@@ -388,16 +391,17 @@ struct Property {
 struct Object {
     properties: Vec<Property>,
     array: Option<Vec<Option<Value>>>,
-    prototype: Option<usize>,
+    prototype: Option<PrototypeIdentity>,
     boxed: Option<Value>,
     regexp: Option<Rc<regexp::Regex>>,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EnumerationOwner {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrototypeIdentity {
     Object(usize),
     Function(usize),
-    Native,
+    Native(usize),
 }
+type EnumerationOwner = PrototypeIdentity;
 struct EnumerationEntry {
     owner: EnumerationOwner,
     key: String,
@@ -1000,6 +1004,13 @@ impl Runtime {
     }
 
     fn object(&mut self, prototype: Option<usize>, array: Option<PrepaidArray>) -> Eval<usize> {
+        self.object_with_prototype(prototype.map(PrototypeIdentity::Object), array)
+    }
+    fn object_with_prototype(
+        &mut self,
+        prototype: Option<PrototypeIdentity>,
+        array: Option<PrepaidArray>,
+    ) -> Eval<usize> {
         if self.objects.len() >= MAX_OBJECTS {
             return Err(Fault::Fatal("JavaScript object limit exhausted".into()));
         }
@@ -1116,14 +1127,8 @@ impl Runtime {
             .map(|property| self.budget.copy(&property.value))
             .transpose()
     }
-    fn enumeration_owner(value: &Value) -> Eval<EnumerationOwner> {
-        match value {
-            Value::Object(id) => Ok(EnumerationOwner::Object(*id)),
-            Value::Function(id) => Ok(EnumerationOwner::Function(*id)),
-            Value::Native(_) => Ok(EnumerationOwner::Native),
-            Value::Host(_) => Err(unsupported("for-in enumeration of host objects")),
-            _ => Err(exception("TypeError: enumeration requires an object")),
-        }
+    fn enumeration_owner(&mut self, value: &Value) -> Eval<EnumerationOwner> {
+        self.object_identity(value)
     }
     fn native_properties_id(&mut self, name: &str) -> Eval<Option<usize>> {
         for (existing, id) in &self.native_properties {
@@ -1144,13 +1149,7 @@ impl Runtime {
         Ok(false)
     }
     fn enumeration_parent(&mut self, owner: EnumerationOwner) -> Eval<Option<EnumerationOwner>> {
-        self.budget.step()?;
-        let prototype = match owner {
-            EnumerationOwner::Object(id) => self.objects[id].prototype,
-            EnumerationOwner::Function(id) => self.objects[self.functions[id].properties].prototype,
-            EnumerationOwner::Native => Some(self.function_prototype),
-        };
-        Ok(prototype.map(EnumerationOwner::Object))
+        self.identity_parent(owner)
     }
     fn enumeration_object_keys(
         &mut self,
@@ -1189,7 +1188,7 @@ impl Runtime {
     fn enumeration_own_keys(
         &mut self,
         owner: EnumerationOwner,
-        root: &Value,
+        _root: &Value,
         entries: &mut Vec<EnumerationEntry>,
     ) -> Eval<()> {
         self.budget.step()?;
@@ -1200,15 +1199,10 @@ impl Runtime {
                 enumeration_add(&mut self.budget, entries, owner, "name", false)?;
                 self.enumeration_object_keys(self.functions[id].properties, owner, entries)
             }
-            EnumerationOwner::Native => {
-                let Value::Native(name) = root else {
-                    return Err(Fault::Fatal("Invalid native enumeration owner".into()));
-                };
-                if let Some(id) = self.native_properties_id(name)? {
-                    self.enumeration_object_keys(id, owner, entries)?;
-                }
-                for key in native_virtual_names(name) {
-                    if self.native_property_deleted(name, key)? {
+            EnumerationOwner::Native(native) => {
+                self.enumeration_object_keys(self.native_properties[native].1, owner, entries)?;
+                for key in native_virtual_names(&self.native_properties[native].0) {
+                    if self.native_identity_deleted(native, key)? {
                         continue;
                     }
                     enumeration_add(&mut self.budget, entries, owner, key, false)?;
@@ -1217,73 +1211,15 @@ impl Runtime {
             }
         }
     }
-    fn enumeration_object_descriptor(&mut self, id: usize, key: &str) -> Eval<Option<bool>> {
-        self.budget.step()?;
-        let object = &self.objects[id];
-        if let Some(Value::String(units)) = &object.boxed {
-            if key == "length" {
-                return Ok(Some(false));
-            }
-            if array_index(key).is_some_and(|index| index < units.len()) {
-                return Ok(Some(true));
-            }
-        }
-        if let Some(array) = &object.array {
-            if key == "length" {
-                return Ok(Some(false));
-            }
-            if let Some(index) = array_index(key)
-                && array.get(index).is_some_and(Option::is_some)
-            {
-                return Ok(Some(true));
-            }
-        }
-        for property in &object.properties {
-            let Some(name) = property.key.string() else {
-                continue;
-            };
-            if enumeration_equal(&mut self.budget, name, key)? {
-                return Ok(Some(property.enumerable));
-            }
-        }
-        Ok(None)
-    }
     fn enumeration_descriptor(
         &mut self,
         owner: EnumerationOwner,
-        root: &Value,
+        _root: &Value,
         key: &str,
     ) -> Eval<Option<bool>> {
-        self.budget.step()?;
-        match owner {
-            EnumerationOwner::Object(id) => self.enumeration_object_descriptor(id, key),
-            EnumerationOwner::Function(id) => {
-                if matches!(key, "name" | "length") {
-                    return Ok(Some(false));
-                }
-                self.enumeration_object_descriptor(self.functions[id].properties, key)
-            }
-            EnumerationOwner::Native => {
-                let Value::Native(name) = root else {
-                    return Err(Fault::Fatal("Invalid native enumeration owner".into()));
-                };
-                if let Some(id) = self.native_properties_id(name)?
-                    && let Some(enumerable) = self.enumeration_object_descriptor(id, key)?
-                {
-                    return Ok(Some(enumerable));
-                }
-                for native_key in native_virtual_names(name) {
-                    if enumeration_equal(&mut self.budget, native_key, key)? {
-                        return Ok(if self.native_property_deleted(name, key)? {
-                            None
-                        } else {
-                            Some(false)
-                        });
-                    }
-                }
-                Ok(None)
-            }
-        }
+        Ok(self
+            .own_descriptor(owner, KeyRef::String(key))?
+            .map(|d| d.enumerable))
     }
     fn enumeration_snapshot(&mut self, root: &Value) -> Eval<Vec<EnumerationEntry>> {
         // Deterministic research policy: snapshot first-visible owner/key pairs,
@@ -1292,7 +1228,7 @@ impl Runtime {
         // visiting; deletion/new shadowing skips it. Delete+readd on the same
         // owner before visitation may visit the replacement property.
         let mut entries = Vec::new();
-        let mut current = Some(Self::enumeration_owner(root)?);
+        let mut current = Some(self.enumeration_owner(root)?);
         for _ in 0..MAX_CALLS {
             let Some(owner) = current else {
                 return Ok(entries);
@@ -1313,7 +1249,7 @@ impl Runtime {
         root: &Value,
         key: &str,
     ) -> Eval<Option<(EnumerationOwner, bool)>> {
-        let mut current = Some(Self::enumeration_owner(root)?);
+        let mut current = Some(self.enumeration_owner(root)?);
         for _ in 0..MAX_CALLS {
             let Some(owner) = current else {
                 return Ok(None);
@@ -2418,11 +2354,13 @@ impl Runtime {
         if !matches!(callee, Value::Function(_)) {
             return Err(exception("TypeError: value is not a constructor"));
         }
-        let prototype = match self.get(&callee, "prototype", host)? {
-            Value::Object(id) => id,
-            _ => self.object_prototype,
+        let prototype = self.get(&callee, "prototype", host)?;
+        let prototype = if prototype.primitive() {
+            PrototypeIdentity::Object(self.object_prototype)
+        } else {
+            self.object_identity(&prototype)?
         };
-        let object = Value::Object(self.object(Some(prototype), None)?);
+        let object = Value::Object(self.object_with_prototype(Some(prototype), None)?);
         let receiver = self.copy(&object)?;
         let result = self.call(callee, receiver, args, None, host)?;
         Ok(if result.primitive() { object } else { result })
@@ -2445,182 +2383,27 @@ impl Runtime {
 
     fn get(&mut self, value: &Value, key: &str, host: &mut impl Host) -> Eval<Value> {
         self.budget.step()?;
-        let prototype = match value {
-            Value::Undefined | Value::Null => {
-                return Err(exception("TypeError: property access on null or undefined"));
-            }
-            Value::Host(object) => {
-                let value = host.get(object, key).map_err(exception)?;
-                self.admit(&value)?;
-                self.budget.allocate(value_bytes(&value))?;
-                return Ok(value);
-            }
-            Value::Object(id) => {
-                if let Some(value) = self.get_own_value(*id, key, value, host)? {
-                    return Ok(value);
-                }
-                if let Some(Value::String(units)) = &self.objects[*id].boxed {
-                    if key == "length" {
-                        return Ok(Value::Number(units.len() as f64));
-                    }
-                    if let Some(index) = array_index(key)
-                        && let Some(unit) = units.get(index).copied()
-                    {
-                        return self.string(vec![unit]);
-                    }
-                }
-                self.objects[*id].prototype
-            }
-            Value::Function(id) => {
-                let function = self
-                    .functions
-                    .get(*id)
-                    .ok_or_else(|| exception("TypeError: unknown function"))?;
-                if key == "length" {
-                    return Ok(Value::Number(function.code.params.len() as f64));
-                }
-                if key == "name" {
-                    let name = function.code.name.clone().unwrap_or_default();
-                    return self.text(&name);
-                }
-                Some(function.properties)
-            }
-            Value::String(units) => {
-                if key == "length" {
-                    return Ok(Value::Number(units.len() as f64));
-                }
-                if let Some(index) = array_index(key) {
-                    return match units.get(index) {
-                        Some(unit) => self.string(vec![*unit]),
-                        None => Ok(Value::Undefined),
-                    };
-                }
-                Some(self.string_prototype)
-            }
-            Value::Number(_) => Some(self.number_prototype),
-            Value::Bool(_) => Some(self.boolean_prototype),
-            Value::Symbol(_) => Some(self.symbol_prototype),
-            Value::Native(name) => {
-                if let Some((_, object)) = self
-                    .native_properties
-                    .iter()
-                    .find(|(existing, _)| existing == name)
-                {
-                    let object = *object;
-                    if let Some(value) = self.get_own_value(object, key, value, host)? {
-                        return Ok(value);
-                    }
-                }
-                if self.native_property_deleted(name, key)? {
-                    return self.get(&Value::Object(self.function_prototype), key, host);
-                }
-                if key == "name" {
-                    return self.text(match name.as_str() {
-                        "Symbol.toPrimitive" => "[Symbol.toPrimitive]",
-                        "Symbol.description" => "get description",
-                        _ => name.rsplit('.').next().unwrap_or(name),
-                    });
-                }
-                if key == "prototype" && native_virtual_names(name).contains(&"prototype") {
-                    return Ok(match name.as_str() {
-                        "Object" => Value::Object(self.object_prototype),
-                        "Array" => Value::Object(self.array_prototype),
-                        "Function" => Value::Object(self.function_prototype),
-                        "String" => Value::Object(self.string_prototype),
-                        "Number" => Value::Object(self.number_prototype),
-                        "Boolean" => Value::Object(self.boolean_prototype),
-                        "RegExp" => Value::Object(self.regexp_prototype),
-                        "Symbol" => Value::Object(self.symbol_prototype),
-                        _ => Value::Undefined,
-                    });
-                }
-                if matches!(
-                    (name.as_str(), key),
-                    ("Array", "isArray")
-                        | ("String", "fromCharCode")
-                        | (
-                            "Object",
-                            "keys"
-                                | "create"
-                                | "getPrototypeOf"
-                                | "getOwnPropertyNames"
-                                | "getOwnPropertySymbols"
-                        )
-                        | ("Number", "isNaN" | "isFinite" | "isInteger")
-                ) {
-                    return Ok(Value::Native(format!("{name}.{key}")));
-                }
-                if key == "length" {
-                    return Ok(Value::Number(
-                        if name == "Symbol"
-                            || matches!(
-                                name.as_str(),
-                                "Symbol.toString" | "Symbol.valueOf" | "Symbol.description"
-                            )
-                        {
-                            0.0
-                        } else if matches!(name.as_str(), "parseInt" | "RegExp") {
-                            2.0
-                        } else if name == "RegExp.toString" {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    ));
-                }
-                Some(self.function_prototype)
-            }
-        };
-        let mut current = prototype;
-        for _ in 0..MAX_CALLS {
-            let Some(id) = current else {
-                return Ok(Value::Undefined);
-            };
-            if let Some(value) = self.get_own_value(id, key, value, host)? {
-                return Ok(value);
-            }
-            current = self.objects[id].prototype;
+        if let Value::Host(object) = value {
+            let value = host.get(object, key).map_err(exception)?;
+            self.admit(&value)?;
+            self.budget.allocate(value_bytes(&value))?;
+            return Ok(value);
         }
-        Err(Fault::Fatal(
-            "JavaScript prototype depth limit exhausted".into(),
-        ))
+        if let Value::String(units) = value {
+            if key == "length" {
+                return Ok(Value::Number(units.len() as f64));
+            }
+            if let Some(index) = array_index(key) {
+                return match units.get(index) {
+                    Some(unit) => self.string(vec![*unit]),
+                    None => Ok(Value::Undefined),
+                };
+            }
+        }
+        self.read_property(value, KeyRef::String(key), host)
     }
     fn inherited_readonly(&mut self, id: usize, key: &str) -> Eval<bool> {
-        let index = array_index(key);
-        let mut current = Some(id);
-        for _ in 0..MAX_CALLS {
-            self.budget.step()?;
-            let Some(id) = current else {
-                return Ok(false);
-            };
-            let object = &self.objects[id];
-            if object.regexp.is_some()
-                && matches!(key, "source" | "global" | "ignoreCase" | "multiline")
-            {
-                return Ok(true);
-            }
-            if let Some(Value::String(units)) = &object.boxed
-                && (key == "length" || index.is_some_and(|index| index < units.len()))
-            {
-                return Ok(true);
-            }
-            if let Some(property) = object.properties.iter().find(|p| p.key == key) {
-                return Ok(!property.writable);
-            }
-            let parent = object.prototype;
-            // Any nearer ordinary own descriptor stops the inherited search.
-            if self.enumeration_object_descriptor(id, key)?.is_some() {
-                return Ok(false);
-            }
-            current = parent;
-        }
-        if current.is_none() {
-            Ok(false)
-        } else {
-            Err(Fault::Fatal(
-                "JavaScript prototype depth limit exhausted".into(),
-            ))
-        }
+        self.readonly_property(PrototypeIdentity::Object(id), KeyRef::String(key))
     }
     fn set(&mut self, object: Value, key: &str, value: Value, host: &mut impl Host) -> Eval<()> {
         self.budget.step()?;
@@ -2704,6 +2487,9 @@ impl Runtime {
                     .get(id)
                     .ok_or_else(|| exception("TypeError: unknown function"))?
                     .properties;
+                if self.readonly_property(PrototypeIdentity::Function(id), KeyRef::String(key))? {
+                    return Ok(());
+                }
                 self.put_own(object, key, value, true)
             }
             Value::Native(name) => {
@@ -2712,18 +2498,11 @@ impl Runtime {
                     return Ok(());
                 }
                 let enumerable = !virtual_key || self.native_property_deleted(&name, key)?;
-                let object = if let Some((_, id)) = self
-                    .native_properties
-                    .iter()
-                    .find(|(existing, _)| *existing == name)
-                {
-                    *id
-                } else {
-                    let id = self.object(Some(self.function_prototype), None)?;
-                    self.budget.allocate(64 + name.len())?;
-                    self.native_properties.push((name, id));
-                    id
-                };
+                let native = self.native_identity(&name)?;
+                if self.readonly_property(PrototypeIdentity::Native(native), KeyRef::String(key))? {
+                    return Ok(());
+                }
+                let object = self.native_properties[native].1;
                 self.put_own(object, key, value, enumerable)
             }
             Value::Null | Value::Undefined => Err(exception(
@@ -2930,16 +2709,18 @@ impl Runtime {
                         "TypeError: right side of instanceof is not callable",
                     ));
                 }
-                let Value::Object(target) = self.get(&right, "prototype", host)? else {
+                if left.primitive() {
+                    return Ok(Value::Bool(false));
+                }
+                let prototype = self.get(&right, "prototype", host)?;
+                if prototype.primitive() {
                     return Err(exception(
                         "TypeError: constructor prototype is not an object",
                     ));
-                };
-                let mut current = match left {
-                    Value::Object(id) => self.objects[id].prototype,
-                    Value::Function(id) => Some(self.functions[id].properties),
-                    _ => None,
-                };
+                }
+                let target = self.object_identity(&prototype)?;
+                let left = self.object_identity(&left)?;
+                let mut current = self.identity_parent(left)?;
                 for _ in 0..MAX_CALLS {
                     let Some(id) = current else {
                         return Ok(Value::Bool(false));
@@ -2947,7 +2728,7 @@ impl Runtime {
                     if id == target {
                         return Ok(Value::Bool(true));
                     }
-                    current = self.objects[id].prototype;
+                    current = self.identity_parent(id)?;
                 }
                 return Err(Fault::Fatal(
                     "JavaScript prototype depth limit exhausted".into(),
@@ -3366,7 +3147,7 @@ impl Runtime {
             "Object.keys" | "Object.getOwnPropertyNames" => {
                 let owner = match &first {
                     Value::Object(_) | Value::Function(_) | Value::Native(_) => {
-                        Self::enumeration_owner(&first)?
+                        self.enumeration_owner(&first)?
                     }
                     _ => return Err(unsupported("Object keys on primitive/host values")),
                 };
@@ -3385,26 +3166,28 @@ impl Runtime {
                 ))
             }
             "Object.create" => {
+                if first.primitive() && !matches!(first, Value::Null) {
+                    return Err(exception("TypeError: prototype must be an object or null"));
+                }
                 if args.len() > 1 && !matches!(args[1], Value::Undefined) {
                     return Err(unsupported("Object.create property descriptors"));
                 }
                 let prototype = match first {
                     Value::Null => None,
-                    Value::Object(id) => Some(id),
+                    Value::Object(_) | Value::Function(_) | Value::Native(_) => {
+                        Some(self.object_identity(&first)?)
+                    }
+                    Value::Host(_) => return Err(unsupported("host prototype identities")),
                     _ => return Err(exception("TypeError: prototype must be an object or null")),
                 };
-                Ok(Value::Object(self.object(prototype, None)?))
+                Ok(Value::Object(self.object_with_prototype(prototype, None)?))
             }
             "Object.getPrototypeOf" => {
-                let id = match first {
-                    Value::Object(id) => id,
-                    Value::Function(id) => self.functions[id].properties,
-                    _ => return Err(unsupported("getPrototypeOf on primitive/host values")),
-                };
-                Ok(self.objects[id]
-                    .prototype
-                    .map(Value::Object)
-                    .unwrap_or(Value::Null))
+                let owner = self.object_identity(&first)?;
+                match self.identity_parent(owner)? {
+                    Some(prototype) => self.identity_value(prototype),
+                    None => Ok(Value::Null),
+                }
             }
             "String.fromCharCode" => {
                 let mut units = Vec::new();

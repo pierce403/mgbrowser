@@ -30,10 +30,13 @@ charged. Compact AST statements and capacity-aware storage accounting now let a
 20,000-statement function fit while correctly charging holes and spare capacity.
 Genuine Symbol primitives now support distinct property keys, registry lookup,
 boxing, reflection and implemented coercion hooks, including fallible DOM string
-conversion. All 438 debug tests and 340 selected release checks pass locally,
-alongside 12 native and 12 external CDP journeys. Ingress, real-copy and resource
-limits remain intact. Google's missing-Symbol diagnostic is gone, but a prototype
-type error and a later allocation rejection still leave no actionable results.
+conversion. Functions and native builtins now retain genuine prototype identity,
+including inherited metadata and Symbol keys, construction and instanceof.
+All 492 debug tests and 394 selected release checks pass locally, alongside
+13 native and 13 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt still reports the same prototype type
+error and a later allocation rejection, with no actionable results; the generic
+prototype correction did not resolve that served response.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

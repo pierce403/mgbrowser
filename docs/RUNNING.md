@@ -263,13 +263,31 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-symbols \
   --evidence-dir tmp/symbol-journey
 ```
 
-Its unchanged missing-API baseline now completes in the actual worker at 57,954
-accepted bytes. Native and external CDP paths submit the query/hidden field and
-reach the local destination; frames inspected. All 438 debug tests, 340 selected
-release checks and the three exact CI journey steps pass locally (12 native and
-12 external CDP destinations). Ordinary Symbol-to-DOM conversion errors preserve
+At the Symbol increment its unchanged missing-API baseline completed in the actual
+worker at 57,954 accepted bytes. Native and external CDP paths submitted the
+query/hidden field and reached the local destination; frames inspected. That
+increment passed all 438 debug tests, 340 selected release checks and the three
+exact CI journey steps locally (12 native and 12 external CDP destinations).
+Ordinary Symbol-to-DOM conversion errors preserve
 the mutation target and allow later scripts; fatal cumulative creation still
 stops catch/finally/later execution. See JAVASCRIPT.md for exact scope and limits.
+
+`/script-prototypes` creates its form only after checking genuine user/native
+prototype identity, inherited metadata and Symbol keys, and function-valued
+constructor prototypes:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-prototypes \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/prototypes-journey
+```
+
+The unchanged fixture completes at 78,118 accepted bytes in the actual restricted
+worker. All 492 debug tests, 394 selected release checks and three exact CI journey
+steps pass locally (13 native/13 external CDP destinations). Its query/hidden field
+submits normally and the actual local result is clicked; native query and CDP
+destination frames were inspected. Exact legacy traversal limits and all caps
+remain, with separate fatal depth and ordinary error/recovery checks.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
@@ -293,6 +311,13 @@ followed by an AST rejection requesting 387,964 after 4,107,538 accepted bytes.
 Exit 2, no actual result or destination. The message does not establish which
 prototype value was supplied. Next is independent object/prototype correctness
 and cumulative-storage work; real DOM events and timers are also still missing.
+
+The post-typed-prototype checkpoint still reports that same leading TypeError.
+Actual form submission works, but search HTTP 200 remains blank with two completed
+scripts/three errors; Ast 387,500 is rejected after 4,107,727 accepted bytes and
+the later script repeats that failure. Exit 2, no result or destination. The
+generic correction has no observed benefit on the leading live diagnostic;
+further builtin prototype and storage work requires independent authored cases.
 
 ## Browser automation
 
@@ -355,11 +380,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-symbols tmp/cdp-symbol-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-prototypes tmp/cdp-prototypes-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST and Symbol
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol and typed-prototype
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -369,7 +397,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><title>Prototype worker baseline</title></head><body>
+<p id="status">Prototype baseline fallback.</p>
+<script>
+function User(first,second){}
+function C(){}
+function D(){}
+var child=Object.create(User);
+if(Object.getPrototypeOf(child)!==User || Object.getPrototypeOf(User)!==Function.prototype || typeof child!=='object') throw 'User prototype identity check failed';
+User.visible='user field';
+var key=Symbol('metadata');
+User[key]='symbol field';
+if(child.visible!=='user field' || child.length!==2 || child.name!=='User' || child.prototype!==User.prototype || child[key]!=='symbol field' || !(key in child) || child.hasOwnProperty(key)) throw 'Inherited user metadata check failed';
+var inherited='';
+for(var name in child) inherited+=name+',';
+if(inherited!=='visible,' || Object.keys(child).length!==0 || Object.getOwnPropertySymbols(child).length!==0) throw 'Inherited enumeration check failed';
+var nativeChild=Object.create(Array);
+Array.visible='native field';
+Array[key]='native symbol';
+if(Object.getPrototypeOf(nativeChild)!==Array || Object.getPrototypeOf(Array)!==Function.prototype || nativeChild.visible!=='native field' || nativeChild.prototype!==Array.prototype || nativeChild.length!==Array.length || !nativeChild.isArray([]) || nativeChild[key]!=='native symbol') throw 'Native prototype metadata check failed';
+C.prototype=User;
+var made=new C();
+if(Object.getPrototypeOf(made)!==User || !(made instanceof C) || made.visible!=='user field' || made[key]!=='symbol field') throw 'Function-valued constructor prototype check failed';
+D.prototype=Array;
+var nativeMade=new D();
+if(Object.getPrototypeOf(nativeMade)!==Array || !(nativeMade instanceof D) || nativeMade[key]!=='native symbol') throw 'Native-valued constructor prototype check failed';
+document.title='Prototype-built local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var source=document.createElement('input');
+source.type='hidden';
+source.name='source';
+source.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(source);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Prototype form ready';
+</script></body></html>
