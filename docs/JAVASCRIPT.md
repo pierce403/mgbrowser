@@ -989,3 +989,81 @@ comparison or a guarantee that one more change will finish compatibility. Next
 is independent cumulative-storage ownership diagnosis; the last rejected phase
 is not automatically the best optimization target. No live-source inspection,
 adaptation or retry. Exact publication evidence follows in the daily log.
+
+### Empty arguments snapshot storage
+
+The implemented storage change defers only an arguments snapshot whose actual
+argument list is empty. A real nondeletable local binding is installed after
+formal parameters and before existing hoisting, retaining the original callee
+identity privately. Any binding read, including typeof, void, member access and
+direct eval, materializes the existing branded empty object and callee property
+once. Successful replacement cancels the pending value without reading it;
+metadata-only lookup, bare declarations and unsuccessful deletion preserve it.
+Nonempty lists, including a single explicit undefined, retain their current
+prepaid slots, parameter copies and snapshot construction. A formal named
+arguments retains the existing suppression behavior. Scope, identity, callee,
+prototype and the documented unmapped/indexed-length approximations do not change.
+References: [declaration binding](https://262.ecma-international.org/5.1/#sec-10.5)
+and [arguments objects](https://262.ecma-international.org/5.1/#sec-10.6).
+
+The environment and real binding still pay their existing 128 and 137 bytes.
+The 128-byte object and 134-byte callee property are admitted only when actually
+created. The existing callee-property fuel step also moves to that point; there
+is no new artificial step or cap. Materialization publishes only after complete
+success. Failed admission remains fatal/latched, retains earlier effects and
+already accepted orphan storage, and skips handlers/later work. This explicitly
+defers resource-failure timing, not JavaScript value behavior. Unread/replaced
+snapshots do not consume nonexistent object/callee allocations or object counts.
+The private pending callee id increases Binding from 64 to 80 bytes; Environment
+remains 48 bytes and Object 112, all within their existing 128-byte allowances.
+Bootstrap remains 25,854 bytes. No public Value variant, retained nonempty Vec,
+collector, limit increase, worker permission, dependency or CDP expansion is
+included.
+
+Before implementation, the frozen 1,576-byte local worker fixture attempted
+8,500 empty calls, then checks actual snapshot/eval identity and builds all form
+controls. It rejected Runtime 137 after 4,194,254 accepted bytes, retaining fallback
+and no controls. The unchanged tests/fixtures/script/empty-arguments.html now
+completes one script without errors and creates the actual query/hidden/submit
+controls at 2,317,555 accepted bytes: Bootstrap 25,854, Source 1,653, Ast 26,790,
+FunctionCode 407 and Runtime 2,262,851, regex zero. Baseline and completion execute
+different amounts of work; these totals are not an equal-work performance or RSS
+comparison.
+
+The authored public-invoke control now measures 265 Runtime bytes per unread
+empty call, compared with the frozen baseline's 527. First read pays the remaining
+262 exactly once; repeated reads preserve object identity without another object
+or callee charge. Nonempty costs remain unchanged. A separate actual-worker
+control that reads every snapshot still exhausts the unchanged 4 MiB budget:
+Runtime 137 is rejected after 4,194,207 accepted bytes. Its earlier snapshot-ready
+DOM marker survives, but catch/finally/later-script effects and navigation do not.
+Focused private/resource cases separately verify first-read object 128 and callee
+134 admission failures without publishing a partial binding value.
+
+All 29 independent semantic groups pass against both the pinned old library and
+the implementation, alongside 14 independent resource and seven private groups.
+They cover read/replace/delete/hoisting and eval scope, brand/callee/identity,
+retained environments, exact charging and fatal preflight. The focused integration
+run passes 28 DOM and 40 actual-worker groups, including ordinary-error recovery.
+Frozen default-stack gates pass 659 debug tests (29 summaries) and 561 selected
+release checks (20 summaries); no existing assertion or cap was weakened.
+Evidence is in ignored tmp/empty-arguments-final-tests.log,
+tmp/empty-arguments-final-release.log and tmp/empty-arguments-integration-tests.log.
+All three exact CI journey steps pass locally under unchanged deadlines, with
+16 native and 16 external CDP destinations. The new form submits its actual
+Unicode query/hidden/submit fields; stale-node/session and 1100×683 destination
+PNG checks pass. Root inspected query/destination frames and checked port cleanup.
+Exact-SHA publication evidence follows separately in the daily log.
+
+One bounded post-change Google attempt still fails. Homepage HTTP 200 retains
+26 items/one form, three completed scripts/seven errors and no allocation rejection
+(2,505,994 accepted bytes). Actual served-form submission works with verified TLS
+and ordinary cookies. Search HTTP 200/title Google Search has zero items/forms
+and two completed scripts/three errors repeating Runtime 128 rejected after
+4,194,254 accepted bytes against 4,194,304. Accepted phases are Bootstrap 25,854,
+Source 132,384, Ast 2,438,297, FunctionCode 22,016 and Runtime 1,575,703, regex zero.
+Exit 2/JOURNEY_INCOMPLETE; blank frame inspected, no result/destination or newly
+completed live stage. These local results do not establish Google's actual call
+distribution; changing served responses are not a controlled benchmark. Further
+ownership work needs independent authored measurements, with no raised limits or
+live-source inspection/adaptation/retry.

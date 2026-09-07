@@ -774,6 +774,62 @@ fn concat_preserves_host_node_identity_and_drives_dom_text_title_navigation() {
 }
 
 #[test]
+fn empty_snapshot_read_through_eval_preserves_identity_and_drives_dom() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        function build(){
+            var a=eval('arguments');
+            if(a.length!==0 || a.callee!==build || a!==arguments)throw 'Snapshot identity failed';
+            document.getElementById('output').textContent='Rust & café';
+            document.title='Empty arguments DOM ready';
+            location.href='/empty-arguments-destination';
+        }
+        build();
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/empty-arguments-destination")
+    );
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Empty arguments DOM ready");
+    assert_eq!(content(&document, "#output"), "Rust & café");
+    readable(&document);
+}
+
+#[test]
+fn replaced_empty_arguments_preserve_symbol_rejection_at_dom_boundary() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        function replace(){
+            arguments=Symbol('replacement');
+            try{document.getElementById('output').textContent=arguments;location.href='/incorrect';}
+            catch(error){if(String(error)!=='TypeError: cannot convert Symbol to string')throw error;}
+            document.title='Replaced arguments stay values';
+        }
+        replace();
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Replaced arguments stay values");
+    assert_eq!(content(&document, "#output"), "Unchanged output");
+    readable(&document);
+}
+
+#[test]
 fn concat_keeps_symbol_values_until_dom_conversion_rejects_without_mutation() {
     let reply = page(
         "",

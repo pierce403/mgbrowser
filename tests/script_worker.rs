@@ -139,6 +139,92 @@ fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
     assert!(reply.html.contains("Authored local concat form ready"));
 }
 
+fn empty_arguments_reply(html: &str) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-empty-arguments-worker-baseline".into(),
+        html: html.into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    (reply, document)
+}
+
+#[test]
+fn restricted_child_empty_calls_create_form_after_frozen_storage_workload() {
+    let (reply, document) =
+        empty_arguments_reply(include_str!("fixtures/script/empty-arguments.html"));
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("empty-arguments fixture allocation: {report:?}");
+    assert!(report.first_rejected.is_none());
+    assert_eq!(document.title, "Empty-arguments local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(document.nodes.iter().any(|node| node.tag == "button"
+        && node.attr("type") == Some("submit")
+        && node.attr("name") == Some("submit")
+        && node.attr("value") == Some("search")));
+    assert!(
+        reply
+            .html
+            .contains("Authored local empty-arguments form ready")
+    );
+}
+
+#[test]
+fn restricted_child_empty_snapshot_ordinary_exception_allows_later_recovery() {
+    let (reply, document) = empty_arguments_reply(
+        "<html><head><title>Empty arguments fallback</title></head><body><p id=output>Readable empty arguments fallback</p><script>function failing(){if(arguments.length!==0)throw 'Snapshot failed';throw TypeError('authored empty snapshot');}failing();document.title='Incorrect completion';location.href='/incorrect';</script><script>function recovering(){var a=arguments;if(a.callee!==recovering || a.length!==0)throw 'Recovery snapshot failed';document.title='Empty arguments recovered';document.getElementById('output').textContent='Recovered after materialized snapshot';}recovering();</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+    assert!(reply.errors[0].contains("TypeError: authored empty snapshot"));
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert_eq!(document.title, "Empty arguments recovered");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Recovered after materialized snapshot"));
+}
+
+#[test]
+fn restricted_child_observed_empty_snapshots_still_fail_fatally_at_heap_limit() {
+    let (reply, document) = empty_arguments_reply(
+        "<html><head><title>Observed arguments fallback</title></head><body><p id=output>Readable observed arguments fallback</p><script>function observed(){return arguments;}var first=observed();if(first.length!==0 || first.callee!==observed)throw 'First snapshot failed';document.getElementById('output').setAttribute('data-snapshot','ready');try{for(var index=0;index<8500;index++){observed();}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("observed empty-arguments rejection: {report:?}");
+    assert_eq!(
+        report.first_rejected.unwrap().phase,
+        mg_deps::js::runtime::AllocationPhase::Runtime
+    );
+    let diagnostic = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(diagnostic.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, diagnostic);
+    assert_eq!(document.title, "Observed arguments fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-snapshot"), Some("ready"));
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable observed arguments fallback"));
+}
+
 #[test]
 fn restricted_child_concat_null_receiver_is_ordinary_and_later_script_recovers() {
     let request = mg_deps::js_browser::Request {

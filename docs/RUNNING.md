@@ -330,6 +330,34 @@ journey steps passing locally (15 native/15 external CDP destinations). Root
 inspected the real query and destination frames. This is application-handler
 and public CDP verification, not physical keyboard or Google acceptance.
 
+`/script-empty-arguments` is the authored empty-snapshot storage fixture. It
+completes 8,500 zero-argument calls without reading their arguments bindings,
+then checks distinct snapshot identities, the original callee, Arguments brand,
+Object.prototype parent, one explicit undefined argument and direct-eval reads.
+Only after those checks does it create the actual query, hidden and submit controls:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-empty-arguments \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/empty-arguments-journey
+```
+
+The unchanged page now passes its actual-worker check at 2,317,555 accepted
+bytes under the same 4,194,304-byte cumulative limit. Its old-worker baseline
+stopped before creating any form at 4,194,254 accepted bytes, rejecting a
+137-byte Runtime charge. These runs complete different amounts of work, so this
+is not a controlled performance or process-memory benchmark. Only empty snapshots
+are deferred; observed snapshots and all nonempty lists retain their real storage
+and existing behavior. All 659 debug tests and 561 selected release checks pass
+locally with unchanged limits. All three exact CI journey steps also pass locally,
+with 16 native destinations and 16 external CDP successes. The new client journey
+submits the actual Unicode query, hidden and submit fields, rejects stale nodes,
+clicks the local first result and verifies a 1100×683 destination PNG and flattened
+session. Root inspected the native query and CDP destination frames; owned
+fixture/debugger ports were released. This verifies application handlers and the
+external CDP path, not physical keyboard input or Google acceptance. The separate
+post-change live checkpoint below still fails.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
@@ -376,6 +404,14 @@ after 4,194,294 accepted bytes, requesting 128 against the 4,194,304 limit. Exit
 no result/destination; blank frame inspected. Unsupported concat is absent in this
 response, not a controlled benchmark. Next is independent cumulative-storage
 ownership diagnosis without raised limits or adapting live page source.
+
+The post-empty-arguments checkpoint again submits the actual form. Homepage HTTP
+200 has 26 items/one form and no rejected allocation (2,505,994 accepted bytes).
+Search HTTP 200 remains blank, with two completed scripts/three errors repeating
+Runtime 128 rejected after 4,194,254 accepted bytes against the same 4,194,304
+limit. Exit 2, no result or destination; blank frame inspected. No new live
+journey stage completed. Continue independently measured storage/ownership work;
+this changing response is not a controlled benchmark or a reason to raise caps.
 
 ## Browser automation
 
@@ -447,11 +483,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-concat tmp/cdp-concat-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-empty-arguments tmp/cdp-empty-arguments-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family and concat
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family, concat and empty-arguments
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -461,7 +500,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

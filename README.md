@@ -36,11 +36,14 @@ Six existing Error families now have genuine prototypes and instances, ordered
 string conversion and bounded callback-free host diagnostics.
 Generic Array.concat now preserves one-level spreading, inherited reads, holes
 and identity, with distinct Array/Arguments branding and prepaid result storage.
-All 604 debug tests and 506 selected release checks pass locally, alongside
-15 native and 15 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt no longer reports unsupported concat,
-but stops at the unchanged 4 MiB cumulative allocation limit, with no actionable
-results. Next is independently measured storage-ownership work.
+Empty-only arguments snapshots now materialize on first read, preserving identity
+and scope while avoiding unused objects. An authored 8,500-call page now creates
+its real form under the same cap; observed snapshots still pay their full cost.
+All 659 debug tests and 561 selected release checks pass locally, alongside
+16 native and 16 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt still stops at the unchanged 4 MiB
+cumulative allocation limit, with no actionable results or new completed live
+stage. Next is independently measured storage-ownership work.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

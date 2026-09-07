@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><title>Empty arguments worker baseline</title></head><body>
+<p id="status">Authored local empty-arguments fixture fallback.</p>
+<script>
+function work(){return 7;}
+for(var count=0;count<8500;count++){
+  if(work()!==7)throw 'Empty call result changed';
+}
+function snapshot(){return arguments;}
+var first=snapshot();
+var second=snapshot();
+var nonempty=snapshot(undefined);
+if(first===second || first.length!==0 || first.callee!==snapshot || Array.isArray(first) || Object.getPrototypeOf(first)!==Object.prototype || Object.prototype.toString.call(first)!=='[object Arguments]')throw 'Empty snapshot identity failed';
+if(nonempty.length!==1 || !nonempty.hasOwnProperty('0') || nonempty[0]!==undefined)throw 'Nonempty snapshot changed';
+function throughEval(){return eval('arguments');}
+var evaluated=throughEval();
+if(evaluated.length!==0 || evaluated.callee!==throughEval)throw 'Eval snapshot failed';
+document.title='Empty-arguments local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var hidden=document.createElement('input');
+hidden.type='hidden';
+hidden.name='source';
+hidden.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.name='submit';
+go.value='search';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(hidden);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local empty-arguments form ready';
+</script></body></html>

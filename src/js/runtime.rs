@@ -18,6 +18,8 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
+#[path = "arguments.rs"]
+mod arguments;
 #[path = "array.rs"]
 mod array;
 #[path = "error.rs"]
@@ -499,6 +501,9 @@ struct Binding {
     name: String,
     value: Value,
     deletable: bool,
+    // Only an empty actual argument list can have this private pending value.
+    // The ordinary binding exists immediately; no public Value or Vec is kept.
+    pending_empty_arguments: Option<usize>,
 }
 struct Code {
     name: Option<String>,
@@ -1319,13 +1324,16 @@ impl Runtime {
         if environment == 0 {
             return Ok(self.own(0, name)?.unwrap_or(Value::Undefined));
         }
-        let value = self.environments[environment]
+        let Some(index) = self.environments[environment]
             .bindings
             .iter()
-            .find(|binding| binding.name == name)
-            .map(|binding| &binding.value)
-            .unwrap_or(&Value::Undefined);
-        self.budget.copy(value)
+            .position(|binding| binding.name == name)
+        else {
+            return self.budget.copy(&Value::Undefined);
+        };
+        self.materialize_empty_arguments(environment, index)?;
+        self.budget
+            .copy(&self.environments[environment].bindings[index].value)
     }
     fn define(&mut self, environment: usize, name: &str, value: Value) -> Eval<()> {
         if environment == 0 {
@@ -1357,12 +1365,14 @@ impl Runtime {
         let bindings = &mut self.environments[environment].bindings;
         if let Some(previous) = bindings.iter_mut().find(|binding| binding.name == name) {
             previous.value = value;
+            previous.pending_empty_arguments = None;
         } else {
             self.budget.allocate(128 + name.len())?;
             bindings.push(Binding {
                 name: name.into(),
                 value,
                 deletable: false,
+                pending_empty_arguments: None,
             });
         }
         Ok(())
@@ -2949,21 +2959,25 @@ impl Runtime {
                     )?;
                 }
                 if !code.params.iter().any(|name| name == "arguments") {
-                    // Parameter copies/bindings above remain independent. The
-                    // incoming Vec<Value> cannot be assumed to reuse storage as
-                    // Vec<Option<Value>>: pay these new slots, then move payloads.
-                    let mut items = PrepaidArray::with_slots(
-                        &mut self.budget,
-                        args.len(),
-                        AllocationPhase::Runtime,
-                    )?;
-                    for arg in args {
-                        items.push_owned(&mut self.budget, Some(arg))?;
+                    if args.is_empty() {
+                        self.defer_empty_arguments(environment, id)?;
+                    } else {
+                        // Parameter copies/bindings above remain independent. The
+                        // incoming Vec<Value> cannot be assumed to reuse storage as
+                        // Vec<Option<Value>>: pay these new slots, then move payloads.
+                        let mut items = PrepaidArray::with_slots(
+                            &mut self.budget,
+                            args.len(),
+                            AllocationPhase::Runtime,
+                        )?;
+                        for arg in args {
+                            items.push_owned(&mut self.budget, Some(arg))?;
+                        }
+                        let arguments = self.object(Some(self.object_prototype), Some(items))?;
+                        self.objects[arguments].arguments = true;
+                        self.put_own(arguments, "callee", Value::Function(id), false)?;
+                        self.define(environment, "arguments", Value::Object(arguments))?;
                     }
-                    let arguments = self.object(Some(self.object_prototype), Some(items))?;
-                    self.objects[arguments].arguments = true;
-                    self.put_own(arguments, "callee", Value::Function(id), false)?;
-                    self.define(environment, "arguments", Value::Object(arguments))?;
                 }
                 self.hoist(&code.body, environment, environment, false)?;
                 match self.statements(&code.body, environment, &this, host)? {
