@@ -147,7 +147,7 @@ Future own Rust JavaScript engine and expanded platform support; no embedded exi
 
 ## F-009 — Experimental Rust dependency foundation
 
-Stability: in-progress
+Stability: stable
 
 ### Properties
 
@@ -158,6 +158,6 @@ Cargo configuration pins rustls-rustcrypto and explicitly selects Rust font/imag
 - [x] Locked dependencies compile and TLS client construction succeeds with the explicit provider.
 - [x] PNG round-trip succeeds, a disabled codec is rejected, and Rust font APIs reject invalid font input.
 - [x] Active Linux normal/build dependency graph passes the native-backend regression guard.
-- [ ] GitHub CI reproduces the locked build and dependency checks.
+- [x] GitHub CI reproduces the locked build and dependency checks.
 
-Evidence: local cargo test --locked passed all three smoke tests on 2026-09-07; docs/DEPENDENCIES.md records the initial build/dependency review. No handshake or font-rendering validation is claimed.
+Evidence: local cargo test --locked passed all three smoke tests on 2026-09-07; GitHub Rust run 34121634459 reproduced formatting, dependency guard and smoke tests for 645d30b. docs/DEPENDENCIES.md records the initial build/dependency review. Stable refers to this dependency configuration contract, not production TLS readiness. No handshake or font-rendering validation is claimed.
