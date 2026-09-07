@@ -1,7 +1,7 @@
 //! Explicit browser capabilities for the isolated original JavaScript interpreter.
 use crate::{
     document::{self, Document, Node},
-    js::runtime::{Host, Runtime, Value},
+    js::runtime::{AllocationReport, Host, Runtime, Value},
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,8 @@ pub struct Reply {
     pub navigation: Option<String>,
     pub errors: Vec<String>,
     pub scripts_executed: usize,
+    /// Fixed-size realm diagnostics, absent if rejected before runtime creation.
+    pub allocations: Option<AllocationReport>,
 }
 
 struct BrowserHost {
@@ -44,6 +46,7 @@ pub fn execute(request: Request) -> Reply {
         navigation: None,
         errors: Vec::new(),
         scripts_executed: 0,
+        allocations: None,
     };
     if request.html.len() > MAX_SOURCE || request.url.len() > 16_384 {
         reply
@@ -185,6 +188,7 @@ pub fn execute(request: Request) -> Reply {
             }
         }
     }
+    reply.allocations = Some(runtime.allocation_report());
     match host.serialize(0, true) {
         Ok(html) => {
             reply.html = html;
@@ -930,6 +934,9 @@ mod tests {
             |i| matches!(i,document::Item::Input{name,value,..} if name=="q"&&value=="Rust & café")
         ));
         assert_eq!(doc.forms[0].action, "http://localhost/search");
+        let allocations = reply.allocations.unwrap();
+        assert!(allocations.is_valid());
+        assert!(allocations.first_rejected.is_none());
     }
     #[test]
     fn scripts_share_a_realm_and_load_callbacks_run() {
@@ -1016,6 +1023,7 @@ mod tests {
         assert!(!reply.applied);
         assert_eq!(reply.html, html);
         assert!(reply.navigation.is_none());
+        assert!(reply.allocations.unwrap().is_valid());
         assert!(
             reply
                 .errors
@@ -1030,5 +1038,6 @@ mod tests {
         });
         assert!(!reply.applied);
         assert_eq!(reply.scripts_executed, 0);
+        assert!(reply.allocations.is_none());
     }
 }

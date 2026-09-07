@@ -29,6 +29,117 @@ const MAX_ARRAY: usize = 10_000;
 const MAX_ACTIVE_EXPRESSIONS: usize = 128;
 const MAX_EVALUATION_ENTRIES: usize = 384;
 
+/// Exclusive logical charge sites, not allocator RSS or inclusive call stacks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AllocationPhase {
+    Bootstrap,
+    Source,
+    Ast,
+    FunctionCode,
+    Runtime,
+    RegexCompile,
+    RegexResult,
+}
+impl AllocationPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bootstrap => "bootstrap",
+            Self::Source => "source",
+            Self::Ast => "ast",
+            Self::FunctionCode => "function_code",
+            Self::Runtime => "runtime",
+            Self::RegexCompile => "regex_compile",
+            Self::RegexResult => "regex_result",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationTotals {
+    pub bootstrap: u64,
+    pub source: u64,
+    pub ast: u64,
+    pub function_code: u64,
+    /// Includes shared object/property storage and ordinary value copies, even
+    /// when called by source conversion or regex code. Callbacks keep their own
+    /// charge attribution rather than inheriting a caller's phase.
+    pub runtime: u64,
+    pub regex_compile: u64,
+    pub regex_result: u64,
+}
+impl AllocationTotals {
+    fn counter(&mut self, phase: AllocationPhase) -> &mut u64 {
+        match phase {
+            AllocationPhase::Bootstrap => &mut self.bootstrap,
+            AllocationPhase::Source => &mut self.source,
+            AllocationPhase::Ast => &mut self.ast,
+            AllocationPhase::FunctionCode => &mut self.function_code,
+            AllocationPhase::Runtime => &mut self.runtime,
+            AllocationPhase::RegexCompile => &mut self.regex_compile,
+            AllocationPhase::RegexResult => &mut self.regex_result,
+        }
+    }
+    fn total(self) -> Option<u64> {
+        [
+            self.bootstrap,
+            self.source,
+            self.ast,
+            self.function_code,
+            self.runtime,
+            self.regex_compile,
+            self.regex_result,
+        ]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RejectedAllocation {
+    pub phase: AllocationPhase,
+    pub accepted_bytes: u64,
+    pub requested_bytes: u64,
+    pub limit_bytes: u64,
+}
+impl RejectedAllocation {
+    fn fault(self) -> Fault {
+        Fault::Fatal(format!(
+            "JavaScript allocation budget exhausted: phase={} accepted={} requested={} limit={}",
+            self.phase.label(),
+            self.accepted_bytes,
+            self.requested_bytes,
+            self.limit_bytes
+        ))
+    }
+}
+
+/// Fixed-size host diagnostics with no script text, names, URLs or event history.
+/// Accepted charges are cumulative; rejection never advances these totals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationReport {
+    pub limit_bytes: u64,
+    pub accepted_bytes: u64,
+    pub phases: AllocationTotals,
+    pub first_rejected: Option<RejectedAllocation>,
+}
+impl AllocationReport {
+    /// Check a transferred report without allocating or trusting reported caps.
+    pub fn is_valid(&self) -> bool {
+        self.limit_bytes == MAX_HEAP as u64
+            && self.accepted_bytes <= self.limit_bytes
+            && self.phases.total() == Some(self.accepted_bytes)
+            && self.first_rejected.is_none_or(|rejected| {
+                rejected.limit_bytes == self.limit_bytes
+                    && rejected.accepted_bytes == self.accepted_bytes
+                    && rejected.requested_bytes > self.limit_bytes - self.accepted_bytes
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Undefined,
@@ -103,6 +214,9 @@ struct Budget {
     calls: usize,
     active_expressions: usize,
     evaluation_entries: usize,
+    allocations: AllocationTotals,
+    first_rejected: Option<RejectedAllocation>,
+    bootstrapping: bool,
 }
 impl Budget {
     fn enter_evaluation(&mut self, expression: bool) -> Eval<()> {
@@ -129,13 +243,30 @@ impl Budget {
         Ok(())
     }
     fn allocate(&mut self, bytes: usize) -> Eval<()> {
+        self.allocate_in(AllocationPhase::Runtime, bytes)
+    }
+    fn allocate_in(&mut self, phase: AllocationPhase, bytes: usize) -> Eval<()> {
+        if let Some(rejected) = self.first_rejected {
+            return Err(rejected.fault());
+        }
+        let phase = if self.bootstrapping {
+            AllocationPhase::Bootstrap
+        } else {
+            phase
+        };
         let total = self.allocated.saturating_add(bytes);
         if total > MAX_HEAP {
-            return Err(Fault::Fatal(
-                "JavaScript allocation budget exhausted".into(),
-            ));
+            let rejected = RejectedAllocation {
+                phase,
+                accepted_bytes: self.allocated as u64,
+                requested_bytes: bytes as u64,
+                limit_bytes: MAX_HEAP as u64,
+            };
+            self.first_rejected = Some(rejected);
+            return Err(rejected.fault());
         }
         self.allocated = total;
+        *self.allocations.counter(phase) += bytes as u64;
         Ok(())
     }
     fn copy(&mut self, value: &Value) -> Eval<Value> {
@@ -245,8 +376,8 @@ struct Binding {
 }
 struct Code {
     name: Option<String>,
-    params: Vec<String>,
-    body: Vec<Stmt>,
+    params: Rc<[String]>,
+    body: Rc<[Stmt]>,
 }
 struct Function {
     code: Rc<Code>,
@@ -345,6 +476,12 @@ impl Runtime {
                 calls: 0,
                 active_expressions: 0,
                 evaluation_entries: 0,
+                allocations: AllocationTotals {
+                    bootstrap: 128,
+                    ..AllocationTotals::default()
+                },
+                first_rejected: None,
+                bootstrapping: true,
             },
             fatal: None,
             random: 0x9e3779b97f4a7c15,
@@ -489,7 +626,17 @@ impl Runtime {
                 false,
             )
             .expect("fixed bootstrap");
+        runtime.budget.bootstrapping = false;
         runtime
+    }
+
+    pub fn allocation_report(&self) -> AllocationReport {
+        AllocationReport {
+            limit_bytes: MAX_HEAP as u64,
+            accepted_bytes: self.budget.allocated as u64,
+            phases: self.budget.allocations,
+            first_rejected: self.budget.first_rejected,
+        }
     }
 
     pub fn set_global(&mut self, name: &str, value: Value) {
@@ -556,10 +703,13 @@ impl Runtime {
             return Err(error.clone());
         }
         let result = (|| {
-            self.budget
-                .allocate(128usize.saturating_add(source.len()))?;
+            self.budget.allocate_in(
+                AllocationPhase::Source,
+                128usize.saturating_add(source.len()),
+            )?;
             let Program(statements) = self.parse_result(syntax::parse(source))?;
-            self.budget.allocate(
+            self.budget.allocate_in(
+                AllocationPhase::Ast,
                 statements
                     .iter()
                     .map(statement_bytes)
@@ -648,7 +798,7 @@ impl Runtime {
             };
             length = length.saturating_add(character.len_utf8());
         }
-        self.budget.allocate(length)?;
+        self.budget.allocate_in(AllocationPhase::Source, length)?;
         String::from_utf16(units).map_err(|_| exception("SyntaxError: invalid UTF-16 source"))
     }
 
@@ -663,9 +813,10 @@ impl Runtime {
             return Ok(input);
         };
         let source = self.utf8_source(&units)?;
-        self.budget.allocate(128)?;
+        self.budget.allocate_in(AllocationPhase::Source, 128)?;
         let Program(statements) = self.parse_result(syntax::parse(&source))?;
-        self.budget.allocate(
+        self.budget.allocate_in(
+            AllocationPhase::Ast,
             statements
                 .iter()
                 .map(statement_bytes)
@@ -682,18 +833,20 @@ impl Runtime {
     }
 
     fn dynamic_function(&mut self, args: Vec<Value>, host: &mut impl Host) -> Eval<Value> {
-        self.budget.allocate(args.len().saturating_mul(32))?;
+        self.budget
+            .allocate_in(AllocationPhase::Source, args.len().saturating_mul(32))?;
         let mut parts = Vec::with_capacity(args.len());
         // Complete every ToString before any parameter/body grammar validation.
         for argument in args {
-            parts.push(self.units(argument, host)?);
+            parts.push(self.units_in(argument, host, AllocationPhase::Source)?);
         }
         let body = parts.pop().unwrap_or_default();
         let length = parts
             .iter()
             .map(Vec::len)
             .fold(parts.len().saturating_sub(1), usize::saturating_add);
-        self.budget.allocate(length.saturating_mul(2))?;
+        self.budget
+            .allocate_in(AllocationPhase::Source, length.saturating_mul(2))?;
         let mut parameters = Vec::with_capacity(length);
         for (index, part) in parts.into_iter().enumerate() {
             if index != 0 {
@@ -703,9 +856,10 @@ impl Runtime {
         }
         let parameters = self.utf8_source(&parameters)?;
         let body = self.utf8_source(&body)?;
-        self.budget.allocate(128)?;
+        self.budget.allocate_in(AllocationPhase::Source, 128)?;
         let parsed = self.parse_result(syntax::parse_function(&parameters, &body))?;
-        self.budget.allocate(expression_bytes(&parsed))?;
+        self.budget
+            .allocate_in(AllocationPhase::Ast, expression_bytes(&parsed))?;
         let Expr::Function { name, params, body } = parsed else {
             return Err(Fault::Fatal(
                 "Invalid dynamic function parser result".into(),
@@ -1125,20 +1279,19 @@ impl Runtime {
     fn function(
         &mut self,
         name: Option<&String>,
-        params: &[String],
-        body: &[Stmt],
+        params: &Rc<[String]>,
+        body: &Rc<[Stmt]>,
         environment: usize,
         self_named: bool,
     ) -> Eval<Value> {
         if self.functions.len() >= MAX_OBJECTS {
             return Err(Fault::Fatal("JavaScript function limit exhausted".into()));
         }
-        let bytes = body
-            .iter()
-            .map(statement_bytes)
-            .fold(128usize, usize::saturating_add)
-            .saturating_add(params.iter().map(|p| p.len() + 32).sum::<usize>());
-        self.budget.allocate(bytes)?;
+        // Each parse already paid for the immutable slices. A closure owns only
+        // fresh instance metadata and its display name, not another code copy.
+        let bytes = 128usize.saturating_add(name.map_or(0, String::len));
+        self.budget
+            .allocate_in(AllocationPhase::FunctionCode, bytes)?;
         let environment = if self_named && name.is_some() {
             self.environment(environment, false)?
         } else {
@@ -1150,8 +1303,8 @@ impl Runtime {
         self.functions.push(Function {
             code: Rc::new(Code {
                 name: name.cloned(),
-                params: params.to_vec(),
-                body: body.to_vec(),
+                params: Rc::clone(params),
+                body: Rc::clone(body),
             }),
             environment,
             properties,
@@ -2504,12 +2657,21 @@ impl Runtime {
         Ok(primitive_number(&self.primitive(value, true, host)?))
     }
     fn units(&mut self, value: Value, host: &mut impl Host) -> Eval<Vec<u16>> {
+        self.units_in(value, host, AllocationPhase::Runtime)
+    }
+    fn units_in(
+        &mut self,
+        value: Value,
+        host: &mut impl Host,
+        phase: AllocationPhase,
+    ) -> Eval<Vec<u16>> {
         let value = self.primitive(value, false, host)?;
         match value {
             Value::String(units) => Ok(units),
             other => {
                 let text = other.as_text();
-                self.budget.allocate(text.len().saturating_mul(2))?;
+                self.budget
+                    .allocate_in(phase, text.len().saturating_mul(2))?;
                 Ok(text.encode_utf16().collect())
             }
         }
@@ -2754,7 +2916,53 @@ impl Runtime {
         mut args: Vec<Value>,
         host: &mut impl Host,
     ) -> Eval<Value> {
-        let first = self.copy(args.first().unwrap_or(&Value::Undefined))?;
+        // Forwarding branches own their arguments and do not use this copy.
+        // Copy only for branches that actually consume `first`; argument
+        // expression evaluation and user coercion order remain unchanged.
+        let needs_first = matches!(
+            name,
+            "encodeURI"
+                | "encodeURIComponent"
+                | "decodeURI"
+                | "decodeURIComponent"
+                | "RegExp.exec"
+                | "RegExp.test"
+                | "String"
+                | "Number"
+                | "Boolean"
+                | "Object"
+                | "Array.isArray"
+                | "Function.apply"
+                | "Object.hasOwnProperty"
+                | "Object.keys"
+                | "Object.getOwnPropertyNames"
+                | "Object.create"
+                | "Object.getPrototypeOf"
+                | "Number.isNaN"
+                | "Number.isFinite"
+                | "Number.isInteger"
+                | "isNaN"
+                | "isFinite"
+                | "parseInt"
+                | "parseFloat"
+                | "Error"
+                | "TypeError"
+                | "RangeError"
+                | "ReferenceError"
+                | "URIError"
+                | "SyntaxError"
+                | "Number.toString"
+                | "Number.toFixed"
+        ) || (name == "Array"
+            && args.len() == 1
+            && matches!(args.first(), Some(Value::Number(_))))
+            || (name.starts_with("Math.")
+                && !matches!(name, "Math.random" | "Math.min" | "Math.max"));
+        let first = if needs_first {
+            self.copy(args.first().unwrap_or(&Value::Undefined))?
+        } else {
+            Value::Undefined
+        };
         match name {
             "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
                 let input = self.units(first, host)?;
@@ -2783,7 +2991,9 @@ impl Runtime {
                     self.text("")
                 } else {
                     let units = self.units(first, host)?;
-                    self.string(units)
+                    // ToString either transfers a paid buffer or charges its
+                    // conversion before allocating one.
+                    Ok(Value::String(units))
                 }
             }
             "Number" => Ok(Value::Number(if args.is_empty() {
@@ -2904,7 +3114,7 @@ impl Runtime {
                     self.budget.step()?;
                     if entry.enumerable || name.ends_with("Names") {
                         let key = self.text(&entry.key)?;
-                        self.result_push(&mut values, key)?;
+                        self.result_push(&mut values, key, AllocationPhase::Runtime)?;
                     }
                 }
                 Ok(Value::Object(
@@ -2974,7 +3184,7 @@ impl Runtime {
                     self.text("")?
                 } else {
                     let units = self.units(first, host)?;
-                    self.string(units)?
+                    Value::String(units)
                 };
                 let label = self.text(name)?;
                 self.put_own(object, "message", message, false)?;
@@ -3101,15 +3311,20 @@ impl Runtime {
         // Charge every attempt, including catchable syntax failures. Compiler
         // workspaces also have independent structural limits in regexp.rs.
         let reserved = pattern.len().saturating_mul(128).saturating_add(1024);
-        self.budget.allocate(reserved)?;
-        let compiled = self.regexp_result(regexp::Regex::compile(pattern, flags))?;
         self.budget
-            .allocate(compiled.estimated_bytes().saturating_sub(reserved))?;
+            .allocate_in(AllocationPhase::RegexCompile, reserved)?;
+        let compiled = self.regexp_result(regexp::Regex::compile(pattern, flags))?;
+        self.budget.allocate_in(
+            AllocationPhase::RegexCompile,
+            compiled.estimated_bytes().saturating_sub(reserved),
+        )?;
         Ok(Rc::new(compiled))
     }
     fn regexp_source(&mut self, pattern: &[u16]) -> Eval<Value> {
-        self.budget
-            .allocate(pattern.len().saturating_mul(12).saturating_add(8))?;
+        self.budget.allocate_in(
+            AllocationPhase::RegexResult,
+            pattern.len().saturating_mul(12).saturating_add(8),
+        )?;
         let mut source = Vec::new();
         if pattern.is_empty() {
             source.extend("(?:)".encode_utf16());
@@ -3211,8 +3426,10 @@ impl Runtime {
     ) -> Eval<Option<regexp::Match>> {
         // The compiler bounds capture count and matching workspaces; returned
         // capture storage is charged before the matcher can allocate it.
-        self.budget
-            .allocate(regex.pattern().len().saturating_add(1).saturating_mul(32))?;
+        self.budget.allocate_in(
+            AllocationPhase::RegexResult,
+            regex.pattern().len().saturating_add(1).saturating_mul(32),
+        )?;
         let result = regex.find(input, start, &mut self.budget.fuel);
         self.regexp_result(result)
     }
@@ -3241,16 +3458,27 @@ impl Runtime {
         }
         Ok(matched)
     }
-    fn slice_value(&mut self, input: &[u16], start: usize, end: usize) -> Eval<Value> {
+    fn slice_value(
+        &mut self,
+        input: &[u16],
+        start: usize,
+        end: usize,
+        phase: AllocationPhase,
+    ) -> Eval<Value> {
         self.budget
-            .allocate(end.saturating_sub(start).saturating_mul(2))?;
+            .allocate_in(phase, end.saturating_sub(start).saturating_mul(2))?;
         Ok(Value::String(input[start..end].to_vec()))
     }
-    fn result_push(&mut self, values: &mut Vec<Option<Value>>, value: Value) -> Eval<()> {
+    fn result_push(
+        &mut self,
+        values: &mut Vec<Option<Value>>,
+        value: Value,
+        phase: AllocationPhase,
+    ) -> Eval<()> {
         if values.len() >= MAX_ARRAY {
             return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
         }
-        self.budget.allocate(64 + value_bytes(&value))?;
+        self.budget.allocate_in(phase, 64 + value_bytes(&value))?;
         values.push(Some(value));
         Ok(())
     }
@@ -3258,14 +3486,16 @@ impl Runtime {
         let mut values = Vec::new();
         for capture in found.captures {
             let value = match capture {
-                Some((start, end)) => self.slice_value(input, start, end)?,
+                Some((start, end)) => {
+                    self.slice_value(input, start, end, AllocationPhase::RegexResult)?
+                }
                 None => Value::Undefined,
             };
-            self.result_push(&mut values, value)?;
+            self.result_push(&mut values, value, AllocationPhase::RegexResult)?;
         }
         let id = self.object(Some(self.array_prototype), Some(values))?;
         self.put_own(id, "index", Value::Number(found.start as f64), true)?;
-        let original = self.slice_value(input, 0, input.len())?;
+        let original = self.slice_value(input, 0, input.len(), AllocationPhase::RegexResult)?;
         self.put_own(id, "input", original, true)?;
         Ok(Value::Object(id))
     }
@@ -3286,11 +3516,11 @@ impl Runtime {
                 unreachable!()
             };
             let mut output = Vec::new();
-            self.append_units(&mut output, &[47])?;
-            self.append_units(&mut output, &source)?;
-            self.append_units(&mut output, &[47])?;
+            self.append_units(&mut output, &[47], AllocationPhase::RegexResult)?;
+            self.append_units(&mut output, &source, AllocationPhase::RegexResult)?;
+            self.append_units(&mut output, &[47], AllocationPhase::RegexResult)?;
             for flag in regex.flags().encode_utf16() {
-                self.append_units(&mut output, &[flag])?;
+                self.append_units(&mut output, &[flag], AllocationPhase::RegexResult)?;
             }
             return Ok(Value::String(output));
         }
@@ -3332,8 +3562,9 @@ impl Runtime {
         self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
         let mut values = Vec::new();
         while let Some(found) = self.regexp_exec(id, &regex, input, host)? {
-            let value = self.slice_value(input, found.start, found.end)?;
-            self.result_push(&mut values, value)?;
+            let value =
+                self.slice_value(input, found.start, found.end, AllocationPhase::RegexResult)?;
+            self.result_push(&mut values, value, AllocationPhase::RegexResult)?;
             if found.start == found.end {
                 self.put_own(
                     id,
@@ -3351,8 +3582,14 @@ impl Runtime {
             ))
         }
     }
-    fn append_units(&mut self, output: &mut Vec<u16>, units: &[u16]) -> Eval<()> {
-        self.budget.allocate(units.len().saturating_mul(2))?;
+    fn append_units(
+        &mut self,
+        output: &mut Vec<u16>,
+        units: &[u16],
+        phase: AllocationPhase,
+    ) -> Eval<()> {
+        self.budget
+            .allocate_in(phase, units.len().saturating_mul(2))?;
         output.extend_from_slice(units);
         Ok(())
     }
@@ -3387,20 +3624,21 @@ impl Runtime {
         replacement: &[u16],
         input: &[u16],
         found: &regexp::Match,
+        phase: AllocationPhase,
     ) -> Eval<()> {
         let mut index = 0;
         while index < replacement.len() {
             self.budget.step()?;
             let unit = replacement[index];
             if unit != 36 || index + 1 == replacement.len() {
-                self.append_units(output, &[unit])?;
+                self.append_units(output, &[unit], phase)?;
                 index += 1;
                 continue;
             }
             let next = replacement[index + 1];
             let span = match next {
                 36 => {
-                    self.append_units(output, &[36])?;
+                    self.append_units(output, &[36], phase)?;
                     index += 2;
                     continue;
                 }
@@ -3419,24 +3657,24 @@ impl Runtime {
                     } else if first > 0 && first < found.captures.len() {
                         (first, 2)
                     } else {
-                        self.append_units(output, &[36])?;
+                        self.append_units(output, &[36], phase)?;
                         index += 1;
                         continue;
                     };
                     if let Some((start, end)) = found.captures[capture] {
-                        self.append_units(output, &input[start..end])?;
+                        self.append_units(output, &input[start..end], phase)?;
                     }
                     index += used;
                     continue;
                 }
                 _ => {
-                    self.append_units(output, &[36])?;
+                    self.append_units(output, &[36], phase)?;
                     index += 1;
                     continue;
                 }
             };
             if let Some((start, end)) = span {
-                self.append_units(output, &input[start..end])?;
+                self.append_units(output, &input[start..end], phase)?;
             }
             index += 2;
         }
@@ -3451,6 +3689,11 @@ impl Runtime {
         let search = self.copy(args.first().unwrap_or(&Value::Undefined))?;
         let replacement = self.copy(args.get(1).unwrap_or(&Value::Undefined))?;
         let regex = self.as_regexp(&search);
+        let phase = if regex.is_some() {
+            AllocationPhase::RegexResult
+        } else {
+            AllocationPhase::Runtime
+        };
         let plain = if regex.is_none() {
             Some(self.units(search, host)?)
         } else {
@@ -3470,7 +3713,7 @@ impl Runtime {
                     ));
                 }
                 self.budget
-                    .allocate(64 + found.captures.len().saturating_mul(32))?;
+                    .allocate_in(phase, 64 + found.captures.len().saturating_mul(32))?;
                 let empty = found.start == found.end;
                 let next = found.end + 1;
                 matches.push(found);
@@ -3502,32 +3745,32 @@ impl Runtime {
         let mut output = Vec::new();
         let mut previous = 0;
         for found in matches {
-            self.append_units(&mut output, &input[previous..found.start])?;
+            self.append_units(&mut output, &input[previous..found.start], phase)?;
             if let Some(replacement) = &replacement_string {
-                self.replacement_text(&mut output, replacement, input, &found)?;
+                self.replacement_text(&mut output, replacement, input, &found, phase)?;
             } else {
                 let count = found.captures.len().saturating_add(2);
                 if count > MAX_ARRAY {
                     return Err(Fault::Fatal("JavaScript argument limit exhausted".into()));
                 }
-                self.budget.allocate(count.saturating_mul(64))?;
+                self.budget.allocate_in(phase, count.saturating_mul(64))?;
                 let mut callback_args = Vec::with_capacity(count);
                 for capture in &found.captures {
                     callback_args.push(match capture {
-                        Some((start, end)) => self.slice_value(input, *start, *end)?,
+                        Some((start, end)) => self.slice_value(input, *start, *end, phase)?,
                         None => Value::Undefined,
                     });
                 }
                 callback_args.push(Value::Number(found.start as f64));
-                callback_args.push(self.slice_value(input, 0, input.len())?);
+                callback_args.push(self.slice_value(input, 0, input.len(), phase)?);
                 let callback = self.copy(&replacement)?;
                 let value = self.call(callback, Value::Undefined, callback_args, None, host)?;
                 let units = self.units(value, host)?;
-                self.append_units(&mut output, &units)?;
+                self.append_units(&mut output, &units, phase)?;
             }
             previous = found.end;
         }
-        self.append_units(&mut output, &input[previous..])?;
+        self.append_units(&mut output, &input[previous..], phase)?;
         Ok(Value::String(output))
     }
     fn split_find(
@@ -3566,6 +3809,11 @@ impl Runtime {
             int32(self.number(limit, host)?) as u32
         };
         let regex = self.as_regexp(&separator).map(|(_, regex)| regex);
+        let phase = if regex.is_some() {
+            AllocationPhase::RegexResult
+        } else {
+            AllocationPhase::Runtime
+        };
         let undefined = matches!(separator, Value::Undefined);
         // Separator coercion precedes the zero-limit return in ES5.1.
         let plain = if regex.is_none() {
@@ -3576,15 +3824,15 @@ impl Runtime {
         let mut values = Vec::new();
         if limit != 0 {
             if undefined {
-                let value = self.slice_value(input, 0, input.len())?;
-                self.result_push(&mut values, value)?;
+                let value = self.slice_value(input, 0, input.len(), phase)?;
+                self.result_push(&mut values, value, phase)?;
             } else if input.is_empty() {
                 if self
                     .split_find(regex.as_deref(), &plain, input, 0)?
                     .is_none()
                 {
-                    let value = self.slice_value(input, 0, 0)?;
-                    self.result_push(&mut values, value)?;
+                    let value = self.slice_value(input, 0, 0, phase)?;
+                    self.result_push(&mut values, value, phase)?;
                 }
             } else {
                 let mut previous = 0;
@@ -3602,18 +3850,18 @@ impl Runtime {
                         start = found.start + 1;
                         continue;
                     }
-                    let value = self.slice_value(input, previous, found.start)?;
-                    self.result_push(&mut values, value)?;
+                    let value = self.slice_value(input, previous, found.start, phase)?;
+                    self.result_push(&mut values, value, phase)?;
                     previous = found.end;
                     if values.len() == limit as usize {
                         break;
                     }
                     for capture in found.captures.into_iter().skip(1) {
                         let value = match capture {
-                            Some((start, end)) => self.slice_value(input, start, end)?,
+                            Some((start, end)) => self.slice_value(input, start, end, phase)?,
                             None => Value::Undefined,
                         };
-                        self.result_push(&mut values, value)?;
+                        self.result_push(&mut values, value, phase)?;
                         if values.len() == limit as usize {
                             break;
                         }
@@ -3621,8 +3869,8 @@ impl Runtime {
                     start = previous;
                 }
                 if values.len() < limit as usize {
-                    let value = self.slice_value(input, previous, input.len())?;
-                    self.result_push(&mut values, value)?;
+                    let value = self.slice_value(input, previous, input.len(), phase)?;
+                    self.result_push(&mut values, value, phase)?;
                 }
             }
         }
@@ -3647,9 +3895,27 @@ impl Runtime {
         }
         let units = self.units(this, host)?;
         let length = units.len();
-        let first = self.copy(args.first().unwrap_or(&Value::Undefined))?;
+        let needs_first = matches!(
+            name,
+            "String.match"
+                | "String.search"
+                | "String.charAt"
+                | "String.charCodeAt"
+                | "String.slice"
+                | "String.substring"
+                | "String.substr"
+                | "String.indexOf"
+                | "String.includes"
+                | "String.startsWith"
+                | "String.endsWith"
+        );
+        let first = if needs_first {
+            self.copy(args.first().unwrap_or(&Value::Undefined))?
+        } else {
+            Value::Undefined
+        };
         match name {
-            "String.toString" | "String.valueOf" => self.string(units),
+            "String.toString" | "String.valueOf" => Ok(Value::String(units)),
             "String.match" | "String.search" => self.string_regexp_match(name, &units, first, host),
             "String.replace" => self.string_replace(&units, args, host),
             "String.split" => self.string_split(&units, args, host),
@@ -3706,7 +3972,7 @@ impl Runtime {
                     end = start;
                 }
                 self.budget.allocate((end - start).saturating_mul(2))?;
-                self.string(units[start..end].to_vec())
+                Ok(Value::String(units[start..end].to_vec()))
             }
             "String.indexOf" | "String.includes" | "String.startsWith" | "String.endsWith" => {
                 let search = self.units(first, host)?;
@@ -3752,7 +4018,9 @@ impl Runtime {
                     self.budget.allocate(more.len().saturating_mul(2))?;
                     result.extend(more);
                 }
-                self.string(result)
+                // The receiver buffer was paid; each appended segment was
+                // charged immediately before extending it above.
+                Ok(Value::String(result))
             }
             "String.trim" => {
                 let start = units
@@ -3779,10 +4047,13 @@ impl Runtime {
                             self.budget.allocate(converted.len().saturating_mul(2))?;
                             result.extend(converted.encode_utf16());
                         }
-                        Err(error) => result.push(error.unpaired_surrogate()),
+                        Err(error) => {
+                            self.budget.allocate(2)?;
+                            result.push(error.unpaired_surrogate());
+                        }
                     }
                 }
-                self.string(result)
+                Ok(Value::String(result))
             }
             _ => Err(unsupported(name)),
         }
@@ -3864,7 +4135,8 @@ impl Runtime {
                         result.extend(units);
                     }
                 }
-                self.string(result)
+                // Separators and element payloads were prepaid before append.
+                Ok(Value::String(result))
             }
             "Array.slice" => {
                 let start = self.copy(args.first().unwrap_or(&Value::Number(0.0)))?;
@@ -4119,6 +4391,7 @@ fn statement_bytes(statement: &Stmt) -> usize {
             .fold(0, add),
         Stmt::Function { name, params, body } => name
             .len()
+            .saturating_add(4 * std::mem::size_of::<usize>())
             .saturating_add(params.iter().map(|name| name.len() + 32).sum::<usize>())
             .saturating_add(body.iter().map(statement_bytes).fold(0, add)),
         Stmt::Block(body) => body.iter().map(statement_bytes).fold(0, add),
@@ -4188,6 +4461,223 @@ fn statement_bytes(statement: &Stmt) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn function_instances_share_code_slices_not_closure_state() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        runtime
+            .execute(
+                "function make(x){return function inner(y){return x+y;};}var a=make(4);var b=make(9);",
+                &mut host,
+            )
+            .unwrap();
+        let Value::Function(a) = runtime.get_global("a") else {
+            panic!("expected first closure");
+        };
+        let Value::Function(b) = runtime.get_global("b") else {
+            panic!("expected second closure");
+        };
+        assert_ne!(a, b);
+        let first = &runtime.functions[a];
+        let second = &runtime.functions[b];
+        assert!(!Rc::ptr_eq(&first.code, &second.code));
+        assert!(Rc::ptr_eq(&first.code.body, &second.code.body));
+        assert!(Rc::ptr_eq(&first.code.params, &second.code.params));
+        assert_ne!(first.environment, second.environment);
+        assert_ne!(first.properties, second.properties);
+        let before = runtime.allocation_report();
+        assert_eq!(
+            runtime
+                .execute(
+                    "a(1)===5 && b(1)===10 && a.prototype!==b.prototype && typeof inner==='undefined';",
+                    &mut host,
+                )
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            runtime.allocation_report().phases.function_code,
+            before.phases.function_code
+        );
+        let make = runtime.get_global("make");
+        runtime
+            .invoke(make, Value::Undefined, vec![Value::Number(12.0)], &mut host)
+            .unwrap();
+        assert_eq!(
+            runtime.allocation_report().phases.function_code - before.phases.function_code,
+            128 + "inner".len() as u64
+        );
+        assert!(runtime.allocation_report().is_valid());
+    }
+
+    #[test]
+    fn prepaid_case_output_charges_unpaired_surrogates_before_append() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        let before = runtime.allocation_report();
+        let input = vec![0xd800, b'A' as u16, 0xdc00];
+        let name = "String.toLowerCase";
+        assert_eq!(
+            runtime
+                .invoke(
+                    Value::Native(name.into()),
+                    Value::String(input),
+                    vec![],
+                    &mut host,
+                )
+                .unwrap(),
+            Value::String(vec![0xd800, b'a' as u16, 0xdc00])
+        );
+        // Host ingress pays six input bytes; all three output units each pay
+        // two bytes, including the two unpaired units. No final move recharge.
+        let after = runtime.allocation_report();
+        assert_eq!(
+            after.phases.runtime - before.phases.runtime,
+            name.len() as u64 + 6 + 6
+        );
+        assert!(after.is_valid());
+    }
+
+    #[test]
+    fn ignored_native_arguments_do_not_copy_and_coercions_remain_ordered() {
+        let run = |argument| {
+            let mut runtime = Runtime::new();
+            let before = runtime.allocation_report();
+            assert_eq!(
+                runtime
+                    .invoke(
+                        Value::Native("String.valueOf".into()),
+                        Value::text("receiver"),
+                        vec![argument],
+                        &mut TestHost::default(),
+                    )
+                    .unwrap(),
+                Value::text("receiver")
+            );
+            runtime.allocation_report().phases.runtime - before.phases.runtime
+        };
+        assert_eq!(
+            run(Value::String(vec![97; 1024])) - run(Value::Undefined),
+            2048
+        );
+        yes(
+            "var order='';var receiver={toString:function(){order+='r';return 'A';}};var first={toString:function(){order+='a';return 'B';}};var second={toString:function(){order+='b';return 'C';}};String.prototype.concat.call(receiver,first,second)==='ABC' && order==='rab';",
+        );
+    }
+
+    #[test]
+    fn allocation_phase_counters_and_first_rejection_are_exact() {
+        let mut runtime = Runtime::new();
+        let initial = runtime.allocation_report();
+        assert!(initial.is_valid());
+        assert_eq!(initial.accepted_bytes, initial.phases.bootstrap);
+        assert!(initial.first_rejected.is_none());
+        for phase in [
+            AllocationPhase::Source,
+            AllocationPhase::Ast,
+            AllocationPhase::FunctionCode,
+            AllocationPhase::Runtime,
+            AllocationPhase::RegexCompile,
+            AllocationPhase::RegexResult,
+        ] {
+            let before = runtime.allocation_report();
+            runtime.budget.allocate_in(phase, 37).unwrap();
+            let after = runtime.allocation_report();
+            let mut expected = before;
+            expected.accepted_bytes += 37;
+            *expected.phases.counter(phase) += 37;
+            assert_eq!(after, expected);
+            assert!(after.is_valid());
+        }
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated)
+            .unwrap();
+        let accepted = runtime.allocation_report();
+        assert_eq!(accepted.accepted_bytes, accepted.limit_bytes);
+        let error = fault_text(
+            runtime
+                .budget
+                .allocate_in(AllocationPhase::RegexResult, 1)
+                .unwrap_err(),
+        );
+        let rejected = runtime.allocation_report();
+        assert!(rejected.is_valid());
+        assert_eq!(rejected.phases, accepted.phases);
+        assert_eq!(rejected.accepted_bytes, accepted.accepted_bytes);
+        assert_eq!(
+            rejected.first_rejected,
+            Some(RejectedAllocation {
+                phase: AllocationPhase::RegexResult,
+                accepted_bytes: MAX_HEAP as u64,
+                requested_bytes: 1,
+                limit_bytes: MAX_HEAP as u64,
+            })
+        );
+        assert_eq!(
+            fault_text(
+                runtime
+                    .budget
+                    .allocate_in(AllocationPhase::Source, usize::MAX)
+                    .unwrap_err()
+            ),
+            error
+        );
+        assert_eq!(runtime.allocation_report(), rejected);
+    }
+
+    #[test]
+    fn allocation_report_validation_checks_caps_overflow_and_rejection() {
+        let report = Runtime::new().allocation_report();
+        assert!(report.is_valid());
+        let mut invalid = report;
+        invalid.limit_bytes += 1;
+        assert!(!invalid.is_valid());
+        invalid = report;
+        invalid.phases.source = u64::MAX;
+        assert!(!invalid.is_valid());
+        invalid = report;
+        invalid.accepted_bytes += 1;
+        assert!(!invalid.is_valid());
+        invalid = report;
+        invalid.first_rejected = Some(RejectedAllocation {
+            phase: AllocationPhase::Runtime,
+            accepted_bytes: report.accepted_bytes,
+            requested_bytes: report.limit_bytes - report.accepted_bytes,
+            limit_bytes: report.limit_bytes,
+        });
+        assert!(!invalid.is_valid());
+        invalid.first_rejected.as_mut().unwrap().requested_bytes += 1;
+        assert!(invalid.is_valid());
+        invalid.first_rejected.as_mut().unwrap().accepted_bytes += 1;
+        assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn allocation_output_phases_do_not_leak_into_callbacks_or_plain_strings() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        runtime
+            .execute("'a-b'.replace('a','x');'a-b'.split('-');", &mut host)
+            .unwrap();
+        let plain = runtime.allocation_report();
+        assert!(plain.is_valid());
+        assert_eq!(plain.phases.regex_compile, 0);
+        assert_eq!(plain.phases.regex_result, 0);
+        runtime
+            .execute(
+                "'aa'.replace(/a/g,function(){return Function('return 7;')();});",
+                &mut host,
+            )
+            .unwrap();
+        let regex = runtime.allocation_report();
+        assert!(regex.is_valid());
+        assert!(regex.phases.regex_compile > 0 && regex.phases.regex_result > 0);
+        assert!(regex.phases.source > plain.phases.source);
+        assert!(regex.phases.function_code > plain.phases.function_code);
+        assert!(regex.phases.runtime > plain.phases.runtime);
+    }
 
     #[derive(Default)]
     struct TestHost {
@@ -4635,7 +5125,10 @@ mod tests {
             .execute("encodeURIComponent('a b')", &mut host)
             .unwrap();
         assert!(runtime.budget.allocated > before);
-        runtime.budget.allocated = MAX_HEAP - 1;
+        runtime
+            .budget
+            .allocate(MAX_HEAP - 1 - runtime.budget.allocated)
+            .unwrap();
         let error = runtime
             .execute("encodeURIComponent('a b')", &mut host)
             .unwrap_err();
@@ -4915,7 +5408,8 @@ fn expression_bytes(expr: &Expr) -> usize {
         Expr::Function { name, params, body } => name
             .as_ref()
             .map_or(0, String::len)
-            .saturating_add(params.iter().map(String::len).sum::<usize>())
+            .saturating_add(4 * std::mem::size_of::<usize>())
+            .saturating_add(params.iter().map(|name| name.len() + 32).sum::<usize>())
             .saturating_add(body.iter().map(statement_bytes).fold(0, add)),
         Expr::Unary { expr, .. } | Expr::Update { expr, .. } => expression_bytes(expr),
         Expr::Binary { left, right, .. }

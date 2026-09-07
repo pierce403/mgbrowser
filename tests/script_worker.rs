@@ -411,3 +411,108 @@ fn restricted_child_nested_evaluation_limits_cannot_be_caught_or_reset() {
         assert!(reply.html.contains("Readable original content"));
     }
 }
+
+#[test]
+fn restricted_child_returns_first_allocation_failure_without_reset_or_dom_effects() {
+    use mg_deps::js::runtime::AllocationPhase;
+    let source = "try{while(true){Array(1000);}}catch(e){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}";
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-allocation-limit".into(),
+        html: format!(
+            "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>document.title='Incorrect later script';</script></body></html>"
+        ),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    let report = reply.allocations.expect("executed realm has a report");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let failure = report.first_rejected.expect("allocation failure retained");
+    assert_eq!(failure.phase, AllocationPhase::Runtime);
+    assert_eq!(failure.accepted_bytes, report.accepted_bytes);
+    assert!(failure.requested_bytes > report.limit_bytes - report.accepted_bytes);
+    let first = reply.errors[0].split_once(": ").unwrap().1;
+    let second = reply.errors[1].split_once(": ").unwrap().1;
+    assert_eq!(first, second, "later script must retain the first failure");
+    assert!(first.contains("JavaScript allocation budget exhausted"));
+    assert!(reply.navigation.is_none());
+    assert!(reply.html.contains("<title>Original title</title>"));
+    assert!(reply.html.contains("Readable original content"));
+    let diagnostic = serde_json::to_string(&report).unwrap();
+    assert!(diagnostic.len() < 1024);
+    assert!(!diagnostic.contains("example.test"));
+    assert!(!diagnostic.contains("Incorrect"));
+}
+
+#[test]
+fn restricted_child_reports_successful_allocation_totals_and_pre_runtime_rejection() {
+    for (url, expected_applied) in [
+        ("https://example.test/local-allocation-report", true),
+        ("file:///local-allocation-report", false),
+    ] {
+        let request = mg_deps::js_browser::Request {
+            url: url.into(),
+            html: "<html><body><p>Local fixture</p><script>function add(a,b){return a+b;}document.title=String(add(2,3));</script></body></html>".into(),
+        };
+        let input = serde_json::to_vec(&request).unwrap();
+        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+        let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(reply.applied, expected_applied);
+        if expected_applied {
+            let report = reply.allocations.unwrap();
+            assert!(report.is_valid());
+            assert!(report.first_rejected.is_none());
+            assert!(report.phases.bootstrap > 0);
+            assert!(report.phases.source > 0);
+            assert!(report.phases.ast > 0);
+            assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+            assert_eq!(reply.scripts_executed, 1);
+            assert!(reply.html.contains("<title>5</title>"));
+        } else {
+            assert!(reply.allocations.is_none());
+            assert!(reply.navigation.is_none());
+            assert_eq!(reply.scripts_executed, 0);
+        }
+    }
+}
+
+#[test]
+fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budget() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-allocation".into(),
+        html: include_str!("fixtures/script/allocation.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.phases.ast > 2_000_000);
+    assert!(report.phases.function_code < 1024, "{report:?}");
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Shared-code local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.tag == "input" && node.attr("name") == Some("q"))
+    );
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(reply.html.contains("within the unchanged budget."));
+}

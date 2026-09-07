@@ -222,6 +222,52 @@ unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
 
+### Allocation diagnostics and shared function storage
+
+`Runtime::allocation_report()` returns a fixed-size host-readable snapshot:
+the unchanged 4 MiB limit, accepted total, exclusive phase totals (bootstrap,
+source, successful AST, function code, runtime storage/copies, regex compilation
+and regex results), and the first rejected charge. Rejection records its phase,
+accepted total and requested bytes without changing successful totals. Later
+scripts retain that first failure rather than relabeling the latched error.
+The report contains no source text, identifiers, URLs, timestamps or growing
+history. This is conservative cumulative accounting, not measured allocator RSS.
+
+Phases classify explicit charge sites, not inclusive operation costs. Shared
+object/property metadata remains Runtime even inside function/regex operations;
+callbacks use their own charge sites, not the caller's phase. The accepted phase
+sum equals the accepted total. The parent rejects invalid reports before applying
+the worker's projection. Reports are optional: rejection before realm creation
+has none, while rejected DOM serialization can retain a snapshot. Absence is not
+zero allocation. `SCRIPT_ALLOCATION` prints only for validated, applied replies.
+No script-visible host API, worker capability or CDP command was added.
+
+Function parameter/body slices now use `Rc` ownership from the parsed AST,
+instead of deep-copying immutable code for each function instance. Closures keep
+fresh identity, captured environments, properties and prototypes. Each separate
+parse still pays for its entire tree, including shared-slice metadata, before
+effects; per-instance function metadata remains charged. Independently parsed
+trees are not interned. Native dispatch avoids first-argument copies only where
+unused; audited string operations return already-prepaid buffers without charging
+them again. True clones, host ingress, binding/property storage, parser attempts
+and all existing limits remain charged. Generic array adoption, property/binding
+transfers and regex reservation policies are unchanged.
+
+On 2026-09-07 all 288 debug tests and 178 selected release tests passed on default
+stacks, including 24 independent allocation groups and 15 actual-worker groups.
+These cover phase sums/monotonicity, first-failure latching, malformed reports,
+large ASTs/functions, repeated compilation, closures, pointer/lifetime behavior,
+UTF-16/coercion order, true-copy charges and fatal-limit enforcement.
+
+The authored `/script-allocation` factory contains 9,999 harmless statements and
+creates five real DOM controls. Before sharing, its worker rejected a 2,240,584-byte
+function-code charge; after sharing, the complete run accepts 3,745,970 bytes,
+including 137 bytes of per-instance function-code metadata. The unchanged fixture
+passes actual-worker, native-window and external CDP form/result/destination
+journeys. All three exact CI journey steps also pass locally; native query and
+CDP destination frames were inspected. Publication evidence is in the daily log.
+These local results do not complete the live Google journey.
+
 ### Bounded expression-state increment
 
 `src/js/syntax/expressions.rs` implements the expression grammar with explicit
@@ -241,7 +287,7 @@ when the lexer has already cached a malformed-token diagnostic. All parser-owned
 resource errors remain fatal through eval and Function construction; ordinary
 syntax errors remain catchable and never return a successfully parsed prefix.
 
-The AST/API, 128 structural/AST-depth limits, source/token/node caps, function and
+That expression-machine increment preserved the AST/API, 128 structural/AST-depth limits, source/token/node caps, function and
 statement guards, grammar-directed regex/division, NoIn contexts,
 precedence/associativity and ASI are preserved. Function parameter/body fragments
 remain separately parsed. Statement/function parsing and AST
@@ -340,9 +386,17 @@ rendered items or forms. The earlier parser-nesting diagnostic was absent in
 this response, but the inspected frame was still blank and the journey exited
 2 without a result or destination. Local success does not complete the live goal.
 
-Next work identifies allocation consumption by phase using general diagnostics
-and independently authored source/AST/runtime fixtures. Do not blindly increase
-limits or port site challenge code.
+After allocation diagnostics and sharing, the actual Google homepage has no
+rejected allocation (2,468,375 accepted bytes), with three completed scripts and
+seven unsupported-behavior errors. The real form still submits normally. Search
+returns HTTP 200 but rejects a 2,575,110-byte AST charge after 2,390,987 accepted
+bytes; three script errors repeat the same first failure. Its inspected frame has
+no items/forms, and the journey exits 2 without a result or destination.
+
+Next work audits remaining AST representation and runtime ownership/copy costs
+using independently authored fixtures. The counters identify an admission gap,
+not permission to remove real charges or raise limits. No site challenge code is
+an implementation input.
 General language/builtin correctness, a pinned independent conformance corpus,
 parent-brokered external scripts, persistent realms, real DOM event dispatch/timers
 and broader DOM support remain open. CDP Runtime/Debugger remain

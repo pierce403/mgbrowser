@@ -524,8 +524,8 @@ pub fn parse_function(parameters: &str, body: &str) -> Result<Expr, String> {
         .expr(
             Expr::Function {
                 name: Some("anonymous".into()),
-                params,
-                body,
+                params: params.into(),
+                body: body.into(),
             },
             depth + 1,
         )
@@ -808,8 +808,8 @@ impl<'a> Parser<'a> {
             return self.stmt(
                 Stmt::Function {
                     name: name.unwrap(),
-                    params,
-                    body,
+                    params: params.into(),
+                    body: body.into(),
                 },
                 depth + 1,
             );
@@ -1270,6 +1270,7 @@ fn hexadecimal_number(digits: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::rc::Rc;
 
     fn expression(source: &str) -> Expr {
         let Program(mut body) = parse(source).unwrap();
@@ -1406,20 +1407,21 @@ mod tests {
             parse_function("a /* first */, b\\u0063", "return a + bc;").unwrap(),
             Expr::Function {
                 name: Some("anonymous".into()),
-                params: vec!["a".into(), "bc".into()],
+                params: vec!["a".into(), "bc".into()].into(),
                 body: vec![Stmt::Return(Some(Expr::Binary {
                     op: "+".into(),
                     left: Box::new(Expr::Ident("a".into())),
                     right: Box::new(Expr::Ident("bc".into())),
-                }))],
+                }))]
+                .into(),
             }
         );
         assert_eq!(
             parse_function("// no parameters", "// no body").unwrap(),
             Expr::Function {
                 name: Some("anonymous".into()),
-                params: vec![],
-                body: vec![],
+                params: vec![].into(),
+                body: vec![].into(),
             }
         );
         let Expr::Function { params, body, .. } =
@@ -1427,8 +1429,8 @@ mod tests {
         else {
             panic!()
         };
-        assert_eq!(params, vec!["a"]);
-        assert_eq!(body, vec![Stmt::Return(Some(Expr::Ident("a".into())))]);
+        assert_eq!(params.as_ref(), ["a"]);
+        assert_eq!(body.as_ref(), [Stmt::Return(Some(Expr::Ident("a".into())))]);
         for (parameters, body) in [
             ("a, a", "return a;"), // Duplicate parameters are valid in non-strict code.
             ("eval, arguments, undefined", "return arguments;"),
@@ -1446,10 +1448,199 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            body,
-            vec![Stmt::Return(None), Stmt::Expr(Expr::Number(2.0))]
+            body.as_ref(),
+            [Stmt::Return(None), Stmt::Expr(Expr::Number(2.0))]
         );
         assert!(parse("return 1;").is_err());
+    }
+
+    #[test]
+    fn cloned_declarations_share_code_and_retained_nested_code_outlives_program() {
+        let source = String::from(
+            "function outer(parameter) { function inner(value) { return parameter + value; } return inner; }",
+        );
+        let program = parse(&source).unwrap();
+        drop(source);
+        let copied = program.clone();
+        let (retained, outer_body, inner_params, inner_body) = {
+            let Stmt::Function { params, body, .. } = &program.0[0] else {
+                panic!("expected declaration")
+            };
+            let Stmt::Function {
+                params: copied_params,
+                body: copied_body,
+                ..
+            } = &copied.0[0]
+            else {
+                panic!("expected copied declaration")
+            };
+            assert!(Rc::ptr_eq(params, copied_params));
+            assert!(Rc::ptr_eq(body, copied_body));
+
+            // Cloning just the nested declaration must also share its code,
+            // independently of the outer body's shared statement storage.
+            let retained = body[0].clone();
+            let Stmt::Function {
+                params: nested_params,
+                body: nested_body,
+                ..
+            } = &body[0]
+            else {
+                panic!("expected nested declaration")
+            };
+            let Stmt::Function {
+                params: retained_params,
+                body: retained_body,
+                ..
+            } = &retained
+            else {
+                panic!("expected retained declaration")
+            };
+            assert!(Rc::ptr_eq(nested_params, retained_params));
+            assert!(Rc::ptr_eq(nested_body, retained_body));
+            let weak = (
+                Rc::downgrade(body),
+                Rc::downgrade(nested_params),
+                Rc::downgrade(nested_body),
+            );
+            (retained, weak.0, weak.1, weak.2)
+        };
+        drop(program);
+        drop(copied);
+        assert!(outer_body.upgrade().is_none());
+        let Stmt::Function { name, params, body } = &retained else {
+            panic!("expected retained declaration")
+        };
+        assert_eq!(name, "inner");
+        assert_eq!(params.as_ref(), ["value"]);
+        assert!(matches!(body[0], Stmt::Return(Some(Expr::Binary { .. }))));
+        assert!(inner_params.upgrade().is_some());
+        assert!(inner_body.upgrade().is_some());
+        drop(retained);
+        assert!(inner_params.upgrade().is_none());
+        assert!(inner_body.upgrade().is_none());
+    }
+
+    #[test]
+    fn cloned_expression_and_dynamic_function_share_owned_code() {
+        for function in [
+            expression("(function named(first, second) { return first + second; })"),
+            parse_function("first, second", "return first + second;").unwrap(),
+        ] {
+            let copied = function.clone();
+            let (weak_params, weak_body) = {
+                let Expr::Function { name, params, body } = &function else {
+                    panic!("expected function expression")
+                };
+                let Expr::Function {
+                    name: copied_name,
+                    params: copied_params,
+                    body: copied_body,
+                } = &copied
+                else {
+                    panic!("expected copied function")
+                };
+                assert_eq!(name, copied_name);
+                assert!(Rc::ptr_eq(params, copied_params));
+                assert!(Rc::ptr_eq(body, copied_body));
+                (Rc::downgrade(params), Rc::downgrade(body))
+            };
+            drop(function);
+            let Expr::Function { params, body, .. } = &copied else {
+                panic!("expected copied function")
+            };
+            assert_eq!(params.as_ref(), ["first", "second"]);
+            assert!(matches!(body[0], Stmt::Return(Some(Expr::Binary { .. }))));
+            drop(copied);
+            assert!(weak_params.upgrade().is_none());
+            assert!(weak_body.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn independent_function_parses_do_not_intern_code() {
+        for source in [
+            "function first(arg) { return arg; }",
+            "(function first(arg) { return arg; });",
+        ] {
+            let first = parse(source).unwrap();
+            let second = parse(source).unwrap();
+            assert_eq!(first, second);
+            let code = |statement: &Stmt| match statement {
+                Stmt::Function { params, body, .. }
+                | Stmt::Expr(Expr::Function { params, body, .. }) => {
+                    (Rc::clone(params), Rc::clone(body))
+                }
+                _ => panic!("expected function"),
+            };
+            let (first_params, first_body) = code(&first.0[0]);
+            let (second_params, second_body) = code(&second.0[0]);
+            assert!(!Rc::ptr_eq(&first_params, &second_params));
+            assert!(!Rc::ptr_eq(&first_body, &second_body));
+        }
+        let first = parse_function("arg", "return arg;").unwrap();
+        let second = parse_function("arg", "return arg;").unwrap();
+        let Expr::Function { params, body, .. } = first else {
+            panic!("expected dynamic function")
+        };
+        let Expr::Function {
+            params: other_params,
+            body: other_body,
+            ..
+        } = second
+        else {
+            panic!("expected dynamic function")
+        };
+        assert!(!Rc::ptr_eq(&params, &other_params));
+        assert!(!Rc::ptr_eq(&body, &other_body));
+    }
+
+    #[test]
+    fn shared_nested_function_code_clones_and_drops_at_ast_limit_on_default_stack() {
+        let functions = MAX_DEPTH / 4;
+        let labels = MAX_DEPTH - functions - 1;
+        let source = |extra_labels| {
+            let labels: String = (0..labels + extra_labels)
+                .map(|index| format!("label{index}:"))
+                .collect();
+            format!(
+                "{}{labels};{}",
+                "function nested(arg){".repeat(functions),
+                "}".repeat(functions)
+            )
+        };
+        // Function bodies remain part of structural AST depth even when their
+        // storage is shared. This complete tree has depth MAX_DEPTH, including
+        // nested function boundaries and the deepest ordinary statement chain.
+        let program = parse(&source(0)).unwrap();
+        let copied = program.clone();
+        let mut statement = &copied.0[0];
+        let mut weak_bodies = Vec::new();
+        for _ in 0..functions {
+            let Stmt::Function { params, body, .. } = statement else {
+                panic!("expected nested function")
+            };
+            assert_eq!(params.as_ref(), ["arg"]);
+            weak_bodies.push(Rc::downgrade(body));
+            statement = &body[0];
+        }
+        for _ in 0..labels {
+            let Stmt::Label { body, .. } = statement else {
+                panic!("expected label")
+            };
+            statement = body;
+        }
+        assert!(matches!(statement, Stmt::Empty));
+        drop(program);
+        assert!(weak_bodies.iter().all(|body| body.upgrade().is_some()));
+        // No special thread stack: dropping the final shared owner must release
+        // every nested body, including the unshared deepest label chain.
+        drop(copied);
+        assert!(weak_bodies.iter().all(|body| body.upgrade().is_none()));
+
+        let error = parse(&source(1)).unwrap_err();
+        assert!(error.starts_with("AST depth limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
     }
 
     #[test]

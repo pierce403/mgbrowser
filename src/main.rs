@@ -254,8 +254,18 @@ impl App {
                                 && reply.html.len() <= 2 * 1024 * 1024
                                 && reply.scripts_executed <= 32
                                 && reply.errors.len() <= 64
-                                && reply.errors.iter().all(|error| error.len() <= 4096) =>
+                                && reply.errors.iter().all(|error| error.len() <= 4096)
+                                && reply
+                                    .allocations
+                                    .as_ref()
+                                    .is_none_or(|report| report.is_valid()) =>
                         {
+                            if let Some(report) = &reply.allocations {
+                                // Fixed numeric diagnostic fields, not page source or URLs.
+                                if let Ok(json) = serde_json::to_string(report) {
+                                    eprintln!("SCRIPT_ALLOCATION {json}");
+                                }
+                            }
                             source = reply.html;
                             scripting = true;
                             script_navigation = reply.navigation.and_then(|target| {
@@ -1240,6 +1250,8 @@ mod tests {
     #[test]
     fn script_rejection_or_worker_failure_retains_noscript_and_drops_navigation() {
         let html = "<html><body><noscript><p>Readable fallback</p></noscript></body></html>";
+        let mut invalid_report = mg_deps::js::runtime::Runtime::new().allocation_report();
+        invalid_report.accepted_bytes += 1;
         for script in [
             Ok(mg_deps::js_browser::Reply {
                 applied: false,
@@ -1247,6 +1259,15 @@ mod tests {
                 navigation: Some("https://example.test/unwanted".into()),
                 errors: vec!["Rejected source".into()],
                 scripts_executed: 0,
+                allocations: None,
+            }),
+            Ok(mg_deps::js_browser::Reply {
+                applied: true,
+                html: "<p>Do not apply invalid diagnostics</p>".into(),
+                navigation: Some("https://example.test/unwanted".into()),
+                errors: vec![],
+                scripts_executed: 0,
+                allocations: Some(invalid_report),
             }),
             Err("Worker deadline".into()),
         ] {
@@ -1311,6 +1332,7 @@ mod tests {
                     navigation: Some("https://example.test/unwanted".into()),
                     errors: vec![],
                     scripts_executed: 1,
+                    allocations: None,
                 })),
                 result: Ok(net::Response {
                     url: url::Url::parse("https://example.test/old").unwrap(),

@@ -154,7 +154,14 @@ impl<'a> Parser<'a> {
     #[inline(never)]
     fn expression_function(&mut self) -> Result<E, String> {
         let (name, params, body, depth) = self.function(false)?;
-        self.expr(Expr::Function { name, params, body }, depth + 1)
+        self.expr(
+            Expr::Function {
+                name,
+                params: params.into(),
+                body: body.into(),
+            },
+            depth + 1,
+        )
     }
 }
 

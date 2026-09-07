@@ -60,6 +60,11 @@ snapshot can still be applied while showing script errors. The status bar and
 stderr distinguish completed, partial, rejected and failed worker results.
 Each reported partial error also appears as an escaped `SCRIPT_DIAGNOSTIC` line,
 so a first parser failure does not hide other missing capabilities in that response.
+`SCRIPT_ALLOCATION` contains a fixed JSON realm report with accepted bytes,
+exclusive charge-site totals and the first rejected allocation. Repeated script
+errors can be the same latched failure; they are not separate allocation attempts.
+These diagnostics contain no source text or URLs and do not expose a page API.
+The report is cumulative logical accounting, not measured process memory.
 `--disable-scripts` explicitly selects the default behavior.
 
 The local containment self-test requires no display and starts only owned children:
@@ -153,23 +158,41 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-expressions \
 
 The fixture's actual-worker form-creation check and native/CDP
 form-to-destination journeys passed on 2026-09-07; rendered frames were inspected.
-All 251 debug tests and 141 selected release tests pass without increasing
+The expression increment passed 251 debug tests and 141 selected release tests without increasing
 thread-stack sizes, including mixed evaluator/helper recursion regressions.
 Parser storage/work is bounded across nested functions, while source/token/node
 and structural/AST-depth caps remain unchanged. Logical evaluation-depth guards
 are tested, not a claim of production stack safety.
+
+`/script-allocation` is a local storage-regression fixture with no static controls.
+It builds a compiled DOM factory containing 9,999 harmless expression statements,
+then calls it to create the form. The pre-sharing worker rejected the redundant
+function-body copy; the fixture must complete within the same 4 MiB realm budget:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-allocation \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/allocation-journey
+```
+
+The actual worker completes this fixture with 3,745,970 accepted bytes, including
+137 bytes of per-instance function-code metadata. Native and external CDP journeys
+submit the query/hidden field and reach the local destination; rendered frames
+were inspected. All 288 debug tests and 178 selected release tests pass. Consult
+the daily log for the baseline, final local checks and publication evidence.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-expression Google attempt submitted the real form, but the HTTP
-200 response titled “Google Search” reported three allocation-budget errors and
-had no rendered items or forms. The prior parser-nesting diagnostic was absent;
-no result or destination was reached. Google's first-result/destination
-acceptance goal remains unmet. Next is local allocation-phase diagnosis, not
-blindly raising limits; real DOM events and timers are still missing.
+2026-09-07 post-sharing Google attempt submitted the real form. The homepage no
+longer exhausted the allocation budget, but the HTTP 200 “Google Search” response
+still rejected an AST charge: 2,390,987 accepted bytes plus a requested 2,575,110
+bytes exceeds the unchanged 4 MiB limit. Three errors repeat this first failure;
+no rendered items/forms, result or destination were reached. Google's acceptance
+goal remains unmet. Next is further independently tested AST/runtime storage
+work, not blindly raising limits; real DOM events and timers are still missing.
 
 ## Browser automation
 
@@ -214,11 +237,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-expressions tmp/cdp-expressions-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-allocation tmp/cdp-allocation-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration and grouped-expression
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression and shared-code
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -228,7 +254,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

@@ -1,4 +1,6 @@
 //! An original, bounded JavaScript interpreter; not a conforming ECMAScript engine yet.
+use std::rc::Rc;
+
 pub mod regexp;
 pub mod runtime;
 pub mod syntax;
@@ -27,8 +29,10 @@ pub enum Stmt {
     Var(Vec<(String, Option<Expr>)>),
     Function {
         name: String,
-        params: Vec<String>,
-        body: Vec<Stmt>,
+        // Freeze parsed code once; closure instances share it without sharing
+        // their environments, function identities or mutable properties.
+        params: Rc<[String]>,
+        body: Rc<[Stmt]>,
     },
     Return(Option<Expr>),
     If {
@@ -90,8 +94,8 @@ pub enum Expr {
     Object(Vec<(String, Expr)>),
     Function {
         name: Option<String>,
-        params: Vec<String>,
-        body: Vec<Stmt>,
+        params: Rc<[String]>,
+        body: Rc<[Stmt]>,
     },
     Unary {
         op: String,
