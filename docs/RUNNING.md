@@ -244,21 +244,39 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-ast \
   --evidence-dir tmp/ast-journey
 ```
 
-Its pre-change worker failed AST admission before creating controls. The unchanged
-fixture now completes at 2,481,036 accepted bytes with real controls. Native and
+Its pre-change worker failed AST admission before creating controls. At that
+increment the unchanged fixture completed at 2,481,036 accepted bytes with real controls. Native and
 external CDP paths submit its Unicode query/hidden field and reach the local
 destination; frames were inspected. Smaller statement storage and capacity-aware
 AST charges, including holes, preserve every limit. A repeated uncalled sparse
 function still exhausts AST admission without handlers or later-script effects.
-All 368 debug tests and 258 selected release checks pass; all three exact CI
-journey steps pass locally with 11 native and 11 external CDP destinations.
+That increment passed all 368 debug tests, 258 selected release checks and all
+three exact CI journey steps locally with 11 native and 11 external CDP destinations.
+
+`/script-symbols` is the frozen Symbol-dependent form. Distinct identities,
+symbol-key lookup/reflection, string-key filtering and registry lookup must work
+before any control is created:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-symbols \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/symbol-journey
+```
+
+Its unchanged missing-API baseline now completes in the actual worker at 57,954
+accepted bytes. Native and external CDP paths submit the query/hidden field and
+reach the local destination; frames inspected. All 438 debug tests, 340 selected
+release checks and the three exact CI journey steps pass locally (12 native and
+12 external CDP destinations). Ordinary Symbol-to-DOM conversion errors preserve
+the mutation target and allow later scripts; fatal cumulative creation still
+stops catch/finally/later execution. See JAVASCRIPT.md for exact scope and limits.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-AST Google attempt submitted the real form. The homepage retains
+2026-09-07 post-AST Google attempt submitted the real form. The homepage retained
 26 items/one form and no allocation rejection. Search HTTP 200 still has no
 items/forms, result or destination. Its first error is now `Symbol is not defined`;
 a later script rejects Ast 387,844 after 4,078,595 accepted bytes, and the next
@@ -266,7 +284,15 @@ script repeats that failure. Two scripts complete with three errors overall.
 The search frame remains blank and the journey exits 2. The earlier admission
 failure is no longer first, but Google's acceptance goal remains unmet. Next is
 genuine Symbol/property-key support and separate measured storage diagnosis;
-real DOM events and timers are also still missing.
+that Symbol increment is now implemented and tested above.
+
+The post-Symbol Google attempt also submits the actual form. Homepage HTTP 200
+has no rejected allocation; search HTTP 200 remains blank with two completed
+scripts/three errors. First is now `TypeError: prototype must be an object or null`,
+followed by an AST rejection requesting 387,964 after 4,107,538 accepted bytes.
+Exit 2, no actual result or destination. The message does not establish which
+prototype value was supplied. Next is independent object/prototype correctness
+and cumulative-storage work; real DOM events and timers are also still missing.
 
 ## Browser automation
 
@@ -326,11 +352,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-ast tmp/cdp-ast-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-symbols tmp/cdp-symbol-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership and compact-AST
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST and Symbol
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -340,7 +369,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

@@ -551,6 +551,54 @@ impl BrowserHost {
 }
 
 impl Host for BrowserHost {
+    fn string_assignment(&self, object: &str, key: &str) -> bool {
+        if object == "location" {
+            return key == "href";
+        }
+        if object.starts_with("style:") {
+            return valid_name(key);
+        }
+        (object == "document" && matches!(key, "title" | "location"))
+            || ((object == "document" || object.starts_with("node:"))
+                && matches!(
+                    key,
+                    "textContent"
+                        | "innerText"
+                        | "innerHTML"
+                        | "id"
+                        | "className"
+                        | "name"
+                        | "type"
+                        | "value"
+                        | "href"
+                        | "src"
+                        | "action"
+                        | "method"
+                ))
+    }
+
+    fn string_arguments(&self, name: &str) -> &'static [usize] {
+        // Only these positions are text. Node arguments, callbacks and unused
+        // arguments must not run coercion hooks as a side effect of dispatch.
+        match name {
+            "host.dom.setAttribute" => &[0, 1],
+            "host.location.assign"
+            | "host.location.replace"
+            | "host.window.addEventListener"
+            | "host.dom.addEventListener"
+            | "host.collection.item"
+            | "host.dom.getElementById"
+            | "host.dom.querySelector"
+            | "host.dom.querySelectorAll"
+            | "host.dom.getElementsByTagName"
+            | "host.dom.createElement"
+            | "host.dom.createTextNode"
+            | "host.dom.getAttribute"
+            | "host.dom.removeAttribute" => &[0],
+            _ => &[],
+        }
+    }
+
     fn get(&mut self, object: &str, key: &str) -> Result<Value, String> {
         if object == "navigator" {
             return Ok(match key {
@@ -731,7 +779,9 @@ impl Host for BrowserHost {
         })
     }
     fn set(&mut self, object: &str, key: &str, value: Value) -> Result<(), String> {
-        let text = value.as_text();
+        // Runtime has applied true ToString for declared string-valued setters.
+        // This fallible final conversion also rejects a directly supplied Symbol.
+        let text = value.as_dom_text()?;
         if object == "location" {
             return if key == "href" {
                 self.navigate(&text)
@@ -794,7 +844,11 @@ impl Host for BrowserHost {
     }
     fn call(&mut self, name: &str, this: Value, args: Vec<Value>) -> Result<Value, String> {
         let first = args.first().cloned().unwrap_or(Value::Undefined);
-        let text = first.as_text();
+        let text = if self.string_arguments(name).contains(&0) {
+            first.as_dom_text()?
+        } else {
+            String::new()
+        };
         if name == "host.console.log" {
             return Ok(Value::Undefined);
         }
@@ -892,7 +946,7 @@ impl Host for BrowserHost {
                 self.attr(
                     root,
                     &text.to_ascii_lowercase(),
-                    args.get(1).cloned().unwrap_or(Value::Undefined).as_text(),
+                    args.get(1).unwrap_or(&Value::Undefined).as_dom_text()?,
                 )?;
                 Ok(Value::Undefined)
             }

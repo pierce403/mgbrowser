@@ -28,10 +28,12 @@ local binding; a separate large-parameter form also fits. A sole Function parame
 fragment now moves without redundant joining while real UTF-8 conversion stays
 charged. Compact AST statements and capacity-aware storage accounting now let a
 20,000-statement function fit while correctly charging holes and spare capacity.
-All 368 debug tests and 258 selected release checks pass locally, with ingress,
-real-copy and resource limits intact. Google's search gets beyond its earlier
-AST admission error, but missing Symbol support and a later allocation rejection
-still leave no actionable results.
+Genuine Symbol primitives now support distinct property keys, registry lookup,
+boxing, reflection and implemented coercion hooks, including fallible DOM string
+conversion. All 438 debug tests and 340 selected release checks pass locally,
+alongside 12 native and 12 external CDP journeys. Ingress, real-copy and resource
+limits remain intact. Google's missing-Symbol diagnostic is gone, but a prototype
+type error and a later allocation rejection still leave no actionable results.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

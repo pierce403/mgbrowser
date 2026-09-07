@@ -40,6 +40,10 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   `exec`/`test`/`toString`, and String `match`/`search`/`replace`/`split`, including
   capture groups, replacement callbacks and stateful global matching. See below
   for the supported grammar and deliberate limitations.
+- Core Symbol primitives have opaque identity, a bounded registry, boxing,
+  description/branding methods and typed symbol property keys. Own-symbol
+  reflection is separate from string enumeration. Only toPrimitive and
+  toStringTag well-known hooks are exposed, with actual algorithms; see below.
 
 Unsupported syntax rejects the complete script with a byte-offset diagnostic,
 not a successfully parsed prefix. Current exclusions include strict directives,
@@ -54,7 +58,8 @@ non-strict parameter aliasing; property descriptors and host coercion are partia
 number formatting/rounding is not fully specification-compatible. Strings retain
 UTF-16 code units inside the evaluator, including lone surrogates; the UTF-8 DOM
 and display boundary uses replacement characters for unpaired surrogates, and
-lone-surrogate property names are rejected. Error object names/messages are
+lone-surrogate string property names are rejected (symbol descriptions retain
+their code units). Error object names/messages are
 available, but Error prototype and `instanceof` fidelity remain partial.
 `Math.random` is deterministic research
 output, never cryptographic randomness. Passing the local tests is not a claim
@@ -178,6 +183,7 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Document startup | 32 eligible scripts, including unsupported external/module entries; 32 listeners |
 | Evaluator realm | 1,000,000 fuel; 4 MiB cumulative logical allocation; 10,000 objects, functions or environments; call depth 64; array/argument length 10,000 |
 | Evaluator retained entries | 128 active expression entries; 384 combined expression, statement and call entries, shared across re-entry |
+| Symbol storage | 10,000 cumulative admitted records, including two initial well-knowns; descriptions, registry entries and reflection share the existing realm allocation/fuel limits |
 | For-in enumeration | Prototype depth 64; candidate snapshots, including non-enumerable shadows, charge shared realm fuel and cumulative allocation; no separate candidate-count cap |
 | URI conversion | 1,048,576 UTF-16 units each input/output, with exact encoded-size preflight; allocations also charge the realm budget |
 | Regex compilation | 16,384 pattern units; 8,192 nodes; 64 captures; nesting 64; 128 bracket classes; 2 MiB compiled storage; 2,000,000 compile steps; numeric quantifiers at most 1,000,000 |
@@ -246,7 +252,7 @@ Before implementation, the unchanged authored 730-byte `/script-ast` HTML
 fixture generated 19,998 harmless statements and 19 form-building statements.
 The actual restricted worker rejected 4,492,773 AST bytes after 864,771 accepted
 bytes, leaving readable fallback and no controls. Its bytes are frozen for this
-increment. It now completes one script without errors at 2,481,036 accepted bytes
+increment. At that increment it completed one script without errors at 2,481,036 accepted bytes
 (Ast 1,615,150), creating the actual query/hidden/submit controls. Native and
 external CDP journeys submit the Unicode query and reach the local destination;
 both rendered frames were inspected. These runs perform different amounts of
@@ -277,8 +283,8 @@ five sparse-literal evaluations fit while the original six-evaluation input is
 retained as a fatal regression; and the shared-factory worker asserts actual
 10,000 statement-slot storage instead of the obsolete two-MiB node weight.
 Dense literals, six native Array constructions and all semantic/failure checks
-remain. All 368 debug tests, 258 selected release checks and all three exact CI
-journey steps pass locally (11 native and 11 external CDP destinations).
+remain. That increment passed all 368 debug tests, 258 selected release checks and
+all three exact CI journey steps locally (11 native and 11 external CDP destinations).
 Live/publication evidence follows in the dated log.
 
 ### Sole Function parameter-source ownership
@@ -633,27 +639,93 @@ Imported conformance corpora need a recorded revision and license. Extend agains
 independent local cases, not one site's source; keep private browsing/script
 artifacts in ignored `tmp/`, and use only explicit local fixtures in CI.
 
-### Next: core Symbols (proposed, not implemented)
+### Core Symbols and typed property keys
 
-Use opaque immutable symbol identity and typed string-or-symbol property keys,
-not description strings. The proposed core includes Symbol calls, constructor
-rejection, a bounded registry, boxing, branded prototype methods, and own-symbol
-reflection. Keep string-only enumeration distinct from symbol keys.
+The core uses opaque immutable Arc-backed identity and typed string-or-symbol property keys,
+not description strings. Symbol calls produce new primitives; `new Symbol` throws.
+The scoped API includes `Symbol.for`/`keyFor`, boxing through Object, branded
+prototype `valueOf`/`toString` and the inherited description getter. Descriptions
+and registry keys preserve UTF-16, including lone surrogates. Same-description
+symbols remain distinct, while registry lookup reuses its registered identity.
 Reference: [Symbol objects](https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-symbol-objects).
 
-Property-key conversion must preserve symbols. Audit implicit string/numeric
-conversion, truthiness, equality, and DOM string arguments; a diagnostic display
-string must not become an implicit conversion. Explicit Default/String/Number
-hints are needed for genuine toPrimitive dispatch. Reference:
-[conversion operations](https://tc39.es/ecma262/multipage/abstract-operations.html#sec-type-conversion).
+Property-key conversion preserves symbol identity across get/set/delete, prototype
+lookup, `in` and own-property checks. Symbol descriptions such as `0` and `length`
+must never enter array-index or length branches. `Object.getOwnPropertySymbols`
+returns own symbols in creation order; updating preserves order and deletion then
+re-addition moves the key to the end. String-only keys/names/for-in exclude symbols.
+No computed object-literal syntax, Reflect namespace or iterator protocol is implied.
 
-Only expose well-known hooks with implemented algorithms; initial candidates are
-toPrimitive and toStringTag, not iterator/regex/species compatibility flags.
-Keep all existing caps and charge identity/description/registry/reflection
-storage and ingress. Public foreign-symbol ingress needs explicit identity and
-admission rules. Independent cases must cover distinct same-description keys,
-array descriptions such as length/0, prototype lookup/deletion/reflection,
-coercion order/errors, closure/eval/Function lifetime, cumulative fatal limits,
-and a symbol-dependent real-worker/native/CDP form. No live script source is an
-implementation input, and this proposal does not resolve the later allocation
-failure or establish Google acceptance.
+Implicit string and numeric conversion must reject Symbols rather than use their
+diagnostic display or silently produce NaN. Plain `String(symbol)` is the explicit
+exception; boxed symbols and `new String(symbol)` do not get that exception.
+Genuine `Symbol.toPrimitive` dispatch supplies default/string/number hints, checks
+callability and primitive results, preserves the receiver and shares existing
+fuel/recursion limits. `Symbol.toStringTag` affects Object's tag string only when
+the retrieved value is a string. These two well-known hooks are the initial scope;
+iterator, regex, species, concat and custom-instance hooks stay absent until their
+algorithms exist. References: [conversion operations](https://tc39.es/ecma262/multipage/abstract-operations.html#sec-type-conversion)
+and [String construction](https://tc39.es/ecma262/multipage/text-processing.html#sec-string-constructor-string-value).
+
+One Runtime is the current worker's single agent/realm. Its registry and symbol
+identities survive that document's scripts, closures, eval and Function calls;
+no persistent page realm is added. Public opaque handles may outlive their source
+Runtime and cross into another, retaining identity but requiring destination
+storage admission. The immutable handle preserves public Value's existing
+Send/Sync boundary without making the AST/runtime shareable or adding worker
+capabilities. Foreign registered symbols do not automatically join the
+destination registry. Semantic well-known identity and actual retained record
+admission are separate concerns; equal well-known keys must not hide uncharged
+foreign storage: admission compares actual allocation pointers while well-known
+equality compares their supported kind.
+
+The new symbol table is cumulative and capped at 10,000 admitted records, including
+the two initial well-knowns. Its logical allowance is 128 bytes for record/control/
+table storage plus description capacity in UTF-16 bytes, charged before retention;
+registry indexing adds 64 bytes. Handle copies do not copy description payloads.
+Reflection arrays pay existing slot/object charges, and actual description/string
+copies remain charged. Existing 4 MiB, fuel, object, parser, array and worker caps
+are unchanged; first resource failure remains fatal and latched. These are logical
+storage allowances, not RSS or a new garbage collector.
+
+The DOM bridge declares its string-valued setters and argument positions. Runtime
+performs fallible ToString, including boxed/custom-object hooks, before passing
+those values to Host. Symbol conversion failure must preserve the target mutation
+and prevent navigation; earlier ordinary hook side effects are not rolled back.
+Node arguments, callback arguments and unused extras are not stringified.
+Symbol-keyed Host properties remain explicitly unsupported rather than aliasing
+string names. The bridge still uses UTF-8 replacement for lone surrogates and its
+existing textual collection.item index approximation; receiver validation versus
+argument-conversion ordering is not full Web IDL behavior. Reference:
+[DOMString conversion](https://webidl.spec.whatwg.org/#es-DOMString).
+
+The authored `/script-symbols` fixture is frozen byte-for-byte from its missing-API
+baseline: it previously reported ordinary ReferenceError before creating controls,
+without allocation rejection. It now completes at 57,954 accepted bytes with a
+real query/hidden/submit form. Native and external CDP paths submit its Unicode
+query, follow the local result and reach the destination; frames were inspected.
+The separate negative worker verifies its builder and first Symbol succeeded,
+then rejects Runtime 159,984 after 4,193,241 accepted bytes, with readable fallback
+and no catch/finally/later/navigation effects.
+
+All 438 debug tests and 340 selected release checks pass on default stacks,
+including 24 independent Symbol semantics, 14 key and 13 admission/lifetime/limit
+groups, 20 DOM and 26 actual-worker groups. Private cases verify storage allowances,
+Send/Sync, foreign well-known record admission, reserved description capacity,
+real getter copies and preflighted hook argument slots. The full three CI journey
+steps pass locally with 12 native and 12 external CDP destinations. No existing
+test was weakened; review caught and corrected readonly, coercion-order and
+public transport regressions plus new-copy charge omissions. Native string-key
+deletion retains its existing character-level fuel metering.
+
+One post-Symbol live checkpoint still produces no Google result links. Homepage
+HTTP 200 retains its form with three completed scripts/seven errors and no rejected
+allocation (2,506,006 accepted bytes). Search HTTP 200 completes two scripts with
+three errors: first `TypeError: prototype must be an object or null`, then an AST
+request of 387,964 after 4,107,538 accepted bytes, repeated by the next script.
+The missing-Symbol error is absent, but the inspected frame remains blank; exit 2,
+no result or destination. The diagnostic alone does not identify the supplied
+prototype or prove the cause. Next work independently audits object/prototype
+coverage and cumulative storage, without site-source adaptation or raised limits.
+No live script source was an implementation input. Publication evidence is in
+the daily log; local Symbol support does not establish Google acceptance.

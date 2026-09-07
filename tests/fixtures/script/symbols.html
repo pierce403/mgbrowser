@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><title>Symbol worker baseline</title></head><body>
+<p id="status">Symbol baseline fallback.</p>
+<script>
+var first=Symbol('same');
+var second=Symbol('same');
+if(first===second || typeof first!=='symbol' || typeof second!=='symbol') throw 'Symbol identity check failed';
+var object={plain:'string key'};
+object[first]='first value';
+object[second]='second value';
+if(object[first]!=='first value' || object[second]!=='second value' || object.plain!=='string key') throw 'Symbol property check failed';
+var symbols=Object.getOwnPropertySymbols(object);
+if(symbols.length!==2 || !((symbols[0]===first && symbols[1]===second) || (symbols[0]===second && symbols[1]===first))) throw 'Symbol reflection check failed';
+var keys=Object.keys(object);
+if(keys.length!==1 || keys[0]!=='plain') throw 'String key reflection check failed';
+var registered=Symbol.for('mgbrowser fixture');
+if(typeof registered!=='symbol' || registered!==Symbol.for('mgbrowser fixture') || Symbol.keyFor(registered)!=='mgbrowser fixture' || Symbol.keyFor(first)!==undefined) throw 'Symbol registry check failed';
+document.title='Symbol-built local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var source=document.createElement('input');
+source.type='hidden';
+source.name='source';
+source.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(source);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Symbol form ready';
+</script></body></html>
+

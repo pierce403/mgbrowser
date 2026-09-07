@@ -1,6 +1,6 @@
 //! Original, deliberately limited classic-script evaluator.
 //!
-//! Values use UTF-16 strings. `Value::as_text` is a host-display coercion, not
+//! Values use UTF-16 strings. `Value::as_text` is diagnostic formatting, not
 //! user-defined ToPrimitive: it replaces lone surrogates only at the UTF-8 host
 //! boundary and approximates number/function formatting. The evaluator keeps
 //! string code units intact. Resource accounting is a conservative, cumulative
@@ -18,6 +18,10 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
+#[path = "symbol.rs"]
+mod symbol;
+pub use symbol::SymbolHandle;
+use symbol::{Hint, PropertyKey};
 
 const MAX_FUEL: u64 = 1_000_000;
 const MAX_HEAP: usize = 4 * 1024 * 1024;
@@ -147,6 +151,7 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     String(Vec<u16>),
+    Symbol(SymbolHandle),
     Object(usize),
     Function(usize),
     Native(String),
@@ -164,9 +169,19 @@ impl Value {
             Self::Bool(value) => value.to_string(),
             Self::Number(value) => number_text(*value),
             Self::String(value) => String::from_utf16_lossy(value),
+            Self::Symbol(value) => value.display(),
             Self::Function(_) => "function () { [mgbrowser code] }".into(),
             Self::Native(name) => format!("function {name}() {{ [native code] }}"),
             Self::Object(_) | Self::Host(_) => "[object Object]".into(),
+        }
+    }
+    /// Primitive-only DOM boundary after the runtime's marked Host ToString.
+    /// Objects retain the existing diagnostic fallback for unmarked operations.
+    pub fn as_dom_text(&self) -> Result<String, String> {
+        if matches!(self, Self::Symbol(_)) {
+            Err("TypeError: cannot convert Symbol to string".into())
+        } else {
+            Ok(self.as_text())
         }
     }
     fn truthy(&self) -> bool {
@@ -190,6 +205,12 @@ impl Value {
 }
 
 pub trait Host {
+    fn string_assignment(&self, _object: &str, _key: &str) -> bool {
+        false
+    }
+    fn string_arguments(&self, _name: &str) -> &'static [usize] {
+        &[]
+    }
     fn get(&mut self, object: &str, key: &str) -> Result<Value, String>;
     fn set(&mut self, object: &str, key: &str, value: Value) -> Result<(), String>;
     fn call(&mut self, name: &str, this: Value, args: Vec<Value>) -> Result<Value, String>;
@@ -357,9 +378,12 @@ impl PrepaidArray {
 }
 
 struct Property {
-    key: String,
+    key: PropertyKey,
     value: Value,
     enumerable: bool,
+    writable: bool,
+    configurable: bool,
+    getter: bool,
 }
 struct Object {
     properties: Vec<Property>,
@@ -423,6 +447,7 @@ fn native_virtual_names(name: &str) -> &'static [&'static str] {
             "create",
             "getPrototypeOf",
             "getOwnPropertyNames",
+            "getOwnPropertySymbols",
         ],
         "Array" => &["name", "length", "prototype", "isArray"],
         "String" => &["name", "length", "prototype", "fromCharCode"],
@@ -435,6 +460,15 @@ fn native_virtual_names(name: &str) -> &'static [&'static str] {
             "isInteger",
         ],
         "Function" | "Boolean" | "RegExp" => &["name", "length", "prototype"],
+        "Symbol" => &[
+            "name",
+            "length",
+            "prototype",
+            "for",
+            "keyFor",
+            "toPrimitive",
+            "toStringTag",
+        ],
         _ => &["name", "length"],
     }
 }
@@ -460,7 +494,7 @@ struct Function {
 }
 enum Reference {
     Binding(usize, String),
-    Property(Value, String),
+    Property(Value, PropertyKey),
 }
 enum Flow {
     Normal(Option<Value>),
@@ -522,6 +556,11 @@ pub struct Runtime {
     number_prototype: usize,
     boolean_prototype: usize,
     regexp_prototype: usize,
+    symbol_prototype: usize,
+    symbols: Vec<SymbolHandle>,
+    symbol_registry: Vec<SymbolHandle>,
+    to_primitive: Option<SymbolHandle>,
+    to_string_tag: Option<SymbolHandle>,
     global_declarations: Vec<String>,
     global_setters: Vec<(String, String, String)>,
 }
@@ -566,6 +605,11 @@ impl Runtime {
             number_prototype: 5,
             boolean_prototype: 6,
             regexp_prototype: 7,
+            symbol_prototype: 8,
+            symbols: Vec::new(),
+            symbol_registry: Vec::new(),
+            to_primitive: None,
+            to_string_tag: None,
             global_declarations: Vec::new(),
             global_setters: Vec::new(),
         };
@@ -573,6 +617,7 @@ impl Runtime {
         for prototype in [
             Some(1),
             None,
+            Some(1),
             Some(1),
             Some(1),
             Some(1),
@@ -700,6 +745,7 @@ impl Runtime {
                 false,
             )
             .expect("fixed bootstrap");
+        runtime.symbol_bootstrap().expect("fixed symbol bootstrap");
         runtime.budget.bootstrapping = false;
         runtime
     }
@@ -762,6 +808,11 @@ impl Runtime {
             return Err(error.clone());
         }
         let result = (|| {
+            self.admit(&callee)?;
+            self.admit(&this)?;
+            for argument in &args {
+                self.admit(argument)?;
+            }
             self.budget.allocate(
                 value_bytes(&callee)
                     .saturating_add(value_bytes(&this))
@@ -994,28 +1045,37 @@ impl Runtime {
         Ok(Value::text(value))
     }
     fn copy(&mut self, value: &Value) -> Eval<Value> {
+        self.admit(value)?;
         self.budget.copy(value)
     }
 
     fn put_own(&mut self, object: usize, key: &str, value: Value, enumerable: bool) -> Eval<()> {
         self.budget.step()?;
+        self.admit(&value)?;
         let entry = self
             .objects
             .get_mut(object)
             .ok_or_else(|| exception("TypeError: unknown object"))?;
-        self.budget.allocate(value_bytes(&value))?;
         if let Some(property) = entry
             .properties
             .iter_mut()
             .find(|property| property.key == key)
         {
+            if !property.writable {
+                return Ok(());
+            }
+            self.budget.allocate(value_bytes(&value))?;
             property.value = value;
         } else {
+            self.budget.allocate(value_bytes(&value))?;
             self.budget.allocate(128 + key.len())?;
             entry.properties.push(Property {
-                key: key.into(),
+                key: PropertyKey::String(key.into()),
                 value,
                 enumerable,
+                writable: true,
+                configurable: true,
+                getter: false,
             });
         }
         Ok(())
@@ -1119,13 +1179,10 @@ impl Runtime {
         }
         for property in &object.properties {
             self.budget.step()?;
-            enumeration_add(
-                &mut self.budget,
-                entries,
-                owner,
-                &property.key,
-                property.enumerable,
-            )?;
+            let Some(key) = property.key.string() else {
+                continue;
+            };
+            enumeration_add(&mut self.budget, entries, owner, key, property.enumerable)?;
         }
         Ok(())
     }
@@ -1182,7 +1239,10 @@ impl Runtime {
             }
         }
         for property in &object.properties {
-            if enumeration_equal(&mut self.budget, &property.key, key)? {
+            let Some(name) = property.key.string() else {
+                continue;
+            };
+            if enumeration_equal(&mut self.budget, name, key)? {
                 return Ok(Some(property.enumerable));
             }
         }
@@ -1960,7 +2020,7 @@ impl Runtime {
                 }
                 self.binding(*environment, name)
             }
-            Reference::Property(object, key) => self.get(object, key, host),
+            Reference::Property(object, key) => self.get_key(object, key, host),
         }
     }
     fn write_reference(
@@ -1972,7 +2032,7 @@ impl Runtime {
         match reference {
             Reference::Binding(0, name) => self.set(Value::Object(0), &name, value, host),
             Reference::Binding(environment, name) => self.define(environment, &name, value),
-            Reference::Property(object, key) => self.set(object, &key, value, host),
+            Reference::Property(object, key) => self.set_key(object, &key, value, host),
         }
     }
     #[inline(never)]
@@ -2200,7 +2260,7 @@ impl Runtime {
                 Expr::Member { .. } => {
                     let reference = self.reference(expr, environment, this, host)?;
                     if let Reference::Property(object, key) = reference {
-                        self.delete(object, &key)
+                        self.delete_key(object, &key)
                     } else {
                         unreachable!()
                     }
@@ -2220,6 +2280,7 @@ impl Runtime {
                 Value::Bool(_) => "boolean",
                 Value::Number(_) => "number",
                 Value::String(_) => "string",
+                Value::Symbol(_) => "symbol",
                 Value::Function(_) | Value::Native(_) => "function",
                 _ => "object",
             }),
@@ -2321,6 +2382,14 @@ impl Runtime {
         let callee = self.expression(callee, environment, this, host)?;
         let args = self.arguments(args, environment, this, host)?;
         if let Value::Native(name) = &callee {
+            if name == "Symbol" {
+                return Err(exception("TypeError: Symbol is not a constructor"));
+            }
+            if name == "String" {
+                let value = args.into_iter().next().unwrap_or(Value::text(""));
+                let units = self.units(value, host)?;
+                return self.boxed(Value::String(units));
+            }
             if name == "RegExp" {
                 return self.call(
                     Value::Native("RegExp.new".into()),
@@ -2382,11 +2451,12 @@ impl Runtime {
             }
             Value::Host(object) => {
                 let value = host.get(object, key).map_err(exception)?;
+                self.admit(&value)?;
                 self.budget.allocate(value_bytes(&value))?;
                 return Ok(value);
             }
             Value::Object(id) => {
-                if let Some(value) = self.own(*id, key)? {
+                if let Some(value) = self.get_own_value(*id, key, value, host)? {
                     return Ok(value);
                 }
                 if let Some(Value::String(units)) = &self.objects[*id].boxed {
@@ -2429,6 +2499,7 @@ impl Runtime {
             }
             Value::Number(_) => Some(self.number_prototype),
             Value::Bool(_) => Some(self.boolean_prototype),
+            Value::Symbol(_) => Some(self.symbol_prototype),
             Value::Native(name) => {
                 if let Some((_, object)) = self
                     .native_properties
@@ -2436,7 +2507,7 @@ impl Runtime {
                     .find(|(existing, _)| existing == name)
                 {
                     let object = *object;
-                    if let Some(value) = self.own(object, key)? {
+                    if let Some(value) = self.get_own_value(object, key, value, host)? {
                         return Ok(value);
                     }
                 }
@@ -2444,7 +2515,11 @@ impl Runtime {
                     return self.get(&Value::Object(self.function_prototype), key, host);
                 }
                 if key == "name" {
-                    return self.text(name.rsplit('.').next().unwrap_or(name));
+                    return self.text(match name.as_str() {
+                        "Symbol.toPrimitive" => "[Symbol.toPrimitive]",
+                        "Symbol.description" => "get description",
+                        _ => name.rsplit('.').next().unwrap_or(name),
+                    });
                 }
                 if key == "prototype" && native_virtual_names(name).contains(&"prototype") {
                     return Ok(match name.as_str() {
@@ -2455,6 +2530,7 @@ impl Runtime {
                         "Number" => Value::Object(self.number_prototype),
                         "Boolean" => Value::Object(self.boolean_prototype),
                         "RegExp" => Value::Object(self.regexp_prototype),
+                        "Symbol" => Value::Object(self.symbol_prototype),
                         _ => Value::Undefined,
                     });
                 }
@@ -2464,7 +2540,11 @@ impl Runtime {
                         | ("String", "fromCharCode")
                         | (
                             "Object",
-                            "keys" | "create" | "getPrototypeOf" | "getOwnPropertyNames"
+                            "keys"
+                                | "create"
+                                | "getPrototypeOf"
+                                | "getOwnPropertyNames"
+                                | "getOwnPropertySymbols"
                         )
                         | ("Number", "isNaN" | "isFinite" | "isInteger")
                 ) {
@@ -2472,7 +2552,14 @@ impl Runtime {
                 }
                 if key == "length" {
                     return Ok(Value::Number(
-                        if matches!(name.as_str(), "parseInt" | "RegExp") {
+                        if name == "Symbol"
+                            || matches!(
+                                name.as_str(),
+                                "Symbol.toString" | "Symbol.valueOf" | "Symbol.description"
+                            )
+                        {
+                            0.0
+                        } else if matches!(name.as_str(), "parseInt" | "RegExp") {
                             2.0
                         } else if name == "RegExp.toString" {
                             0.0
@@ -2489,7 +2576,7 @@ impl Runtime {
             let Some(id) = current else {
                 return Ok(Value::Undefined);
             };
-            if let Some(value) = self.own(id, key)? {
+            if let Some(value) = self.get_own_value(id, key, value, host)? {
                 return Ok(value);
             }
             current = self.objects[id].prototype;
@@ -2500,14 +2587,6 @@ impl Runtime {
     }
     fn inherited_readonly(&mut self, id: usize, key: &str) -> Eval<bool> {
         let index = array_index(key);
-        if index.is_none()
-            && !matches!(
-                key,
-                "length" | "source" | "global" | "ignoreCase" | "multiline"
-            )
-        {
-            return Ok(false);
-        }
         let mut current = Some(id);
         for _ in 0..MAX_CALLS {
             self.budget.step()?;
@@ -2524,6 +2603,9 @@ impl Runtime {
                 && (key == "length" || index.is_some_and(|index| index < units.len()))
             {
                 return Ok(true);
+            }
+            if let Some(property) = object.properties.iter().find(|p| p.key == key) {
+                return Ok(!property.writable);
             }
             let parent = object.prototype;
             // Any nearer ordinary own descriptor stops the inherited search.
@@ -2543,7 +2625,14 @@ impl Runtime {
     fn set(&mut self, object: Value, key: &str, value: Value, host: &mut impl Host) -> Eval<()> {
         self.budget.step()?;
         match object {
-            Value::Host(object) => host.set(&object, key, value).map_err(exception),
+            Value::Host(object) => {
+                let value = if host.string_assignment(&object, key) {
+                    Value::String(self.units(value, host)?)
+                } else {
+                    value
+                };
+                host.set(&object, key, value).map_err(exception)
+            }
             Value::Object(id) => {
                 if self.inherited_readonly(id, key)? {
                     return Ok(());
@@ -2552,7 +2641,14 @@ impl Runtime {
                     && let Some((_, object, property)) =
                         self.global_setters.iter().find(|(name, _, _)| name == key)
                 {
-                    return host.set(object, property, value).map_err(exception);
+                    let object = object.clone();
+                    let property = property.clone();
+                    let value = if host.string_assignment(&object, &property) {
+                        Value::String(self.units(value, host)?)
+                    } else {
+                        value
+                    };
+                    return host.set(&object, &property, value).map_err(exception);
                 }
                 if id == 0 && matches!(key, "undefined" | "NaN" | "Infinity") {
                     return Ok(());
@@ -2641,6 +2737,15 @@ impl Runtime {
             return Ok(Value::Bool(false));
         }
         if let Value::Native(name) = &object {
+            if let Some(id) = self.native_properties_id(name)? {
+                if self.objects[id]
+                    .properties
+                    .iter()
+                    .any(|p| p.key == key && !p.configurable)
+                {
+                    return Ok(Value::Bool(false));
+                }
+            }
             let virtual_key = native_virtual_names(name).contains(&key);
             if matches!(key, "name" | "length") || (key == "prototype" && virtual_key) {
                 return Ok(Value::Bool(false));
@@ -2653,7 +2758,9 @@ impl Runtime {
             if let Some(id) = self.native_properties_id(name)? {
                 let properties = &mut self.objects[id].properties;
                 for index in 0..properties.len() {
-                    if enumeration_equal(&mut self.budget, &properties[index].key, key)? {
+                    if let Some(name) = properties[index].key.string()
+                        && enumeration_equal(&mut self.budget, name, key)?
+                    {
                         properties.remove(index);
                         break;
                     }
@@ -2710,26 +2817,59 @@ impl Runtime {
                 return Ok(Value::Bool(true));
             }
         }
+        if object
+            .properties
+            .iter()
+            .any(|p| p.key == key && !p.configurable)
+        {
+            return Ok(Value::Bool(false));
+        }
         object.properties.retain(|property| property.key != key);
         Ok(Value::Bool(true))
     }
-    fn property_key(&mut self, value: Value, host: &mut impl Host) -> Eval<String> {
-        let value = self.primitive(value, false, host)?;
+    fn property_key(&mut self, value: Value, host: &mut impl Host) -> Eval<PropertyKey> {
+        let value = self.primitive(value, Hint::String, host)?;
         match value {
-            Value::String(units) => {
-                String::from_utf16(&units).map_err(|_| unsupported("lone-surrogate property keys"))
-            }
-            other => Ok(other.as_text()),
+            Value::Symbol(symbol) => Ok(PropertyKey::Symbol(symbol)),
+            Value::String(units) => String::from_utf16(&units)
+                .map(PropertyKey::String)
+                .map_err(|_| unsupported("lone-surrogate property keys")),
+            other => Ok(PropertyKey::String(other.as_text())),
         }
     }
-    fn primitive(&mut self, value: Value, number_hint: bool, host: &mut impl Host) -> Eval<Value> {
+    fn primitive(&mut self, value: Value, hint: Hint, host: &mut impl Host) -> Eval<Value> {
         if value.primitive() {
             return Ok(value);
         }
-        for key in if number_hint {
-            ["valueOf", "toString"]
-        } else {
+        if !matches!(value, Value::Host(_)) {
+            let key = PropertyKey::Symbol(self.to_primitive.as_ref().unwrap().clone());
+            let method = self.get_key(&value, &key, host)?;
+            if !matches!(method, Value::Undefined | Value::Null) {
+                if !method.callable() {
+                    return Err(exception("TypeError: Symbol.toPrimitive is not callable"));
+                }
+                let receiver = self.copy(&value)?;
+                let hint_value = self.text(match hint {
+                    Hint::Default => "default",
+                    Hint::String => "string",
+                    Hint::Number => "number",
+                })?;
+                // This hook creates its own one-slot argument vector; unlike
+                // ordinary source calls, no arguments() producer prepaid it.
+                self.budget.allocate(64)?;
+                let result = self.call(method, receiver, vec![hint_value], None, host)?;
+                if result.primitive() {
+                    return Ok(result);
+                }
+                return Err(exception(
+                    "TypeError: Symbol.toPrimitive must return a primitive",
+                ));
+            }
+        }
+        for key in if matches!(hint, Hint::String) {
             ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
         } {
             let method = self.get(&value, key, host)?;
             if method.callable() {
@@ -2745,7 +2885,7 @@ impl Runtime {
         ))
     }
     fn number(&mut self, value: Value, host: &mut impl Host) -> Eval<f64> {
-        Ok(primitive_number(&self.primitive(value, true, host)?))
+        primitive_number(&self.primitive(value, Hint::Number, host)?)
     }
     fn units(&mut self, value: Value, host: &mut impl Host) -> Eval<Vec<u16>> {
         self.units_in(value, host, AllocationPhase::Runtime)
@@ -2756,8 +2896,9 @@ impl Runtime {
         host: &mut impl Host,
         phase: AllocationPhase,
     ) -> Eval<Vec<u16>> {
-        let value = self.primitive(value, false, host)?;
+        let value = self.primitive(value, Hint::String, host)?;
         match value {
+            Value::Symbol(_) => Err(exception("TypeError: cannot convert Symbol to string")),
             Value::String(units) => Ok(units),
             other => {
                 let text = other.as_text();
@@ -2777,25 +2918,11 @@ impl Runtime {
                 return Ok(Value::Bool(if op == "==" { equal } else { !equal }));
             }
             "in" => {
-                let key = self.property_key(left, host)?;
-                let mut object = match right {
-                    Value::Object(id) => Some(id),
-                    Value::Function(id) => Some(self.functions[id].properties),
-                    Value::Host(_) => return Err(unsupported("in on host objects")),
-                    _ => return Err(exception("TypeError: right side of in is not an object")),
-                };
-                for _ in 0..MAX_CALLS {
-                    let Some(id) = object else {
-                        return Ok(Value::Bool(false));
-                    };
-                    if self.own(id, &key)?.is_some() {
-                        return Ok(Value::Bool(true));
-                    }
-                    object = self.objects[id].prototype;
+                if right.primitive() {
+                    return Err(exception("TypeError: right side of in is not an object"));
                 }
-                return Err(Fault::Fatal(
-                    "JavaScript prototype depth limit exhausted".into(),
-                ));
+                let key = self.property_key(left, host)?;
+                return Ok(Value::Bool(self.has_key(&right, &key, false)?));
             }
             "instanceof" => {
                 if !right.callable() {
@@ -2828,8 +2955,21 @@ impl Runtime {
             }
             _ => {}
         }
-        let left = self.primitive(left, true, host)?;
-        let right = self.primitive(right, true, host)?;
+        let hint = if op == "+" {
+            Hint::Default
+        } else {
+            Hint::Number
+        };
+        let left = self.primitive(left, hint, host)?;
+        // Numeric-only operators finish converting the left operand before
+        // invoking right-side coercion hooks. Addition and comparisons first
+        // obtain both primitives, as required by their distinct algorithms.
+        let left = if matches!(op, "+" | "<" | ">" | "<=" | ">=") {
+            left
+        } else {
+            Value::Number(primitive_number(&left)?)
+        };
+        let right = self.primitive(right, hint, host)?;
         if op == "+" && (matches!(left, Value::String(_)) || matches!(right, Value::String(_))) {
             let mut a = self.units(left, host)?;
             let b = self.units(right, host)?;
@@ -2841,7 +2981,7 @@ impl Runtime {
         if matches!(op, "<" | ">" | "<=" | ">=") {
             let order = match (&left, &right) {
                 (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
-                _ => primitive_number(&left).partial_cmp(&primitive_number(&right)),
+                _ => primitive_number(&left)?.partial_cmp(&primitive_number(&right)?),
             };
             return Ok(Value::Bool(order.is_some_and(|order| match op {
                 "<" => order.is_lt(),
@@ -2850,7 +2990,7 @@ impl Runtime {
                 _ => !order.is_lt(),
             })));
         }
-        let (a, b) = (primitive_number(&left), primitive_number(&right));
+        let (a, b) = (primitive_number(&left)?, primitive_number(&right)?);
         Ok(Value::Number(match op {
             "+" => a + b,
             "-" => a - b,
@@ -2879,7 +3019,7 @@ impl Runtime {
         }
         match (&left, &right) {
             (Value::Number(_), Value::String(_)) | (Value::String(_), Value::Number(_)) => {
-                Ok(primitive_number(&left) == primitive_number(&right))
+                Ok(primitive_number(&left)? == primitive_number(&right)?)
             }
             (Value::Bool(value), _) => {
                 self.equal(Value::Number(if *value { 1.0 } else { 0.0 }), right, host)
@@ -2887,12 +3027,19 @@ impl Runtime {
             (_, Value::Bool(value)) => {
                 self.equal(left, Value::Number(if *value { 1.0 } else { 0.0 }), host)
             }
-            _ if !left.primitive() && matches!(right, Value::Number(_) | Value::String(_)) => {
-                let left = self.primitive(left, true, host)?;
+            _ if !left.primitive()
+                && matches!(
+                    right,
+                    Value::Number(_) | Value::String(_) | Value::Symbol(_)
+                ) =>
+            {
+                let left = self.primitive(left, Hint::Default, host)?;
                 self.equal(left, right, host)
             }
-            _ if !right.primitive() && matches!(left, Value::Number(_) | Value::String(_)) => {
-                let right = self.primitive(right, true, host)?;
+            _ if !right.primitive()
+                && matches!(left, Value::Number(_) | Value::String(_) | Value::Symbol(_)) =>
+            {
+                let right = self.primitive(right, Hint::Default, host)?;
                 self.equal(left, right, host)
             }
             _ => Ok(false),
@@ -2903,6 +3050,7 @@ impl Runtime {
             Value::String(_) => self.string_prototype,
             Value::Number(_) => self.number_prototype,
             Value::Bool(_) => self.boolean_prototype,
+            Value::Symbol(_) => self.symbol_prototype,
             _ => return Ok(value),
         };
         let object = self.object(Some(prototype), None)?;
@@ -2954,7 +3102,15 @@ impl Runtime {
                 )
             }
             Value::Native(name) if name.starts_with("host.") => {
+                let mut args = args;
+                for index in host.string_arguments(&name) {
+                    if let Some(argument) = args.get_mut(*index) {
+                        let value = std::mem::replace(argument, Value::Undefined);
+                        *argument = Value::String(self.units(value, host)?);
+                    }
+                }
                 let value = host.call(&name, this, args).map_err(exception)?;
+                self.admit(&value)?;
                 self.budget.allocate(value_bytes(&value))?;
                 Ok(value)
             }
@@ -3016,6 +3172,9 @@ impl Runtime {
         mut args: Vec<Value>,
         host: &mut impl Host,
     ) -> Eval<Value> {
+        if name == "Symbol" || name.starts_with("Symbol.") {
+            return self.symbol_native(name, this, args, host);
+        }
         // Forwarding branches own their arguments and do not use this copy.
         // Copy only for branches that actually consume `first`; argument
         // expression evaluation and user coercion order remain unchanged.
@@ -3036,6 +3195,7 @@ impl Runtime {
                 | "Object.hasOwnProperty"
                 | "Object.keys"
                 | "Object.getOwnPropertyNames"
+                | "Object.getOwnPropertySymbols"
                 | "Object.create"
                 | "Object.getPrototypeOf"
                 | "Number.isNaN"
@@ -3089,6 +3249,8 @@ impl Runtime {
             "String" => {
                 if args.is_empty() {
                     self.text("")
+                } else if matches!(first, Value::Symbol(_)) {
+                    self.string_symbol(first)
                 } else {
                     let units = self.units(first, host)?;
                     // ToString either transfers a paid buffer or charges its
@@ -3113,7 +3275,7 @@ impl Runtime {
             }
             "Array" => {
                 let array = if args.len() == 1 && matches!(first, Value::Number(_)) {
-                    let length = primitive_number(&first);
+                    let length = primitive_number(&first)?;
                     if !length.is_finite() || length < 0.0 || length.fract() != 0.0 {
                         return Err(exception("RangeError: invalid array length"));
                     }
@@ -3189,34 +3351,18 @@ impl Runtime {
                     self.boxed(this)
                 }
             }
-            "Object.toString" => self.text(match this {
-                Value::Undefined => "[object Undefined]",
-                Value::Null => "[object Null]",
-                Value::Object(id) if self.objects.get(id).is_some_and(|o| o.array.is_some()) => {
-                    "[object Array]"
-                }
-                Value::Object(id) if self.objects.get(id).is_some_and(|o| o.regexp.is_some()) => {
-                    "[object RegExp]"
-                }
-                Value::Function(_) | Value::Native(_) => "[object Function]",
-                Value::String(_) => "[object String]",
-                Value::Number(_) => "[object Number]",
-                Value::Bool(_) => "[object Boolean]",
-                _ => "[object Object]",
-            }),
+            "Object.toString" => self.object_tag(this, host),
             "Object.hasOwnProperty" => {
                 let key = self.property_key(first, host)?;
-                let owner = match &this {
+                match &this {
                     Value::Object(_) | Value::Function(_) | Value::Native(_) => {
-                        Self::enumeration_owner(&this)?
+                        Ok(Value::Bool(self.has_key(&this, &key, true)?))
                     }
                     Value::Host(_) => return Err(unsupported("hasOwnProperty on host objects")),
-                    _ => return Ok(Value::Bool(false)),
-                };
-                Ok(Value::Bool(
-                    self.enumeration_descriptor(owner, &this, &key)?.is_some(),
-                ))
+                    _ => Ok(Value::Bool(false)),
+                }
             }
+            "Object.getOwnPropertySymbols" => self.own_symbols(first),
             "Object.keys" | "Object.getOwnPropertyNames" => {
                 let owner = match &first {
                     Value::Object(_) | Value::Function(_) | Value::Native(_) => {
@@ -3408,7 +3554,11 @@ impl Runtime {
                     if !(0.0..=100.0).contains(&digits) {
                         return Err(exception("RangeError: invalid fraction digits"));
                     }
-                    return self.text(&format!("{:.*}", digits as usize, primitive_number(&value)));
+                    return self.text(&format!(
+                        "{:.*}",
+                        digits as usize,
+                        primitive_number(&value)?
+                    ));
                 }
                 self.text(&value.as_text())
             }
@@ -4330,7 +4480,13 @@ fn strict_equal(left: &Value, right: &Value) -> bool {
 fn js_space(character: char) -> bool {
     character.is_whitespace() || character == '\u{feff}'
 }
-fn primitive_number(value: &Value) -> f64 {
+fn primitive_number(value: &Value) -> Eval<f64> {
+    if matches!(value, Value::Symbol(_)) {
+        return Err(exception("TypeError: cannot convert Symbol to number"));
+    }
+    Ok(primitive_number_without_symbol(value))
+}
+fn primitive_number_without_symbol(value: &Value) -> f64 {
     match value {
         Value::Undefined => f64::NAN,
         Value::Null => 0.0,

@@ -104,6 +104,110 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_uses_real_symbols_before_creating_controls() {
+    // This exact source previously stopped at ReferenceError: Symbol is not
+    // defined. Identity/key/reflection/registry checks precede all form creation.
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-symbol-worker-baseline".into(),
+        html: include_str!("fixtures/script/symbols.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("Symbol fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Symbol-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.tag == "button" && node.attr("type") == Some("submit"))
+    );
+    assert!(reply.html.contains("Symbol form ready"));
+}
+
+#[test]
+fn restricted_child_rejects_symbol_dom_conversion_and_recovers_in_later_script() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-symbol-conversion".into(),
+        html: "<html><head><title>Symbol conversion fallback</title></head><body><p id=output>Kept text</p><script>var token=Symbol('not text');document.getElementById('output').textContent=Object(token);location.href='/incorrect';</script><script>if(typeof token==='symbol'){document.title='Recovered after Symbol error';}</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1);
+    assert!(reply.errors[0].contains("TypeError"), "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Recovered after Symbol error");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(
+        document.nodes[document.nodes[output].children[0]].text,
+        "Kept text"
+    );
+    assert!(document.forms.is_empty());
+}
+
+#[test]
+fn restricted_child_symbol_description_storage_stays_cumulative_and_fatal() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-symbol-storage-limit".into(),
+        html: "<html><head><title>Symbol storage fallback</title></head><body><p id=output>Readable Symbol fallback</p><script>var description=Array(10000).join('abcdefgh');document.getElementById('output').setAttribute('data-builder','ready');Symbol(description);document.getElementById('output').setAttribute('data-symbol','ready');try{for(var i=0;i<100;i++){Symbol(description);}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("Symbol storage negative allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert_eq!(
+        report.first_rejected.unwrap().phase,
+        mg_deps::js::runtime::AllocationPhase::Runtime
+    );
+    let first = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(first.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Symbol storage fallback");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable Symbol fallback"));
+    // The builder and a real Symbol succeeded before the failing loop. A
+    // Runtime-phase failure in Array/join alone cannot satisfy this negative.
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-builder"), Some("ready"));
+    assert_eq!(document.nodes[output].attr("data-symbol"), Some("ready"));
+}
+
+#[test]
 fn restricted_child_retains_large_ast_and_calls_real_form_builder() {
     // Frozen before the AST change: 19,998 harmless statements followed by 19
     // DOM-building statements. Its original AST admission exceeded 4 MiB.

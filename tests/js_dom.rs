@@ -393,3 +393,253 @@ fn scripts_and_load_callbacks_preserve_order_and_ready_state() {
         "first:loading|second|third|dom:interactive:DOMContentLoaded|dom-second|load-first:complete|load-second|onload"
     );
 }
+
+#[test]
+fn symbol_dom_setters_reject_before_mutation_or_navigation() {
+    for value in ["Symbol('value')", "Object(Symbol('value'))"] {
+        for assignment in [
+            "document.title",
+            "document.getElementById('output').textContent",
+            "document.getElementById('output').innerText",
+            "document.getElementById('output').innerHTML",
+            "document.getElementById('target').value",
+            "document.getElementById('target').name",
+            "document.getElementById('link').href",
+            "document.getElementById('output').style.cssText",
+            "document.getElementById('output').style.color",
+            "location.href",
+            "document.location",
+            "window.location",
+            "location",
+        ] {
+            let reply = page(
+                "",
+                "<input id=target name=kept value=original><a id=link href='/kept'>Kept link</a>",
+                &format!("{assignment} = {value};document.title='Incorrect later effect';"),
+            );
+            assert_eq!(
+                reply.errors.len(),
+                1,
+                "{assignment} = {value}: {:?}",
+                reply.errors
+            );
+            assert!(
+                reply.errors[0].contains("TypeError"),
+                "{assignment} = {value}: {:?}",
+                reply.errors
+            );
+            assert!(reply.navigation.is_none(), "{assignment} = {value}");
+            assert_eq!(reply.scripts_executed, 0);
+            assert!(reply.allocations.unwrap().first_rejected.is_none());
+            let doc = rendered(&reply);
+            assert_eq!(doc.title, "Initial title");
+            assert_eq!(content(&doc, "#output"), "Unchanged output");
+            let target = doc.query_selector(0, "#target").unwrap().unwrap();
+            assert_eq!(doc.nodes[target].attr("value"), Some("original"));
+            assert_eq!(doc.nodes[target].attr("name"), Some("kept"));
+            let link = doc.query_selector(0, "#link").unwrap().unwrap();
+            assert_eq!(doc.nodes[link].attr("href"), Some("/kept"));
+            let output = doc.query_selector(0, "#output").unwrap().unwrap();
+            assert_eq!(doc.nodes[output].attr("style"), None);
+            readable(&doc);
+        }
+    }
+}
+
+#[test]
+fn symbol_dom_string_arguments_reject_without_consuming_diagnostic_text() {
+    for value in ["Symbol('output')", "Object(Symbol('output'))"] {
+        for call in [
+            "document.getElementById(V)",
+            "document.querySelector(V)",
+            "document.querySelectorAll(V)",
+            "document.getElementsByTagName(V)",
+            "document.createElement(V)",
+            "document.createTextNode(V)",
+            "document.body.getAttribute(V)",
+            "document.body.removeAttribute(V)",
+            "document.body.setAttribute(V, 'value')",
+            "document.body.setAttribute('data-test', V)",
+            "document.addEventListener(V, function(){})",
+            "window.addEventListener(V, function(){})",
+            "document.querySelectorAll('p').item(V)",
+            "location.assign(V)",
+            "location.replace(V)",
+        ] {
+            let call = call.replace('V', value);
+            let reply = page(
+                "",
+                "",
+                &format!("{call};document.title='Incorrect effect';"),
+            );
+            assert_eq!(reply.errors.len(), 1, "{call}: {:?}", reply.errors);
+            assert!(
+                reply.errors[0].contains("TypeError"),
+                "{call}: {:?}",
+                reply.errors
+            );
+            assert!(reply.navigation.is_none(), "{call}");
+            let doc = rendered(&reply);
+            assert_eq!(doc.title, "Initial title");
+            assert_eq!(content(&doc, "#output"), "Unchanged output");
+            let body = doc.query_selector(0, "body").unwrap().unwrap();
+            assert_eq!(doc.nodes[body].attr("data-test"), None);
+            readable(&doc);
+        }
+    }
+}
+
+#[test]
+fn dom_coercion_hooks_receive_string_hint_and_preserve_argument_order() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var trail='';
+        function text(value, marker) {
+            var object={};
+            object[Symbol.toPrimitive]=function(hint) {
+                if(this!==object || hint!=='string') throw 'wrong conversion';
+                trail+=marker;return value;
+            };
+            return object;
+        }
+        var node=document.createElement(text('p','element;'));
+        node.id=text('created','id;');
+        node.textContent=text('Rust & café','text;');
+        node.setAttribute(text('data-test','name;'),text('retained','value;'));
+        document.body.appendChild(node);
+        document.getElementById('output').textContent=trail;
+    "#,
+    );
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    let doc = rendered(&reply);
+    assert_eq!(content(&doc, "#output"), "element;id;text;name;value;");
+    assert_eq!(content(&doc, "#created"), "Rust & café");
+    let created = doc.query_selector(0, "#created").unwrap().unwrap();
+    assert_eq!(doc.nodes[created].attr("data-test"), Some("retained"));
+    readable(&doc);
+}
+
+#[test]
+fn failed_second_dom_conversion_keeps_attribute_but_not_prior_hook_side_effects() {
+    let reply = page(
+        "",
+        "<p id=target data-test=kept>Kept child</p>",
+        r#"
+        var trail='';var key={};var value={};
+        key[Symbol.toPrimitive]=function(hint){trail+='key:'+hint+';';return 'data-test';};
+        value[Symbol.toPrimitive]=function(hint){trail+='value:'+hint+';';return Symbol('no text');};
+        try{document.getElementById('target').setAttribute(key,value);}
+        catch(error){trail+='caught';}
+        document.getElementById('output').textContent=trail;
+    "#,
+    );
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    let doc = rendered(&reply);
+    assert_eq!(content(&doc, "#output"), "key:string;value:string;caught");
+    let target = doc.query_selector(0, "#target").unwrap().unwrap();
+    assert_eq!(doc.nodes[target].attr("data-test"), Some("kept"));
+    assert_eq!(content(&doc, "#target"), "Kept child");
+}
+
+#[test]
+fn failed_first_dom_conversion_does_not_run_the_second_argument_hook() {
+    for failure in ["return Symbol('not a name');", "throw 42;"] {
+        let reply = page(
+            "",
+            "<p id=target data-test=kept>Kept child</p>",
+            &format!(
+                r#"
+            var trail='';var key={{}};var value={{}};
+            key[Symbol.toPrimitive]=function(hint){{trail+='key:'+hint+';';{failure}}};
+            value[Symbol.toPrimitive]=function(hint){{trail+='incorrect value;';return 'changed';}};
+            try{{document.getElementById('target').setAttribute(key,value);}}
+            catch(error){{trail+='caught';}}
+            document.getElementById('output').textContent=trail;
+        "#
+            ),
+        );
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        let doc = rendered(&reply);
+        assert_eq!(content(&doc, "#output"), "key:string;caught");
+        let target = doc.query_selector(0, "#target").unwrap().unwrap();
+        assert_eq!(doc.nodes[target].attr("data-test"), Some("kept"));
+        assert_eq!(content(&doc, "#target"), "Kept child");
+    }
+}
+
+#[test]
+fn dom_explicit_symbol_string_is_allowed_but_unused_arguments_are_not_coerced() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var unused={};unused[Symbol.toPrimitive]=function(){throw 'unused conversion';};
+        var token=Symbol('explicit');
+        console.log(token,unused);
+        var child=document.createTextNode(String(token),unused);
+        var parent=document.getElementById('output');
+        parent.textContent='';parent.appendChild(child,unused);
+        document.addEventListener('DOMContentLoaded',function(){document.title='Listener ran';},unused);
+    "#,
+    );
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Listener ran");
+    assert_eq!(content(&doc, "#output"), "Symbol(explicit)");
+    readable(&doc);
+}
+
+#[test]
+fn symbol_host_keys_fail_explicitly_instead_of_aliasing_string_properties() {
+    for access in [
+        "document[token]",
+        "document[token]='Incorrect'",
+        "delete document[token]",
+        "token in document",
+    ] {
+        let reply = page(
+            "",
+            "",
+            &format!("var token=Symbol('title');{access};document.title='Incorrect later effect';"),
+        );
+        assert_eq!(reply.errors.len(), 1, "{access}: {:?}", reply.errors);
+        assert!(
+            reply.errors[0].to_ascii_lowercase().contains("symbol"),
+            "{access}: {:?}",
+            reply.errors
+        );
+        assert_eq!(rendered(&reply).title, "Initial title");
+        assert!(reply.navigation.is_none());
+        assert!(reply.allocations.unwrap().first_rejected.is_none());
+    }
+}
+
+#[test]
+fn fatal_dom_coercion_cannot_run_handlers_or_a_later_script() {
+    let reply = page(
+        "",
+        r#"
+        <script>
+            var value={};value[Symbol.toPrimitive]=function(){while(true){}};
+            try{document.title=value;}
+            catch(error){document.title='Incorrect catch';}
+            finally{document.title='Incorrect finally';}
+        </script>
+    "#,
+        "document.title='Incorrect later script';location.href='/incorrect';",
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    assert!(
+        reply
+            .errors
+            .iter()
+            .all(|error| error.contains("JavaScript fuel exhausted"))
+    );
+    assert!(reply.navigation.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Initial title");
+    readable(&doc);
+}
