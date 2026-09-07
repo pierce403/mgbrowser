@@ -18,10 +18,13 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
+#[path = "error.rs"]
+mod error;
 #[path = "prototype.rs"]
 mod prototype;
 #[path = "symbol.rs"]
 mod symbol;
+use error::ErrorKind;
 use prototype::KeyRef;
 pub use symbol::SymbolHandle;
 use symbol::{Hint, PropertyKey};
@@ -394,6 +397,7 @@ struct Object {
     prototype: Option<PrototypeIdentity>,
     boxed: Option<Value>,
     regexp: Option<Rc<regexp::Regex>>,
+    error: Option<ErrorKind>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrototypeIdentity {
@@ -561,6 +565,7 @@ pub struct Runtime {
     boolean_prototype: usize,
     regexp_prototype: usize,
     symbol_prototype: usize,
+    error_prototypes: [usize; 6],
     symbols: Vec<SymbolHandle>,
     symbol_registry: Vec<SymbolHandle>,
     to_primitive: Option<SymbolHandle>,
@@ -610,6 +615,7 @@ impl Runtime {
             boolean_prototype: 6,
             regexp_prototype: 7,
             symbol_prototype: 8,
+            error_prototypes: [0; 6],
             symbols: Vec::new(),
             symbol_registry: Vec::new(),
             to_primitive: None,
@@ -750,6 +756,7 @@ impl Runtime {
             )
             .expect("fixed bootstrap");
         runtime.symbol_bootstrap().expect("fixed symbol bootstrap");
+        runtime.error_bootstrap().expect("fixed error bootstrap");
         runtime.budget.bootstrapping = false;
         runtime
     }
@@ -856,6 +863,11 @@ impl Runtime {
                 Err(message)
             }
             Err(Fault::Throw(value)) => {
+                if let Value::Object(id) = &value
+                    && let Some(kind) = self.objects.get(*id).and_then(|object| object.error)
+                {
+                    return Err(self.error_diagnostic(*id, kind));
+                }
                 let text = if let Value::Object(id) = &value {
                     self.objects
                         .get(*id)
@@ -892,10 +904,10 @@ impl Runtime {
     }
 
     fn error_object(&mut self, name: &str, message: &str) -> Eval<Value> {
-        let object = self.object(Some(self.object_prototype), None)?;
-        let name = self.text(name)?;
+        let kind = ErrorKind::from_name(name)
+            .ok_or_else(|| Fault::Fatal("Invalid intrinsic JavaScript error family".into()))?;
+        let object = self.error_instance(kind)?;
         let message = self.text(message)?;
-        self.put_own(object, "name", name, false)?;
         self.put_own(object, "message", message, false)?;
         Ok(Value::Object(object))
     }
@@ -1025,6 +1037,7 @@ impl Runtime {
             prototype,
             boxed: None,
             regexp: None,
+            error: None,
         });
         Ok(id)
     }
@@ -3225,18 +3238,15 @@ impl Runtime {
             }
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "URIError"
             | "SyntaxError" => {
-                let object = self.object(Some(self.object_prototype), None)?;
-                let message = if args.is_empty() {
-                    self.text("")?
-                } else {
+                let kind = ErrorKind::from_name(name).expect("matched intrinsic error family");
+                let object = self.error_instance(kind)?;
+                if !matches!(first, Value::Undefined) {
                     let units = self.units(first, host)?;
-                    Value::String(units)
-                };
-                let label = self.text(name)?;
-                self.put_own(object, "message", message, false)?;
-                self.put_own(object, "name", label, false)?;
+                    self.put_own(object, "message", Value::String(units), false)?;
+                }
                 Ok(Value::Object(object))
             }
+            "Error.toString" => self.error_to_string(this, host),
             _ if name.starts_with("String.") => self.string_method(name, this, args, host),
             _ if name.starts_with("Array.") => self.array_method(name, this, args, host),
             _ if name.starts_with("Math.") => {

@@ -104,6 +104,146 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_uses_error_family_prototypes_before_creating_controls() {
+    // Exact frozen authored baseline: no controls exist until every Error-family
+    // prototype/default/instance/string-conversion requirement has succeeded.
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-error-family-worker-baseline".into(),
+        html: include_str!("fixtures/script/errors.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("Error-family fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Error-family-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.tag == "button" && node.attr("type") == Some("submit"))
+    );
+    assert!(
+        reply
+            .html
+            .contains("Authored local Error-family form ready")
+    );
+}
+
+#[test]
+fn restricted_child_error_diagnostic_does_not_invoke_hooks_and_later_script_recovers() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-error-diagnostic".into(),
+        html: "<html><head><title>Error diagnostic fallback</title></head><body><p id=output>Readable Error fallback</p><script>Error.prototype.toString=function(){document.title='Incorrect diagnostic hook';location.href='/incorrect';while(true){}};throw new TypeError('authored message');</script><script>document.getElementById('output').textContent='Recovered after actual TypeError';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        ["Inline script 1: Uncaught JavaScript exception: TypeError: authored message"]
+    );
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Error diagnostic fallback");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Recovered after actual TypeError"));
+}
+
+#[test]
+fn restricted_child_error_string_coercion_fuel_failure_is_fatal_and_latched() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-error-coercion-fuel".into(),
+        html: "<html><head><title>Error coercion fallback</title></head><body><p id=output>Readable Error coercion fallback</p><script>var error=new TypeError('message');if(!(error instanceof TypeError) || !(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');error.name={toString:function(){document.getElementById('output').setAttribute('data-hook','ready');while(true){}}};try{String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    let first = reply.errors[0].split_once(": ").unwrap().1;
+    assert_eq!(first, "JavaScript fuel exhausted");
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Error coercion fallback");
+    assert!(document.forms.is_empty());
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-error"), Some("ready"));
+    assert_eq!(document.nodes[output].attr("data-hook"), Some("ready"));
+    assert!(reply.html.contains("Readable Error coercion fallback"));
+}
+
+#[test]
+fn restricted_child_error_string_storage_exhaustion_preserves_fallback() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-error-string-storage".into(),
+        html: "<html><head><title>Error string storage fallback</title></head><body><p id=output>Readable Error string storage fallback</p><script>var message=Array(10000).join('abcdefgh');var error=TypeError(message);if(!(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');if(String(error).length!==message.length+11)throw 'Wrong Error string';document.getElementById('output').setAttribute('data-string','ready');try{for(var i=0;i<30;i++)String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    let first = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(first.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("Error string storage negative allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let rejected = report.first_rejected.unwrap();
+    assert_eq!(
+        rejected.phase,
+        mg_deps::js::runtime::AllocationPhase::Runtime
+    );
+    assert!(rejected.requested_bytes >= 79_992 * 2);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Error string storage fallback");
+    assert!(document.forms.is_empty());
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-error"), Some("ready"));
+    assert_eq!(document.nodes[output].attr("data-string"), Some("ready"));
+    assert!(
+        reply
+            .html
+            .contains("Readable Error string storage fallback")
+    );
+}
+
+#[test]
 fn restricted_child_uses_function_and_native_prototypes_before_creating_controls() {
     // Frozen missing-capability baseline: all prototype/metadata/constructor
     // gates precede the real form. There are no static controls to fall back to.

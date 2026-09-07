@@ -32,11 +32,13 @@ Genuine Symbol primitives now support distinct property keys, registry lookup,
 boxing, reflection and implemented coercion hooks, including fallible DOM string
 conversion. Functions and native builtins now retain genuine prototype identity,
 including inherited metadata and Symbol keys, construction and instanceof.
-All 492 debug tests and 394 selected release checks pass locally, alongside
-13 native and 13 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt still reports the same prototype type
-error and a later allocation rejection, with no actionable results; the generic
-prototype correction did not resolve that served response.
+Six existing Error families now have genuine prototypes and instances, ordered
+string conversion and bounded callback-free host diagnostics.
+All 547 debug tests and 449 selected release checks pass locally, alongside
+14 native and 14 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt replaces the prior prototype error with
+unsupported Array.concat; a later allocation rejection remains, with no actionable
+results. Next is independently tested concat support and cumulative-storage work.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

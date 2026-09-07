@@ -681,6 +681,71 @@ fn inherited_function_prototype_hook_failure_keeps_dom_target_unchanged() {
 }
 
 #[test]
+fn error_family_string_conversion_drives_real_dom_text_title_and_navigation() {
+    for family in [
+        "Error",
+        "TypeError",
+        "RangeError",
+        "ReferenceError",
+        "SyntaxError",
+        "URIError",
+    ] {
+        let reply = page(
+            "",
+            "",
+            &format!(
+                r#"
+                var error=new {family}('Rust & café');
+                if(!(error instanceof Error) || error.hasOwnProperty('name'))throw 'Wrong Error instance';
+                document.getElementById('output').textContent=error;
+                error.message='DOM title';document.title=error;
+                error.name='';error.message='/error-destination';location.href=error;
+            "#
+            ),
+        );
+        assert!(reply.applied);
+        assert!(reply.errors.is_empty(), "{family}: {:?}", reply.errors);
+        assert_eq!(reply.scripts_executed, 1);
+        assert_eq!(
+            reply.navigation.as_deref(),
+            Some("https://example.test/error-destination")
+        );
+        assert!(reply.allocations.unwrap().first_rejected.is_none());
+        let doc = rendered(&reply);
+        assert_eq!(doc.title, format!("{family}: DOM title"));
+        assert_eq!(content(&doc, "#output"), format!("{family}: Rust & café"));
+        readable(&doc);
+    }
+}
+
+#[test]
+fn error_message_symbol_conversion_preserves_dom_target_and_prior_hook_effects() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var error=TypeError();var message={};
+        message[Symbol.toPrimitive]=function(hint){
+            if(this!==message || hint!=='string')throw 'Wrong message conversion';
+            document.title='Error message hook ran';return Symbol('not DOM text');
+        };
+        error.message=message;
+        try{document.getElementById('output').textContent=error;location.href='/incorrect';}
+        catch(caught){if(String(caught)!=='TypeError: cannot convert Symbol to string')throw caught;}
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Error message hook ran");
+    assert_eq!(content(&doc, "#output"), "Unchanged output");
+    readable(&doc);
+}
+
+#[test]
 fn fatal_dom_coercion_cannot_run_handlers_or_a_later_script() {
     let reply = page(
         "",

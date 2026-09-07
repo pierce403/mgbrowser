@@ -59,8 +59,10 @@ number formatting/rounding is not fully specification-compatible. Strings retain
 UTF-16 code units inside the evaluator, including lone surrogates; the UTF-8 DOM
 and display boundary uses replacement characters for unpaired surrogates, and
 lone-surrogate string property names are rejected (symbol descriptions retain
-their code units). Error object names/messages are
-available, but Error prototype and `instanceof` fidelity remain partial.
+their code units). Six exposed Error families have genuine prototype chains,
+branding and string conversion, but many ordinary runtime/Host exceptions still
+throw diagnostic strings rather than Error objects; modern stack/cause and the
+remaining Error constructors are not implemented.
 `Math.random` is deterministic research
 output, never cryptographic randomness. Passing the local tests is not a claim
 that supported-looking real-world programs always evaluate correctly.
@@ -190,6 +192,7 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Regex matching | 1,048,576 input units; caller's remaining realm fuel; 16,384 tasks; 4,096 pending states; 4 MiB cumulative state-work accounting per find; lookahead depth 16 |
 | DOM bridge | 50,000 nodes; depth 256; 4 MiB cumulative logical allocation; 1,024 snapshot collections |
 | Serialized DOM / diagnostics | 2 MiB HTML; at most 64 reported errors |
+| Genuine Error host formatting | 4,096 UTF-16 units including prefix/truncation suffix; bounded data-only lookup, no callback execution |
 | Worker protocol | 2 MiB request JSON; 4 MiB response JSON |
 | Worker OS / parent deadline | 256 MiB address space; 1 CPU second; 2-second wall deadline including transfer/startup |
 
@@ -760,7 +763,7 @@ Unknown public native names may retain identity without gaining callable or Host
 authority. Native records consume the existing object cap; allocation/fuel failures
 remain fatal and latched across handlers and later calls/scripts.
 
-Measured x86_64 layouts are unchanged in allowance: Object 104 bytes, Property
+At the typed-prototype increment, measured x86_64 layouts were Object 104 bytes, Property
 64 bytes, typed identity and optional identity 16 bytes each, native table record
 32 bytes, and public Value 32 bytes. The optional identity is the same size as the
 prior optional object index. Existing 128-byte object/property and 64-byte native
@@ -796,7 +799,7 @@ References: ES5.1 [Object.create](https://262.ecma-international.org/5.1/#sec-15
 [function construction](https://262.ecma-international.org/5.1/#sec-13.2.2), and
 [[HasInstance]](https://262.ecma-international.org/5.1/#sec-15.3.5.3).
 
-All 492 debug tests and 394 selected release checks pass on default stacks,
+That increment passed all 492 debug tests and 394 selected release checks on default stacks,
 including 24 independent prototype semantics groups, 17 prototype resource/boundary
 groups and eight new private layout/admission/copy regressions, plus 22 DOM and
 29 actual-worker groups. Formatting and locked binary/example builds pass. No old
@@ -809,7 +812,7 @@ served at `/script-prototypes`. Before implementation it stopped at
 `Object.create(User)`: ordinary TypeError, preserved fallback, zero forms/inputs/
 navigation, no heap rejection and 69,851 accepted bytes. Its unchanged SHA-256 is
 `b917aa23d76bda209589c70d4f7a3f92fd050410b0194d6076c9348aa9f0ca2d`. Actual-worker
-acceptance now completes one script without errors at 78,118 accepted bytes
+acceptance at that increment completed one script without errors at 78,118 accepted bytes
 (Bootstrap 19,773, Source 2,348, Ast 42,130, FunctionCode 390, Runtime 13,477),
 creating the real controls. Separate cases cover depth failures and ordinary
 TypeError recovery. All three exact CI journey steps pass locally with 13 native
@@ -834,3 +837,81 @@ passed exact-SHA remote CI with all 492 debug/394 selected release tests and
 13 native/13 external CDP destinations. Pages deployed matching HTTPS HTML with
 an approved certificate and HTTPS enforcement; publication evidence is in the
 dated log. The actual Google goal remains incomplete.
+
+### Error-family prototypes and string conversion
+
+The six already-exposed constructors—Error, TypeError, RangeError, ReferenceError,
+SyntaxError and URIError—have distinct intrinsic prototype objects. Error.prototype
+inherits Object.prototype; the other five inherit Error.prototype. Constructors
+retain Function.prototype as their parent under the ES5 policy, and their own
+prototype property is nonenumerable, nonwritable and nonconfigurable. Each family
+prototype has its own writable/configurable, nonenumerable name, empty message
+and constructor backreference. Only Error.prototype owns the shared toString.
+References: [ES5 Error objects](https://262.ecma-international.org/5.1/#sec-15.11)
+and [native Error structure](https://262.ecma-international.org/5.1/#sec-15.11.7).
+
+Call and new create fresh correctly linked instances without an own name. An
+undefined or omitted argument leaves message inherited; other arguments undergo
+fallible ToString and create a nonenumerable own message. The existing first-
+argument clone and generic property-storage charges remain. UTF-16 messages retain
+lone surrogates. The family brand belongs to genuine instances and, per ES5, the
+intrinsic prototypes themselves; Object.create(Error.prototype) inherits behavior
+without acquiring that brand. Object.prototype.toString respects the existing
+Symbol.toStringTag hook before its Error fallback. No new globals, modern
+constructor-parent semantics, stack/cause support or general subclassing is implied.
+
+The own ErrorKind brand increases x86_64 Object from 104 to 112 bytes, within
+the unchanged 128-byte allowance. Property remains 64 bytes; ErrorKind and its
+Option are one byte each. Bootstrap explicitly charges all six prototypes,
+their stored fields and native constructor/method identities: 25,854 bytes total.
+Instances reuse these prototypes and pay existing per-object/property costs.
+No dependency, TLS, worker capability, CDP command or existing cap changed.
+
+Generic Error.prototype.toString accepts object/function/native and existing Host
+receivers, rejects primitives, and performs Get(name), its string conversion,
+Get(message), then its string conversion with the original receiver. Undefined
+uses the standard defaults. Empty name/message branches return the already-paid
+other buffer; joining nonempty values preflights the actual UTF-16 output before
+allocation. Getters, conversion hooks and Host reads remain fallible live operations
+with existing fuel, depth, ingress and real-copy accounting. Reference:
+[Error.prototype.toString](https://262.ecma-international.org/5.1/#sec-15.11.4.4).
+
+Already-object parser, dynamic-source, URI and regex errors now use the intrinsic
+family links independently of overwritten global constructors. This does not
+convert free exception() diagnostic strings into objects. Host reporting of an
+uncaught genuine Error is deliberately separate from JavaScript ToString: it
+borrows data fields through at most 64 typed owners, never invokes getters,
+coercion, toString or Host callbacks, and never adds realm charges after failure.
+Unavailable names use the intrinsic family; inaccessible/accessor/nonprimitive
+message fields use explicit placeholders. The formatted output is capped at
+4,096 UTF-16 units including prefix/truncation suffix, using at most 12 KiB of
+bounded host buffer. This is not a script string limit or a larger realm budget.
+Non-Error diagnostic behavior and first fatal failure remain unchanged.
+
+The frozen 2,216-byte tests/fixtures/script/errors.html is served at /script-errors.
+Its old actual-worker baseline stopped at Object.create(Error.prototype), before
+creating controls, at 63,160 accepted bytes and without heap rejection. The unchanged
+fixture now passes the focused worker check at 76,751 bytes (Bootstrap 25,854,
+Source 2,162, Ast 37,660, Runtime 11,075; FunctionCode and regex zero). This is
+different completed work, not an equal-work memory comparison. Focused checks
+pass all 24 DOM and 33 worker tests, including all six family DOM conversions,
+Symbol rejection before mutation, callback-free reporting/later-script recovery,
+and fatal fuel plus real joined-output storage rejection. Independent coverage
+passes 27 semantic, 15 resource and seven private groups; the same final semantic
+suite passed five and failed 22 against the pinned pre-change library. All 547
+debug tests and 449 selected release checks pass on default stacks, together with
+formatting, build and dependency checks. Three exact CI journey steps pass locally
+with 14 native and 14 external CDP destinations. Root inspected the new actual
+form and destination frames. Limits and existing assertions are unchanged.
+
+One bounded post-Error Google checkpoint still submits the actual form with
+verified TLS and ordinary cookies. Homepage HTTP 200 has 26 items/one form,
+three completed scripts/seven errors and no allocation rejection (2,512,389 bytes).
+Search HTTP 200 remains blank, with two completed scripts/three errors. First is
+now unsupported Array.concat; Ast 387,620 is later rejected after 4,132,042 accepted
+bytes (Bootstrap 25,854, Source 159,091, Ast 2,438,297, FunctionCode 15,232,
+Runtime 1,493,568, regex zero). Exit 2, no actual result or destination; blank frame
+inspected. This response no longer reports the prototype error, but does not
+establish its original argument or a controlled benchmark. Next is generic bounded
+concat support using independent authored cases and separate storage diagnosis.
+Exact-SHA remote acceptance/publication is recorded in the daily log when verified.

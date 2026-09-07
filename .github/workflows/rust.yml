@@ -23,7 +23,7 @@ jobs:
       - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_dom --test script_worker
+        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_dom --test script_worker
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
@@ -99,6 +99,7 @@ jobs:
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-ast --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-ast
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-symbols --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-symbols
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-prototypes --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-prototypes
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-errors --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-errors
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
           target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
@@ -139,6 +140,8 @@ jobs:
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-symbols tmp/script-journey/cdp-symbols-destination.png 2>&1 | tee tmp/script-journey/cdp-symbols-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-prototypes"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/prototypes-home.png > tmp/script-journey/prototypes-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-prototypes tmp/script-journey/cdp-prototypes-destination.png 2>&1 | tee tmp/script-journey/cdp-prototypes-client.log
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-errors"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/errors-home.png > tmp/script-journey/errors-home.json
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-errors tmp/script-journey/cdp-errors-destination.png 2>&1 | tee tmp/script-journey/cdp-errors-client.log
           SCRIPT_CDP
       - name: Preserve rendered local journey
         if: always()

@@ -282,12 +282,34 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-prototypes \
   --evidence-dir tmp/prototypes-journey
 ```
 
-The unchanged fixture completes at 78,118 accepted bytes in the actual restricted
-worker. All 492 debug tests, 394 selected release checks and three exact CI journey
-steps pass locally (13 native/13 external CDP destinations). Its query/hidden field
+At the typed-prototype increment the unchanged fixture completed at 78,118 accepted
+bytes in the actual restricted worker. All 492 debug tests, 394 selected release
+checks and three exact CI journey steps passed locally (13 native/13 external CDP
+destinations). Its query/hidden field
 submits normally and the actual local result is clicked; native query and CDP
 destination frames were inspected. Exact legacy traversal limits and all caps
 remain, with separate fatal depth and ordinary error/recovery checks.
+
+`/script-errors` is the frozen Error-family form. The six exposed family prototypes,
+inherited defaults, real TypeError instances and generic string conversion must
+work before any query/hidden/submit control is created:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-errors \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/errors-journey
+```
+
+The unchanged authored fixture passes the focused actual-worker check at 76,751
+accepted bytes with one completed script and no errors. Focused DOM/worker tests
+also cover real Error text/title/navigation conversion, callback-free uncaught
+diagnostics, ordinary recovery and fatal fuel/output-allocation checks. All 547
+debug tests, 449 selected release checks and three exact CI journey steps pass
+locally (14 native/14 external CDP destinations). Native/CDP Error-family forms
+submit the real Unicode query and hidden field, then reach the local destination;
+form and destination frames were inspected. Independent semantic/resource checks
+pass with no limit changes. Publication evidence is in the daily log; authored
+local success is not Google compatibility.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
@@ -318,6 +340,14 @@ scripts/three errors; Ast 387,500 is rejected after 4,107,727 accepted bytes and
 the later script repeats that failure. Exit 2, no result or destination. The
 generic correction has no observed benefit on the leading live diagnostic;
 further builtin prototype and storage work requires independent authored cases.
+
+The post-Error checkpoint moves to unsupported Array.concat as its first search
+error. Homepage/form submission still work; search HTTP 200 remains blank with two
+completed scripts/three errors, followed by Ast 387,620 rejected after 4,132,042
+accepted bytes. Exit 2, no result or destination; blank frame inspected. The prior
+prototype error is absent in this response, not a controlled benchmark or proof
+of its original argument. Next is independently authored bounded concat support
+and separate cumulative-storage diagnosis, with every execution limit retained.
 
 ## Browser automation
 
@@ -383,11 +413,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-prototypes tmp/cdp-prototypes-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-errors tmp/cdp-errors-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol and typed-prototype
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype and Error-family
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -397,7 +430,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

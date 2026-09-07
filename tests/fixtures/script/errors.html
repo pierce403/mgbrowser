@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><title>Error family worker baseline</title></head><body>
+<p id="status">Authored local Error-family fixture fallback.</p>
+<script>
+var inherited=Object.create(Error.prototype);
+if(Object.getPrototypeOf(inherited)!==Error.prototype || inherited.name!=='Error' || inherited.message!=='' || inherited.hasOwnProperty('name') || inherited.hasOwnProperty('message') || inherited.toString()!=='Error') throw 'Inherited Error defaults failed';
+var constructors=[Error,TypeError,RangeError,ReferenceError,SyntaxError,URIError];
+var names=['Error','TypeError','RangeError','ReferenceError','SyntaxError','URIError'];
+for(var i=0;i<constructors.length;i++){
+  var constructor=constructors[i];
+  var prototype=constructor.prototype;
+  if(typeof prototype!=='object' || prototype===null || prototype.constructor!==constructor || prototype.name!==names[i] || prototype.message!=='' || Object.getPrototypeOf(prototype)!==(i===0?Object.prototype:Error.prototype)) throw 'Error-family prototype chain failed';
+}
+var error=new TypeError('message');
+if(!(error instanceof TypeError) || !(error instanceof Error) || Object.getPrototypeOf(error)!==TypeError.prototype || error.name!=='TypeError' || error.message!=='message' || error.hasOwnProperty('name') || !error.hasOwnProperty('message') || error.toString()!=='TypeError: message') throw 'TypeError instance failed';
+if(Error.prototype.toString.call(error)!=='TypeError: message' || Error.prototype.toString.call({name:'Custom',message:'detail'})!=='Custom: detail') throw 'Error string conversion failed';
+document.title='Error-family-built local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var source=document.createElement('input');
+source.type='hidden';
+source.name='source';
+source.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.name='submit';
+go.value='search';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(source);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local Error-family form ready';
+</script></body></html>

@@ -817,6 +817,7 @@ impl Runtime {
         let fallback = match &value {
             Value::Object(id) if self.objects[*id].array.is_some() => "Array",
             Value::Object(id) if self.objects[*id].regexp.is_some() => "RegExp",
+            Value::Object(id) if self.objects[*id].error.is_some() => "Error",
             Value::Object(id) => match self.objects[*id].boxed {
                 Some(Value::String(_)) => "String",
                 Some(Value::Bool(_)) => "Boolean",
