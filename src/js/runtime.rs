@@ -282,6 +282,80 @@ fn value_bytes(value: &Value) -> usize {
     }
 }
 
+/// Audited array producers move their owned element payloads without creating
+/// new copies. Existing evaluation/read/copy/ingress accounting stays in place.
+/// This non-Clone wrapper separately admits the new Option<Value> slots. It must
+/// not be made from a bare vector or exempt general property transfers.
+struct PrepaidArray {
+    values: Vec<Option<Value>>,
+    paid_slots: usize,
+    phase: AllocationPhase,
+    growing: bool,
+}
+impl PrepaidArray {
+    fn with_slots(budget: &mut Budget, count: usize, phase: AllocationPhase) -> Eval<Self> {
+        if count > MAX_ARRAY {
+            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
+        }
+        // Fixed producers pay before output-vector allocation; literals also
+        // preflight here before evaluating any element expression.
+        budget.allocate_in(phase, count.saturating_mul(64))?;
+        Ok(Self {
+            values: Vec::with_capacity(count),
+            paid_slots: count,
+            phase,
+            growing: false,
+        })
+    }
+    fn growing(phase: AllocationPhase) -> Self {
+        Self {
+            values: Vec::new(),
+            paid_slots: 0,
+            phase,
+            growing: true,
+        }
+    }
+    fn push_owned(&mut self, budget: &mut Budget, value: Option<Value>) -> Eval<()> {
+        if self.values.len() >= MAX_ARRAY {
+            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
+        }
+        if self.values.len() == self.paid_slots {
+            if !self.growing {
+                return Err(Fault::Fatal(
+                    "Invalid prepaid JavaScript array admission".into(),
+                ));
+            }
+            let target = self.paid_slots.saturating_mul(2).max(1).min(MAX_ARRAY);
+            budget.allocate_in(self.phase, (target - self.paid_slots).saturating_mul(64))?;
+            // Prepay geometric capacity before growing, avoiding per-element
+            // reallocations. Unused credits remain cumulative; allocator RSS
+            // and rounding are not what this logical budget measures.
+            self.values.reserve_exact(target - self.values.len());
+            self.paid_slots = target;
+        }
+        self.values.push(value);
+        Ok(())
+    }
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+    fn into_values(self) -> Eval<Vec<Option<Value>>> {
+        if self.values.len() > self.paid_slots
+            || (!self.growing && self.values.len() != self.paid_slots)
+            || self.values.capacity() < self.paid_slots
+            || self.paid_slots > MAX_ARRAY
+        {
+            return Err(Fault::Fatal(
+                "Invalid prepaid JavaScript array admission".into(),
+            ));
+        }
+        Ok(self.values)
+    }
+}
+
 struct Property {
     key: String,
     value: Value,
@@ -869,22 +943,14 @@ impl Runtime {
         self.function(name.as_ref(), &params, &body, 0, false)
     }
 
-    fn object(
-        &mut self,
-        prototype: Option<usize>,
-        array: Option<Vec<Option<Value>>>,
-    ) -> Eval<usize> {
+    fn object(&mut self, prototype: Option<usize>, array: Option<PrepaidArray>) -> Eval<usize> {
         if self.objects.len() >= MAX_OBJECTS {
             return Err(Fault::Fatal("JavaScript object limit exhausted".into()));
         }
-        if array.as_ref().is_some_and(|items| items.len() > MAX_ARRAY) {
-            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
-        }
-        self.budget.allocate(
-            128 + array
-                .as_ref()
-                .map_or(0, |items| items.len().saturating_mul(64)),
-        )?;
+        let array = array.map(PrepaidArray::into_values).transpose()?;
+        // The consumed builder admits every array slot exactly once. Metadata
+        // remains Runtime storage even when a regex operation produced it.
+        self.budget.allocate(128)?;
         let id = self.objects.len();
         self.objects.push(Object {
             properties: Vec::new(),
@@ -1975,17 +2041,15 @@ impl Runtime {
         this: &Value,
         host: &mut impl Host,
     ) -> Eval<Value> {
-        if items.len() > MAX_ARRAY {
-            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
-        }
-        self.budget.allocate(items.len().saturating_mul(64))?;
-        let mut values = Vec::with_capacity(items.len());
+        let mut values =
+            PrepaidArray::with_slots(&mut self.budget, items.len(), AllocationPhase::Runtime)?;
         for item in items {
-            values.push(
-                item.as_ref()
-                    .map(|expr| self.expression(expr, environment, this, host))
-                    .transpose()?,
-            );
+            // Evaluated payloads are owned and paid; None preserves a hole.
+            let value = item
+                .as_ref()
+                .map(|expr| self.expression(expr, environment, this, host))
+                .transpose()?;
+            values.push_owned(&mut self.budget, value)?;
         }
         Ok(Value::Object(
             self.object(Some(self.array_prototype), Some(values))?,
@@ -2886,10 +2950,16 @@ impl Runtime {
                     self.define(environment, param, argument)?;
                 }
                 if !code.params.iter().any(|name| name == "arguments") {
-                    let mut items = Vec::with_capacity(args.len());
-                    self.budget.allocate(args.len().saturating_mul(64))?;
-                    for arg in &args {
-                        items.push(Some(self.copy(arg)?));
+                    // Parameter copies/bindings above remain independent. The
+                    // incoming Vec<Value> cannot be assumed to reuse storage as
+                    // Vec<Option<Value>>: pay these new slots, then move payloads.
+                    let mut items = PrepaidArray::with_slots(
+                        &mut self.budget,
+                        args.len(),
+                        AllocationPhase::Runtime,
+                    )?;
+                    for arg in args {
+                        items.push_owned(&mut self.budget, Some(arg))?;
                     }
                     let arguments = self.object(Some(self.array_prototype), Some(items))?;
                     self.put_own(arguments, "callee", Value::Function(id), false)?;
@@ -3020,10 +3090,27 @@ impl Runtime {
                     if length > MAX_ARRAY as f64 {
                         return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
                     }
-                    self.budget.allocate((length as usize).saturating_mul(64))?;
-                    (0..length as usize).map(|_| None).collect()
+                    let mut array = PrepaidArray::with_slots(
+                        &mut self.budget,
+                        length as usize,
+                        AllocationPhase::Runtime,
+                    )?;
+                    for _ in 0..length as usize {
+                        array.push_owned(&mut self.budget, None)?;
+                    }
+                    array
                 } else {
-                    args.into_iter().map(Some).collect()
+                    // Arguments already own their paid payloads, but this is a
+                    // distinct array-slot vector, not the incoming call vector.
+                    let mut array = PrepaidArray::with_slots(
+                        &mut self.budget,
+                        args.len(),
+                        AllocationPhase::Runtime,
+                    )?;
+                    for arg in args {
+                        array.push_owned(&mut self.budget, Some(arg))?;
+                    }
+                    array
                 };
                 Ok(Value::Object(
                     self.object(Some(self.array_prototype), Some(array))?,
@@ -3109,12 +3196,12 @@ impl Runtime {
                 };
                 let mut keys = Vec::new();
                 self.enumeration_own_keys(owner, &first, &mut keys)?;
-                let mut values = Vec::new();
+                let mut values = PrepaidArray::growing(AllocationPhase::Runtime);
                 for entry in keys {
                     self.budget.step()?;
                     if entry.enumerable || name.ends_with("Names") {
                         let key = self.text(&entry.key)?;
-                        self.result_push(&mut values, key, AllocationPhase::Runtime)?;
+                        values.push_owned(&mut self.budget, Some(key))?;
                     }
                 }
                 Ok(Value::Object(
@@ -3469,21 +3556,12 @@ impl Runtime {
             .allocate_in(phase, end.saturating_sub(start).saturating_mul(2))?;
         Ok(Value::String(input[start..end].to_vec()))
     }
-    fn result_push(
-        &mut self,
-        values: &mut Vec<Option<Value>>,
-        value: Value,
-        phase: AllocationPhase,
-    ) -> Eval<()> {
-        if values.len() >= MAX_ARRAY {
-            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
-        }
-        self.budget.allocate_in(phase, 64 + value_bytes(&value))?;
-        values.push(Some(value));
-        Ok(())
-    }
     fn match_array(&mut self, input: &[u16], found: regexp::Match) -> Eval<Value> {
-        let mut values = Vec::new();
+        let mut values = PrepaidArray::with_slots(
+            &mut self.budget,
+            found.captures.len(),
+            AllocationPhase::RegexResult,
+        )?;
         for capture in found.captures {
             let value = match capture {
                 Some((start, end)) => {
@@ -3491,7 +3569,9 @@ impl Runtime {
                 }
                 None => Value::Undefined,
             };
-            self.result_push(&mut values, value, AllocationPhase::RegexResult)?;
+            // slice_value paid the new capture buffer; missing captures are
+            // present undefined values, not array holes.
+            values.push_owned(&mut self.budget, Some(value))?;
         }
         let id = self.object(Some(self.array_prototype), Some(values))?;
         self.put_own(id, "index", Value::Number(found.start as f64), true)?;
@@ -3560,11 +3640,11 @@ impl Runtime {
             };
         }
         self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
-        let mut values = Vec::new();
+        let mut values = PrepaidArray::growing(AllocationPhase::RegexResult);
         while let Some(found) = self.regexp_exec(id, &regex, input, host)? {
             let value =
                 self.slice_value(input, found.start, found.end, AllocationPhase::RegexResult)?;
-            self.result_push(&mut values, value, AllocationPhase::RegexResult)?;
+            values.push_owned(&mut self.budget, Some(value))?;
             if found.start == found.end {
                 self.put_own(
                     id,
@@ -3821,18 +3901,18 @@ impl Runtime {
         } else {
             Vec::new()
         };
-        let mut values = Vec::new();
+        let mut values = PrepaidArray::growing(phase);
         if limit != 0 {
             if undefined {
                 let value = self.slice_value(input, 0, input.len(), phase)?;
-                self.result_push(&mut values, value, phase)?;
+                values.push_owned(&mut self.budget, Some(value))?;
             } else if input.is_empty() {
                 if self
                     .split_find(regex.as_deref(), &plain, input, 0)?
                     .is_none()
                 {
                     let value = self.slice_value(input, 0, 0, phase)?;
-                    self.result_push(&mut values, value, phase)?;
+                    values.push_owned(&mut self.budget, Some(value))?;
                 }
             } else {
                 let mut previous = 0;
@@ -3851,7 +3931,7 @@ impl Runtime {
                         continue;
                     }
                     let value = self.slice_value(input, previous, found.start, phase)?;
-                    self.result_push(&mut values, value, phase)?;
+                    values.push_owned(&mut self.budget, Some(value))?;
                     previous = found.end;
                     if values.len() == limit as usize {
                         break;
@@ -3861,7 +3941,7 @@ impl Runtime {
                             Some((start, end)) => self.slice_value(input, start, end, phase)?,
                             None => Value::Undefined,
                         };
-                        self.result_push(&mut values, value, phase)?;
+                        values.push_owned(&mut self.budget, Some(value))?;
                         if values.len() == limit as usize {
                             break;
                         }
@@ -3870,7 +3950,7 @@ impl Runtime {
                 }
                 if values.len() < limit as usize {
                     let value = self.slice_value(input, previous, input.len(), phase)?;
-                    self.result_push(&mut values, value, phase)?;
+                    values.push_owned(&mut self.budget, Some(value))?;
                 }
             }
         }
@@ -4148,9 +4228,16 @@ impl Runtime {
                     relative_index(self.number(end, host)?, length)
                 }
                 .max(start);
-                let mut values = Vec::new();
+                let mut values = PrepaidArray::with_slots(
+                    &mut self.budget,
+                    end - start,
+                    AllocationPhase::Runtime,
+                )?;
                 for index in start..end {
-                    values.push(self.own(id, &index.to_string())?);
+                    // own() still charges genuine payload reads; adopt each
+                    // owned copy and preserve the existing hole behavior.
+                    let value = self.own(id, &index.to_string())?;
+                    values.push_owned(&mut self.budget, value)?;
                 }
                 Ok(Value::Object(
                     self.object(Some(self.array_prototype), Some(values))?,
@@ -4461,6 +4548,230 @@ fn statement_bytes(statement: &Stmt) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepaid_array_adoption_moves_slots_and_payloads_with_exclusive_charges() {
+        let mut runtime = Runtime::new();
+        let payload = runtime.text("owned payload").unwrap();
+        let Value::String(units) = &payload else {
+            unreachable!()
+        };
+        let payload_pointer = units.as_ptr();
+        let before = runtime.allocation_report();
+        let mut builder =
+            PrepaidArray::with_slots(&mut runtime.budget, 3, AllocationPhase::RegexResult).unwrap();
+        let slots_pointer = builder.values.as_ptr();
+        builder
+            .push_owned(&mut runtime.budget, Some(payload))
+            .unwrap();
+        builder.push_owned(&mut runtime.budget, None).unwrap();
+        builder
+            .push_owned(&mut runtime.budget, Some(Value::Undefined))
+            .unwrap();
+        let id = runtime
+            .object(Some(runtime.array_prototype), Some(builder))
+            .unwrap();
+        let slots = runtime.objects[id].array.as_ref().unwrap();
+        assert_eq!(slots.as_ptr(), slots_pointer);
+        let Some(Value::String(units)) = &slots[0] else {
+            panic!("owned string missing");
+        };
+        assert_eq!(units.as_ptr(), payload_pointer);
+        assert!(slots[1].is_none());
+        assert_eq!(slots[2], Some(Value::Undefined));
+        let after = runtime.allocation_report();
+        assert_eq!(
+            after.phases.regex_result - before.phases.regex_result,
+            3 * 64
+        );
+        assert_eq!(after.phases.runtime - before.phases.runtime, 128);
+        assert_eq!(after.accepted_bytes - before.accepted_bytes, 3 * 64 + 128);
+        assert!(after.is_valid());
+    }
+
+    #[test]
+    fn prepaid_array_geometric_growth_retains_unused_credits_and_caps_work() {
+        for (length, paid_slots, grows) in [(3, 4, 3), (MAX_ARRAY, MAX_ARRAY, 15)] {
+            let mut runtime = Runtime::new();
+            let before = runtime.allocation_report();
+            let mut builder = PrepaidArray::growing(AllocationPhase::RegexResult);
+            let mut growths = 0;
+            for _ in 0..length {
+                let previous = builder.paid_slots;
+                builder.push_owned(&mut runtime.budget, None).unwrap();
+                growths += usize::from(builder.paid_slots != previous);
+                assert!(builder.len() <= builder.paid_slots);
+                assert!(builder.paid_slots <= MAX_ARRAY);
+                assert!(builder.values.capacity() >= builder.paid_slots);
+            }
+            assert_eq!(growths, grows);
+            assert_eq!(builder.paid_slots, paid_slots);
+            if length == MAX_ARRAY {
+                let full = runtime.allocation_report();
+                assert!(builder.push_owned(&mut runtime.budget, None).is_err());
+                assert_eq!(builder.len(), MAX_ARRAY);
+                assert_eq!(runtime.allocation_report(), full);
+            }
+            let id = runtime.object(None, Some(builder)).unwrap();
+            assert_eq!(runtime.objects[id].array.as_ref().unwrap().len(), length);
+            let after = runtime.allocation_report();
+            // The three-element result keeps its unused fourth credit. The
+            // 10k result grows only fifteen times, never on every append.
+            assert_eq!(
+                after.phases.regex_result - before.phases.regex_result,
+                (paid_slots * 64) as u64
+            );
+            assert_eq!(after.phases.runtime - before.phases.runtime, 128);
+            assert!(after.is_valid());
+        }
+        let mut runtime = Runtime::new();
+        let mut builder = PrepaidArray::growing(AllocationPhase::RegexResult);
+        for _ in 0..2 {
+            builder.push_owned(&mut runtime.budget, None).unwrap();
+        }
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - 127)
+            .unwrap();
+        let capacity = builder.values.capacity();
+        let before = runtime.allocation_report();
+        assert!(builder.push_owned(&mut runtime.budget, None).is_err());
+        assert_eq!(builder.len(), 2);
+        assert_eq!(builder.paid_slots, 2);
+        assert_eq!(builder.values.capacity(), capacity);
+        let after = runtime.allocation_report();
+        assert_eq!(after.accepted_bytes, before.accepted_bytes);
+        assert_eq!(after.first_rejected.unwrap().requested_bytes, 128);
+        assert_eq!(
+            after.first_rejected.unwrap().phase,
+            AllocationPhase::RegexResult
+        );
+        assert!(after.is_valid());
+    }
+
+    #[test]
+    fn prepaid_array_rejection_precedes_storage_growth_and_keeps_first_failure() {
+        let mut runtime = Runtime::new();
+        let before = runtime.allocation_report();
+        assert!(matches!(
+            PrepaidArray::with_slots(&mut runtime.budget, MAX_ARRAY + 1, AllocationPhase::Runtime),
+            Err(Fault::Fatal(_))
+        ));
+        assert_eq!(runtime.allocation_report(), before);
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - 63)
+            .unwrap();
+        let before = runtime.allocation_report();
+        let objects_before = runtime.objects.len();
+        let mut builder = PrepaidArray::growing(AllocationPhase::RegexResult);
+        assert!(matches!(
+            builder.push_owned(&mut runtime.budget, Some(Value::Undefined)),
+            Err(Fault::Fatal(_))
+        ));
+        assert_eq!(builder.values.len(), 0);
+        assert_eq!(builder.values.capacity(), 0);
+        assert_eq!(builder.paid_slots, 0);
+        let rejected = runtime.allocation_report();
+        assert_eq!(rejected.accepted_bytes, before.accepted_bytes);
+        assert_eq!(rejected.phases, before.phases);
+        assert_eq!(
+            rejected.first_rejected.unwrap().phase,
+            AllocationPhase::RegexResult
+        );
+        assert_eq!(rejected.first_rejected.unwrap().requested_bytes, 64);
+        assert!(runtime.object(None, Some(builder)).is_err());
+        assert_eq!(runtime.objects.len(), objects_before);
+        assert_eq!(runtime.allocation_report(), rejected);
+        assert!(rejected.is_valid());
+    }
+
+    #[test]
+    fn prepaid_array_admission_requires_full_builder_and_metadata_budget() {
+        let mut runtime = Runtime::new();
+        for count in [0, 1] {
+            let mut builder =
+                PrepaidArray::with_slots(&mut runtime.budget, count, AllocationPhase::Runtime)
+                    .unwrap();
+            for _ in 0..count {
+                builder.push_owned(&mut runtime.budget, None).unwrap();
+            }
+            let before = runtime.allocation_report();
+            assert!(builder.push_owned(&mut runtime.budget, None).is_err());
+            assert_eq!(builder.len(), count);
+            assert_eq!(builder.paid_slots, count);
+            assert_eq!(runtime.allocation_report(), before);
+            runtime.object(None, Some(builder)).unwrap();
+        }
+        let builder =
+            PrepaidArray::with_slots(&mut runtime.budget, 1, AllocationPhase::Runtime).unwrap();
+        let before = runtime.allocation_report();
+        let objects_before = runtime.objects.len();
+        assert!(runtime.object(None, Some(builder)).is_err());
+        assert_eq!(runtime.objects.len(), objects_before);
+        assert_eq!(runtime.allocation_report(), before);
+        let mut builder =
+            PrepaidArray::with_slots(&mut runtime.budget, 1, AllocationPhase::Runtime).unwrap();
+        builder.push_owned(&mut runtime.budget, None).unwrap();
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - 127)
+            .unwrap();
+        assert!(runtime.object(None, Some(builder)).is_err());
+        assert_eq!(runtime.objects.len(), objects_before);
+        let report = runtime.allocation_report();
+        assert_eq!(report.first_rejected.unwrap().requested_bytes, 128);
+        assert_eq!(
+            report.first_rejected.unwrap().phase,
+            AllocationPhase::Runtime
+        );
+        assert!(report.is_valid());
+    }
+
+    #[test]
+    fn arguments_snapshot_moves_original_payload_after_independent_parameter_copy() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        let callee = runtime
+            .execute(
+                "function capture(value){return arguments;}capture;",
+                &mut host,
+            )
+            .unwrap();
+        let input = vec![0xd800, b'a' as u16, 0xdc00];
+        let pointer = input.as_ptr();
+        let Value::Object(snapshot) = runtime
+            .invoke(
+                callee,
+                Value::Undefined,
+                vec![Value::String(input)],
+                &mut host,
+            )
+            .unwrap()
+        else {
+            panic!("arguments snapshot missing");
+        };
+        let Some(Value::String(snapshot_value)) =
+            &runtime.objects[snapshot].array.as_ref().unwrap()[0]
+        else {
+            panic!("snapshot payload missing");
+        };
+        assert_eq!(snapshot_value.as_ptr(), pointer);
+        let parameter = runtime
+            .environments
+            .last()
+            .unwrap()
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "value")
+            .unwrap();
+        let Value::String(parameter_value) = &parameter.value else {
+            panic!("parameter payload missing");
+        };
+        assert_ne!(parameter_value.as_ptr(), pointer);
+        assert_eq!(parameter_value, snapshot_value);
+        assert!(runtime.allocation_report().is_valid());
+    }
 
     #[test]
     fn function_instances_share_code_slices_not_closure_state() {

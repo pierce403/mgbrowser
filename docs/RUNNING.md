@@ -177,24 +177,42 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-allocation \
   --evidence-dir tmp/allocation-journey
 ```
 
-The actual worker completes this fixture with 3,745,970 accepted bytes, including
-137 bytes of per-instance function-code metadata. Native and external CDP journeys
+The shared-code increment completed this fixture with 3,745,970 accepted bytes,
+including 137 bytes of per-instance function-code metadata. Native and external CDP journeys
 submit the query/hidden field and reach the local destination; rendered frames
-were inspected. All 288 debug tests and 178 selected release tests pass. Consult
+were inspected. That increment passed 288 debug tests and 178 selected release tests. Consult
 the daily log for the baseline, final local checks and publication evidence.
+
+`/script-arrays` is a separate authored storage fixture: it retains six independent
+10,000-slot arrays with holes, checks their contents, then creates every form
+control in the restricted worker. The baseline exhausted allocation before the
+form existed; the prepaid-ownership increment completes under the same cap:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-arrays \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/arrays-journey
+```
+
+The complete worker accepts 3,891,459 bytes and creates the form without errors.
+Native and external CDP journeys reach the local destination; rendered frames were
+inspected. All 312 debug tests and 202 selected release checks pass. The seventh
+maximum array still fails under the unchanged cumulative limit. See the daily log
+for publication evidence; this local fixture is not Google acceptance.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-sharing Google attempt submitted the real form. The homepage no
+2026-09-07 post-array Google attempt submitted the real form. The homepage no
 longer exhausted the allocation budget, but the HTTP 200 “Google Search” response
-still rejected an AST charge: 2,390,987 accepted bytes plus a requested 2,575,110
+still rejected an AST charge: 1,822,051 accepted bytes plus a requested 2,575,110
 bytes exceeds the unchanged 4 MiB limit. Three errors repeat this first failure;
 no rendered items/forms, result or destination were reached. Google's acceptance
-goal remains unmet. Next is further independently tested AST/runtime storage
-work, not blindly raising limits; real DOM events and timers are still missing.
+goal remains unmet. The remaining admission gap is 202,857 bytes. Next is further
+independently tested AST/runtime storage work, not blindly raising limits; real
+DOM events and timers are still missing.
 
 ## Browser automation
 
@@ -242,11 +260,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-allocation tmp/cdp-allocation-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-arrays tmp/cdp-arrays-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression and shared-code
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code and prepaid-array
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -256,7 +277,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

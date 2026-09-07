@@ -222,6 +222,53 @@ unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
 
+### Prepaid array and argument ownership
+
+Array construction now uses a private array builder: reserve each
+64-byte logical slot before allocating/growing its value vector, then consume
+that builder when creating the object. Known-size producers prepay their exact
+count; growing result arrays prepay bounded geometric capacity (at most 10,000
+slots), retaining unused credits without refunds. This preserves amortized growth
+instead of reallocating for every result element. Adoption charges the existing
+128-byte object metadata, not the already-paid slots or moved string payloads again.
+Only audited producers may transfer owned payloads without creating new copies;
+their existing creation/copy/ingress charges must remain. Array literals,
+numeric/element constructors, slice, key results, regex results, split and
+user-function argument snapshots retain their individual
+payload and phase accounting. No bare vector may bypass slot admission.
+
+User-function parameters still receive their existing independent copies and
+bindings before the original owned argument values move into the unmapped
+arguments snapshot. A script call's input vector and its separate snapshot vector
+remain charged; public `invoke` admits incoming payloads and separately pays the
+new snapshot storage. Holes versus undefined, identity, extra/missing/duplicate
+parameters, the parameter named arguments, callee and post-return lifetime are
+preserved.
+Host ingress, property/binding transfers, real reads/clones, regex reservations,
+all realm/parser/worker caps and first-failure latching are unchanged. This is
+construction/adoption accounting; later array-mutation charges remain unchanged.
+Credits describe requested logical slots, not exact allocator capacity or RSS,
+and this is not a new garbage collector.
+
+All 312 debug tests and 202 selected release tests passed on 2026-09-07, including
+17 independent array groups, five private ownership/preflight/growth groups and
+17 actual-worker groups. Pointer checks verify that adoption moves the slot vector
+and string buffers, and that parameters retain an independent copy. Authored
+public-invoke no-formal/formal snapshots retain charges of 2/6 bytes per added UTF-16
+unit; slice still pays for its real string copies. Growing result arrays reserve
+at most 15 times through 10,000 slots, with rejection before failed growth.
+
+The `/script-arrays` fixture retains six independent 10,000-slot arrays before
+creating any controls. Its baseline failed with 3,883,859 accepted bytes and a
+rejected 640,000-byte Runtime charge. The complete worker now accepts 3,891,459
+bytes, with one completed script and no errors; a seventh maximum array still
+fails cumulatively without catch/finally/later-script effects. These are logical
+charges, not a peak-memory comparison: the old run stopped before doing all work.
+Native and external CDP journeys submit its real query/hidden field and reach the
+local destination. All three exact CI journey steps pass locally; native query
+and CDP destination frames were inspected. Publication evidence is in the log.
+AST representation and broader property-transfer policies remain separate proposals.
+
 ### Allocation diagnostics and shared function storage
 
 `Runtime::allocation_report()` returns a fixed-size host-readable snapshot:
@@ -289,7 +336,7 @@ syntax errors remain catchable and never return a successfully parsed prefix.
 
 That expression-machine increment preserved the AST/API, 128 structural/AST-depth limits, source/token/node caps, function and
 statement guards, grammar-directed regex/division, NoIn contexts,
-precedence/associativity and ASI are preserved. Function parameter/body fragments
+precedence/associativity and ASI. Function parameter/body fragments
 remain separately parsed. Statement/function parsing and AST
 cloning/evaluation/disposal still use guarded recursive code: this is not a fully
 iterative engine or a measurement of native stack bytes. No thread-stack size was
@@ -397,6 +444,16 @@ Next work audits remaining AST representation and runtime ownership/copy costs
 using independently authored fixtures. The counters identify an admission gap,
 not permission to remove real charges or raise limits. No site challenge code is
 an implementation input.
+
+The post-array checkpoint still returns no Google result links. Homepage HTTP 200
+retains its real form, three completed scripts/seven errors and no rejected
+allocation. Search HTTP 200 accepts 1,822,051 bytes before rejecting the same
+2,575,110-byte AST request; Runtime charges are 1,516,976 bytes. The remaining
+admission gap is 202,857 bytes. The inspected search frame is blank and the
+journey exits 2 without a first destination. Responses can vary; the reduced
+charges do not establish compatibility beyond that observed stage. Next audit
+targets narrow paid-value transfers and container-aware AST costs, with existing
+ingress/copy charges and all caps preserved until independently justified changes.
 General language/builtin correctness, a pinned independent conformance corpus,
 parent-brokered external scripts, persistent realms, real DOM event dispatch/timers
 and broader DOM support remain open. CDP Runtime/Debugger remain

@@ -516,3 +516,98 @@ fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budg
         && node.attr("value") == Some("fixture")));
     assert!(reply.html.contains("within the unchanged budget."));
 }
+
+#[test]
+fn restricted_child_prepaid_arrays_create_real_form_inside_unchanged_budget() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-arrays".into(),
+        html: include_str!("fixtures/script/arrays.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.phases.runtime >= 6 * 10_000 * 64, "{report:?}");
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Prepaid-array local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.tag == "input" && node.attr("name") == Some("q"))
+    );
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(
+        reply
+            .html
+            .contains("Six independent arrays and real form controls")
+    );
+}
+
+#[test]
+fn restricted_child_retained_arguments_preserve_snapshot_and_fatal_array_limits() {
+    for (source, succeeds) in [
+        (
+            r#"var original={};
+        function keep(text,object){text='changed';arguments[1].seen='same';return arguments;}
+        var saved=keep('\uD800Z',original);
+        if(saved[0].charCodeAt(0)!==55296 || saved[0].charCodeAt(1)!==90 ||
+            saved[1]!==original || original.seen!=='same' || saved.callee!==keep) {
+            throw 'Unmapped arguments changed';
+        }
+        document.title='Retained arguments ready';"#,
+            true,
+        ),
+        (
+            r#"try{for(var index=0;index<7;index++){Array(10000);}}
+        catch(error){document.title='Incorrect catch';}
+        finally{document.title='Incorrect finally';}"#,
+            false,
+        ),
+    ] {
+        let request = mg_deps::js_browser::Request {
+            url: "https://example.test/local-array-ownership".into(),
+            html: format!(
+                "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>if(document.title==='Retained arguments ready'){{document.title='Later snapshot ready';}}else{{document.title='Incorrect later script';}}</script></body></html>"
+            ),
+        };
+        let input = serde_json::to_vec(&request).unwrap();
+        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+        let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+        assert!(reply.applied);
+        let report = reply.allocations.unwrap();
+        assert!(report.is_valid());
+        assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+        assert!(reply.navigation.is_none());
+        if succeeds {
+            assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+            assert_eq!(reply.scripts_executed, 2);
+            assert!(report.first_rejected.is_none());
+            assert!(reply.html.contains("<title>Later snapshot ready</title>"));
+        } else {
+            assert_eq!(reply.scripts_executed, 0);
+            assert_eq!(reply.errors.len(), 2);
+            let first = reply.errors[0].split_once(": ").unwrap().1;
+            assert_eq!(first, reply.errors[1].split_once(": ").unwrap().1);
+            assert!(first.contains("JavaScript allocation budget exhausted"));
+            assert_eq!(
+                report.first_rejected.unwrap().phase,
+                mg_deps::js::runtime::AllocationPhase::Runtime
+            );
+            assert!(reply.html.contains("<title>Original title</title>"));
+            assert!(reply.html.contains("Readable original content"));
+        }
+    }
+}

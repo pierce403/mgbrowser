@@ -20,8 +20,10 @@ expressions with RegExp and String matching/replacement/splitting, plus
 for-in enumeration and switch control flow. Bounded explicit-state expression
 parsing supports deeper grouping while mixed evaluator recursion has independent
 default-stack regressions. Fixed-size allocation diagnostics and shared immutable
-function code now keep an authored large compiled factory within the unchanged
-4 MiB budget. All 288 debug tests and 178 selected release checks pass locally.
+function code keep an authored large compiled factory within the unchanged
+4 MiB budget. Prepaid array construction and moved argument snapshots now also
+let six maximum-sized arrays and a real form fit below that cap. All 312 debug
+tests and 202 selected release checks pass locally.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
