@@ -56,6 +56,8 @@ deadline. Unsupported isolation/platforms refuse execution. A worker failure or
 rejected document retains the original page, including `noscript`; a valid partial
 snapshot can still be applied while showing script errors. The status bar and
 stderr distinguish completed, partial, rejected and failed worker results.
+Each reported partial error also appears as an escaped `SCRIPT_DIAGNOSTIC` line,
+so a first parser failure does not hide other missing capabilities in that response.
 `--disable-scripts` explicitly selects the default behavior.
 
 The local containment self-test requires no display and starts only owned children:
@@ -106,6 +108,12 @@ loop fixture: it should show a readable fuel error and allow normal navigation
 afterward. On a headless Linux host, prefix the browser command with `xvfb-run -a`.
 The native script-redirect/form/result/destination journey passed under Xvfb on
 2026-09-07; rendered frames were inspected.
+
+`/script-dynamic` is a separate authored fixture with no static form controls.
+It uses the original Function constructor to build the form and direct `eval`
+to read a local variable. Use that path in the native command above or as the
+CDP journey URL below to exercise dynamic compilation inside the same restricted
+worker. JavaScript's `eval` does not imply support for CDP `Runtime.evaluate`.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual

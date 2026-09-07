@@ -24,6 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 include_str!("../tests/fixtures/script/redirect.html"),
             ),
             "/script-loop" => ("200 OK", include_str!("../tests/fixtures/script/loop.html")),
+            "/script-dynamic" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/dynamic.html"),
+            ),
             "/search"
                 if fields.iter().any(|(k, v)| k == "q" && !v.is_empty())
                     && fields.iter().any(|(k, v)| k == "source" && v == "fixture") =>
@@ -62,6 +66,7 @@ mod tests {
             include_str!("../tests/fixtures/script/home.html"),
             include_str!("../tests/fixtures/script/redirect.html"),
             include_str!("../tests/fixtures/script/loop.html"),
+            include_str!("../tests/fixtures/script/dynamic.html"),
         ] {
             let document = document::parse(source, "http://127.0.0.1:7878/script-home");
             assert!(document.forms.is_empty());

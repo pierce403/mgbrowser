@@ -86,6 +86,7 @@ jobs:
           done
           [[ "$fixture_ready" == true ]]
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-redirect --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-dynamic --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-dynamic
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
           target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
@@ -104,6 +105,8 @@ jobs:
           grep -F 'JavaScript fuel exhausted' tmp/script-journey/browser.log
           grep -F 'Fallback content remains readable' tmp/script-journey/loop.json > /dev/null
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-home tmp/script-journey/cdp-destination.png 2>&1 | tee tmp/script-journey/cdp-client.log
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-dynamic"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/dynamic-home.png > tmp/script-journey/dynamic-home.json
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-dynamic tmp/script-journey/cdp-dynamic-destination.png 2>&1 | tee tmp/script-journey/cdp-dynamic-client.log
           SCRIPT_CDP
       - name: Preserve rendered local journey
         if: always()

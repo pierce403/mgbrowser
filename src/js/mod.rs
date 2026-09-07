@@ -1,6 +1,7 @@
 //! An original, bounded JavaScript interpreter; not a conforming ECMAScript engine yet.
 pub mod runtime;
 pub mod syntax;
+pub mod uri;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program(pub Vec<Stmt>);
@@ -36,8 +37,12 @@ pub enum Stmt {
         update: Option<Expr>,
         body: Box<Stmt>,
     },
-    Break,
-    Continue,
+    Label {
+        name: String,
+        body: Box<Stmt>,
+    },
+    Break(Option<String>),
+    Continue(Option<String>),
     Throw(Expr),
     Try {
         body: Box<Stmt>,

@@ -102,3 +102,63 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
     assert!(reply.html.contains("<title>Worker ready</title>"));
     assert!(reply.html.contains("Changed &amp; safe"));
 }
+
+#[test]
+fn restricted_child_uses_labeled_control_flow_and_uri_builtins() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-language-fixture".into(),
+        html: r#"<html><head><title>Before</title></head><body><p id=output>Before</p><script>
+        var word='';
+        outer: for(var i=0;i<3;i++) {
+            for(var j=0;j<3;j++) {
+                if(j===1)continue outer;
+                word+=i;
+            }
+        }
+        done: {word+=' café';break done;word='wrong';}
+        var encoded=encodeURIComponent(word);
+        document.getElementById('output').textContent=decodeURIComponent(encoded);
+        document.title='Labels and URI ready';
+        location.href='/next?q='+encoded;
+        </script></body></html>"#
+            .into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.html.contains("<title>Labels and URI ready</title>"));
+    assert!(reply.html.contains("012 café"));
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/next?q=012%20caf%C3%A9")
+    );
+}
+
+#[test]
+fn restricted_child_dynamic_compilation_creates_real_form_controls() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-dynamic".into(),
+        html: include_str!("fixtures/script/dynamic.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Dynamic script-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(
+        document
+            .items
+            .iter()
+            .any(|item| matches!(item,mg_deps::document::Item::Input{name,..} if name=="q"))
+    );
+}

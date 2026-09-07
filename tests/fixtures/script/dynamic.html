@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><title>Local dynamic script fixture waiting</title></head>
+<body>
+<h1>Local dynamically compiled form fixture</h1>
+<p>This is an authored localhost test, not a Google page or search service.</p>
+<p id="dynamic-status">The form requires our own Function constructor and direct eval.</p>
+<noscript><p>Scripts are disabled; this local fixture has no static form.</p></noscript>
+<script>
+var makeForm = Function('fieldName',
+    'var form=document.createElement("form");form.action="/search";form.method="get";' +
+    'var hidden=document.createElement("input");hidden.type="hidden";hidden.name="source";hidden.value="fixture";form.appendChild(hidden);' +
+    'var label=document.createElement("label");label.textContent="Local query ";' +
+    'var query=document.createElement("input");query.name=fieldName;query.type="text";label.appendChild(query);form.appendChild(label);' +
+    'var submit=document.createElement("button");submit.type="submit";submit.name="submit";submit.value="search";submit.textContent="Search local dynamic fixture";form.appendChild(submit);' +
+    'return form;'
+);
+function prepareForm() {
+    var localFieldName = 'q';
+    return eval('makeForm(localFieldName)');
+}
+document.body.appendChild(prepareForm());
+document.title = 'Dynamic script-built local fixture';
+document.getElementById('dynamic-status').textContent = 'Function compiled the form builder; direct eval read the local field name.';
+</script>
+</body>
+</html>

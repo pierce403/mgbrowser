@@ -6,14 +6,17 @@
 //! string code units intact. Resource accounting is a conservative, cumulative
 //! logical allocation budget, not a measurement of allocator RSS; the worker's
 //! OS memory limit is a separate boundary. No garbage collector is implemented.
+//! Dynamic parsing charges source conversion and fixed attempt overhead, then
+//! successful ASTs; discarded partial AST/token buffers are independently bounded
+//! by parser limits, not measured cumulatively as physical allocation bytes.
 //!
 //! This is a classic non-strict subset, not ECMAScript conformance. In particular,
 //! arguments are an unmapped snapshot; descriptors/accessors, lexical declarations,
-//! dynamic eval/Function, modules, regex, promises and a general event loop are not
-//! implemented. Unsupported exposed builtins throw an explicit error. Math.random
+//! modules, regex, promises and a general event loop are not implemented.
+//! Unsupported exposed builtins throw an explicit error. Math.random
 //! is a deterministic research PRNG and must never be used for cryptography.
 
-use super::{Expr, Program, Stmt, syntax};
+use super::{Expr, Program, Stmt, syntax, uri};
 use std::rc::Rc;
 
 const MAX_FUEL: u64 = 1_000_000;
@@ -139,7 +142,13 @@ struct Object {
 }
 struct Environment {
     parent: Option<usize>,
-    bindings: Vec<(String, Value)>,
+    variable: usize,
+    bindings: Vec<Binding>,
+}
+struct Binding {
+    name: String,
+    value: Value,
+    deletable: bool,
 }
 struct Code {
     name: Option<String>,
@@ -158,8 +167,45 @@ enum Reference {
 enum Flow {
     Normal(Option<Value>),
     Return(Value),
-    Break,
-    Continue,
+    Break(Option<String>, Option<Value>),
+    Continue(Option<String>, Option<Value>),
+}
+impl Flow {
+    fn update_empty(self, previous: Option<Value>) -> Self {
+        match self {
+            Self::Normal(None) => Self::Normal(previous),
+            Self::Break(target, None) => Self::Break(target, previous),
+            Self::Continue(target, None) => Self::Continue(target, previous),
+            other => other,
+        }
+    }
+}
+enum LoopStep {
+    Next,
+    Stop,
+    Abrupt(Flow),
+}
+fn loop_step(flow: Flow, last: &mut Option<Value>, labels: &[&str]) -> LoopStep {
+    let matches = |target: &Option<String>| {
+        target
+            .as_ref()
+            .is_none_or(|target| labels.contains(&target.as_str()))
+    };
+    match flow.update_empty(last.take()) {
+        Flow::Normal(value) => {
+            *last = value;
+            LoopStep::Next
+        }
+        Flow::Continue(target, value) if matches(&target) => {
+            *last = value;
+            LoopStep::Next
+        }
+        Flow::Break(target, value) if matches(&target) => {
+            *last = value;
+            LoopStep::Stop
+        }
+        other => LoopStep::Abrupt(other),
+    }
 }
 
 pub struct Runtime {
@@ -193,6 +239,7 @@ impl Runtime {
             functions: Vec::new(),
             environments: vec![Environment {
                 parent: None,
+                variable: 0,
                 bindings: Vec::new(),
             }],
             native_properties: Vec::new(),
@@ -286,6 +333,8 @@ impl Runtime {
             "TypeError",
             "RangeError",
             "ReferenceError",
+            "URIError",
+            "SyntaxError",
         ] {
             runtime.set_global(name, Value::Native(name.into()));
         }
@@ -312,6 +361,14 @@ impl Runtime {
         }
         runtime.set_global("Math", Value::Object(math));
         runtime.set_global("globalThis", Value::Object(0));
+        runtime
+            .put_own(
+                runtime.function_prototype,
+                "constructor",
+                Value::Native("Function".into()),
+                false,
+            )
+            .expect("fixed bootstrap");
         runtime
     }
 
@@ -369,7 +426,7 @@ impl Runtime {
                     .saturating_add(value_bytes(&this))
                     .saturating_add(args.iter().map(value_bytes).sum::<usize>()),
             )?;
-            self.call(callee, this, args, host)
+            self.call(callee, this, args, None, host)
         })();
         self.finish(result)
     }
@@ -378,19 +435,17 @@ impl Runtime {
         if let Some(error) = &self.fatal {
             return Err(error.clone());
         }
-        if source.len() > MAX_HEAP {
-            self.fatal = Some("JavaScript source exceeds allocation budget".into());
-            return Err(self.fatal.clone().unwrap());
-        }
-        let Program(statements) = syntax::parse(source)?;
         let result = (|| {
+            self.budget
+                .allocate(128usize.saturating_add(source.len()))?;
+            let Program(statements) = self.parse_result(syntax::parse(source))?;
             self.budget.allocate(
                 statements
                     .iter()
                     .map(statement_bytes)
                     .fold(0usize, usize::saturating_add),
             )?;
-            self.hoist(&statements, 0)?;
+            self.hoist(&statements, 0, 0, false)?;
             match self.statements(&statements, 0, &Value::Object(0), host)? {
                 Flow::Normal(value) => Ok(value.unwrap_or(Value::Undefined)),
                 _ => Err(exception("SyntaxError: invalid top-level control flow")),
@@ -405,8 +460,139 @@ impl Runtime {
                 self.fatal = Some(message.clone());
                 Err(message)
             }
-            Err(error) => Err(fault_text(error)),
+            Err(Fault::Throw(value)) => {
+                let text = if let Value::Object(id) = &value {
+                    self.objects
+                        .get(*id)
+                        .and_then(|object| {
+                            let name = object.properties.iter().find(|p| p.key == "name")?;
+                            let message = object.properties.iter().find(|p| p.key == "message")?;
+                            Some(format!(
+                                "{}: {}",
+                                name.value.as_text(),
+                                message.value.as_text()
+                            ))
+                        })
+                        .unwrap_or_else(|| value.as_text())
+                } else {
+                    value.as_text()
+                };
+                Err(format!("Uncaught JavaScript exception: {text}"))
+            }
         }
+    }
+
+    fn uri_result<T>(&mut self, result: Result<T, String>) -> Eval<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) if error == uri::LIMIT_ERROR => Err(Fault::Fatal(error)),
+            Err(error) => {
+                let value = self.error_object(
+                    "URIError",
+                    error.strip_prefix("URIError: ").unwrap_or(&error),
+                )?;
+                Err(Fault::Throw(value))
+            }
+        }
+    }
+
+    fn error_object(&mut self, name: &str, message: &str) -> Eval<Value> {
+        let object = self.object(Some(self.object_prototype), None)?;
+        let name = self.text(name)?;
+        let message = self.text(message)?;
+        self.put_own(object, "name", name, false)?;
+        self.put_own(object, "message", message, false)?;
+        Ok(Value::Object(object))
+    }
+
+    fn parse_result<T>(&mut self, result: Result<T, String>) -> Eval<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) if syntax::is_limit_error(&error) => Err(Fault::Fatal(format!(
+                "JavaScript parser limit exhausted: {error}"
+            ))),
+            Err(error) => Err(Fault::Throw(self.error_object("SyntaxError", &error)?)),
+        }
+    }
+
+    /// The source boundary deliberately rejects unpaired UTF-16; it never
+    /// replaces a code unit and then parses a different program successfully.
+    fn utf8_source(&mut self, units: &[u16]) -> Eval<String> {
+        let mut length = 0usize;
+        for character in char::decode_utf16(units.iter().copied()) {
+            let Ok(character) = character else {
+                return Err(Fault::Throw(self.error_object(
+                    "SyntaxError",
+                    "Unpaired UTF-16 source code unit is unsupported",
+                )?));
+            };
+            length = length.saturating_add(character.len_utf8());
+        }
+        self.budget.allocate(length)?;
+        String::from_utf16(units).map_err(|_| exception("SyntaxError: invalid UTF-16 source"))
+    }
+
+    fn eval_code(
+        &mut self,
+        input: Value,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let Value::String(units) = input else {
+            return Ok(input);
+        };
+        let source = self.utf8_source(&units)?;
+        self.budget.allocate(128)?;
+        let Program(statements) = self.parse_result(syntax::parse(&source))?;
+        self.budget.allocate(
+            statements
+                .iter()
+                .map(statement_bytes)
+                .fold(0usize, usize::saturating_add),
+        )?;
+        let variable = self.environments[environment].variable;
+        self.hoist(&statements, variable, environment, true)?;
+        match self.statements(&statements, environment, this, host)? {
+            Flow::Normal(value) => Ok(value.unwrap_or(Value::Undefined)),
+            _ => Err(Fault::Throw(
+                self.error_object("SyntaxError", "Invalid eval control flow")?,
+            )),
+        }
+    }
+
+    fn dynamic_function(&mut self, args: Vec<Value>, host: &mut impl Host) -> Eval<Value> {
+        self.budget.allocate(args.len().saturating_mul(32))?;
+        let mut parts = Vec::with_capacity(args.len());
+        // Complete every ToString before any parameter/body grammar validation.
+        for argument in args {
+            parts.push(self.units(argument, host)?);
+        }
+        let body = parts.pop().unwrap_or_default();
+        let length = parts
+            .iter()
+            .map(Vec::len)
+            .fold(parts.len().saturating_sub(1), usize::saturating_add);
+        self.budget.allocate(length.saturating_mul(2))?;
+        let mut parameters = Vec::with_capacity(length);
+        for (index, part) in parts.into_iter().enumerate() {
+            if index != 0 {
+                parameters.push(b',' as u16);
+            }
+            parameters.extend(part);
+        }
+        let parameters = self.utf8_source(&parameters)?;
+        let body = self.utf8_source(&body)?;
+        self.budget.allocate(128)?;
+        let parsed = self.parse_result(syntax::parse_function(&parameters, &body))?;
+        self.budget.allocate(expression_bytes(&parsed))?;
+        let Expr::Function { name, params, body } = parsed else {
+            return Err(Fault::Fatal(
+                "Invalid dynamic function parser result".into(),
+            ));
+        };
+        // "anonymous" is display metadata, not a self-name lexical binding.
+        self.function(name.as_ref(), &params, &body, 0, false)
     }
 
     fn object(
@@ -434,7 +620,7 @@ impl Runtime {
         });
         Ok(id)
     }
-    fn environment(&mut self, parent: usize) -> Eval<usize> {
+    fn environment(&mut self, parent: usize, variable_scope: bool) -> Eval<usize> {
         if self.environments.len() >= MAX_OBJECTS {
             return Err(Fault::Fatal(
                 "JavaScript environment limit exhausted".into(),
@@ -444,6 +630,11 @@ impl Runtime {
         let id = self.environments.len();
         self.environments.push(Environment {
             parent: Some(parent),
+            variable: if variable_scope {
+                id
+            } else {
+                self.environments[parent].variable
+            },
             bindings: Vec::new(),
         });
         Ok(id)
@@ -518,7 +709,7 @@ impl Runtime {
                     .then_some(0);
             }
             let current = &self.environments[environment];
-            if current.bindings.iter().any(|(key, _)| key == name) {
+            if current.bindings.iter().any(|binding| binding.name == name) {
                 return Some(environment);
             }
             environment = current.parent.unwrap_or(0);
@@ -531,8 +722,8 @@ impl Runtime {
         let value = self.environments[environment]
             .bindings
             .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value)
+            .find(|binding| binding.name == name)
+            .map(|binding| &binding.value)
             .unwrap_or(&Value::Undefined);
         self.budget.copy(value)
     }
@@ -542,27 +733,42 @@ impl Runtime {
         }
         self.budget.allocate(value_bytes(&value))?;
         let bindings = &mut self.environments[environment].bindings;
-        if let Some((_, previous)) = bindings.iter_mut().find(|(key, _)| key == name) {
-            *previous = value;
+        if let Some(previous) = bindings.iter_mut().find(|binding| binding.name == name) {
+            previous.value = value;
         } else {
             self.budget.allocate(128 + name.len())?;
-            bindings.push((name.into(), value));
+            bindings.push(Binding {
+                name: name.into(),
+                value,
+                deletable: false,
+            });
         }
         Ok(())
     }
-    fn declare(&mut self, environment: usize, name: &str) -> Eval<()> {
+    fn declare(&mut self, environment: usize, name: &str, deletable: bool) -> Eval<()> {
         let exists = if environment == 0 {
             self.objects[0].properties.iter().any(|p| p.key == name)
         } else {
             self.environments[environment]
                 .bindings
                 .iter()
-                .any(|(key, _)| key == name)
+                .any(|binding| binding.name == name)
         };
         if !exists {
             self.define(environment, name, Value::Undefined)?;
+            if environment != 0 {
+                self.environments[environment]
+                    .bindings
+                    .last_mut()
+                    .unwrap()
+                    .deletable = deletable;
+            }
         }
-        if environment == 0 && !self.global_declarations.iter().any(|key| key == name) {
+        if environment == 0
+            && !exists
+            && !deletable
+            && !self.global_declarations.iter().any(|key| key == name)
+        {
             self.budget.allocate(32 + name.len())?;
             self.global_declarations.push(name.into());
         }
@@ -587,7 +793,7 @@ impl Runtime {
             .saturating_add(params.iter().map(|p| p.len() + 32).sum::<usize>());
         self.budget.allocate(bytes)?;
         let environment = if self_named && name.is_some() {
-            self.environment(environment)?
+            self.environment(environment, false)?
         } else {
             environment
         };
@@ -610,13 +816,19 @@ impl Runtime {
         }
         Ok(Value::Function(id))
     }
-    fn hoist(&mut self, statements: &[Stmt], environment: usize) -> Eval<()> {
+    fn hoist(
+        &mut self,
+        statements: &[Stmt],
+        environment: usize,
+        lexical: usize,
+        deletable: bool,
+    ) -> Eval<()> {
         for statement in statements {
             self.budget.step()?;
             match statement {
                 Stmt::Var(bindings) => {
                     for (name, _) in bindings {
-                        self.declare(environment, name)?;
+                        self.declare(environment, name, deletable)?;
                     }
                 }
                 Stmt::Function { name, params, body } => {
@@ -626,41 +838,96 @@ impl Runtime {
                             "SyntaxError: function declaration conflicts with host global",
                         ));
                     }
-                    self.declare(environment, name)?;
-                    let function = self.function(Some(name), params, body, environment, false)?;
+                    self.declare(environment, name, deletable)?;
+                    // Function declarations may make an existing configurable
+                    // global permanent; ordinary var declarations must not.
+                    if environment == 0
+                        && !deletable
+                        && !self.global_declarations.iter().any(|key| key == name)
+                    {
+                        self.budget.allocate(32 + name.len())?;
+                        self.global_declarations.push(name.clone());
+                    }
+                    let function = self.function(Some(name), params, body, lexical, false)?;
                     self.define(environment, name, function)?;
                 }
-                Stmt::Block(body) => self.hoist(body, environment)?,
+                Stmt::Block(body) => self.hoist(body, environment, lexical, deletable)?,
+                Stmt::Label { body, .. } => {
+                    self.hoist(
+                        std::slice::from_ref(body.as_ref()),
+                        environment,
+                        lexical,
+                        deletable,
+                    )?;
+                }
                 Stmt::If {
                     consequent,
                     alternate,
                     ..
                 } => {
-                    self.hoist(std::slice::from_ref(consequent.as_ref()), environment)?;
+                    self.hoist(
+                        std::slice::from_ref(consequent.as_ref()),
+                        environment,
+                        lexical,
+                        deletable,
+                    )?;
                     if let Some(alternate) = alternate {
-                        self.hoist(std::slice::from_ref(alternate.as_ref()), environment)?;
+                        self.hoist(
+                            std::slice::from_ref(alternate.as_ref()),
+                            environment,
+                            lexical,
+                            deletable,
+                        )?;
                     }
                 }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    self.hoist(std::slice::from_ref(body.as_ref()), environment)?
-                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => self.hoist(
+                    std::slice::from_ref(body.as_ref()),
+                    environment,
+                    lexical,
+                    deletable,
+                )?,
                 Stmt::For { init, body, .. } => {
                     if let Some(init) = init {
-                        self.hoist(std::slice::from_ref(init.as_ref()), environment)?;
+                        self.hoist(
+                            std::slice::from_ref(init.as_ref()),
+                            environment,
+                            lexical,
+                            deletable,
+                        )?;
                     }
-                    self.hoist(std::slice::from_ref(body.as_ref()), environment)?;
+                    self.hoist(
+                        std::slice::from_ref(body.as_ref()),
+                        environment,
+                        lexical,
+                        deletable,
+                    )?;
                 }
                 Stmt::Try {
                     body,
                     catch,
                     finally,
                 } => {
-                    self.hoist(std::slice::from_ref(body.as_ref()), environment)?;
+                    self.hoist(
+                        std::slice::from_ref(body.as_ref()),
+                        environment,
+                        lexical,
+                        deletable,
+                    )?;
                     if let Some((_, catch)) = catch {
-                        self.hoist(std::slice::from_ref(catch.as_ref()), environment)?;
+                        self.hoist(
+                            std::slice::from_ref(catch.as_ref()),
+                            environment,
+                            lexical,
+                            deletable,
+                        )?;
                     }
                     if let Some(finally) = finally {
-                        self.hoist(std::slice::from_ref(finally.as_ref()), environment)?;
+                        self.hoist(
+                            std::slice::from_ref(finally.as_ref()),
+                            environment,
+                            lexical,
+                            deletable,
+                        )?;
                     }
                 }
                 _ => {}
@@ -677,10 +944,10 @@ impl Runtime {
     ) -> Eval<Flow> {
         let mut last = None;
         for statement in statements {
-            match self.statement(statement, environment, this, host)? {
+            match self.statement(statement, &[], environment, this, host)? {
                 Flow::Normal(Some(value)) => last = Some(value),
                 Flow::Normal(None) => {}
-                other => return Ok(other),
+                other => return Ok(other.update_empty(last)),
             }
         }
         Ok(Flow::Normal(last))
@@ -688,6 +955,7 @@ impl Runtime {
     fn statement(
         &mut self,
         statement: &Stmt,
+        labels: &[&str],
         environment: usize,
         this: &Value,
         host: &mut impl Host,
@@ -720,8 +988,25 @@ impl Runtime {
                 Some(expr) => self.expression(expr, environment, this, host)?,
                 None => Value::Undefined,
             })),
-            Stmt::Break => Ok(Flow::Break),
-            Stmt::Continue => Ok(Flow::Continue),
+            Stmt::Break(target) | Stmt::Continue(target) => {
+                self.budget
+                    .allocate(target.as_ref().map_or(0, String::len))?;
+                Ok(if matches!(statement, Stmt::Break(_)) {
+                    Flow::Break(target.clone(), None)
+                } else {
+                    Flow::Continue(target.clone(), None)
+                })
+            }
+            Stmt::Label { name, body } => {
+                self.budget
+                    .allocate((labels.len() + 1).saturating_mul(std::mem::size_of::<&str>()))?;
+                let mut nested = labels.to_vec();
+                nested.push(name.as_str());
+                match self.statement(body, &nested, environment, this, host)? {
+                    Flow::Break(Some(target), value) if target == *name => Ok(Flow::Normal(value)),
+                    other => Ok(other),
+                }
+            }
             Stmt::Throw(expr) => Err(Fault::Throw(self.expression(
                 expr,
                 environment,
@@ -734,48 +1019,33 @@ impl Runtime {
                 alternate,
             } => {
                 if self.expression(test, environment, this, host)?.truthy() {
-                    self.statement(consequent, environment, this, host)
+                    self.statement(consequent, &[], environment, this, host)
                 } else if let Some(alternate) = alternate {
-                    self.statement(alternate, environment, this, host)
+                    self.statement(alternate, &[], environment, this, host)
                 } else {
                     Ok(Flow::Normal(None))
                 }
             }
-            Stmt::While { test, body } => {
-                let mut last = None;
-                while self.expression(test, environment, this, host)?.truthy() {
-                    match self.statement(body, environment, this, host)? {
-                        Flow::Break => break,
-                        Flow::Continue => {}
-                        Flow::Return(value) => return Ok(Flow::Return(value)),
-                        Flow::Normal(value) => {
-                            if value.is_some() {
-                                last = value;
-                            }
-                        }
-                    }
-                }
-                Ok(Flow::Normal(last))
+            Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => {
+                self.iteration(statement, labels, environment, this, host)
             }
-            Stmt::DoWhile { body, test } => {
-                let mut last = None;
-                loop {
-                    match self.statement(body, environment, this, host)? {
-                        Flow::Break => break,
-                        Flow::Continue => {}
-                        Flow::Return(value) => return Ok(Flow::Return(value)),
-                        Flow::Normal(value) => {
-                            if value.is_some() {
-                                last = value;
-                            }
-                        }
-                    }
-                    if !self.expression(test, environment, this, host)?.truthy() {
-                        break;
-                    }
-                }
-                Ok(Flow::Normal(last))
-            }
+            Stmt::Try { .. } => self.try_statement(statement, environment, this, host),
+        }
+    }
+
+    // Keep loop and try frames separate from ordinary dispatch: recursive calls
+    // must reach the configured call-depth error without large debug-build frames.
+    fn iteration(
+        &mut self,
+        statement: &Stmt,
+        labels: &[&str],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        let (body, test, update, test_after_body) = match statement {
+            Stmt::While { test, body } => (body, Some(test), None, false),
+            Stmt::DoWhile { test, body } => (body, Some(test), None, true),
             Stmt::For {
                 init,
                 test,
@@ -783,62 +1053,80 @@ impl Runtime {
                 body,
             } => {
                 if let Some(init) = init {
-                    self.statement(init, environment, this, host)?;
+                    self.statement(init, &[], environment, this, host)?;
                 }
-                let mut last = None;
-                loop {
-                    self.budget.step()?;
-                    if let Some(test) = test
-                        && !self.expression(test, environment, this, host)?.truthy()
-                    {
-                        break;
-                    }
-                    match self.statement(body, environment, this, host)? {
-                        Flow::Break => break,
-                        Flow::Continue => {}
-                        Flow::Return(value) => return Ok(Flow::Return(value)),
-                        Flow::Normal(value) => {
-                            if value.is_some() {
-                                last = value;
-                            }
-                        }
-                    }
-                    if let Some(update) = update {
-                        self.expression(update, environment, this, host)?;
-                    }
-                }
-                Ok(Flow::Normal(last))
+                (body, test.as_ref(), update.as_ref(), false)
             }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                let mut result = self.statement(body, environment, this, host);
-                if matches!(result, Err(Fault::Fatal(_))) {
-                    return result;
-                }
-                if let Err(Fault::Throw(value)) = result {
-                    result = if let Some((name, catch)) = catch {
-                        let environment = self.environment(environment)?;
-                        self.define(environment, name, value)?;
-                        self.statement(catch, environment, this, host)
-                    } else {
-                        Err(Fault::Throw(value))
-                    };
-                }
-                if matches!(result, Err(Fault::Fatal(_))) {
-                    return result;
-                }
-                if let Some(finally) = finally {
-                    match self.statement(finally, environment, this, host)? {
-                        Flow::Normal(_) => {}
-                        other => return Ok(other),
-                    }
-                }
-                result
+            _ => unreachable!("iteration dispatch only accepts loops"),
+        };
+        let mut last = None;
+        loop {
+            if matches!(statement, Stmt::For { .. }) {
+                self.budget.step()?;
+            }
+            if !test_after_body
+                && let Some(test) = test
+                && !self.expression(test, environment, this, host)?.truthy()
+            {
+                break;
+            }
+            let flow = self.statement(body, &[], environment, this, host)?;
+            match loop_step(flow, &mut last, labels) {
+                LoopStep::Stop => break,
+                LoopStep::Next => {}
+                LoopStep::Abrupt(flow) => return Ok(flow),
+            }
+            if let Some(update) = update {
+                self.expression(update, environment, this, host)?;
+            }
+            if test_after_body
+                && let Some(test) = test
+                && !self.expression(test, environment, this, host)?.truthy()
+            {
+                break;
             }
         }
+        Ok(Flow::Normal(last))
+    }
+
+    fn try_statement(
+        &mut self,
+        statement: &Stmt,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        let Stmt::Try {
+            body,
+            catch,
+            finally,
+        } = statement
+        else {
+            unreachable!("try dispatch only accepts try statements")
+        };
+        let mut result = self.statement(body, &[], environment, this, host);
+        if matches!(result, Err(Fault::Fatal(_))) {
+            return result;
+        }
+        if let Err(Fault::Throw(value)) = result {
+            result = if let Some((name, catch)) = catch {
+                let environment = self.environment(environment, false)?;
+                self.define(environment, name, value)?;
+                self.statement(catch, &[], environment, this, host)
+            } else {
+                Err(Fault::Throw(value))
+            };
+        }
+        if matches!(result, Err(Fault::Fatal(_))) {
+            return result;
+        }
+        if let Some(finally) = finally {
+            match self.statement(finally, &[], environment, this, host)? {
+                Flow::Normal(_) => {}
+                other => return Ok(other),
+            }
+        }
+        result
     }
 
     fn reference(
@@ -959,7 +1247,19 @@ impl Runtime {
                         Expr::Ident(name) => match self.lookup(environment, name) {
                             None => Ok(Value::Bool(true)),
                             Some(0) => self.delete(Value::Object(0), name),
-                            Some(_) => Ok(Value::Bool(false)),
+                            Some(environment) => {
+                                let bindings = &mut self.environments[environment].bindings;
+                                let index = bindings
+                                    .iter()
+                                    .position(|binding| binding.name == *name)
+                                    .unwrap();
+                                if bindings[index].deletable {
+                                    bindings.remove(index);
+                                    Ok(Value::Bool(true))
+                                } else {
+                                    Ok(Value::Bool(false))
+                                }
+                            }
                         },
                         Expr::Member { .. } => {
                             let reference = self.reference(expr, environment, this, host)?;
@@ -1082,7 +1382,8 @@ impl Runtime {
                 Ok(result)
             }
             Expr::Call { callee, args } => {
-                let (callee, receiver) = if matches!(callee.as_ref(), Expr::Member { .. }) {
+                let eval_reference = matches!(callee.as_ref(), Expr::Ident(name) if name == "eval");
+                let (callee, mut receiver) = if matches!(callee.as_ref(), Expr::Member { .. }) {
                     let reference = self.reference(callee, environment, this, host)?;
                     let callee = self.read_reference(&reference, host)?;
                     let receiver = if let Reference::Property(value, _) = reference {
@@ -1097,8 +1398,15 @@ impl Runtime {
                         Value::Object(0),
                     )
                 };
+                let direct_eval =
+                    if eval_reference && matches!(&callee, Value::Native(name) if name == "eval") {
+                        receiver = self.copy(this)?;
+                        Some(environment)
+                    } else {
+                        None
+                    };
                 let args = self.arguments(args, environment, this, host)?;
-                self.call(callee, receiver, args, host)
+                self.call(callee, receiver, args, direct_eval, host)
             }
             Expr::New { callee, args } => {
                 let callee = self.expression(callee, environment, this, host)?;
@@ -1108,12 +1416,15 @@ impl Runtime {
                         name.as_str(),
                         "Array"
                             | "Object"
+                            | "Function"
                             | "Error"
                             | "TypeError"
                             | "RangeError"
                             | "ReferenceError"
+                            | "URIError"
+                            | "SyntaxError"
                     ) {
-                        return self.call(callee, Value::Undefined, args, host);
+                        return self.call(callee, Value::Undefined, args, None, host);
                     }
                     return Err(unsupported("this native constructor"));
                 }
@@ -1126,7 +1437,7 @@ impl Runtime {
                 };
                 let object = Value::Object(self.object(Some(prototype), None)?);
                 let receiver = self.copy(&object)?;
-                let result = self.call(callee, receiver, args, host)?;
+                let result = self.call(callee, receiver, args, None, host)?;
                 Ok(if result.primitive() { object } else { result })
             }
         }
@@ -1408,7 +1719,7 @@ impl Runtime {
             let method = self.get(&value, key, host)?;
             if method.callable() {
                 let receiver = self.copy(&value)?;
-                let result = self.call(method, receiver, Vec::new(), host)?;
+                let result = self.call(method, receiver, Vec::new(), None, host)?;
                 if result.primitive() {
                     return Ok(result);
                 }
@@ -1591,6 +1902,7 @@ impl Runtime {
         callee: Value,
         this: Value,
         args: Vec<Value>,
+        direct_eval: Option<usize>,
         host: &mut impl Host,
     ) -> Eval<Value> {
         self.budget.step()?;
@@ -1602,6 +1914,20 @@ impl Runtime {
         }
         self.budget.calls += 1;
         let result = (|| match callee {
+            Value::Native(name) if name == "eval" => {
+                let environment = direct_eval.unwrap_or(0);
+                let this = if direct_eval.is_some() {
+                    this
+                } else {
+                    Value::Object(0)
+                };
+                self.eval_code(
+                    args.into_iter().next().unwrap_or(Value::Undefined),
+                    environment,
+                    &this,
+                    host,
+                )
+            }
             Value::Native(name) if name.starts_with("host.") => {
                 let value = host.call(&name, this, args).map_err(exception)?;
                 self.budget.allocate(value_bytes(&value))?;
@@ -1615,7 +1941,7 @@ impl Runtime {
                     .ok_or_else(|| exception("TypeError: unknown function"))?;
                 let code = function.code.clone();
                 let parent = function.environment;
-                let environment = self.environment(parent)?;
+                let environment = self.environment(parent, true)?;
                 let this = if matches!(this, Value::Undefined | Value::Null) {
                     Value::Object(0)
                 } else {
@@ -1635,7 +1961,7 @@ impl Runtime {
                     self.put_own(arguments, "callee", Value::Function(id), false)?;
                     self.define(environment, "arguments", Value::Object(arguments))?;
                 }
-                self.hoist(&code.body, environment)?;
+                self.hoist(&code.body, environment, environment, false)?;
                 match self.statements(&code.body, environment, &this, host)? {
                     Flow::Return(value) => Ok(value),
                     Flow::Normal(_) => Ok(Value::Undefined),
@@ -1657,7 +1983,24 @@ impl Runtime {
     ) -> Eval<Value> {
         let first = self.copy(args.first().unwrap_or(&Value::Undefined))?;
         match name {
-            "eval" | "Function" => Err(unsupported("dynamic eval and Function constructors")),
+            "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
+                let input = self.units(first, host)?;
+                let component = name.ends_with("Component");
+                let output = if name.starts_with("encode") {
+                    let length = self.uri_result(uri::encoded_len(&input, component))?;
+                    self.budget.allocate(length.saturating_mul(2))?;
+                    self.uri_result(uri::encode(&input, component))?
+                } else {
+                    if input.len() > uri::MAX_UNITS {
+                        return Err(Fault::Fatal(uri::LIMIT_ERROR.into()));
+                    }
+                    self.budget.allocate(input.len().saturating_mul(2))?;
+                    self.uri_result(uri::decode(&input, component))?
+                };
+                // Output allocation was charged before the helper allocated it.
+                Ok(Value::String(output))
+            }
+            "Function" => self.dynamic_function(args, host),
             "String" => {
                 if args.is_empty() {
                     self.text("")
@@ -1708,7 +2051,7 @@ impl Runtime {
                 } else {
                     args.remove(0)
                 };
-                self.call(this, receiver, args, host)
+                self.call(this, receiver, args, None, host)
             }
             "Function.apply" => {
                 let list = self.copy(args.get(1).unwrap_or(&Value::Undefined))?;
@@ -1727,7 +2070,7 @@ impl Runtime {
                         values.push(self.get(&list, &index.to_string(), host)?);
                     }
                 }
-                self.call(this, first, values, host)
+                self.call(this, first, values, None, host)
             }
             "Function.toString" => {
                 if !this.callable() {
@@ -1851,7 +2194,8 @@ impl Runtime {
                 let text = String::from_utf16_lossy(&units);
                 Ok(Value::Number(parse_float(&text, &mut self.budget)?))
             }
-            "Error" | "TypeError" | "RangeError" | "ReferenceError" => {
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "URIError"
+            | "SyntaxError" => {
                 let object = self.object(Some(self.object_prototype), None)?;
                 let message = if args.is_empty() {
                     self.text("")?
@@ -2434,7 +2778,9 @@ fn parse_integer(text: &str, mut radix: i32, budget: &mut Budget) -> Eval<f64> {
 fn statement_bytes(statement: &Stmt) -> usize {
     let add = |a: usize, b: usize| a.saturating_add(b);
     128usize.saturating_add(match statement {
-        Stmt::Empty | Stmt::Break | Stmt::Continue => 0,
+        Stmt::Empty => 0,
+        Stmt::Break(target) | Stmt::Continue(target) => target.as_ref().map_or(0, String::len),
+        Stmt::Label { name, body } => name.len().saturating_add(statement_bytes(body)),
         Stmt::Expr(expr) | Stmt::Throw(expr) => expression_bytes(expr),
         Stmt::Return(expr) => expr.as_ref().map_or(0, expression_bytes),
         Stmt::Var(bindings) => bindings
@@ -2591,9 +2937,206 @@ mod tests {
         yes("function f(){try{return 1;}finally{return 2;}}f()===2");
         yes("var caught=false;try{null.x;}catch(e){caught=true;}caught");
         let error = Runtime::new()
-            .execute("eval('1+1')", &mut TestHost::default())
+            .execute("[].map(function(){})", &mut TestHost::default())
             .unwrap_err();
         assert!(error.contains("Unsupported"));
+    }
+
+    #[test]
+    fn labels_preserve_completion_values_and_hoisted_variables() {
+        assert_eq!(
+            evaluate("outer: { 17; break outer; 99; }"),
+            Value::Number(17.0)
+        );
+        assert_eq!(
+            evaluate("outer: inner: for(var i=0;i<3;i++){42;continue outer;}"),
+            Value::Number(42.0)
+        );
+        assert_eq!(
+            evaluate("outer: while(true){inner:while(true){23;break outer;}}"),
+            Value::Number(23.0)
+        );
+        yes("var old=hidden; block:{var hidden=3;break block;}old===undefined && hidden===3");
+        yes(
+            "var n=0;outer:inner:for(var i=0;i<3;i++){try{continue outer;}finally{n++;}}n===3 && i===3",
+        );
+    }
+
+    #[test]
+    fn dynamic_functions_have_global_scope_and_anonymous_display_names() {
+        yes("var anonymous=7;var f=Function('return anonymous;');f.name==='anonymous' && f()===7");
+        yes("(function(){}).constructor('return 13;')()===13");
+        yes(
+            "function outer(){var hidden=4;return Function('return typeof hidden;')();}outer()==='undefined'",
+        );
+        yes(
+            "var code='var n=4;'; var wrapper=Object(code);eval(wrapper)===wrapper && typeof n==='undefined'",
+        );
+    }
+
+    #[test]
+    fn eval_binding_creation_and_intrinsic_identity_are_preserved() {
+        yes("eval('var created=1;'); (delete created) && typeof created==='undefined'");
+        yes("var permanent=1;eval('var permanent=2');!(delete permanent) && permanent===2");
+        yes(
+            "function run(){var local=1;eval('var created=2;');return (delete created) && !(delete local) && typeof created==='undefined';}run()",
+        );
+        yes(
+            "var kept=eval;function f(){var x=7;return eval((eval=function(){return 9;},'x'));}f()===7 && eval('ignored')===9",
+        );
+        yes(
+            "function f(){try{throw 4;}catch(e){eval('var made=7;function read(){return e;}');}return made+read();}f()===11",
+        );
+        yes(
+            "function outer(){var x=1;function inner(){eval('var x=2');return x;}return inner()===2 && x===1;}outer()",
+        );
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        runtime
+            .execute("eval('var created=1;');", &mut host)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .execute("var created; delete created;", &mut host)
+                .unwrap(),
+            Value::Bool(true)
+        );
+        runtime
+            .execute("eval('var created=1;');", &mut host)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .execute("function created(){} delete created;", &mut host)
+                .unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn dynamic_sources_never_replace_invalid_utf16_and_syntax_errors_are_objects() {
+        yes(
+            "var caught=false;try{eval('\\ud800');}catch(e){caught=e.name==='SyntaxError';}caught && eval('2+3')===5",
+        );
+        yes(
+            "var caught=false;try{Function('return \\ud800;');}catch(e){caught=e.name==='SyntaxError';}caught",
+        );
+        yes(
+            "var order='';try{Function({toString:function(){order+='p';return '\\ud800';}},{toString:function(){order+='b';return 'return 1;';}});}catch(e){order+=e.name;}order==='pbSyntaxError'",
+        );
+        yes("eval(\"'\\\\ud800'\").charCodeAt(0)===55296");
+        yes(
+            "var caught=false;try{eval(\"'use strict';1\");}catch(e){caught=e.name==='SyntaxError';}caught",
+        );
+    }
+
+    #[test]
+    fn dynamic_parser_and_nested_eval_limits_remain_fatal_and_latched() {
+        for source in [
+            "var caught=false;var code='eval(code)';try{eval(code);}catch(e){caught=true;}finally{caught=true;}",
+            "var caught=false;try{Function('return arguments.callee();')();}catch(e){caught=true;}finally{caught=true;}",
+        ] {
+            let mut runtime = Runtime::new();
+            let mut host = TestHost::default();
+            let error = runtime.execute(source, &mut host).unwrap_err();
+            assert!(error.contains("call depth exhausted"), "{error}");
+            assert_eq!(runtime.get_global("caught"), Value::Bool(false));
+            assert_eq!(runtime.execute("1", &mut host).unwrap_err(), error);
+        }
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        runtime.set_global(
+            "tooDeep",
+            Value::text(&format!("{}1{}", "(".repeat(140), ")".repeat(140))),
+        );
+        let error = runtime
+            .execute(
+                "var caught=false;try{eval(tooDeep);}catch(e){caught=true;}",
+                &mut host,
+            )
+            .unwrap_err();
+        assert!(error.contains("parser limit exhausted"), "{error}");
+        assert_eq!(runtime.get_global("caught"), Value::Bool(false));
+        assert_eq!(runtime.execute("1", &mut host).unwrap_err(), error);
+    }
+
+    #[test]
+    fn uri_builtins_use_real_to_string_and_catchable_uri_errors() {
+        yes(
+            "var n=0;var o={toString:function(){n++;return 'a b/😀';}};encodeURIComponent(o)==='a%20b%2F%F0%9F%98%80' && n===1",
+        );
+        yes(
+            "var order='';var o={toString:function(){order+='s';return {};},valueOf:function(){order+='v';return 'a b';}};encodeURI(o)==='a%20b' && order==='sv'",
+        );
+        yes(
+            "var order='';decodeURIComponent({toString:function(){order+='s';return '%41';}},order+='arg')==='A' && order==='args'",
+        );
+        yes(
+            "encodeURI('a/b?x=1#t')==='a/b?x=1#t' && decodeURI('%2f%3f%41')==='%2f%3fA' && decodeURIComponent('%2f%3f%41')==='/?A'",
+        );
+        yes(
+            "encodeURIComponent()==='undefined' && decodeURIComponent(null)==='null' && decodeURIComponent('a+b')==='a+b'",
+        );
+        yes(
+            "var caught=false;try{encodeURI('\\ud800');}catch(e){caught=e.name==='URIError' && e.message==='malformed URI sequence';}caught",
+        );
+        yes(
+            "var caught=false;try{decodeURIComponent('%ED%A0%80');}catch(e){caught=e.name==='URIError';}caught",
+        );
+        yes(
+            "var caught=false;try{encodeURI({toString:function(){throw 7;}});}catch(e){caught=e===7;}caught",
+        );
+        assert!(
+            Runtime::new()
+                .execute("decodeURIComponent('%')", &mut TestHost::default())
+                .unwrap_err()
+                .contains("URIError: malformed URI sequence")
+        );
+        assert_eq!(
+            evaluate("decodeURIComponent('\\ud800')"),
+            Value::String(vec![0xd800])
+        );
+    }
+
+    #[test]
+    fn uri_work_respects_cumulative_budget_and_latches_exhaustion() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        let input = Value::String(vec![b' ' as u16; uri::MAX_UNITS / 3 + 1]);
+        runtime.set_global("input", input);
+        let error = runtime
+            .execute(
+                "try{encodeURIComponent(input);}catch(e){'recovered';}",
+                &mut host,
+            )
+            .unwrap_err();
+        assert!(error.contains("limit exhausted"), "{error}");
+        assert_eq!(runtime.execute("1", &mut host).unwrap_err(), error);
+
+        let mut runtime = Runtime::new();
+        runtime
+            .execute("encodeURIComponent('a b')", &mut host)
+            .unwrap();
+        let before = runtime.budget.allocated;
+        runtime
+            .execute("encodeURIComponent('a b')", &mut host)
+            .unwrap();
+        assert!(runtime.budget.allocated > before);
+        runtime.budget.allocated = MAX_HEAP - 1;
+        let error = runtime
+            .execute("encodeURIComponent('a b')", &mut host)
+            .unwrap_err();
+        assert!(error.contains("allocation budget exhausted"), "{error}");
+        assert_eq!(
+            runtime
+                .invoke(
+                    Value::Native("encodeURI".into()),
+                    Value::Undefined,
+                    vec![Value::text("x")],
+                    &mut host
+                )
+                .unwrap_err(),
+            error
+        );
     }
 
     #[test]

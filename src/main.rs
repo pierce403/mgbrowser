@@ -274,10 +274,17 @@ impl App {
                             if let Some(error) = reply.errors.first() {
                                 let error: String = error.chars().take(240).collect();
                                 eprintln!(
-                                    "SCRIPT_PARTIAL executed={} errors={} first={error}",
+                                    "SCRIPT_PARTIAL executed={} errors={} first={error:?}",
                                     reply.scripts_executed,
                                     reply.errors.len()
                                 );
+                                for (index, diagnostic) in reply.errors.iter().enumerate() {
+                                    eprintln!(
+                                        "SCRIPT_DIAGNOSTIC index={} message={:?}",
+                                        index + 1,
+                                        diagnostic
+                                    );
+                                }
                                 format!(
                                     "JS: {} scripts, {} errors ({error})",
                                     reply.scripts_executed,
@@ -297,11 +304,11 @@ impl App {
                                 .chars()
                                 .take(240)
                                 .collect();
-                            eprintln!("SCRIPT_REJECTED {error}");
+                            eprintln!("SCRIPT_REJECTED {error:?}");
                             format!("JS rejected; original document retained: {error}")
                         }
                         Some(Err(error)) => {
-                            eprintln!("SCRIPT_ERROR {error}");
+                            eprintln!("SCRIPT_ERROR {error:?}");
                             format!("JS worker failed: {error}")
                         }
                         None => "JavaScript disabled".into(),

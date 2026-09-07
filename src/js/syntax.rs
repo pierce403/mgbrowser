@@ -2,7 +2,7 @@
 //!
 //! This initial ES5-shaped subset uses ASCII identifiers (including ASCII
 //! Unicode escapes) and UTF-16 strings. Strict mode, regular expressions,
-//! accessors, labels, for-in, and newer language syntax are explicit errors.
+//! accessors, for-in, and newer language syntax are explicit errors.
 
 use super::{Expr, Program, Stmt};
 
@@ -311,7 +311,11 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn tokens(mut self) -> Result<Vec<Token>, String> {
+    fn tokens(self) -> Result<Vec<Token>, String> {
+        self.tokens_with_limit(MAX_TOKENS)
+    }
+
+    fn tokens_with_limit(mut self, limit: usize) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
         loop {
             let newline = self.space_and_comments()?;
@@ -324,7 +328,7 @@ impl<'a> Lexer<'a> {
                 });
                 return Ok(tokens);
             };
-            if tokens.len() >= MAX_TOKENS {
+            if tokens.len() >= limit {
                 return Err(error(offset, "Token limit exceeded"));
             }
             let kind = if identifier_start(ch) || ch == '\\' {
@@ -382,6 +386,11 @@ struct S {
     depth: usize,
 }
 
+struct Label {
+    name: String,
+    iteration: bool,
+}
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -389,6 +398,7 @@ struct Parser {
     nodes: usize,
     functions: usize,
     loops: usize,
+    labels: Vec<Label>,
 }
 
 /// Parse the entire source or return a byte-positioned error. No successful
@@ -398,19 +408,114 @@ pub fn parse(source: &str) -> Result<Program, String> {
         return Err(error(MAX_SOURCE, "Source exceeds one MiB"));
     }
     let tokens = Lexer { source, pos: 0 }.tokens()?;
-    let mut parser = Parser {
-        tokens,
-        pos: 0,
-        nesting: 0,
-        nodes: 0,
-        functions: 0,
-        loops: 0,
-    };
+    let mut parser = Parser::new(tokens);
     let (body, _) = parser.body(false, true)?;
     Ok(Program(body))
 }
 
+/// Parse the Function constructor's already comma-joined parameter arguments and
+/// body as separate grammar inputs (ES5 15.3.2.1). Neither fragment can close,
+/// comment out, or otherwise change the grammar of the other. The returned name
+/// is display metadata; the runtime must create this function in global scope,
+/// without introducing a named-function-expression binding for `anonymous`.
+///
+/// Both fragments share the one-MiB source, token and AST-growth limits. Parameter
+/// bindings are charged alongside body nodes, and the function wrapper contributes
+/// to the normal AST depth. Diagnostics identify the fragment and its byte offset.
+pub fn parse_function(parameters: &str, body: &str) -> Result<Expr, String> {
+    if parameters.len().saturating_add(body.len()) > MAX_SOURCE {
+        return Err(error(MAX_SOURCE, "Source exceeds one MiB"));
+    }
+    let tokens = Lexer {
+        source: parameters,
+        pos: 0,
+    }
+    .tokens()
+    .map_err(|error| format!("Function parameters: {error}"))?;
+    // End-of-input sentinels are not source tokens, consistent with tokens().
+    let remaining_tokens = MAX_TOKENS - (tokens.len() - 1);
+    let mut parser = Parser::new(tokens);
+    let params = (|| {
+        let mut params = Vec::new();
+        if !parser.end() {
+            loop {
+                let name = parser.name(false)?;
+                parser.node(1)?;
+                params.push(name);
+                if !parser.eat(",") {
+                    break;
+                }
+            }
+        }
+        if !parser.end() {
+            return Err(parser.fail("Unexpected token in Function parameter list"));
+        }
+        Ok(params)
+    })()
+    .map_err(|error| format!("Function parameters: {error}"))?;
+
+    // Drop parameter tokens before allocating body tokens. There is no synthetic
+    // source concatenation or second copy of either input string.
+    parser.tokens = Vec::new();
+    parser.tokens = Lexer {
+        source: body,
+        pos: 0,
+    }
+    .tokens_with_limit(remaining_tokens)
+    .map_err(|error| format!("Function body: {error}"))?;
+    parser.pos = 0;
+    parser.functions = 1;
+    let (body, depth) = parser
+        .nested(|parser| parser.body(false, true))
+        .map_err(|error| format!("Function body: {error}"))?;
+    parser
+        .expr(
+            Expr::Function {
+                name: Some("anonymous".into()),
+                params,
+                body,
+            },
+            depth + 1,
+        )
+        .map(|expression| expression.value)
+        .map_err(|error| format!("Function body: {error}"))
+}
+
+/// Recognize only parser-owned resource diagnostics. Runtime dynamic parsing
+/// uses this to keep exhausted budgets fatal instead of catchable SyntaxErrors.
+pub fn is_limit_error(message: &str) -> bool {
+    let message = message
+        .strip_prefix("Function parameters: ")
+        .or_else(|| message.strip_prefix("Function body: "))
+        .unwrap_or(message);
+    let Some((reason, offset)) = message.rsplit_once(" at byte ") else {
+        return false;
+    };
+    offset.parse::<usize>().is_ok()
+        && matches!(
+            reason,
+            "Source exceeds one MiB"
+                | "Token limit exceeded"
+                | "Parser nesting limit exceeded"
+                | "AST depth limit exceeded"
+                | "AST node limit exceeded"
+                | "Label nesting limit exceeded"
+        )
+}
+
 impl Parser {
+    fn new(tokens: Vec<Token>) -> Self {
+        Self {
+            tokens,
+            pos: 0,
+            nesting: 0,
+            nodes: 0,
+            functions: 0,
+            loops: 0,
+            labels: Vec::new(),
+        }
+    }
+
     fn token(&self) -> &Token {
         &self.tokens[self.pos]
     }
@@ -539,7 +644,57 @@ impl Parser {
         self.nested(|parser| parser.statement_inner(declarations))
     }
 
+    fn label_start(&self) -> bool {
+        matches!(&self.token().kind, Kind::Word(name) if !reserved(name))
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|token| matches!(token.kind, Kind::Punct(":")))
+    }
+
+    fn labelled_statement(&mut self) -> Result<S, String> {
+        // ES5 12.7/12.8/12.12: consecutive labels share the terminal statement's
+        // label set; a block or another intervening statement ends that chain.
+        // Collect once, so long chains cannot cause quadratic token lookahead.
+        let first = self.labels.len();
+        while self.label_start() {
+            let offset = self.token().offset;
+            if self.labels.len() >= MAX_DEPTH {
+                return Err(error(offset, "Label nesting limit exceeded"));
+            }
+            let name = self.name(false)?;
+            self.expect(":")?;
+            if self.labels.iter().any(|label| label.name == name) {
+                return Err(error(offset, "Duplicate active label"));
+            }
+            self.labels.push(Label {
+                name,
+                iteration: false,
+            });
+        }
+        let iteration = self.word("while") || self.word("do") || self.word("for");
+        for label in &mut self.labels[first..] {
+            label.iteration = iteration;
+        }
+        let body = self.statement(false);
+        let labels = self.labels.split_off(first);
+        let mut body = body?;
+        for label in labels.into_iter().rev() {
+            body = self.stmt(
+                Stmt::Label {
+                    name: label.name,
+                    body: Box::new(body.value),
+                },
+                body.depth + 1,
+            )?;
+        }
+        Ok(body)
+    }
+
     fn statement_inner(&mut self, declarations: bool) -> Result<S, String> {
+        if self.label_start() {
+            return self.labelled_statement();
+        }
         if self.eat(";") {
             return self.stmt(Stmt::Empty, 1);
         }
@@ -587,22 +742,38 @@ impl Parser {
             return self.stmt(Stmt::Throw(value.value), value.depth + 1);
         }
         if self.word("break") || self.word("continue") {
+            let offset = self.token().offset;
             let is_break = self.eat_word("break");
             if !is_break {
                 self.pos += 1;
             }
-            if self.loops == 0 {
-                return Err(self.fail("break or continue outside a loop"));
-            }
-            if !self.token().newline && matches!(self.token().kind, Kind::Word(_)) {
-                return Err(self.fail("Labeled break and continue are unsupported"));
+            let target_offset = self.token().offset;
+            let target = if !self.token().newline && matches!(self.token().kind, Kind::Word(_)) {
+                Some(self.name(false)?)
+            } else {
+                None
+            };
+            if let Some(name) = &target {
+                let label = self.labels.iter().find(|label| &label.name == name);
+                match label {
+                    None => return Err(error(target_offset, "Unknown enclosing label")),
+                    Some(label) if !is_break && !label.iteration => {
+                        return Err(error(
+                            target_offset,
+                            "continue label does not target a loop",
+                        ));
+                    }
+                    Some(_) => {}
+                }
+            } else if self.loops == 0 {
+                return Err(error(offset, "break or continue outside a loop"));
             }
             self.semicolon()?;
             return self.stmt(
                 if is_break {
-                    Stmt::Break
+                    Stmt::Break(target)
                 } else {
-                    Stmt::Continue
+                    Stmt::Continue(target)
                 },
                 1,
             );
@@ -701,9 +872,6 @@ impl Parser {
             }
         }
         let value = self.expression(true)?;
-        if self.punct(":") {
-            return Err(self.fail("Labeled statements are unsupported"));
-        }
         self.semicolon()?;
         self.stmt(Stmt::Expr(value.value), value.depth + 1)
     }
@@ -807,11 +975,13 @@ impl Parser {
         self.expect(")")?;
         self.expect("{")?;
         let previous_loops = self.loops;
+        let previous_labels = std::mem::take(&mut self.labels);
         self.loops = 0;
         self.functions += 1;
         let result = self.nested(|parser| parser.body(true, true));
         self.functions -= 1;
         self.loops = previous_loops;
+        self.labels = previous_labels;
         let (body, depth) = result?;
         Ok((name, params, body, depth))
     }
@@ -1376,6 +1546,349 @@ mod tests {
         ));
         assert!(parse("function f(){return /*\n*/ 3}").is_ok());
         assert!(parse("while(1){(function(){break;})()}").is_err());
+    }
+
+    #[test]
+    fn dynamic_function_parses_parameters_and_return_body_independently() {
+        assert_eq!(
+            parse_function("a /* first */, b\\u0063", "return a + bc;").unwrap(),
+            Expr::Function {
+                name: Some("anonymous".into()),
+                params: vec!["a".into(), "bc".into()],
+                body: vec![Stmt::Return(Some(Expr::Binary {
+                    op: "+".into(),
+                    left: Box::new(Expr::Ident("a".into())),
+                    right: Box::new(Expr::Ident("bc".into())),
+                }))],
+            }
+        );
+        assert_eq!(
+            parse_function("// no parameters", "// no body").unwrap(),
+            Expr::Function {
+                name: Some("anonymous".into()),
+                params: vec![],
+                body: vec![],
+            }
+        );
+        let Expr::Function { params, body, .. } =
+            parse_function("a // parameter comment", "return a;").unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(params, vec!["a"]);
+        assert_eq!(body, vec![Stmt::Return(Some(Expr::Ident("a".into())))]);
+        for (parameters, body) in [
+            ("a, a", "return a;"), // Duplicate parameters are valid in non-strict code.
+            ("eval, arguments, undefined", "return arguments;"),
+            ("a, // between arguments\n b", "return b;"),
+            ("", "function nested(){return 2;} return nested();"),
+            ("", "outer: while(false){continue outer;} return 1;"),
+            ("", "('use strict'); return 1;"),
+        ] {
+            assert!(
+                parse_function(parameters, body).is_ok(),
+                "{parameters:?}: {body:?}"
+            );
+        }
+        let Expr::Function { body, .. } = parse_function("", "return\n2;").unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            body,
+            vec![Stmt::Return(None), Stmt::Expr(Expr::Number(2.0))]
+        );
+        assert!(parse("return 1;").is_err());
+    }
+
+    #[test]
+    fn dynamic_function_rejects_cross_fragment_syntax_and_invalid_bindings() {
+        for parameters in [
+            "a,",
+            ",a",
+            "a b",
+            "a=1",
+            "{a}",
+            "[a]",
+            "...a",
+            "return",
+            "r\\u0065turn",
+            "é",
+            "a) { return 1; } (",
+            "a); harmlessMarker=1; (",
+            "a /*",
+        ] {
+            let error = parse_function(parameters, "return 2;").expect_err(parameters);
+            assert!(error.starts_with("Function parameters: "), "{error}");
+            assert!(error.contains(" at byte "), "{error}");
+            assert!(!is_limit_error(&error), "{error}");
+        }
+        let error = parse_function("a /*", "*/ return a;").unwrap_err();
+        assert!(error.starts_with("Function parameters: "));
+        for body in [
+            "return 1; } function unexpected(){}",
+            "}); harmlessMarker=1; (function(){",
+            "return 1; /*",
+            "return 1; @",
+            "'use strict'; return 1;",
+            "'another directive'; 'use strict'; return 1;",
+            "break;",
+            "continue;",
+            "break outside;",
+            "continue outside;",
+            "outer: { (function(){break outer;})(); }",
+            "outer: while(false) { (function(){continue outer;})(); }",
+        ] {
+            let error = parse_function("", body).expect_err(body);
+            assert!(error.starts_with("Function body: "), "{error}");
+            assert!(error.contains(" at byte "), "{error}");
+            assert!(!is_limit_error(&error), "{error}");
+        }
+        assert_eq!(
+            parse_function("a", "return 1; @").unwrap_err(),
+            "Function body: Unsupported character or non-ASCII identifier at byte 10"
+        );
+    }
+
+    #[test]
+    fn dynamic_function_shares_source_token_ast_and_depth_limits() {
+        let half = " ".repeat(MAX_SOURCE / 2);
+        assert!(parse_function(&half, &half).is_ok());
+        assert!(is_limit_error(
+            &parse_function(&half, &format!("{half} ")).unwrap_err()
+        ));
+
+        // Three parameter-list tokens plus the body exactly consume the budget.
+        let body = ";".repeat(MAX_TOKENS - 3);
+        assert!(parse_function("a,b", &body).is_ok());
+        let error = parse_function("a,b", &format!("{body};")).unwrap_err();
+        assert!(error.contains("Token limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
+
+        // ASI gives two AST nodes per one source token. Bindings and the function
+        // wrapper must share the node count with these body expression statements.
+        let body = "1\n".repeat(MAX_NODES / 2 - 1);
+        assert!(parse_function("a", &body).is_ok());
+        let error = parse_function("a,b", &body).unwrap_err();
+        assert!(error.contains("AST node limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
+
+        let body: String = (0..MAX_DEPTH - 2).map(|i| format!("label{i}:")).collect();
+        assert!(parse_function("", &format!("{body};")).is_ok());
+        let error = parse_function("", &format!("{body}last:;")).unwrap_err();
+        assert!(error.contains("AST depth limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
+        let error =
+            parse_function("", &format!("{}1{}", "(".repeat(200), ")".repeat(200))).unwrap_err();
+        assert!(error.contains("Parser nesting limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
+    }
+
+    #[test]
+    fn parser_limit_classification_accepts_only_exact_owned_diagnostics() {
+        for reason in [
+            "Source exceeds one MiB",
+            "Token limit exceeded",
+            "Parser nesting limit exceeded",
+            "AST depth limit exceeded",
+            "AST node limit exceeded",
+            "Label nesting limit exceeded",
+        ] {
+            for prefix in ["", "Function parameters: ", "Function body: "] {
+                assert!(is_limit_error(&format!("{prefix}{reason} at byte 12")));
+            }
+        }
+        for error in [
+            "Unknown enclosing label at byte 12",
+            "Token limit exceeded",
+            "Token limit exceeded at byte -1",
+            "Token limit exceeded at byte 1 trailing",
+            "User said Token limit exceeded at byte 1",
+            "Function body: Syntax error at byte 0",
+        ] {
+            assert!(!is_limit_error(error), "{error}");
+        }
+    }
+
+    #[test]
+    fn labels_retain_ast_names_and_allow_non_loop_break_targets() {
+        assert_eq!(
+            parse("exit: { break exit; }").unwrap(),
+            Program(vec![Stmt::Label {
+                name: "exit".into(),
+                body: Box::new(Stmt::Block(vec![Stmt::Break(Some("exit".into()))])),
+            }])
+        );
+        assert_eq!(
+            parse("first: second: while (false) { continue first; break second; }").unwrap(),
+            Program(vec![Stmt::Label {
+                name: "first".into(),
+                body: Box::new(Stmt::Label {
+                    name: "second".into(),
+                    body: Box::new(Stmt::While {
+                        test: Expr::Bool(false),
+                        body: Box::new(Stmt::Block(vec![
+                            Stmt::Continue(Some("first".into())),
+                            Stmt::Break(Some("second".into())),
+                        ])),
+                    }),
+                }),
+            }])
+        );
+        for source in [
+            "empty: ;",
+            "value: 1;",
+            "declaration: var value=1;",
+            "branch: if (true) break branch; else 2;",
+            "outer: inner: for(;;) { continue outer; break inner; }",
+            "outer: inner: do { continue inner; break outer; } while(false);",
+            "outer: while(false) { inner: { continue outer; break inner; } }",
+            "first\n:\nsecond: while(false) { continue first; }",
+        ] {
+            assert!(parse(source).is_ok(), "{source}");
+        }
+    }
+
+    #[test]
+    fn labels_are_unique_only_while_active_and_reset_at_functions() {
+        for source in [
+            "same: { break same; } same: { break same; }",
+            "var same=1; same: { var same=2; break same; }",
+            "outer: while(false) { (function(){outer: while(false){continue outer;}})(); continue outer; }",
+            "outer: { (function named(){outer: {break outer;}})(); break outer; }",
+            "function f(){same: {break same;}} function g(){same: {break same;}}",
+            "outer: while(false) { inner: while(false) {continue outer;} continue outer; }",
+        ] {
+            assert!(parse(source).is_ok(), "{source}");
+        }
+        for source in [
+            "same: same: ;",
+            "same: { if(false) same: ; }",
+            "same: while(false) { same: ; }",
+            "s\\u0061me: { same: ; }",
+            "outer: { (function(){})(); outer: ; }",
+            "outer: { (function(){break outer;})(); }",
+            "outer: while(false) { (function(){continue outer;})(); }",
+            "outer: while(false) { (function(){break;})(); }",
+            "outer: while(false) { (function(){continue;})(); }",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn invalid_label_targets_reject_the_whole_program_with_byte_offsets() {
+        for source in [
+            "var before=1; break missing;",
+            "var before=1; continue missing;",
+            "label: {} break label;",
+            "label: while(false) {} continue label;",
+            "block: { break; }",
+            "block: { continue block; }",
+            "block: { while(false) {continue block;} }",
+            "outer: inner: { while(false) {continue inner;} }",
+            "branch: if(true) while(false) {continue branch;}",
+            "loop: while(false) { continue unknown; }",
+            "loop: while(false) { break unknown; }",
+            "loop: while(false) { continue loop extra; }",
+            "label:",
+            "(label): ;",
+            "obj.label: ;",
+            "1: ;",
+            "if: ;",
+            "label: function f(){}",
+        ] {
+            let error = parse(source).expect_err(source);
+            assert!(error.contains("byte"), "{source}: {error}");
+        }
+        let source = "outer: { break missing; }";
+        assert_eq!(
+            parse(source).unwrap_err(),
+            format!(
+                "Unknown enclosing label at byte {}",
+                source.find("missing").unwrap()
+            )
+        );
+        let source = "label: { label: ; }";
+        assert_eq!(
+            parse(source).unwrap_err(),
+            format!(
+                "Duplicate active label at byte {}",
+                source.rfind("label").unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn labelled_control_obeys_asi_and_comment_line_terminators() {
+        for gap in [
+            "\n",
+            "\r",
+            "\r\n",
+            "\u{2028}",
+            "\u{2029}",
+            "/*\n*/",
+            "// next\n",
+        ] {
+            let Program(body) = parse(&format!(
+                "outer: while(false) {{break{gap}outer; continue{gap}outer;}}"
+            ))
+            .unwrap();
+            let Stmt::Label { body, .. } = &body[0] else {
+                panic!()
+            };
+            let Stmt::While { body, .. } = body.as_ref() else {
+                panic!()
+            };
+            assert_eq!(
+                body.as_ref(),
+                &Stmt::Block(vec![
+                    Stmt::Break(None),
+                    Stmt::Expr(Expr::Ident("outer".into())),
+                    Stmt::Continue(None),
+                    Stmt::Expr(Expr::Ident("outer".into())),
+                ]),
+                "{gap:?}"
+            );
+            assert!(parse(&format!("outer: {{break{gap}outer;}}")).is_err());
+        }
+        let Program(body) =
+            parse("outer: while(false) {break /*same line*/ outer; continue /*same line*/ outer;}")
+                .unwrap();
+        let Stmt::Label { body, .. } = &body[0] else {
+            panic!()
+        };
+        let Stmt::While { body, .. } = body.as_ref() else {
+            panic!()
+        };
+        assert_eq!(
+            body.as_ref(),
+            &Stmt::Block(vec![
+                Stmt::Break(Some("outer".into())),
+                Stmt::Continue(Some("outer".into())),
+            ])
+        );
+    }
+
+    #[test]
+    fn label_chains_obey_existing_ast_and_scope_bounds() {
+        fn chain(count: usize) -> String {
+            let mut source = String::new();
+            for index in 0..count {
+                source.push_str(&format!("label{index}:"));
+            }
+            source.push(';');
+            source
+        }
+        assert!(parse(&chain(MAX_DEPTH - 1)).is_ok());
+        assert!(parse(&chain(MAX_DEPTH)).unwrap_err().contains("AST depth"));
+        assert!(
+            parse(&chain(MAX_DEPTH + 1))
+                .unwrap_err()
+                .contains("Label nesting")
+        );
+        assert!(parse(&chain(10_000)).unwrap_err().contains("Label nesting"));
+        let source = format!("{};{}", "label:{".repeat(MAX_DEPTH), "}".repeat(MAX_DEPTH));
+        assert!(parse(&source).is_err());
     }
 
     #[test]

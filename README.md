@@ -10,6 +10,11 @@ cargo run --locked --bin mgbrowser -- https://www.google.com/
 
 Requires an X11/XWayland display and a DejaVu/Liberation font file, or `MGBROWSER_FONT`. See [running and testing](docs/RUNNING.md) for controls, limitations, and repeatable local interaction checks.
 
+For automation, add `--remote-debugging-port=9222` (or `0` for an available port).
+The loopback CDP subset provides discovery, navigation, DOM inspection, input and
+PNG screenshots; see [the protocol contract and example client](docs/CDP.md).
+Full CDP support is the long-term target, not current compatibility.
+
 - Website: https://mgbrowser.org
 - [MVP and architecture plan](docs/MVP.md)
 - [Feature specification and acceptance](FEATURES.md)

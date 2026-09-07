@@ -38,6 +38,12 @@ The endpoint grants control of this browser session to local clients. The transp
 
 The initial local CDP journey passed on 2026-09-07: the external WebSocket client loaded the fixture, entered a Unicode search, submitted the hidden form field, rejected the old document's node ID, clicked the first local result, loaded its destination, and decoded a 1100×683 PNG. A separate browser connection attached, inspected the same page through a flattened session, and detached. The client reported `CDP_JOURNEY_OK`. This verifies that local workflow; it does not establish full protocol or third-party client compatibility.
 
+The same external journey also passes with opt-in scripts at `/script-home` and
+`/script-dynamic`. The latter creates its real form through the original Function
+constructor and direct JavaScript eval inside the restricted worker. CDP reads
+and operates the resulting DOM; it does not evaluate code itself. Recovery after
+the local `/script-loop` fuel error is separately checked before onward navigation.
+
 | Domain | Commands |
 | --- | --- |
 | Browser | `getVersion` |
