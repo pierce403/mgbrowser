@@ -269,3 +269,145 @@ fn restricted_child_rejects_invalid_switch_before_dom_prefix_effects() {
     assert!(reply.html.contains("<title>Original title</title>"));
     assert!(reply.html.contains("Later script executes"));
 }
+
+#[test]
+fn restricted_child_deeply_grouped_factory_creates_real_form_controls() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-expressions".into(),
+        html: include_str!("fixtures/script/expressions.html").into(),
+    };
+    assert!(
+        request
+            .html
+            .contains(&format!("var create = {}function", "(".repeat(64)))
+    );
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Expression-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(
+        document
+            .items
+            .iter()
+            .any(|item| matches!(item, mg_deps::document::Item::Input { name, .. } if name == "q"))
+    );
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(
+        reply
+            .html
+            .contains("64 grouping pairs created this usable form.")
+    );
+}
+
+#[test]
+fn restricted_child_malformed_group_rejects_prefix_and_preserves_later_script() {
+    let source = format!(
+        "document.title='Incorrect prefix';var broken={}1{};",
+        "(".repeat(64),
+        ")".repeat(63)
+    );
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-expression-syntax".into(),
+        html: format!(
+            "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>{source}</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>"
+        ),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1);
+    assert!(
+        reply.errors[0].contains("SyntaxError"),
+        "{:?}",
+        reply.errors
+    );
+    assert!(reply.html.contains("<title>Original title</title>"));
+    assert!(reply.html.contains("Later script executes"));
+}
+
+#[test]
+fn restricted_child_excessive_group_depth_is_fatal_before_prefix_effects() {
+    let source = format!(
+        "document.title='Incorrect prefix';var tooDeep={}1{};",
+        "(".repeat(1024),
+        ")".repeat(1024)
+    );
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-expression-limit".into(),
+        html: format!(
+            "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>document.title='Incorrect later script';</script></body></html>"
+        ),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(
+        reply
+            .errors
+            .iter()
+            .all(|message| message.contains("parser limit")),
+        "{:?}",
+        reply.errors
+    );
+    assert!(reply.navigation.is_none());
+    assert!(reply.html.contains("<title>Original title</title>"));
+    assert!(reply.html.contains("Readable original content"));
+}
+
+#[test]
+fn restricted_child_nested_evaluation_limits_cannot_be_caught_or_reset() {
+    // Authored expression-heavy and statement-heavy recursion; these must
+    // return a language resource error, not crash the worker or run finally.
+    for body in [
+        format!("return {}recurse();", "+ ".repeat(8)),
+        format!("{}return recurse();", "if(true)".repeat(32)),
+        format!("{}return recurse();", "for(var key in {a:1})".repeat(48)),
+        format!(
+            "{}return {}recurse();{}",
+            "switch(1){case 1:".repeat(48),
+            "+ ".repeat(24),
+            "}".repeat(48)
+        ),
+    ] {
+        let request = mg_deps::js_browser::Request {
+            url: "https://example.test/local-evaluation-limit".into(),
+            html: format!(
+                "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>function recurse(){{{body}}}try{{recurse();}}catch(e){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later script';</script></body></html>"
+            ),
+        };
+        let input = serde_json::to_vec(&request).unwrap();
+        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+        let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+        assert!(reply.applied);
+        assert_eq!(reply.scripts_executed, 0);
+        assert_eq!(reply.errors.len(), 2);
+        assert!(
+            reply
+                .errors
+                .iter()
+                .all(|message| message.contains("evaluation depth limit exhausted")),
+            "{:?}",
+            reply.errors
+        );
+        assert!(reply.navigation.is_none());
+        assert!(reply.html.contains("<title>Original title</title>"));
+        assert!(reply.html.contains("Readable original content"));
+    }
+}

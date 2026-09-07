@@ -45,7 +45,8 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-home --enable
 Start the local fixture server described below first. The script creates the
 form, title and startup status; no form controls are present outside its script.
 The worker executes a small non-strict language subset, including bounded
-`for-in`/`switch` and regular expressions, plus startup DOM callbacks,
+`for-in`/`switch`, regular expressions and explicit-state expression parsing,
+plus startup DOM callbacks,
 then returns the changed document. It has no external script loading, persistent
 realm, general event loop/timers, fetch/XHR, or script cookie access. Most modern
 sites will still fail. [JAVASCRIPT.md](JAVASCRIPT.md) records exact capabilities,
@@ -139,17 +140,36 @@ passed on 2026-09-07; rendered frames were inspected. Use
 switch, mutation, scope and resource-limit cases. Enumeration has a bounded
 snapshot policy and does not support DOM host objects; see [JAVASCRIPT.md](JAVASCRIPT.md).
 
+`/script-expressions` creates every control through a DOM factory wrapped in
+exactly 64 grouping pairs, exercising nested function parsing while expression
+state remains pending. It is an independently authored local fixture, not a
+website-script adaptation:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-expressions \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/expressions-journey
+```
+
+The fixture's actual-worker form-creation check and native/CDP
+form-to-destination journeys passed on 2026-09-07; rendered frames were inspected.
+All 251 debug tests and 141 selected release tests pass without increasing
+thread-stack sizes, including mixed evaluator/helper recursion regressions.
+Parser storage/work is bounded across nested functions, while source/token/node
+and structural/AST-depth caps remain unchanged. Logical evaluation-depth guards
+are tested, not a claim of production stack safety.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-iteration Google attempt submitted the real form, but the HTTP 200
-response titled “Google Search” reported parser nesting-limit errors and had no
-rendered items or forms. No result or destination was reached. Google's
-first-result/destination acceptance goal remains unmet. Next parser work requires
-independent nesting fixtures and stack/resource-safe architecture, not blindly
-raising limits; real DOM events and timers are still missing.
+2026-09-07 post-expression Google attempt submitted the real form, but the HTTP
+200 response titled “Google Search” reported three allocation-budget errors and
+had no rendered items or forms. The prior parser-nesting diagnostic was absent;
+no result or destination was reached. Google's first-result/destination
+acceptance goal remains unmet. Next is local allocation-phase diagnosis, not
+blindly raising limits; real DOM events and timers are still missing.
 
 ## Browser automation
 
@@ -181,8 +201,8 @@ cargo run --locked --example cdp_journey -- \
   http://127.0.0.1:7878/script-home tmp/cdp-script-journey.png
 ```
 
-The same client can navigate that scripting-enabled browser to the regex or
-iteration fixture:
+The same client can navigate that scripting-enabled browser to the regex,
+iteration or grouped-expression fixture:
 
 ```sh
 cargo run --locked --example cdp_journey -- \
@@ -191,11 +211,15 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-iteration tmp/cdp-iteration-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-expressions tmp/cdp-expressions-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
-destination response and PNG through our public CDP endpoint. That journey and
-recovery after `/script-loop` passed on 2026-09-07. It does not use
+destination response and PNG through our public CDP endpoint. The previously
+implemented script-home/loop recovery, dynamic, regex, iteration and grouped-expression
+journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
 
@@ -204,6 +228,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
+cargo test --locked --release --lib --test js_expressions --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -215,3 +240,9 @@ UI/CDP state transitions, original JS syntax/evaluation, DOM mutation and actual
 restricted worker children. Consult FEATURES.md and the daily log for dated
 end-to-end evidence and remaining acceptance gates. Fixture success is not
 language conformance or public-site compatibility.
+
+For a focused expression-parser check, run `cargo test --locked --lib js::syntax`
+and `cargo test --locked --test js_expressions --test script_worker`. The release
+command above also exercises the library and real worker children; these tests
+do not increase the native thread-stack size. Passing language cases alone does
+not replace the native/CDP fixture journey or the bounded live-site gate.

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Local expression fixture</title></head>
+<body>
+<h1>Local grouped-expression form fixture</h1>
+<p>This is an authored localhost test, not a Google page or search service.</p>
+<p id="status">The script must parse grouped expressions to create the form.</p>
+<script>
+// Exactly 64 grouping pairs around this factory; no static form controls.
+var create = ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((function(tag) { return document.createElement(tag); }))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+var form = create('form');
+form.action = '/search';
+form.method = 'get';
+var label = create('label');
+label.textContent = 'Local query ';
+var query = create('input');
+query.name = 'q';
+query.type = 'text';
+var hidden = create('input');
+hidden.type = 'hidden';
+hidden.name = 'source';
+hidden.value = 'fixture';
+var submit = create('button');
+submit.type = 'submit';
+submit.textContent = 'Search local expression fixture';
+form.appendChild(label);
+form.appendChild(query);
+form.appendChild(hidden);
+form.appendChild(submit);
+document.body.appendChild(form);
+document.title = 'Expression-built local fixture';
+document.getElementById('status').textContent = 'A factory inside 64 grouping pairs created this usable form.';
+</script>
+<noscript><p>Enable the experimental script worker to create this local form.</p></noscript>
+</body>
+</html>

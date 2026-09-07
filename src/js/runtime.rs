@@ -24,6 +24,10 @@ const MAX_HEAP: usize = 4 * 1024 * 1024;
 const MAX_OBJECTS: usize = 10_000;
 const MAX_CALLS: usize = 64;
 const MAX_ARRAY: usize = 10_000;
+// AST and call limits cannot independently bound their product on the native
+// stack. Track retained evaluation entries across function/native re-entry too.
+const MAX_ACTIVE_EXPRESSIONS: usize = 128;
+const MAX_EVALUATION_ENTRIES: usize = 384;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -97,8 +101,26 @@ struct Budget {
     fuel: u64,
     allocated: usize,
     calls: usize,
+    active_expressions: usize,
+    evaluation_entries: usize,
 }
 impl Budget {
+    fn enter_evaluation(&mut self, expression: bool) -> Eval<()> {
+        if self.evaluation_entries >= MAX_EVALUATION_ENTRIES
+            || (expression && self.active_expressions >= MAX_ACTIVE_EXPRESSIONS)
+        {
+            return Err(Fault::Fatal(
+                "JavaScript evaluation depth limit exhausted".into(),
+            ));
+        }
+        self.evaluation_entries += 1;
+        self.active_expressions += usize::from(expression);
+        Ok(())
+    }
+    fn leave_evaluation(&mut self, expression: bool) {
+        self.evaluation_entries -= 1;
+        self.active_expressions -= usize::from(expression);
+    }
     fn step(&mut self) -> Eval<()> {
         self.fuel = self
             .fuel
@@ -321,6 +343,8 @@ impl Runtime {
                 fuel: MAX_FUEL,
                 allocated: 128,
                 calls: 0,
+                active_expressions: 0,
+                evaluation_entries: 0,
             },
             fatal: None,
             random: 0x9e3779b97f4a7c15,
@@ -1292,7 +1316,21 @@ impl Runtime {
         }
         Ok(Flow::Normal(last))
     }
+    #[inline(never)]
     fn statement(
+        &mut self,
+        statement: &Stmt,
+        labels: &[&str],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        self.budget.enter_evaluation(false)?;
+        let result = self.statement_inner(statement, labels, environment, this, host);
+        self.budget.leave_evaluation(false);
+        result
+    }
+    fn statement_inner(
         &mut self,
         statement: &Stmt,
         labels: &[&str],
@@ -1310,20 +1348,7 @@ impl Runtime {
                 host,
             )?))),
             Stmt::Block(body) => self.statements(body, environment, this, host),
-            Stmt::Var(bindings) => {
-                for (name, expr) in bindings {
-                    if let Some(expr) = expr {
-                        let value = self.expression(expr, environment, this, host)?;
-                        let target = self.lookup(environment, name).unwrap_or(0);
-                        self.write_reference(
-                            Reference::Binding(target, name.clone()),
-                            value,
-                            host,
-                        )?;
-                    }
-                }
-                Ok(Flow::Normal(None))
-            }
+            Stmt::Var(bindings) => self.variable_statement(bindings, environment, this, host),
             Stmt::Return(expr) => Ok(Flow::Return(match expr {
                 Some(expr) => self.expression(expr, environment, this, host)?,
                 None => Value::Undefined,
@@ -1338,14 +1363,7 @@ impl Runtime {
                 })
             }
             Stmt::Label { name, body } => {
-                self.budget
-                    .allocate((labels.len() + 1).saturating_mul(std::mem::size_of::<&str>()))?;
-                let mut nested = labels.to_vec();
-                nested.push(name.as_str());
-                match self.statement(body, &nested, environment, this, host)? {
-                    Flow::Break(Some(target), value) if target == *name => Ok(Flow::Normal(value)),
-                    other => Ok(other),
-                }
+                self.label_statement(name, body, labels, environment, this, host)
             }
             Stmt::Throw(expr) => Err(Fault::Throw(self.expression(
                 expr,
@@ -1379,6 +1397,43 @@ impl Runtime {
                 cases,
             } => self.switch_statement(discriminant, cases, labels, environment, this, host),
             Stmt::Try { .. } => self.try_statement(statement, environment, this, host),
+        }
+    }
+
+    // Keep bulky branch temporaries outside ordinary dispatch: every retained
+    // statement otherwise reserves their combined debug-build stack space.
+    fn variable_statement(
+        &mut self,
+        bindings: &[(String, Option<Expr>)],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        for (name, expr) in bindings {
+            if let Some(expr) = expr {
+                let value = self.expression(expr, environment, this, host)?;
+                let target = self.lookup(environment, name).unwrap_or(0);
+                self.write_reference(Reference::Binding(target, name.clone()), value, host)?;
+            }
+        }
+        Ok(Flow::Normal(None))
+    }
+    fn label_statement(
+        &mut self,
+        name: &str,
+        body: &Stmt,
+        labels: &[&str],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        self.budget
+            .allocate((labels.len() + 1).saturating_mul(std::mem::size_of::<&str>()))?;
+        let mut nested = labels.to_vec();
+        nested.push(name);
+        match self.statement(body, &nested, environment, this, host)? {
+            Flow::Break(Some(target), value) if target == name => Ok(Flow::Normal(value)),
+            other => Ok(other),
         }
     }
 
@@ -1448,24 +1503,10 @@ impl Runtime {
         this: &Value,
         host: &mut impl Host,
     ) -> Eval<Flow> {
-        if let ForInBinding::Var {
-            name,
-            init: Some(init),
-        } = binding
-        {
-            let value = self.expression(init, environment, this, host)?;
-            let target = self.lookup(environment, name).unwrap_or(0);
-            self.budget.allocate(name.len())?;
-            self.write_reference(Reference::Binding(target, name.clone()), value, host)?;
-        }
-        let object = self.expression(object, environment, this, host)?;
+        let object = self.for_in_object(binding, object, environment, this, host)?;
         if matches!(object, Value::Null | Value::Undefined) {
             return Ok(Flow::Normal(None));
         }
-        if matches!(object, Value::Host(_)) {
-            return Err(unsupported("for-in enumeration of host objects"));
-        }
-        let object = self.boxed(object)?;
         let entries = self.enumeration_snapshot(&object)?;
         let mut last = None;
         for entry in entries {
@@ -1475,15 +1516,7 @@ impl Runtime {
             {
                 continue;
             }
-            let reference = match binding {
-                ForInBinding::Var { name, .. } => {
-                    self.budget.allocate(name.len())?;
-                    Reference::Binding(self.lookup(environment, name).unwrap_or(0), name.clone())
-                }
-                ForInBinding::Reference(expr) => self.reference(expr, environment, this, host)?,
-            };
-            let key = self.text(&entry.key)?;
-            self.write_reference(reference, key, host)?;
+            self.for_in_assignment(binding, &entry.key, environment, this, host)?;
             match loop_step(
                 self.statement(body, &[], environment, this, host)?,
                 &mut last,
@@ -1496,6 +1529,57 @@ impl Runtime {
         }
         Ok(Flow::Normal(last))
     }
+
+    // Setup and per-key assignment may evaluate user code, but their temporary
+    // frames must end before retaining this loop around recursive body calls.
+    #[inline(never)]
+    fn for_in_object(
+        &mut self,
+        binding: &ForInBinding,
+        object: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        if let ForInBinding::Var {
+            name,
+            init: Some(init),
+        } = binding
+        {
+            let value = self.expression(init, environment, this, host)?;
+            let target = self.lookup(environment, name).unwrap_or(0);
+            self.budget.allocate(name.len())?;
+            self.write_reference(Reference::Binding(target, name.clone()), value, host)?;
+        }
+        let object = self.expression(object, environment, this, host)?;
+        if matches!(object, Value::Null | Value::Undefined) {
+            return Ok(object);
+        }
+        if matches!(object, Value::Host(_)) {
+            return Err(unsupported("for-in enumeration of host objects"));
+        }
+        self.boxed(object)
+    }
+
+    #[inline(never)]
+    fn for_in_assignment(
+        &mut self,
+        binding: &ForInBinding,
+        key: &str,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<()> {
+        let reference = match binding {
+            ForInBinding::Var { name, .. } => {
+                self.budget.allocate(name.len())?;
+                Reference::Binding(self.lookup(environment, name).unwrap_or(0), name.clone())
+            }
+            ForInBinding::Reference(expr) => self.reference(expr, environment, this, host)?,
+        };
+        let key = self.text(key)?;
+        self.write_reference(reference, key, host)
+    }
     fn switch_statement(
         &mut self,
         discriminant: &Expr,
@@ -1505,22 +1589,9 @@ impl Runtime {
         this: &Value,
         host: &mut impl Host,
     ) -> Eval<Flow> {
-        let value = self.expression(discriminant, environment, this, host)?;
-        let mut default = None;
-        let mut selected = None;
-        for (index, case) in cases.iter().enumerate() {
-            self.budget.step()?;
-            if let Some(test) = &case.test {
-                let selector = self.expression(test, environment, this, host)?;
-                if strict_equal(&value, &selector) {
-                    selected = Some(index);
-                    break;
-                }
-            } else {
-                default = Some(index);
-            }
-        }
-        let Some(selected) = selected.or(default) else {
+        // Selector temporaries must unwind before recursive clause execution.
+        let Some(selected) = self.switch_selection(discriminant, cases, environment, this, host)?
+        else {
             return Ok(Flow::Normal(None));
         };
         let mut last = None;
@@ -1542,6 +1613,31 @@ impl Runtime {
             }
         }
         Ok(Flow::Normal(last))
+    }
+
+    #[inline(never)]
+    fn switch_selection(
+        &mut self,
+        discriminant: &Expr,
+        cases: &[SwitchCase],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Option<usize>> {
+        let value = self.expression(discriminant, environment, this, host)?;
+        let mut default = None;
+        for (index, case) in cases.iter().enumerate() {
+            self.budget.step()?;
+            if let Some(test) = &case.test {
+                let selector = self.expression(test, environment, this, host)?;
+                if strict_equal(&value, &selector) {
+                    return Ok(Some(index));
+                }
+            } else {
+                default = Some(index);
+            }
+        }
+        Ok(default)
     }
 
     fn try_statement(
@@ -1633,7 +1729,20 @@ impl Runtime {
             Reference::Property(object, key) => self.set(object, &key, value, host),
         }
     }
+    #[inline(never)]
     fn expression(
+        &mut self,
+        expr: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        self.budget.enter_evaluation(true)?;
+        let result = self.expression_inner(expr, environment, this, host);
+        self.budget.leave_evaluation(true);
+        result
+    }
+    fn expression_inner(
         &mut self,
         expr: &Expr,
         environment: usize,
@@ -1659,34 +1768,8 @@ impl Runtime {
                 None => Err(exception(format!("ReferenceError: {name} is not defined"))),
             },
             Expr::This => self.copy(this),
-            Expr::Array(items) => {
-                if items.len() > MAX_ARRAY {
-                    return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
-                }
-                self.budget.allocate(items.len().saturating_mul(64))?;
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    values.push(
-                        item.as_ref()
-                            .map(|expr| self.expression(expr, environment, this, host))
-                            .transpose()?,
-                    );
-                }
-                Ok(Value::Object(
-                    self.object(Some(self.array_prototype), Some(values))?,
-                ))
-            }
-            Expr::Object(properties) => {
-                let object = self.object(Some(self.object_prototype), None)?;
-                for (key, expr) in properties {
-                    if key == "__proto__" {
-                        return Err(unsupported("object-literal __proto__ setters"));
-                    }
-                    let value = self.expression(expr, environment, this, host)?;
-                    self.put_own(object, key, value, true)?;
-                }
-                Ok(Value::Object(object))
-            }
+            Expr::Array(items) => self.array_expression(items, environment, this, host),
+            Expr::Object(properties) => self.object_expression(properties, environment, this, host),
             Expr::Function { name, params, body } => {
                 self.function(name.as_ref(), params, body, environment, true)
             }
@@ -1694,133 +1777,15 @@ impl Runtime {
                 let reference = self.reference(expr, environment, this, host)?;
                 self.read_reference(&reference, host)
             }
-            Expr::Unary { op, expr } => {
-                if op == "typeof"
-                    && let Expr::Ident(name) = expr.as_ref()
-                    && self.lookup(environment, name).is_none()
-                {
-                    return self.text("undefined");
-                }
-                if op == "delete" {
-                    return match expr.as_ref() {
-                        Expr::Ident(name) => match self.lookup(environment, name) {
-                            None => Ok(Value::Bool(true)),
-                            Some(0) => self.delete(Value::Object(0), name),
-                            Some(environment) => {
-                                let bindings = &mut self.environments[environment].bindings;
-                                let index = bindings
-                                    .iter()
-                                    .position(|binding| binding.name == *name)
-                                    .unwrap();
-                                if bindings[index].deletable {
-                                    bindings.remove(index);
-                                    Ok(Value::Bool(true))
-                                } else {
-                                    Ok(Value::Bool(false))
-                                }
-                            }
-                        },
-                        Expr::Member { .. } => {
-                            let reference = self.reference(expr, environment, this, host)?;
-                            if let Reference::Property(object, key) = reference {
-                                self.delete(object, &key)
-                            } else {
-                                unreachable!()
-                            }
-                        }
-                        _ => {
-                            self.expression(expr, environment, this, host)?;
-                            Ok(Value::Bool(true))
-                        }
-                    };
-                }
-                let value = self.expression(expr, environment, this, host)?;
-                match op.as_str() {
-                    "!" => Ok(Value::Bool(!value.truthy())),
-                    "void" => Ok(Value::Undefined),
-                    "typeof" => self.text(match value {
-                        Value::Undefined => "undefined",
-                        Value::Bool(_) => "boolean",
-                        Value::Number(_) => "number",
-                        Value::String(_) => "string",
-                        Value::Function(_) | Value::Native(_) => "function",
-                        _ => "object",
-                    }),
-                    "+" => Ok(Value::Number(self.number(value, host)?)),
-                    "-" => Ok(Value::Number(-self.number(value, host)?)),
-                    "~" => Ok(Value::Number((!int32(self.number(value, host)?)) as f64)),
-                    _ => Err(unsupported(op)),
-                }
-            }
+            Expr::Unary { op, expr } => self.unary_expression(op, expr, environment, this, host),
             Expr::Binary { op, left, right } => {
-                let left = self.expression(left, environment, this, host)?;
-                if op == "&&" {
-                    return if left.truthy() {
-                        self.expression(right, environment, this, host)
-                    } else {
-                        Ok(left)
-                    };
-                }
-                if op == "||" {
-                    return if left.truthy() {
-                        Ok(left)
-                    } else {
-                        self.expression(right, environment, this, host)
-                    };
-                }
-                if op == "??" {
-                    return if matches!(left, Value::Null | Value::Undefined) {
-                        self.expression(right, environment, this, host)
-                    } else {
-                        Ok(left)
-                    };
-                }
-                let right = self.expression(right, environment, this, host)?;
-                self.binary(op, left, right, host)
+                self.binary_expression(op, left, right, environment, this, host)
             }
             Expr::Assign { op, left, right } => {
-                let reference = self.reference(left, environment, this, host)?;
-                let old = if op != "=" {
-                    Some(self.read_reference(&reference, host)?)
-                } else {
-                    None
-                };
-                if let Some(value) = &old {
-                    if op == "&&=" && !value.truthy()
-                        || op == "||=" && value.truthy()
-                        || op == "??=" && !matches!(value, Value::Null | Value::Undefined)
-                    {
-                        return self.copy(value);
-                    }
-                }
-                let right = self.expression(right, environment, this, host)?;
-                let value = if matches!(op.as_str(), "=" | "&&=" | "||=" | "??=") {
-                    right
-                } else {
-                    self.binary(
-                        op.strip_suffix('=').ok_or_else(|| unsupported(op))?,
-                        old.unwrap(),
-                        right,
-                        host,
-                    )?
-                };
-                let result = self.copy(&value)?;
-                self.write_reference(reference, value, host)?;
-                Ok(result)
+                self.assignment_expression(op, left, right, environment, this, host)
             }
             Expr::Update { op, expr, prefix } => {
-                let reference = self.reference(expr, environment, this, host)?;
-                let old = self.read_reference(&reference, host)?;
-                let old = self.number(old, host)?;
-                let new = if op == "++" {
-                    old + 1.0
-                } else if op == "--" {
-                    old - 1.0
-                } else {
-                    return Err(unsupported(op));
-                };
-                self.write_reference(reference, Value::Number(new), host)?;
-                Ok(Value::Number(if *prefix { new } else { old }))
+                self.update_expression(op, expr, *prefix, environment, this, host)
             }
             Expr::Conditional {
                 test,
@@ -1841,74 +1806,313 @@ impl Runtime {
                 Ok(result)
             }
             Expr::Call { callee, args } => {
-                let eval_reference = matches!(callee.as_ref(), Expr::Ident(name) if name == "eval");
-                let (callee, mut receiver) = if matches!(callee.as_ref(), Expr::Member { .. }) {
-                    let reference = self.reference(callee, environment, this, host)?;
-                    let callee = self.read_reference(&reference, host)?;
-                    let receiver = if let Reference::Property(value, _) = reference {
-                        value
-                    } else {
-                        unreachable!()
-                    };
-                    (callee, receiver)
-                } else {
-                    (
-                        self.expression(callee, environment, this, host)?,
-                        Value::Object(0),
-                    )
-                };
-                let direct_eval =
-                    if eval_reference && matches!(&callee, Value::Native(name) if name == "eval") {
-                        receiver = self.copy(this)?;
-                        Some(environment)
-                    } else {
-                        None
-                    };
-                let args = self.arguments(args, environment, this, host)?;
-                self.call(callee, receiver, args, direct_eval, host)
+                self.call_expression(callee, args, environment, this, host)
             }
             Expr::New { callee, args } => {
-                let callee = self.expression(callee, environment, this, host)?;
-                let args = self.arguments(args, environment, this, host)?;
-                if let Value::Native(name) = &callee {
-                    if name == "RegExp" {
-                        return self.call(
-                            Value::Native("RegExp.new".into()),
-                            Value::Undefined,
-                            args,
-                            None,
-                            host,
-                        );
-                    }
-                    if matches!(
-                        name.as_str(),
-                        "Array"
-                            | "Object"
-                            | "Function"
-                            | "Error"
-                            | "TypeError"
-                            | "RangeError"
-                            | "ReferenceError"
-                            | "URIError"
-                            | "SyntaxError"
-                    ) {
-                        return self.call(callee, Value::Undefined, args, None, host);
-                    }
-                    return Err(unsupported("this native constructor"));
-                }
-                if !matches!(callee, Value::Function(_)) {
-                    return Err(exception("TypeError: value is not a constructor"));
-                }
-                let prototype = match self.get(&callee, "prototype", host)? {
-                    Value::Object(id) => id,
-                    _ => self.object_prototype,
-                };
-                let object = Value::Object(self.object(Some(prototype), None)?);
-                let receiver = self.copy(&object)?;
-                let result = self.call(callee, receiver, args, None, host)?;
-                Ok(if result.primitive() { object } else { result })
+                self.new_expression(callee, args, environment, this, host)
             }
         }
+    }
+
+    #[inline(never)]
+    fn array_expression(
+        &mut self,
+        items: &[Option<Expr>],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        if items.len() > MAX_ARRAY {
+            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
+        }
+        self.budget.allocate(items.len().saturating_mul(64))?;
+        let mut values = Vec::with_capacity(items.len());
+        for item in items {
+            values.push(
+                item.as_ref()
+                    .map(|expr| self.expression(expr, environment, this, host))
+                    .transpose()?,
+            );
+        }
+        Ok(Value::Object(
+            self.object(Some(self.array_prototype), Some(values))?,
+        ))
+    }
+
+    #[inline(never)]
+    fn object_expression(
+        &mut self,
+        properties: &[(String, Expr)],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let object = self.object(Some(self.object_prototype), None)?;
+        for (key, expr) in properties {
+            if key == "__proto__" {
+                return Err(unsupported("object-literal __proto__ setters"));
+            }
+            let value = self.expression(expr, environment, this, host)?;
+            self.put_own(object, key, value, true)?;
+        }
+        Ok(Value::Object(object))
+    }
+
+    #[inline(never)]
+    fn binary_expression(
+        &mut self,
+        op: &str,
+        left: &Expr,
+        right: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let left = self.expression(left, environment, this, host)?;
+        if op == "&&" {
+            return if left.truthy() {
+                self.expression(right, environment, this, host)
+            } else {
+                Ok(left)
+            };
+        }
+        if op == "||" {
+            return if left.truthy() {
+                Ok(left)
+            } else {
+                self.expression(right, environment, this, host)
+            };
+        }
+        if op == "??" {
+            return if matches!(left, Value::Null | Value::Undefined) {
+                self.expression(right, environment, this, host)
+            } else {
+                Ok(left)
+            };
+        }
+        let right = self.expression(right, environment, this, host)?;
+        self.binary(op, left, right, host)
+    }
+
+    #[inline(never)]
+    fn update_expression(
+        &mut self,
+        op: &str,
+        expr: &Expr,
+        prefix: bool,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let reference = self.reference(expr, environment, this, host)?;
+        let old = self.read_reference(&reference, host)?;
+        let old = self.number(old, host)?;
+        let new = if op == "++" {
+            old + 1.0
+        } else if op == "--" {
+            old - 1.0
+        } else {
+            return Err(unsupported(op));
+        };
+        self.write_reference(reference, Value::Number(new), host)?;
+        Ok(Value::Number(if prefix { new } else { old }))
+    }
+
+    // Keep unrelated expression temporaries out of every retained AST frame.
+    #[inline(never)]
+    fn unary_expression(
+        &mut self,
+        op: &str,
+        expr: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        if op == "typeof"
+            && let Expr::Ident(name) = expr
+            && self.lookup(environment, name).is_none()
+        {
+            return self.text("undefined");
+        }
+        if op == "delete" {
+            return match expr {
+                Expr::Ident(name) => match self.lookup(environment, name) {
+                    None => Ok(Value::Bool(true)),
+                    Some(0) => self.delete(Value::Object(0), name),
+                    Some(environment) => {
+                        let bindings = &mut self.environments[environment].bindings;
+                        let index = bindings
+                            .iter()
+                            .position(|binding| binding.name == *name)
+                            .unwrap();
+                        if bindings[index].deletable {
+                            bindings.remove(index);
+                            Ok(Value::Bool(true))
+                        } else {
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                },
+                Expr::Member { .. } => {
+                    let reference = self.reference(expr, environment, this, host)?;
+                    if let Reference::Property(object, key) = reference {
+                        self.delete(object, &key)
+                    } else {
+                        unreachable!()
+                    }
+                }
+                _ => {
+                    self.expression(expr, environment, this, host)?;
+                    Ok(Value::Bool(true))
+                }
+            };
+        }
+        let value = self.expression(expr, environment, this, host)?;
+        match op {
+            "!" => Ok(Value::Bool(!value.truthy())),
+            "void" => Ok(Value::Undefined),
+            "typeof" => self.text(match value {
+                Value::Undefined => "undefined",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Function(_) | Value::Native(_) => "function",
+                _ => "object",
+            }),
+            "+" => Ok(Value::Number(self.number(value, host)?)),
+            "-" => Ok(Value::Number(-self.number(value, host)?)),
+            "~" => Ok(Value::Number((!int32(self.number(value, host)?)) as f64)),
+            _ => Err(unsupported(op)),
+        }
+    }
+
+    // Keep unrelated expression temporaries out of every retained AST frame.
+    #[inline(never)]
+    fn assignment_expression(
+        &mut self,
+        op: &str,
+        left: &Expr,
+        right: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let reference = self.reference(left, environment, this, host)?;
+        let old = if op != "=" {
+            Some(self.read_reference(&reference, host)?)
+        } else {
+            None
+        };
+        if let Some(value) = &old {
+            if op == "&&=" && !value.truthy()
+                || op == "||=" && value.truthy()
+                || op == "??=" && !matches!(value, Value::Null | Value::Undefined)
+            {
+                return self.copy(value);
+            }
+        }
+        let right = self.expression(right, environment, this, host)?;
+        let value = if matches!(op, "=" | "&&=" | "||=" | "??=") {
+            right
+        } else {
+            self.binary(
+                op.strip_suffix('=').ok_or_else(|| unsupported(op))?,
+                old.unwrap(),
+                right,
+                host,
+            )?
+        };
+        let result = self.copy(&value)?;
+        self.write_reference(reference, value, host)?;
+        Ok(result)
+    }
+
+    // Keep unrelated expression temporaries out of every retained AST frame.
+    #[inline(never)]
+    fn call_expression(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let eval_reference = matches!(callee, Expr::Ident(name) if name == "eval");
+        let (callee, mut receiver) = if matches!(callee, Expr::Member { .. }) {
+            let reference = self.reference(callee, environment, this, host)?;
+            let callee = self.read_reference(&reference, host)?;
+            let receiver = if let Reference::Property(value, _) = reference {
+                value
+            } else {
+                unreachable!()
+            };
+            (callee, receiver)
+        } else {
+            (
+                self.expression(callee, environment, this, host)?,
+                Value::Object(0),
+            )
+        };
+        let direct_eval =
+            if eval_reference && matches!(&callee, Value::Native(name) if name == "eval") {
+                receiver = self.copy(this)?;
+                Some(environment)
+            } else {
+                None
+            };
+        let args = self.arguments(args, environment, this, host)?;
+        self.call(callee, receiver, args, direct_eval, host)
+    }
+
+    // Keep unrelated expression temporaries out of every retained AST frame.
+    #[inline(never)]
+    fn new_expression(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let callee = self.expression(callee, environment, this, host)?;
+        let args = self.arguments(args, environment, this, host)?;
+        if let Value::Native(name) = &callee {
+            if name == "RegExp" {
+                return self.call(
+                    Value::Native("RegExp.new".into()),
+                    Value::Undefined,
+                    args,
+                    None,
+                    host,
+                );
+            }
+            if matches!(
+                name.as_str(),
+                "Array"
+                    | "Object"
+                    | "Function"
+                    | "Error"
+                    | "TypeError"
+                    | "RangeError"
+                    | "ReferenceError"
+                    | "URIError"
+                    | "SyntaxError"
+            ) {
+                return self.call(callee, Value::Undefined, args, None, host);
+            }
+            return Err(unsupported("this native constructor"));
+        }
+        if !matches!(callee, Value::Function(_)) {
+            return Err(exception("TypeError: value is not a constructor"));
+        }
+        let prototype = match self.get(&callee, "prototype", host)? {
+            Value::Object(id) => id,
+            _ => self.object_prototype,
+        };
+        let object = Value::Object(self.object(Some(prototype), None)?);
+        let receiver = self.copy(&object)?;
+        let result = self.call(callee, receiver, args, None, host)?;
+        Ok(if result.primitive() { object } else { result })
     }
     fn arguments(
         &mut self,
@@ -2479,6 +2683,7 @@ impl Runtime {
         if args.len() > MAX_ARRAY {
             return Err(Fault::Fatal("JavaScript argument limit exhausted".into()));
         }
+        self.budget.enter_evaluation(false)?;
         self.budget.calls += 1;
         let result = (|| match callee {
             Value::Native(name) if name == "eval" => {
@@ -2538,6 +2743,7 @@ impl Runtime {
             _ => Err(exception("TypeError: value is not callable")),
         })();
         self.budget.calls -= 1;
+        self.budget.leave_evaluation(false);
         result
     }
 
@@ -4541,6 +4747,152 @@ mod tests {
                     .unwrap_err(),
                 error
             );
+        }
+    }
+
+    #[test]
+    fn evaluation_depth_guards_cover_pending_statements_and_expressions() {
+        const CHILD: &str = "MGBROWSER_RUNTIME_DEPTH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let cases = [
+                ("unary", format!("return {}recurse();", "+ ".repeat(96))),
+                ("if", format!("{}return recurse();", "if(true)".repeat(96))),
+                (
+                    "while",
+                    format!("{}return recurse();", "while(true)".repeat(96)),
+                ),
+                ("for", format!("{}return recurse();", "for(;;)".repeat(48))),
+                (
+                    "for-in",
+                    format!("{}return recurse();", "for(var k in {a:1})".repeat(48)),
+                ),
+                (
+                    "blocks",
+                    format!("{}return recurse();{}", "{".repeat(60), "}".repeat(60)),
+                ),
+                (
+                    "try",
+                    format!(
+                        "{}return recurse();{}",
+                        "try{".repeat(48),
+                        "}finally{}".repeat(48)
+                    ),
+                ),
+                (
+                    "switch",
+                    format!(
+                        "{}return recurse();{}",
+                        "switch(1){case 1:".repeat(48),
+                        "}".repeat(48)
+                    ),
+                ),
+                (
+                    "mixed",
+                    format!(
+                        "{}return {}recurse();{}",
+                        "if(true){".repeat(24),
+                        "+ ".repeat(32),
+                        "}".repeat(24)
+                    ),
+                ),
+                (
+                    "mixed-switch",
+                    format!(
+                        "{}return {}recurse();{}",
+                        "switch(1){case 1:".repeat(48),
+                        "+ ".repeat(24),
+                        "}".repeat(48)
+                    ),
+                ),
+                (
+                    "mixed-if",
+                    format!(
+                        "{}return {}recurse();",
+                        "if(true)".repeat(96),
+                        "+ ".repeat(24)
+                    ),
+                ),
+            ];
+            for (name, body) in cases {
+                eprintln!("Local retained-evaluation probe: {name}");
+                let source = format!(
+                    "var caught=false,finalized=false;function recurse(){{{body}}}try{{recurse();}}catch(e){{caught=true;}}finally{{finalized=true;}}"
+                );
+                let mut runtime = Runtime::new();
+                let mut host = TestHost::default();
+                let error = runtime.execute(&source, &mut host).unwrap_err();
+                assert!(
+                    error.contains("evaluation depth limit exhausted"),
+                    "{name}: {error}"
+                );
+                assert_eq!(runtime.get_global("caught"), Value::Bool(false));
+                assert_eq!(runtime.get_global("finalized"), Value::Bool(false));
+                assert_eq!(runtime.budget.active_expressions, 0);
+                assert_eq!(runtime.budget.evaluation_entries, 0);
+                assert_eq!(runtime.budget.calls, 0);
+                assert_eq!(runtime.execute("42", &mut host).unwrap_err(), error);
+                assert_eq!(
+                    runtime
+                        .invoke(
+                            Value::Native("Number".into()),
+                            Value::Undefined,
+                            vec![],
+                            &mut host
+                        )
+                        .unwrap_err(),
+                    error
+                );
+            }
+            return;
+        }
+        // A Rust stack overflow aborts, not unwinds. Isolate the default-stack
+        // regression so a future failure cannot abort unrelated test groups.
+        use std::{
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "js::runtime::tests::evaluation_depth_guards_cover_pending_statements_and_expressions", "--nocapture"])
+            .env(CHILD, "1")
+            .env_remove("RUST_MIN_STACK")
+            .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "Owned evaluation-depth child exceeded deadline: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "Owned default-stack evaluation test failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn evaluation_entry_counters_unwind_after_catchable_errors_and_success() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        for source in [
+            "function f(){throw 7;}try{f();}catch(e){e;}",
+            "function f(){return missing;}try{f();}catch(e){1;}",
+            "function f(){return 42;}f();",
+        ] {
+            runtime.execute(source, &mut host).unwrap();
+            assert_eq!(runtime.budget.active_expressions, 0);
+            assert_eq!(runtime.budget.evaluation_entries, 0);
+            assert_eq!(runtime.budget.calls, 0);
         }
     }
 }

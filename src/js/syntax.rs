@@ -6,6 +6,8 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase};
 
+mod expressions;
+
 const MAX_SOURCE: usize = 1024 * 1024;
 const MAX_TOKENS: usize = 100_000;
 const MAX_NODES: usize = 100_000;
@@ -455,6 +457,8 @@ struct Parser<'a> {
     tokens: usize,
     token_limit: usize,
     nesting: usize,
+    expression_frames: usize,
+    expression_steps: usize,
     nodes: usize,
     functions: usize,
     loops: usize,
@@ -549,6 +553,8 @@ pub fn is_limit_error(message: &str) -> bool {
                 | "AST node limit exceeded"
                 | "Label nesting limit exceeded"
                 | "Regular expression compilation limit exceeded"
+                | "Expression stack limit exceeded"
+                | "Expression work limit exceeded"
         )
 }
 
@@ -565,6 +571,8 @@ impl<'a> Parser<'a> {
             tokens: 0,
             token_limit,
             nesting: 0,
+            expression_frames: 0,
+            expression_steps: 0,
             nodes: 0,
             functions: 0,
             loops: 0,
@@ -642,7 +650,7 @@ impl<'a> Parser<'a> {
         operation: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
         if self.nesting >= MAX_DEPTH {
-            return Err(self.fail("Parser nesting limit exceeded"));
+            return Err(error(self.token().offset, "Parser nesting limit exceeded"));
         }
         self.nesting += 1;
         let result = operation(self);
@@ -651,10 +659,10 @@ impl<'a> Parser<'a> {
     }
     fn node(&mut self, depth: usize) -> Result<(), String> {
         if depth > MAX_DEPTH {
-            return Err(self.fail("AST depth limit exceeded"));
+            return Err(error(self.token().offset, "AST depth limit exceeded"));
         }
         if self.nodes >= MAX_NODES {
-            return Err(self.fail("AST node limit exceeded"));
+            return Err(error(self.token().offset, "AST node limit exceeded"));
         }
         self.nodes += 1;
         Ok(())
@@ -1170,354 +1178,11 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self, allow_in: bool) -> Result<E, String> {
-        let first = self.assignment(allow_in)?;
-        if !self.eat(",") {
-            return Ok(first);
-        }
-        let mut depth = first.depth;
-        let mut values = vec![first.value];
-        loop {
-            let expression = self.assignment(allow_in)?;
-            depth = depth.max(expression.depth);
-            values.push(expression.value);
-            if !self.eat(",") {
-                break;
-            }
-        }
-        self.expr(Expr::Sequence(values), depth + 1)
+        self.expression_machine(allow_in, true)
     }
 
     fn assignment(&mut self, allow_in: bool) -> Result<E, String> {
-        self.nested(|parser| {
-            let left = parser.conditional(allow_in)?;
-            let Kind::Punct(
-                op @ ("=" | "+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | ">>>=" | "&=" | "|="
-                | "^="),
-            ) = parser.token().kind
-            else {
-                return Ok(left);
-            };
-            if !assignable(&left.value) {
-                return Err(parser.fail("Invalid assignment target"));
-            }
-            parser.advance();
-            let right = parser.assignment(allow_in)?;
-            let depth = left.depth.max(right.depth) + 1;
-            parser.expr(
-                Expr::Assign {
-                    op: op.to_owned(),
-                    left: Box::new(left.value),
-                    right: Box::new(right.value),
-                },
-                depth,
-            )
-        })
-    }
-
-    fn conditional(&mut self, allow_in: bool) -> Result<E, String> {
-        let test = self.binary(1, allow_in)?;
-        if !self.eat("?") {
-            return Ok(test);
-        }
-        let consequent = self.assignment(true)?;
-        self.expect(":")?;
-        let alternate = self.assignment(allow_in)?;
-        let depth = test.depth.max(consequent.depth).max(alternate.depth) + 1;
-        self.expr(
-            Expr::Conditional {
-                test: Box::new(test.value),
-                consequent: Box::new(consequent.value),
-                alternate: Box::new(alternate.value),
-            },
-            depth,
-        )
-    }
-
-    fn binary(&mut self, minimum: u8, allow_in: bool) -> Result<E, String> {
-        let mut left = self.unary()?;
-        loop {
-            let Some((op, precedence)) = binary_operator(&self.token().kind, allow_in) else {
-                break;
-            };
-            if precedence < minimum {
-                break;
-            }
-            let op = op.to_owned();
-            self.advance();
-            let right = self.binary(precedence + 1, allow_in)?;
-            let depth = left.depth.max(right.depth) + 1;
-            left = self.expr(
-                Expr::Binary {
-                    op,
-                    left: Box::new(left.value),
-                    right: Box::new(right.value),
-                },
-                depth,
-            )?;
-        }
-        Ok(left)
-    }
-
-    fn unary(&mut self) -> Result<E, String> {
-        self.nested(|parser| {
-            let op = match &parser.token().kind {
-                Kind::Punct(op @ ("+" | "-" | "!" | "~" | "++" | "--")) => Some((*op).to_owned()),
-                Kind::Word(op) if matches!(op.as_str(), "typeof" | "void" | "delete") => {
-                    Some(op.clone())
-                }
-                _ => None,
-            };
-            if let Some(op) = op {
-                parser.advance();
-                let expression = parser.unary()?;
-                let depth = expression.depth + 1;
-                return if op == "++" || op == "--" {
-                    if !assignable(&expression.value) {
-                        return Err(parser.fail("Invalid update target"));
-                    }
-                    parser.expr(
-                        Expr::Update {
-                            op,
-                            expr: Box::new(expression.value),
-                            prefix: true,
-                        },
-                        depth,
-                    )
-                } else {
-                    parser.expr(
-                        Expr::Unary {
-                            op,
-                            expr: Box::new(expression.value),
-                        },
-                        depth,
-                    )
-                };
-            }
-            let expression = parser.left_hand_side()?;
-            if !parser.token().newline && (parser.punct("++") || parser.punct("--")) {
-                if !assignable(&expression.value) {
-                    return Err(parser.fail("Invalid update target"));
-                }
-                let Kind::Punct(op) = parser.token().kind else {
-                    unreachable!()
-                };
-                parser.advance();
-                let depth = expression.depth + 1;
-                parser.expr(
-                    Expr::Update {
-                        op: op.to_owned(),
-                        expr: Box::new(expression.value),
-                        prefix: false,
-                    },
-                    depth,
-                )
-            } else {
-                Ok(expression)
-            }
-        })
-    }
-
-    fn left_hand_side(&mut self) -> Result<E, String> {
-        let mut expression = self.new_expression()?;
-        loop {
-            if self.punct("(") {
-                let (args, args_depth) = self.arguments()?;
-                let depth = expression.depth.max(args_depth) + 1;
-                expression = self.expr(
-                    Expr::Call {
-                        callee: Box::new(expression.value),
-                        args,
-                    },
-                    depth,
-                )?;
-            } else if self.punct(".") || self.punct("[") {
-                expression = self.member(expression)?;
-            } else {
-                return Ok(expression);
-            }
-        }
-    }
-
-    fn new_expression(&mut self) -> Result<E, String> {
-        self.nested(|parser| {
-            let mut expression = if parser.eat_word("new") {
-                let callee = parser.new_expression()?;
-                let (args, args_depth) = if parser.punct("(") {
-                    parser.arguments()?
-                } else {
-                    (Vec::new(), 0)
-                };
-                let depth = callee.depth.max(args_depth) + 1;
-                parser.expr(
-                    Expr::New {
-                        callee: Box::new(callee.value),
-                        args,
-                    },
-                    depth,
-                )?
-            } else {
-                parser.primary()?
-            };
-            while parser.punct(".") || parser.punct("[") {
-                expression = parser.member(expression)?;
-            }
-            Ok(expression)
-        })
-    }
-
-    fn member(&mut self, object: E) -> Result<E, String> {
-        let property = if self.eat(".") {
-            let name = self.name(true)?;
-            self.expr(Expr::String(name.encode_utf16().collect()), 1)?
-        } else {
-            self.expect("[")?;
-            let property = self.expression(true)?;
-            self.expect("]")?;
-            property
-        };
-        let depth = object.depth.max(property.depth) + 1;
-        self.expr(
-            Expr::Member {
-                object: Box::new(object.value),
-                property: Box::new(property.value),
-            },
-            depth,
-        )
-    }
-
-    fn arguments(&mut self) -> Result<(Vec<Expr>, usize), String> {
-        self.expect("(")?;
-        let mut args = Vec::new();
-        let mut depth = 0;
-        if !self.punct(")") {
-            loop {
-                let argument = self.assignment(true)?;
-                depth = depth.max(argument.depth);
-                args.push(argument.value);
-                if !self.eat(",") {
-                    break;
-                }
-            }
-        }
-        self.expect(")")?;
-        Ok((args, depth))
-    }
-
-    fn primary(&mut self) -> Result<E, String> {
-        let token = self.token().clone();
-        match token.kind {
-            Kind::Number(value) => {
-                self.advance();
-                self.expr(Expr::Number(value), 1)
-            }
-            Kind::String(value) => {
-                self.advance();
-                self.expr(Expr::String(value), 1)
-            }
-            Kind::Word(ref word) if word == "function" => {
-                self.advance();
-                let (name, params, body, depth) = self.function(false)?;
-                self.expr(Expr::Function { name, params, body }, depth + 1)
-            }
-            Kind::Word(word) => {
-                self.advance();
-                let expression = match word.as_str() {
-                    "true" => Expr::Bool(true),
-                    "false" => Expr::Bool(false),
-                    "null" => Expr::Null,
-                    "this" => Expr::This,
-                    word if reserved(word) => {
-                        return Err(error(
-                            token.offset,
-                            "Unsupported or misplaced reserved word",
-                        ));
-                    }
-                    _ => Expr::Ident(word),
-                };
-                self.expr(expression, 1)
-            }
-            Kind::Punct("(") => {
-                self.advance();
-                let value = self.expression(true)?;
-                self.expect(")")?;
-                Ok(value)
-            }
-            Kind::Punct("[") => {
-                self.advance();
-                let mut values = Vec::new();
-                let mut depth = 0;
-                while !self.punct("]") {
-                    if self.eat(",") {
-                        values.push(None);
-                        continue;
-                    }
-                    let value = self.assignment(true)?;
-                    depth = depth.max(value.depth);
-                    values.push(Some(value.value));
-                    if !self.eat(",") {
-                        break;
-                    }
-                }
-                self.expect("]")?;
-                self.expr(Expr::Array(values), depth + 1)
-            }
-            Kind::Punct("{") => self.object(),
-            Kind::Punct("/" | "/=") => {
-                // Lookahead is requested only while the current token is a
-                // possible label name, never while it is a slash.
-                debug_assert!(self.lookahead.is_none());
-                let (pattern, flags) = self.lexer.regexp(token.offset)?;
-                self.advance();
-                self.expr(Expr::RegExp { pattern, flags }, 1)
-            }
-            Kind::Invalid(message) => Err(message),
-            Kind::End => Err(error(
-                token.offset,
-                "Unexpected end of source; expected expression",
-            )),
-            _ => Err(error(
-                token.offset,
-                "Expected expression or encountered unsupported syntax",
-            )),
-        }
-    }
-
-    fn object(&mut self) -> Result<E, String> {
-        self.expect("{")?;
-        let mut values = Vec::new();
-        let mut depth = 0;
-        while !self.punct("}") {
-            let token = self.token().clone();
-            let key = match token.kind {
-                Kind::Word(name) => name,
-                Kind::String(value) => String::from_utf16(&value).map_err(|_| {
-                    error(
-                        token.offset,
-                        "Lone-surrogate object property names are unsupported",
-                    )
-                })?,
-                Kind::Number(value) => number_property(value),
-                _ => {
-                    return Err(self.fail(
-                        "Expected object property name; computed properties are unsupported",
-                    ));
-                }
-            };
-            self.advance();
-            if !self.eat(":") {
-                return Err(
-                    self.fail("Expected colon; object accessors and shorthand are unsupported")
-                );
-            }
-            let value = self.assignment(true)?;
-            depth = depth.max(value.depth);
-            values.push((key, value.value));
-            if !self.eat(",") {
-                break;
-            }
-        }
-        self.expect("}")?;
-        self.expr(Expr::Object(values), depth + 1)
+        self.expression_machine(allow_in, false)
     }
 }
 
@@ -1880,6 +1545,8 @@ mod tests {
             "AST node limit exceeded",
             "Label nesting limit exceeded",
             "Regular expression compilation limit exceeded",
+            "Expression stack limit exceeded",
+            "Expression work limit exceeded",
         ] {
             for prefix in ["", "Function parameters: ", "Function body: "] {
                 assert!(is_limit_error(&format!("{prefix}{reason} at byte 12")));

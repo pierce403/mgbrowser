@@ -174,8 +174,10 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | --- | --- |
 | Script document / URL | 1 MiB HTML; 16 KiB URL |
 | Each parsed script | 1 MiB source; 100,000 tokens and AST nodes; nesting/AST depth 128; Function fragments share these caps |
+| Expression parser state | Per Parser: 1,536 live continuation instructions, including the active instruction; 3,200,000 cumulative dispatch steps |
 | Document startup | 32 eligible scripts, including unsupported external/module entries; 32 listeners |
 | Evaluator realm | 1,000,000 fuel; 4 MiB cumulative logical allocation; 10,000 objects, functions or environments; call depth 64; array/argument length 10,000 |
+| Evaluator retained entries | 128 active expression entries; 384 combined expression, statement and call entries, shared across re-entry |
 | For-in enumeration | Prototype depth 64; candidate snapshots, including non-enumerable shadows, charge shared realm fuel and cumulative allocation; no separate candidate-count cap |
 | URI conversion | 1,048,576 UTF-16 units each input/output, with exact encoded-size preflight; allocations also charge the realm budget |
 | Regex compilation | 16,384 pattern units; 8,192 nodes; 64 captures; nesting 64; 128 bracket classes; 2 MiB compiled storage; 2,000,000 compile steps; numeric quantifiers at most 1,000,000 |
@@ -185,9 +187,12 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Worker protocol | 2 MiB request JSON; 4 MiB response JSON |
 | Worker OS / parent deadline | 256 MiB address space; 1 CPU second; 2-second wall deadline including transfer/startup |
 
-Parser nesting counts guarded grammar/helper frames, not just visible braces.
-The for/switch helpers charge this existing budget to bound their retained Rust
-stack frames. Object.keys/getOwnPropertyNames additionally obey the ordinary
+Expression parsing now uses heap-backed continuations rather than recursive
+precedence-helper descent. Its shared structural guard counts recursive grammar
+operands/containers, not each pass-through helper; 64 grouping pairs are supported
+without adding AST wrappers. Guarded statement/function and for/switch helper
+frames still share the same nesting budget, so the limit is not just a count of
+visible braces. Object.keys/getOwnPropertyNames additionally obey the ordinary
 10,000-element result-array cap; for-in does not construct such a result array.
 
 Logical allocation accounting is conservative and cumulative, not allocator RSS.
@@ -195,7 +200,7 @@ Dynamic compilation charges source conversion and fixed attempt overhead even on
 syntax failure, and additionally charges successfully parsed ASTs. Temporary
 parser allocations, including partial ASTs discarded on failure, are bounded by
 the per-parse limits but are not individually charged as cumulative heap usage.
-The OS address-space cap is independent. Evaluator fuel/allocation/call exhaustion
+The OS address-space cap is independent. Evaluator fuel/allocation/depth exhaustion
 is uncatchable and latched for the realm. The parent bounds pipe traffic, kills
 and reaps timed-out/oversized workers, and reports an explicit error.
 
@@ -216,6 +221,71 @@ parent network process are not sandboxed by it, and this browser remains
 unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
+
+### Bounded expression-state increment
+
+`src/js/syntax/expressions.rs` implements the expression grammar with explicit
+continuation/operator state and one result register. Each pending operand is an
+already depth-checked AST. Storage grows on demand, with at most `12 × 128 = 1,536`
+live instructions shared across all expression machines in one Parser. This
+includes the popped instruction while a nested function body is parsed; a
+function cannot reset the outer machine's counters. The allowance derives from
+the grammar's forwarding stages, structural entry/leave, container return and
+active-instruction bookkeeping, not an increased source or nesting cap.
+
+Dispatch work is independently capped at `32 × 100,000 = 3,200,000` transitions
+per Parser. Success and error paths restore the invocation's pending-state and
+nesting counters, but never refund work already performed. Parser nesting, AST
+depth and AST-node exhaustion now retain their resource-error classification even
+when the lexer has already cached a malformed-token diagnostic. All parser-owned
+resource errors remain fatal through eval and Function construction; ordinary
+syntax errors remain catchable and never return a successfully parsed prefix.
+
+The AST/API, 128 structural/AST-depth limits, source/token/node caps, function and
+statement guards, grammar-directed regex/division, NoIn contexts,
+precedence/associativity and ASI are preserved. Function parameter/body fragments
+remain separately parsed. Statement/function parsing and AST
+cloning/evaluation/disposal still use guarded recursive code: this is not a fully
+iterative engine or a measurement of native stack bytes. No thread-stack size was
+increased, and no website script/challenge source was an implementation input.
+
+On 2026-09-07, the final debug suite passed all 251 tests: 107 library, 15 binary,
+16 control-flow, 12 DOM, 21 dynamic, 22 expression, 24 iteration, 18 regex,
+12 actual-worker and four example/client tests. The library includes all 30 parser
+groups, including shared-state cleanup and nested-function limits. The exact
+release command `cargo test --locked --release --lib --test js_expressions --test script_worker`
+passed all 141 selected tests (107 library, 22 expression and 12 worker).
+Formatting, build and the native-dependency guard passed as well.
+
+These default-stack checks cover 64 grouping levels in ordinary code,
+direct/indirect eval and Function bodies, mixed expression forms, lexical goals,
+early rejection and cumulative limits. Actual workers verify the authored
+`/script-expressions` factory, malformed grouping without prefix DOM effects,
+excessive-depth latching and recursion errors that cannot enter catch/finally or
+execute a later script.
+
+Independent review exposed evaluator stack overflows with pending unary
+expressions and deeply nested switch/for-in helpers. The evaluator now caps
+active expression entries at 128 and combined expression/statement/call entries
+at 384 across function and native re-entry, alongside the unchanged 64-call cap.
+Mechanical helper splits isolate variable/labeled statements, for-in preparation
+and assignment, switch selection and eight expression dispatch arms, reducing
+temporary native frames retained through recursive execution. No cap or thread
+stack was increased.
+
+All 11 heavy default-stack forms pass, including 48 nested switches with 24 unary
+operators and 96 nested if-statements with 24 unary operators. Existing 64-call
+regressions still pass. Entry counters return to zero after successful execution,
+catchable exceptions and fatal errors; exhaustion bypasses catch/finally and
+latches the realm against later execution. These are verified logical guards,
+not native-stack byte accounting or a production stack-safety claim.
+
+The native and external CDP `/script-expressions` journeys passed: both submitted
+the real Unicode query and hidden field, clicked the local result and reached
+the HTTP 200 destination. All three exact CI journey steps passed locally,
+including existing scripted forms and loop-error recovery. Native query and CDP
+destination frames were inspected and readable. See [RUNNING.md](RUNNING.md) for
+the authored fixture commands and the daily log for remote publication evidence.
 
 On 2026-09-07, local language/DOM and worker tests passed. The native Xvfb journey
 followed `/script-redirect` to `/script-home`, where an inline script creates all
@@ -251,7 +321,8 @@ cover mutation/shadowing, boxed values, hoisting, scope, completions, early erro
 and cumulative resource limits. Publication/remote CI evidence is recorded
 separately in the daily log.
 
-The subsequent single Google attempt with `--enable-scripts` still failed. The
+The post-iteration Google checkpoint, before the expression-parser increment,
+used `--enable-scripts` and still failed. The
 HTTP 200 homepage retained 26 rendered items and one form, with two completed
 scripts and eight errors, including unsupported submit/onload/onclick behavior,
 non-callable values and allocation exhaustion. The actual form submitted, but
@@ -262,8 +333,16 @@ not an exhaustive diagnosis or a promise that fixing one diagnostic will make
 Google work. No site-specific rewriting or challenge logic was added. The
 requested first-result journey remains open; see the dated log for evidence.
 
-Next work starts with independently authored nesting cases and a stack/resource-safe
-parser architecture; do not blindly increase limits or port site challenge code.
+The post-expression checkpoint completed the real Google form submission with
+verified TLS and ordinary cookies. Search returned HTTP 200, title “Google
+Search”, two completed scripts and three allocation-budget errors, with no
+rendered items or forms. The earlier parser-nesting diagnostic was absent in
+this response, but the inspected frame was still blank and the journey exited
+2 without a result or destination. Local success does not complete the live goal.
+
+Next work identifies allocation consumption by phase using general diagnostics
+and independently authored source/AST/runtime fixtures. Do not blindly increase
+limits or port site challenge code.
 General language/builtin correctness, a pinned independent conformance corpus,
 parent-brokered external scripts, persistent realms, real DOM event dispatch/timers
 and broader DOM support remain open. CDP Runtime/Debugger remain
