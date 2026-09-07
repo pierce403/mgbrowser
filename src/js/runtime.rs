@@ -1299,6 +1299,28 @@ impl Runtime {
             return self.put_own(0, name, value, true);
         }
         self.budget.allocate(value_bytes(&value))?;
+        self.store_local_binding(environment, name, value)
+    }
+    fn bind_parameter_copy(&mut self, environment: usize, name: &str, value: &Value) -> Eval<()> {
+        if environment == 0 || environment >= self.environments.len() {
+            return Err(Fault::Fatal(
+                "Invalid local JavaScript binding environment".into(),
+            ));
+        }
+        // Formals require an independent copy; admission precedes that clone.
+        // Moving the paid copy into its local binding creates no extra payload.
+        let value = self.copy(value)?;
+        self.store_local_binding(environment, name, value)
+    }
+    // Private local storage only. The two callers retain distinct payload
+    // policies: ordinary define charges its transfer; formals make a paid copy.
+    // Do not route catches, host ingress or general assignments around define.
+    fn store_local_binding(&mut self, environment: usize, name: &str, value: Value) -> Eval<()> {
+        if environment == 0 || environment >= self.environments.len() {
+            return Err(Fault::Fatal(
+                "Invalid local JavaScript binding environment".into(),
+            ));
+        }
         let bindings = &mut self.environments[environment].bindings;
         if let Some(previous) = bindings.iter_mut().find(|binding| binding.name == name) {
             previous.value = value;
@@ -2946,8 +2968,11 @@ impl Runtime {
                     self.boxed(this)?
                 };
                 for (index, param) in code.params.iter().enumerate() {
-                    let argument = self.copy(args.get(index).unwrap_or(&Value::Undefined))?;
-                    self.define(environment, param, argument)?;
+                    self.bind_parameter_copy(
+                        environment,
+                        param,
+                        args.get(index).unwrap_or(&Value::Undefined),
+                    )?;
                 }
                 if !code.params.iter().any(|name| name == "arguments") {
                     // Parameter copies/bindings above remain independent. The
@@ -4548,6 +4573,136 @@ fn statement_bytes(statement: &Stmt) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formal_binding_copies_payload_once_and_preserves_local_metadata() {
+        let mut runtime = Runtime::new();
+        let environment = runtime.environment(0, true).unwrap();
+        let input = Value::String(vec![0xd800, b'a' as u16, 0xdc00]);
+        let Value::String(original) = &input else {
+            unreachable!()
+        };
+        let before = runtime.allocation_report();
+        runtime
+            .bind_parameter_copy(environment, "param", &input)
+            .unwrap();
+        let after = runtime.allocation_report();
+        assert_eq!(after.phases.runtime - before.phases.runtime, 6 + 128 + 5);
+        let binding = &runtime.environments[environment].bindings[0];
+        let Value::String(copy) = &binding.value else {
+            panic!("parameter string missing");
+        };
+        assert_eq!(copy, original);
+        assert_ne!(copy.as_ptr(), original.as_ptr());
+        assert!(!binding.deletable);
+        // The low-level move keeps its buffer; metadata applies only to new
+        // names, and replacing a duplicate preserves the prior attributes.
+        runtime.environments[environment].bindings[0].deletable = true;
+        let before = runtime.allocation_report();
+        runtime
+            .bind_parameter_copy(environment, "param", &input)
+            .unwrap();
+        let bindings = &runtime.environments[environment].bindings;
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].deletable);
+        assert_eq!(
+            runtime.allocation_report().phases.runtime - before.phases.runtime,
+            6
+        );
+        let value = runtime.copy(&input).unwrap();
+        let Value::String(units) = &value else {
+            unreachable!()
+        };
+        let pointer = units.as_ptr();
+        let before = runtime.allocation_report();
+        runtime
+            .store_local_binding(environment, "param", value)
+            .unwrap();
+        let Value::String(stored) = &runtime.environments[environment].bindings[0].value else {
+            unreachable!()
+        };
+        assert_eq!(stored.as_ptr(), pointer);
+        assert_eq!(runtime.allocation_report(), before);
+        assert!(before.is_valid());
+    }
+
+    #[test]
+    fn formal_binding_rejections_preflight_copy_then_metadata_without_insertion() {
+        for remaining in [5, 6 + 128 + 5 - 1] {
+            let mut runtime = Runtime::new();
+            let environment = runtime.environment(0, true).unwrap();
+            let input = Value::String(vec![0xd800, b'a' as u16, 0xdc00]);
+            runtime
+                .budget
+                .allocate(MAX_HEAP - runtime.budget.allocated - remaining)
+                .unwrap();
+            let before = runtime.allocation_report();
+            assert!(
+                runtime
+                    .bind_parameter_copy(environment, "param", &input)
+                    .is_err()
+            );
+            assert!(runtime.environments[environment].bindings.is_empty());
+            let after = runtime.allocation_report();
+            let rejected = after.first_rejected.unwrap();
+            assert_eq!(rejected.phase, AllocationPhase::Runtime);
+            if remaining == 5 {
+                // Budget::copy rejects before clone; no accepted payload cost.
+                assert_eq!(after.accepted_bytes, before.accepted_bytes);
+                assert_eq!(rejected.requested_bytes, 6);
+            } else {
+                // The real copy was paid, but binding metadata did not fit;
+                // no partial name/value entry may be installed.
+                assert_eq!(after.accepted_bytes, before.accepted_bytes + 6);
+                assert_eq!(rejected.requested_bytes, 128 + 5);
+            }
+            assert_eq!(input, Value::String(vec![0xd800, b'a' as u16, 0xdc00]));
+            assert!(
+                runtime
+                    .bind_parameter_copy(environment, "later", &Value::Undefined)
+                    .is_err()
+            );
+            assert_eq!(runtime.allocation_report(), after);
+            assert!(after.is_valid());
+        }
+    }
+
+    #[test]
+    fn formal_binding_storage_rejects_nonlocal_use_and_does_not_exempt_define() {
+        let mut runtime = Runtime::new();
+        let input = Value::text("owned");
+        for environment in [0, runtime.environments.len()] {
+            let before = runtime.allocation_report();
+            assert!(
+                runtime
+                    .bind_parameter_copy(environment, "invalid", &input)
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .store_local_binding(environment, "invalid", Value::Undefined)
+                    .is_err()
+            );
+            assert_eq!(runtime.allocation_report(), before);
+            assert_eq!(runtime.get_global("invalid"), Value::Undefined);
+        }
+        let environment = runtime.environment(0, true).unwrap();
+        let before = runtime.allocation_report();
+        runtime.define(environment, "ordinary", input).unwrap();
+        assert_eq!(
+            runtime.allocation_report().phases.runtime - before.phases.runtime,
+            10 + 128 + 8
+        );
+        let before = runtime.allocation_report();
+        runtime
+            .define(environment, "ordinary", Value::text("copy"))
+            .unwrap();
+        assert_eq!(
+            runtime.allocation_report().phases.runtime - before.phases.runtime,
+            8
+        );
+        assert!(runtime.allocation_report().is_valid());
+    }
 
     #[test]
     fn prepaid_array_adoption_moves_slots_and_payloads_with_exclusive_charges() {

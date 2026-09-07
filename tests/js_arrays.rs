@@ -324,10 +324,12 @@ fn snapshot_moves_owned_payloads_but_formal_parameter_copies_stay_charged() {
     );
     assert_eq!(
         snapshot_string_cost(1024, true) - snapshot_string_cost(512, true),
-        512 * 6
+        // Narrow parameter-binding policy: ingress and the actual independent
+        // copy remain paid; moving that copy into its binding is not paid again.
+        512 * 4
     );
     assert!(snapshot_string_cost(1_500_000, false) >= 3_000_000);
-    assert!(snapshot_string_cost(600_000, true) >= 3_600_000);
+    assert!(snapshot_string_cost(900_000, true) >= 3_600_000);
 }
 
 fn slice_cost(count: usize, units: usize) -> u64 {

@@ -222,6 +222,37 @@ unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
 
+### Parameter-copy binding ownership
+
+The bounded ownership change removes only the payload surcharge when a
+fresh, charged formal-parameter copy moves into its local binding. A private
+copy-and-bind helper performs the real copy itself before passing ownership
+to a non-global local-storage helper. Ordinary `define`, global/property ingress,
+caught host-error strings, metadata, identifier reads and all limits retain their
+charges. No generic already-paid flag or public admission bypass is allowed.
+
+Independent tests verify public-invoke formal/no-formal string slopes of
+4/2 bytes per additional UTF-16 unit, a 900,000-unit formal argument below 4 MiB,
+distinct parameter/original pointers, preserved duplicate/missing parameters and
+unmapped arguments, unchanged ingress/catch/real-copy charges and fatal latching.
+The authored `/script-bindings` fixture creates controls only after binding a
+749,925-unit generated string. Its baseline worker rejects a 1,499,850-byte
+Runtime move charge after 3,678,037 accepted bytes. The unchanged fixture now
+completes with 3,681,962 accepted bytes, one script and no errors; its real query
+and hidden field submit through native and external CDP input to the local result
+and destination. The old run stopped before creating controls, so these totals
+are not equal-work or RSS measurements.
+
+All 327 debug tests, 217 selected release checks and all three exact CI journey
+steps pass locally on 2026-09-07. This includes ten independent binding groups,
+three new private copy/move/preflight groups and 19 actual-worker groups. A larger
+worker input still fails on the required actual parameter clone and prevents
+body/catch/finally/later-script effects while preserving readable fallback.
+Native query and CDP destination frames were inspected. The earlier array
+increment's formal slope of six is historical: it is now four, with no-formal
+two unchanged. Other bindings/property transfers and AST policy are unchanged.
+See the daily log for separate exact-SHA remote acceptance.
+
 ### Prepaid array and argument ownership
 
 Array construction now uses a private array builder: reserve each
@@ -250,11 +281,11 @@ construction/adoption accounting; later array-mutation charges remain unchanged.
 Credits describe requested logical slots, not exact allocator capacity or RSS,
 and this is not a new garbage collector.
 
-All 312 debug tests and 202 selected release tests passed on 2026-09-07, including
+The array increment passed all 312 debug tests and 202 selected release tests on 2026-09-07, including
 17 independent array groups, five private ownership/preflight/growth groups and
 17 actual-worker groups. Pointer checks verify that adoption moves the slot vector
 and string buffers, and that parameters retain an independent copy. Authored
-public-invoke no-formal/formal snapshots retain charges of 2/6 bytes per added UTF-16
+public-invoke no-formal/formal snapshots then retained charges of 2/6 bytes per added UTF-16
 unit; slice still pays for its real string copies. Growing result arrays reserve
 at most 15 times through 10,000 slots, with rejection before failed growth.
 
@@ -459,6 +490,17 @@ parent-brokered external scripts, persistent realms, real DOM event dispatch/tim
 and broader DOM support remain open. CDP Runtime/Debugger remain
 unsupported until backed by actual realm and remote-object lifecycles;
 `Runtime.evaluate` still returns an unsupported-method error.
+
+After parameter-copy binding, one bounded Google checkpoint still returns no
+results. The homepage retains its real form with three completed scripts/seven
+errors and no rejected allocation (2,448,406 accepted bytes). Search HTTP 200
+has zero items/forms and two completed scripts/three errors repeating one AST
+failure: 1,684,603 accepted bytes plus a requested 2,575,110 exceeds 4,194,304.
+Runtime charges are 1,379,528 bytes; the admission gap is now 65,409 bytes. The
+inspected search frame remains blank and the journey exits 2 without a result or
+destination. Changing responses are not a controlled performance comparison or
+proof that another optimization completes compatibility. Next work remains an
+independent ownership/AST audit with true-copy/ingress charges and all caps intact.
 
 Language references are [ECMAScript 5.1](https://262.ecma-international.org/5.1/),
 the [current ECMAScript specification](https://tc39.es/ecma262/) and the

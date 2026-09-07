@@ -196,21 +196,38 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-arrays \
 
 The complete worker accepts 3,891,459 bytes and creates the form without errors.
 Native and external CDP journeys reach the local destination; rendered frames were
-inspected. All 312 debug tests and 202 selected release checks pass. The seventh
+inspected. That increment passed 312 debug tests and 202 selected release checks. The seventh
 maximum array still fails under the unchanged cumulative limit. See the daily log
 for publication evidence; this local fixture is not Google acceptance.
+
+`/script-bindings` is another authored fixture with no static controls. It calls
+a form-building function with a generated 749,925-unit string. The real input and
+independent formal copy remain charged; moving the copy into its binding no longer
+adds a duplicate payload charge. The fixed fixture completes with 3,681,962
+accepted bytes under the unchanged 4 MiB limit:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-bindings \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/bindings-journey
+```
+
+All 327 debug tests, 217 selected release checks and all three exact CI journey
+steps pass locally, including native/CDP submission and destination navigation for
+this form. Native query and CDP destination frames were inspected. A larger real
+copy still fails fatally; generic ingress/binding/catch and read charges remain.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-array Google attempt submitted the real form. The homepage no
+2026-09-07 post-parameter Google attempt submitted the real form. The homepage no
 longer exhausted the allocation budget, but the HTTP 200 “Google Search” response
-still rejected an AST charge: 1,822,051 accepted bytes plus a requested 2,575,110
+still rejected an AST charge: 1,684,603 accepted bytes plus a requested 2,575,110
 bytes exceeds the unchanged 4 MiB limit. Three errors repeat this first failure;
 no rendered items/forms, result or destination were reached. Google's acceptance
-goal remains unmet. The remaining admission gap is 202,857 bytes. Next is further
+goal remains unmet. The remaining admission gap is 65,409 bytes. Next is further
 independently tested AST/runtime storage work, not blindly raising limits; real
 DOM events and timers are still missing.
 
@@ -263,11 +280,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-arrays tmp/cdp-arrays-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-bindings tmp/cdp-bindings-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code and prepaid-array
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array and parameter-copy
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -277,7 +297,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
