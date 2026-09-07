@@ -12,11 +12,11 @@
 //!
 //! This is a classic non-strict subset, not ECMAScript conformance. In particular,
 //! arguments are an unmapped snapshot; descriptors/accessors, lexical declarations,
-//! modules, regex, promises and a general event loop are not implemented.
+//! modules, promises and a general event loop are not implemented.
 //! Unsupported exposed builtins throw an explicit error. Math.random
 //! is a deterministic research PRNG and must never be used for cryptography.
 
-use super::{Expr, Program, Stmt, syntax, uri};
+use super::{Expr, Program, Stmt, regexp, syntax, uri};
 use std::rc::Rc;
 
 const MAX_FUEL: u64 = 1_000_000;
@@ -139,6 +139,7 @@ struct Object {
     array: Option<Vec<Option<Value>>>,
     prototype: Option<usize>,
     boxed: Option<Value>,
+    regexp: Option<Rc<regexp::Regex>>,
 }
 struct Environment {
     parent: Option<usize>,
@@ -222,6 +223,7 @@ pub struct Runtime {
     string_prototype: usize,
     number_prototype: usize,
     boolean_prototype: usize,
+    regexp_prototype: usize,
     global_declarations: Vec<String>,
     global_setters: Vec<(String, String, String)>,
 }
@@ -256,11 +258,21 @@ impl Runtime {
             string_prototype: 4,
             number_prototype: 5,
             boolean_prototype: 6,
+            regexp_prototype: 7,
             global_declarations: Vec::new(),
             global_setters: Vec::new(),
         };
         // The fixed bootstrap is far below all limits and has no host capability.
-        for prototype in [Some(1), None, Some(1), Some(1), Some(1), Some(1), Some(1)] {
+        for prototype in [
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+        ] {
             runtime
                 .object(prototype, None)
                 .expect("fixed bounded runtime bootstrap");
@@ -291,6 +303,9 @@ impl Runtime {
                     "startsWith",
                     "endsWith",
                     "split",
+                    "match",
+                    "search",
+                    "replace",
                     "concat",
                     "trim",
                     "toLowerCase",
@@ -301,6 +316,7 @@ impl Runtime {
             ),
             (5, "Number", &["toString", "valueOf", "toFixed"][..]),
             (6, "Boolean", &["toString", "valueOf"][..]),
+            (7, "RegExp", &["exec", "test", "toString"][..]),
         ] {
             for method in methods {
                 runtime
@@ -313,6 +329,13 @@ impl Runtime {
                     .expect("fixed bootstrap");
             }
         }
+        let empty = runtime.compile_regexp(&[], "").expect("fixed empty regex");
+        runtime
+            .init_regexp(7, empty)
+            .expect("fixed regex prototype");
+        runtime
+            .put_own(7, "constructor", Value::Native("RegExp".into()), false)
+            .expect("fixed regex constructor");
         for name in [
             "Object",
             "Array",
@@ -320,6 +343,7 @@ impl Runtime {
             "Number",
             "Boolean",
             "Function",
+            "RegExp",
             "parseInt",
             "parseFloat",
             "isNaN",
@@ -617,6 +641,7 @@ impl Runtime {
             array,
             prototype,
             boxed: None,
+            regexp: None,
         });
         Ok(id)
     }
@@ -1195,6 +1220,10 @@ impl Runtime {
                 self.budget.allocate(value.len().saturating_mul(2))?;
                 Ok(Value::String(value.clone()))
             }
+            Expr::RegExp { pattern, flags } => {
+                let regex = self.compile_regexp(pattern, flags)?;
+                self.regexp_object(regex)
+            }
             Expr::Ident(name) => match self.lookup(environment, name) {
                 Some(environment) => self.binding(environment, name),
                 None => Err(exception(format!("ReferenceError: {name} is not defined"))),
@@ -1412,6 +1441,15 @@ impl Runtime {
                 let callee = self.expression(callee, environment, this, host)?;
                 let args = self.arguments(args, environment, this, host)?;
                 if let Value::Native(name) = &callee {
+                    if name == "RegExp" {
+                        return self.call(
+                            Value::Native("RegExp.new".into()),
+                            Value::Undefined,
+                            args,
+                            None,
+                            host,
+                        );
+                    }
                     if matches!(
                         name.as_str(),
                         "Array"
@@ -1535,6 +1573,7 @@ impl Runtime {
                         "String" => Value::Object(self.string_prototype),
                         "Number" => Value::Object(self.number_prototype),
                         "Boolean" => Value::Object(self.boolean_prototype),
+                        "RegExp" => Value::Object(self.regexp_prototype),
                         _ => Value::Undefined,
                     });
                 }
@@ -1551,7 +1590,15 @@ impl Runtime {
                     return Ok(Value::Native(format!("{name}.{key}")));
                 }
                 if key == "length" {
-                    return Ok(Value::Number(if name == "parseInt" { 2.0 } else { 1.0 }));
+                    return Ok(Value::Number(
+                        if matches!(name.as_str(), "parseInt" | "RegExp") {
+                            2.0
+                        } else if name == "RegExp.toString" {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    ));
                 }
                 Some(self.function_prototype)
             }
@@ -1575,6 +1622,27 @@ impl Runtime {
         match object {
             Value::Host(object) => host.set(&object, key, value).map_err(exception),
             Value::Object(id) => {
+                if matches!(key, "source" | "global" | "ignoreCase" | "multiline") {
+                    let mut current = Some(id);
+                    for _ in 0..MAX_CALLS {
+                        self.budget.step()?;
+                        let Some(index) = current else { break };
+                        if self.objects[index].regexp.is_some() {
+                            return Ok(());
+                        }
+                        // An ordinary own property shadows inherited metadata.
+                        if self.objects[index].properties.iter().any(|p| p.key == key) {
+                            current = None;
+                            break;
+                        }
+                        current = self.objects[index].prototype;
+                    }
+                    if current.is_some() {
+                        return Err(Fault::Fatal(
+                            "JavaScript prototype depth limit exhausted".into(),
+                        ));
+                    }
+                }
                 if id == 0
                     && let Some((_, object, property)) =
                         self.global_setters.iter().find(|(name, _, _)| name == key)
@@ -1638,6 +1706,9 @@ impl Runtime {
                 self.put_own(object, key, value, true)
             }
             Value::Native(name) => {
+                if name == "RegExp" && matches!(key, "prototype" | "length") {
+                    return Ok(());
+                }
                 let object = if let Some((_, id)) = self
                     .native_properties
                     .iter()
@@ -1659,6 +1730,11 @@ impl Runtime {
         }
     }
     fn delete(&mut self, object: Value, key: &str) -> Eval<Value> {
+        if matches!(&object, Value::Native(name) if name == "RegExp")
+            && matches!(key, "prototype" | "length")
+        {
+            return Ok(Value::Bool(false));
+        }
         let id = match object {
             Value::Object(id) => id,
             Value::Function(id) => {
@@ -1684,6 +1760,14 @@ impl Runtime {
             .objects
             .get_mut(id)
             .ok_or_else(|| exception("TypeError: unknown object"))?;
+        if object.regexp.is_some()
+            && matches!(
+                key,
+                "source" | "global" | "ignoreCase" | "multiline" | "lastIndex"
+            )
+        {
+            return Ok(Value::Bool(false));
+        }
         if let Some(array) = &mut object.array {
             if key == "length" {
                 return Ok(Value::Bool(false));
@@ -2001,6 +2085,10 @@ impl Runtime {
                 Ok(Value::String(output))
             }
             "Function" => self.dynamic_function(args, host),
+            "RegExp" | "RegExp.new" => self.regexp_constructor(args, name == "RegExp.new", host),
+            "RegExp.exec" | "RegExp.test" | "RegExp.toString" => {
+                self.regexp_method(name, this, first, host)
+            }
             "String" => {
                 if args.is_empty() {
                     self.text("")
@@ -2090,6 +2178,9 @@ impl Runtime {
                 Value::Null => "[object Null]",
                 Value::Object(id) if self.objects.get(id).is_some_and(|o| o.array.is_some()) => {
                     "[object Array]"
+                }
+                Value::Object(id) if self.objects.get(id).is_some_and(|o| o.regexp.is_some()) => {
+                    "[object RegExp]"
                 }
                 Value::Function(_) | Value::Native(_) => "[object Function]",
                 Value::String(_) => "[object String]",
@@ -2315,6 +2406,548 @@ impl Runtime {
             _ => Err(unsupported(name)),
         }
     }
+    fn regexp_result<T>(&mut self, result: Result<T, regexp::Error>) -> Eval<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(regexp::Error::Syntax(message)) => {
+                Err(Fault::Throw(self.error_object("SyntaxError", &message)?))
+            }
+            Err(regexp::Error::Limit(message)) => Err(Fault::Fatal(message)),
+        }
+    }
+    fn compile_regexp(&mut self, pattern: &[u16], flags: &str) -> Eval<Rc<regexp::Regex>> {
+        // Charge every attempt, including catchable syntax failures. Compiler
+        // workspaces also have independent structural limits in regexp.rs.
+        let reserved = pattern.len().saturating_mul(128).saturating_add(1024);
+        self.budget.allocate(reserved)?;
+        let compiled = self.regexp_result(regexp::Regex::compile(pattern, flags))?;
+        self.budget
+            .allocate(compiled.estimated_bytes().saturating_sub(reserved))?;
+        Ok(Rc::new(compiled))
+    }
+    fn regexp_source(&mut self, pattern: &[u16]) -> Eval<Value> {
+        self.budget
+            .allocate(pattern.len().saturating_mul(12).saturating_add(8))?;
+        let mut source = Vec::new();
+        if pattern.is_empty() {
+            source.extend("(?:)".encode_utf16());
+        }
+        let mut escaped = false;
+        for &unit in pattern {
+            // Constructor patterns may contain a backslash followed by a raw
+            // line terminator. Replace that identity escape, rather than adding
+            // a second backslash and changing the pattern when source is reused.
+            if escaped && matches!(unit, 10 | 13 | 0x2028 | 0x2029) {
+                source.pop();
+            }
+            match unit {
+                10 => source.extend("\\n".encode_utf16()),
+                13 => source.extend("\\r".encode_utf16()),
+                0x2028 => source.extend("\\u2028".encode_utf16()),
+                0x2029 => source.extend("\\u2029".encode_utf16()),
+                47 if !escaped => source.extend("\\/".encode_utf16()),
+                _ => source.push(unit),
+            }
+            escaped = unit == 92 && !escaped;
+        }
+        Ok(Value::String(source))
+    }
+    fn init_regexp(&mut self, id: usize, regex: Rc<regexp::Regex>) -> Eval<()> {
+        let source = self.regexp_source(regex.pattern())?;
+        self.put_own(id, "source", source, false)?;
+        self.put_own(id, "global", Value::Bool(regex.global()), false)?;
+        self.put_own(id, "ignoreCase", Value::Bool(regex.ignore_case()), false)?;
+        self.put_own(id, "multiline", Value::Bool(regex.multiline()), false)?;
+        self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
+        self.objects[id].regexp = Some(regex);
+        Ok(())
+    }
+    fn regexp_object(&mut self, regex: Rc<regexp::Regex>) -> Eval<Value> {
+        let id = self.object(Some(self.regexp_prototype), None)?;
+        self.init_regexp(id, regex)?;
+        Ok(Value::Object(id))
+    }
+    fn as_regexp(&self, value: &Value) -> Option<(usize, Rc<regexp::Regex>)> {
+        if let Value::Object(id) = value {
+            self.objects
+                .get(*id)?
+                .regexp
+                .as_ref()
+                .map(|regex| (*id, Rc::clone(regex)))
+        } else {
+            None
+        }
+    }
+    fn regexp_constructor(
+        &mut self,
+        args: Vec<Value>,
+        construct: bool,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let pattern = self.copy(args.first().unwrap_or(&Value::Undefined))?;
+        let flags = self.copy(args.get(1).unwrap_or(&Value::Undefined))?;
+        if let Some((_, regex)) = self.as_regexp(&pattern) {
+            if !matches!(flags, Value::Undefined) {
+                return Err(Fault::Throw(self.error_object(
+                    "TypeError",
+                    "RegExp flags must be undefined when cloning a RegExp",
+                )?));
+            }
+            return if construct {
+                self.regexp_object(regex)
+            } else {
+                Ok(pattern)
+            };
+        }
+        let pattern = if matches!(pattern, Value::Undefined) {
+            Vec::new()
+        } else {
+            self.units(pattern, host)?
+        };
+        let flags = if matches!(flags, Value::Undefined) {
+            Vec::new()
+        } else {
+            self.units(flags, host)?
+        };
+        self.budget.allocate(flags.len().saturating_mul(3))?;
+        let flags = match String::from_utf16(&flags) {
+            Ok(flags) => flags,
+            Err(_) => {
+                return Err(Fault::Throw(
+                    self.error_object("SyntaxError", "Invalid RegExp flags")?,
+                ));
+            }
+        };
+        let regex = self.compile_regexp(&pattern, &flags)?;
+        self.regexp_object(regex)
+    }
+    fn regexp_find(
+        &mut self,
+        regex: &regexp::Regex,
+        input: &[u16],
+        start: usize,
+    ) -> Eval<Option<regexp::Match>> {
+        // The compiler bounds capture count and matching workspaces; returned
+        // capture storage is charged before the matcher can allocate it.
+        self.budget
+            .allocate(regex.pattern().len().saturating_add(1).saturating_mul(32))?;
+        let result = regex.find(input, start, &mut self.budget.fuel);
+        self.regexp_result(result)
+    }
+    fn regexp_exec(
+        &mut self,
+        id: usize,
+        regex: &regexp::Regex,
+        input: &[u16],
+        host: &mut impl Host,
+    ) -> Eval<Option<regexp::Match>> {
+        let last = self.own(id, "lastIndex")?.unwrap_or(Value::Undefined);
+        let last = self.number(last, host)?;
+        let last = if last.is_nan() { 0.0 } else { last.trunc() };
+        let start = if regex.global() { last } else { 0.0 };
+        let matched = if start < 0.0 || start > input.len() as f64 {
+            None
+        } else {
+            self.regexp_find(regex, input, start as usize)?
+        };
+        if let Some(found) = &matched {
+            if regex.global() {
+                self.put_own(id, "lastIndex", Value::Number(found.end as f64), false)?;
+            }
+        } else {
+            self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
+        }
+        Ok(matched)
+    }
+    fn slice_value(&mut self, input: &[u16], start: usize, end: usize) -> Eval<Value> {
+        self.budget
+            .allocate(end.saturating_sub(start).saturating_mul(2))?;
+        Ok(Value::String(input[start..end].to_vec()))
+    }
+    fn result_push(&mut self, values: &mut Vec<Option<Value>>, value: Value) -> Eval<()> {
+        if values.len() >= MAX_ARRAY {
+            return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
+        }
+        self.budget.allocate(64 + value_bytes(&value))?;
+        values.push(Some(value));
+        Ok(())
+    }
+    fn match_array(&mut self, input: &[u16], found: regexp::Match) -> Eval<Value> {
+        let mut values = Vec::new();
+        for capture in found.captures {
+            let value = match capture {
+                Some((start, end)) => self.slice_value(input, start, end)?,
+                None => Value::Undefined,
+            };
+            self.result_push(&mut values, value)?;
+        }
+        let id = self.object(Some(self.array_prototype), Some(values))?;
+        self.put_own(id, "index", Value::Number(found.start as f64), true)?;
+        let original = self.slice_value(input, 0, input.len())?;
+        self.put_own(id, "input", original, true)?;
+        Ok(Value::Object(id))
+    }
+    fn regexp_method(
+        &mut self,
+        name: &str,
+        this: Value,
+        first: Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let Some((id, regex)) = self.as_regexp(&this) else {
+            return Err(Fault::Throw(
+                self.error_object("TypeError", "Incompatible RegExp receiver")?,
+            ));
+        };
+        if name == "RegExp.toString" {
+            let Value::String(source) = self.regexp_source(regex.pattern())? else {
+                unreachable!()
+            };
+            let mut output = Vec::new();
+            self.append_units(&mut output, &[47])?;
+            self.append_units(&mut output, &source)?;
+            self.append_units(&mut output, &[47])?;
+            for flag in regex.flags().encode_utf16() {
+                self.append_units(&mut output, &[flag])?;
+            }
+            return Ok(Value::String(output));
+        }
+        let input = self.units(first, host)?;
+        let matched = self.regexp_exec(id, &regex, &input, host)?;
+        if name == "RegExp.test" {
+            return Ok(Value::Bool(matched.is_some()));
+        }
+        match matched {
+            Some(found) => self.match_array(&input, found),
+            None => Ok(Value::Null),
+        }
+    }
+    fn string_regexp_match(
+        &mut self,
+        name: &str,
+        input: &[u16],
+        pattern: Value,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let value = if self.as_regexp(&pattern).is_some() {
+            pattern
+        } else {
+            self.regexp_constructor(vec![pattern], true, host)?
+        };
+        let (id, regex) = self.as_regexp(&value).expect("new RegExp state");
+        if name == "String.search" {
+            return Ok(Value::Number(
+                self.regexp_find(&regex, input, 0)?
+                    .map_or(-1.0, |found| found.start as f64),
+            ));
+        }
+        if !regex.global() {
+            return match self.regexp_exec(id, &regex, input, host)? {
+                Some(found) => self.match_array(input, found),
+                None => Ok(Value::Null),
+            };
+        }
+        self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
+        let mut values = Vec::new();
+        while let Some(found) = self.regexp_exec(id, &regex, input, host)? {
+            let value = self.slice_value(input, found.start, found.end)?;
+            self.result_push(&mut values, value)?;
+            if found.start == found.end {
+                self.put_own(
+                    id,
+                    "lastIndex",
+                    Value::Number((found.end + 1) as f64),
+                    false,
+                )?;
+            }
+        }
+        if values.is_empty() {
+            Ok(Value::Null)
+        } else {
+            Ok(Value::Object(
+                self.object(Some(self.array_prototype), Some(values))?,
+            ))
+        }
+    }
+    fn append_units(&mut self, output: &mut Vec<u16>, units: &[u16]) -> Eval<()> {
+        self.budget.allocate(units.len().saturating_mul(2))?;
+        output.extend_from_slice(units);
+        Ok(())
+    }
+    fn plain_find(
+        &mut self,
+        input: &[u16],
+        search: &[u16],
+        start: usize,
+    ) -> Eval<Option<(usize, usize)>> {
+        if search.len() > input.len() {
+            return Ok(None);
+        }
+        for position in start..=input.len() - search.len() {
+            self.budget.step()?;
+            let mut same = true;
+            for (left, right) in input[position..position + search.len()].iter().zip(search) {
+                self.budget.step()?;
+                if left != right {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return Ok(Some((position, position + search.len())));
+            }
+        }
+        Ok(None)
+    }
+    fn replacement_text(
+        &mut self,
+        output: &mut Vec<u16>,
+        replacement: &[u16],
+        input: &[u16],
+        found: &regexp::Match,
+    ) -> Eval<()> {
+        let mut index = 0;
+        while index < replacement.len() {
+            self.budget.step()?;
+            let unit = replacement[index];
+            if unit != 36 || index + 1 == replacement.len() {
+                self.append_units(output, &[unit])?;
+                index += 1;
+                continue;
+            }
+            let next = replacement[index + 1];
+            let span = match next {
+                36 => {
+                    self.append_units(output, &[36])?;
+                    index += 2;
+                    continue;
+                }
+                38 => Some((found.start, found.end)),
+                96 => Some((0, found.start)),
+                39 => Some((found.end, input.len())),
+                48..=57 => {
+                    let first = (next - 48) as usize;
+                    let second = replacement
+                        .get(index + 2)
+                        .filter(|&&u| (48..=57).contains(&u));
+                    let two = second.map(|&u| first * 10 + (u - 48) as usize);
+                    let (capture, used) = if two.is_some_and(|n| n > 0 && n < found.captures.len())
+                    {
+                        (two.unwrap(), 3)
+                    } else if first > 0 && first < found.captures.len() {
+                        (first, 2)
+                    } else {
+                        self.append_units(output, &[36])?;
+                        index += 1;
+                        continue;
+                    };
+                    if let Some((start, end)) = found.captures[capture] {
+                        self.append_units(output, &input[start..end])?;
+                    }
+                    index += used;
+                    continue;
+                }
+                _ => {
+                    self.append_units(output, &[36])?;
+                    index += 1;
+                    continue;
+                }
+            };
+            if let Some((start, end)) = span {
+                self.append_units(output, &input[start..end])?;
+            }
+            index += 2;
+        }
+        Ok(())
+    }
+    fn string_replace(
+        &mut self,
+        input: &[u16],
+        args: Vec<Value>,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let search = self.copy(args.first().unwrap_or(&Value::Undefined))?;
+        let replacement = self.copy(args.get(1).unwrap_or(&Value::Undefined))?;
+        let regex = self.as_regexp(&search);
+        let plain = if regex.is_none() {
+            Some(self.units(search, host)?)
+        } else {
+            None
+        };
+        // Find before invoking callbacks: callbacks may mutate the RegExp or
+        // recurse, but cannot invalidate matcher borrows or alter this match set.
+        let mut matches = Vec::new();
+        if let Some((id, regex)) = regex {
+            if regex.global() {
+                self.put_own(id, "lastIndex", Value::Number(0.0), false)?;
+            }
+            while let Some(found) = self.regexp_exec(id, &regex, input, host)? {
+                if matches.len() >= MAX_ARRAY {
+                    return Err(Fault::Fatal(
+                        "JavaScript match result limit exhausted".into(),
+                    ));
+                }
+                self.budget
+                    .allocate(64 + found.captures.len().saturating_mul(32))?;
+                let empty = found.start == found.end;
+                let next = found.end + 1;
+                matches.push(found);
+                if !regex.global() {
+                    break;
+                }
+                if empty {
+                    self.put_own(id, "lastIndex", Value::Number(next as f64), false)?;
+                }
+            }
+        } else if let Some((start, end)) =
+            self.plain_find(input, plain.as_ref().expect("plain search"), 0)?
+        {
+            self.budget.allocate(96)?;
+            matches.push(regexp::Match {
+                start,
+                end,
+                captures: vec![Some((start, end))],
+            });
+        }
+        // ES5.1 describes replacement coercion after searching. Its side
+        // effects, like callback side effects, survive the completed search.
+        let replacement_string = if replacement.callable() {
+            None
+        } else {
+            let value = self.copy(&replacement)?;
+            Some(self.units(value, host)?)
+        };
+        let mut output = Vec::new();
+        let mut previous = 0;
+        for found in matches {
+            self.append_units(&mut output, &input[previous..found.start])?;
+            if let Some(replacement) = &replacement_string {
+                self.replacement_text(&mut output, replacement, input, &found)?;
+            } else {
+                let count = found.captures.len().saturating_add(2);
+                if count > MAX_ARRAY {
+                    return Err(Fault::Fatal("JavaScript argument limit exhausted".into()));
+                }
+                self.budget.allocate(count.saturating_mul(64))?;
+                let mut callback_args = Vec::with_capacity(count);
+                for capture in &found.captures {
+                    callback_args.push(match capture {
+                        Some((start, end)) => self.slice_value(input, *start, *end)?,
+                        None => Value::Undefined,
+                    });
+                }
+                callback_args.push(Value::Number(found.start as f64));
+                callback_args.push(self.slice_value(input, 0, input.len())?);
+                let callback = self.copy(&replacement)?;
+                let value = self.call(callback, Value::Undefined, callback_args, None, host)?;
+                let units = self.units(value, host)?;
+                self.append_units(&mut output, &units)?;
+            }
+            previous = found.end;
+        }
+        self.append_units(&mut output, &input[previous..])?;
+        Ok(Value::String(output))
+    }
+    fn split_find(
+        &mut self,
+        regex: Option<&regexp::Regex>,
+        plain: &[u16],
+        input: &[u16],
+        start: usize,
+    ) -> Eval<Option<regexp::Match>> {
+        if let Some(regex) = regex {
+            return self.regexp_find(regex, input, start);
+        }
+        match self.plain_find(input, plain, start)? {
+            Some((start, end)) => {
+                self.budget.allocate(64)?;
+                Ok(Some(regexp::Match {
+                    start,
+                    end,
+                    captures: vec![Some((start, end))],
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+    fn string_split(
+        &mut self,
+        input: &[u16],
+        args: Vec<Value>,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        let separator = self.copy(args.first().unwrap_or(&Value::Undefined))?;
+        let limit = self.copy(args.get(1).unwrap_or(&Value::Undefined))?;
+        let limit = if matches!(limit, Value::Undefined) {
+            u32::MAX
+        } else {
+            int32(self.number(limit, host)?) as u32
+        };
+        let regex = self.as_regexp(&separator).map(|(_, regex)| regex);
+        let undefined = matches!(separator, Value::Undefined);
+        // Separator coercion precedes the zero-limit return in ES5.1.
+        let plain = if regex.is_none() {
+            self.units(separator, host)?
+        } else {
+            Vec::new()
+        };
+        let mut values = Vec::new();
+        if limit != 0 {
+            if undefined {
+                let value = self.slice_value(input, 0, input.len())?;
+                self.result_push(&mut values, value)?;
+            } else if input.is_empty() {
+                if self
+                    .split_find(regex.as_deref(), &plain, input, 0)?
+                    .is_none()
+                {
+                    let value = self.slice_value(input, 0, 0)?;
+                    self.result_push(&mut values, value)?;
+                }
+            } else {
+                let mut previous = 0;
+                let mut start = 0;
+                while start < input.len() && values.len() < limit as usize {
+                    let Some(found) = self.split_find(regex.as_deref(), &plain, input, start)?
+                    else {
+                        break;
+                    };
+                    // Empty matches at the end cannot terminate a separator.
+                    if found.start == input.len() {
+                        break;
+                    }
+                    if found.end == previous {
+                        start = found.start + 1;
+                        continue;
+                    }
+                    let value = self.slice_value(input, previous, found.start)?;
+                    self.result_push(&mut values, value)?;
+                    previous = found.end;
+                    if values.len() == limit as usize {
+                        break;
+                    }
+                    for capture in found.captures.into_iter().skip(1) {
+                        let value = match capture {
+                            Some((start, end)) => self.slice_value(input, start, end)?,
+                            None => Value::Undefined,
+                        };
+                        self.result_push(&mut values, value)?;
+                        if values.len() == limit as usize {
+                            break;
+                        }
+                    }
+                    start = previous;
+                }
+                if values.len() < limit as usize {
+                    let value = self.slice_value(input, previous, input.len())?;
+                    self.result_push(&mut values, value)?;
+                }
+            }
+        }
+        Ok(Value::Object(
+            self.object(Some(self.array_prototype), Some(values))?,
+        ))
+    }
     fn string_method(
         &mut self,
         name: &str,
@@ -2335,6 +2968,9 @@ impl Runtime {
         let first = self.copy(args.first().unwrap_or(&Value::Undefined))?;
         match name {
             "String.toString" | "String.valueOf" => self.string(units),
+            "String.match" | "String.search" => self.string_regexp_match(name, &units, first, host),
+            "String.replace" => self.string_replace(&units, args, host),
+            "String.split" => self.string_split(&units, args, host),
             "String.charAt" | "String.charCodeAt" => {
                 let number = if args.is_empty() {
                     0.0
@@ -2867,6 +3503,64 @@ mod tests {
     }
 
     #[test]
+    fn regexp_string_operations_use_es5_intrinsics_and_preserve_callback_effects() {
+        yes(
+            "var r=/a/g;var s='aa'.replace(r,{toString:function(){r.lastIndex=17;return 'x';}});s==='xx' && r.lastIndex===17;",
+        );
+        // ES5.1 15.5.4.10 step 6 uses the standard builtin, not rx.exec.
+        yes(
+            "var r=/a/g;r.exec=function(){throw 'overridden';};'aba'.match(r).length===2 && 'aba'.replace(r,'x')==='xbx' && 'a'.search(r)===0 && 'aba'.split(r).length===3;",
+        );
+        yes(
+            "var r=/a/g;var n=0;var s='aa'.replace(r,function(){n++;r.lastIndex=19;return n;});s==='12' && n===2 && r.lastIndex===19;",
+        );
+        yes(
+            "var r=/a/g;r.lastIndex={valueOf:function(){throw 'must not coerce';}};'ba'.search(r)===1 && 'a,b'.split(r).length===2;",
+        );
+        yes("var r=/(?=b)/g;'ab'.match(r).length===1 && 'ab'.replace(r,'-')==='a-b';");
+    }
+
+    #[test]
+    fn regexp_source_and_property_guards_are_observable() {
+        let error = Runtime::new().execute("var child=/a/;for(var i=0;i<64;i++){child=Object.create(child);}child.source='wrong';", &mut TestHost::default()).unwrap_err();
+        assert!(error.contains("prototype depth limit"), "{error}");
+        yes(
+            r"RegExp('/').source==='\\/' && RegExp('\n').source==='\\n' && RegExp('\u2028').source==='\\u2028';",
+        );
+        yes(r"/\//.source==='\\/' && RegExp(RegExp('/').source).test('/');");
+        for line in [10, 13, 0x2028, 0x2029] {
+            yes(&format!(
+                "var input=String.fromCharCode({line});var r=RegExp(String.fromCharCode(92,{line}));r.test(input) && RegExp(r.source).test(input);"
+            ));
+            yes(&format!(
+                "var input=String.fromCharCode(92,{line});var r=RegExp(String.fromCharCode(92,92,{line}));r.test(input) && RegExp(r.source).test(input);"
+            ));
+        }
+        yes(
+            "var r=/a/g;var child=Object.create(r);child.source='b';child.global=false;child.source==='a' && child.global && !child.hasOwnProperty('source');",
+        );
+        yes(
+            "var p=RegExp.prototype;RegExp.prototype={};!(delete RegExp.prototype) && RegExp.prototype===p && p.source==='(?:)' && p.test('');",
+        );
+        yes(
+            "var caught=false;try{RegExp.prototype.exec.call(Object.create(/a/),'a');}catch(e){caught=e.name==='TypeError';}caught;",
+        );
+    }
+
+    #[test]
+    fn regexp_replacement_and_split_preserve_code_units_and_coercion_order() {
+        yes("'a'.replace(/(a)/,'$01-$10-$0-$99')==='a-a0-$0-$99';");
+        yes("var a='b'.split(/(a)?b/);a.length===3 && a[0]==='' && a[1]===undefined && a[2]==='';");
+        yes(
+            "var a='😀'.split('');a.length===2 && a[0].charCodeAt(0)===55357 && a[1].charCodeAt(0)===56832;",
+        );
+        yes(
+            "var order='';var a='abc'.split({toString:function(){order+='s';return ',';}},{valueOf:function(){order+='l';return 0;}});order==='ls' && a.length===0;",
+        );
+        yes("'abc'.split('',4294967297).length===1 && 'abc'.split('',-1).length===3;");
+    }
+
+    #[test]
     fn expressions_coercion_and_evaluation_order() {
         yes(
             "1 + 2 * 3 === 7 && '2' + 3 === '23' && '4' - 1 === 3 && null == undefined && null !== undefined",
@@ -3240,6 +3934,9 @@ fn expression_bytes(expr: &Expr) -> usize {
     let add = |a: usize, b: usize| a.saturating_add(b);
     96usize.saturating_add(match expr {
         Expr::String(value) => value.len().saturating_mul(2),
+        Expr::RegExp { pattern, flags } => {
+            pattern.len().saturating_mul(2).saturating_add(flags.len())
+        }
         Expr::Ident(name) => name.len(),
         Expr::Array(items) => items
             .iter()

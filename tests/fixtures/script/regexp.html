@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><title>Local regular expression fixture waiting</title></head>
+<body>
+<h1>Local regular expression form fixture</h1>
+<p>This is an authored localhost test, not a Google page or search service.</p>
+<p id="regexp-status">The form requires our original regular expression parser and matcher.</p>
+<noscript><p>Scripts are disabled; this fixture has no static form.</p></noscript>
+<script>
+var fields = /^field=([a-z]+);source=([a-z]+)$/.exec('field=q;source=fixture');
+if (fields === null || fields[1] !== 'q') throw 'Local capture check failed';
+var repeated = /q/g;
+if (!repeated.test(fields[1]) || repeated.lastIndex !== 1) throw 'Local lastIndex check failed';
+var form = document.createElement('form');
+form.action = '/search';
+form.method = 'get';
+var hidden = document.createElement('input');
+hidden.type = 'hidden';
+hidden.name = 'source';
+hidden.value = fields[2];
+form.appendChild(hidden);
+var label = document.createElement('label');
+label.textContent = 'Local QUERY '.replace(/QUERY/, 'query');
+var query = document.createElement('input');
+query.type = 'text';
+query.name = fields[1];
+label.appendChild(query);
+form.appendChild(label);
+var button = document.createElement('button');
+button.type = 'submit';
+button.name = 'submit';
+button.value = 'search';
+button.textContent = 'Search local regex fixture';
+form.appendChild(button);
+document.body.appendChild(form);
+document.title = 'Regex-built local fixture';
+document.getElementById('regexp-status').textContent = 'captures,lastIndex,replacement'.split(/,/).join(', ') + ' created this usable form.';
+</script>
+</body>
+</html>

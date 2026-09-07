@@ -1,8 +1,8 @@
 //! Original bounded classic-script lexer and parser.
 //!
 //! This initial ES5-shaped subset uses ASCII identifiers (including ASCII
-//! Unicode escapes) and UTF-16 strings. Strict mode, regular expressions,
-//! accessors, for-in, and newer language syntax are explicit errors.
+//! Unicode escapes), UTF-16 strings and parser-directed regular-expression
+//! literals. Strict mode, accessors, for-in and newer syntax are explicit errors.
 
 use super::{Expr, Program, Stmt};
 
@@ -17,6 +17,7 @@ enum Kind {
     Number(f64),
     String(Vec<u16>),
     Punct(&'static str),
+    Invalid(String),
     End,
 }
 
@@ -311,67 +312,123 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn tokens(self) -> Result<Vec<Token>, String> {
-        self.tokens_with_limit(MAX_TOKENS)
-    }
-
-    fn tokens_with_limit(mut self, limit: usize) -> Result<Vec<Token>, String> {
-        let mut tokens = Vec::new();
-        loop {
-            let newline = self.space_and_comments()?;
-            let offset = self.pos;
-            let Some(ch) = self.peek() else {
-                tokens.push(Token {
-                    kind: Kind::End,
-                    offset,
-                    newline,
-                });
-                return Ok(tokens);
-            };
-            if tokens.len() >= limit {
-                return Err(error(offset, "Token limit exceeded"));
-            }
-            let kind = if identifier_start(ch) || ch == '\\' {
-                self.word()?
-            } else if ch.is_ascii_digit()
-                || ch == '.'
-                    && self.source[self.pos + 1..]
-                        .chars()
-                        .next()
-                        .is_some_and(|ch| ch.is_ascii_digit())
-            {
-                self.number()?
-            } else if matches!(ch, '\'' | '"') {
-                self.string()?
-            } else if ch == '`' {
-                return Err(error(offset, "Template literals are unsupported"));
-            } else {
-                let rest = &self.source[self.pos..];
-                if ["=>", "...", "**", "??", "&&=", "||="]
-                    .iter()
-                    .any(|operator| rest.starts_with(operator))
-                    || rest.starts_with("?.")
-                        && !rest.as_bytes().get(2).is_some_and(u8::is_ascii_digit)
-                {
-                    return Err(error(offset, "Unsupported modern JavaScript operator"));
-                }
-                let operator = [
-                    ">>>=", "===", "!==", ">>>", "<<=", ">>=", "++", "--", "&&", "||", "==", "!=",
-                    "<=", ">=", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "{",
-                    "}", "(", ")", "[", "]", ".", ";", ",", ":", "?", "+", "-", "*", "/", "%", "~",
-                    "!", "=", "<", ">", "&", "|", "^",
-                ]
-                .into_iter()
-                .find(|operator| rest.starts_with(operator))
-                .ok_or_else(|| error(offset, "Unsupported character or non-ASCII identifier"))?;
-                self.pos += operator.len();
-                Kind::Punct(operator)
-            };
-            tokens.push(Token {
-                kind,
+    // Scan one InputElementDiv token. Only primary-expression parsing may
+    // reinterpret a slash as InputElementRegExp; no preceding-token heuristic.
+    fn next_div(&mut self, remaining: usize) -> Result<Token, String> {
+        let newline = self.space_and_comments()?;
+        let offset = self.pos;
+        let Some(ch) = self.peek() else {
+            return Ok(Token {
+                kind: Kind::End,
                 offset,
                 newline,
             });
+        };
+        if remaining == 0 {
+            return Err(error(offset, "Token limit exceeded"));
+        }
+        let kind = if identifier_start(ch) || ch == '\\' {
+            self.word()?
+        } else if ch.is_ascii_digit()
+            || ch == '.'
+                && self.source[self.pos + 1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_digit())
+        {
+            self.number()?
+        } else if matches!(ch, '\'' | '"') {
+            self.string()?
+        } else if ch == '`' {
+            return Err(error(offset, "Template literals are unsupported"));
+        } else {
+            let rest = &self.source[self.pos..];
+            if ["=>", "...", "**", "??", "&&=", "||="]
+                .iter()
+                .any(|operator| rest.starts_with(operator))
+                || rest.starts_with("?.") && !rest.as_bytes().get(2).is_some_and(u8::is_ascii_digit)
+            {
+                return Err(error(offset, "Unsupported modern JavaScript operator"));
+            }
+            let operator = [
+                ">>>=", "===", "!==", ">>>", "<<=", ">>=", "++", "--", "&&", "||", "==", "!=",
+                "<=", ">=", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "{", "}",
+                "(", ")", "[", "]", ".", ";", ",", ":", "?", "+", "-", "*", "/", "%", "~", "!",
+                "=", "<", ">", "&", "|", "^",
+            ]
+            .into_iter()
+            .find(|operator| rest.starts_with(operator))
+            .ok_or_else(|| error(offset, "Unsupported character or non-ASCII identifier"))?;
+            self.pos += operator.len();
+            Kind::Punct(operator)
+        };
+        Ok(Token {
+            kind,
+            offset,
+            newline,
+        })
+    }
+
+    fn regexp(&mut self, offset: usize) -> Result<(Vec<u16>, String), String> {
+        // The Div token may have consumed `/=`. Restart immediately after the
+        // opening slash so `/=/` retains its initial equals sign as pattern text.
+        self.pos = offset + 1;
+        let start = self.pos;
+        let mut in_class = false;
+        let end = loop {
+            let position = self.pos;
+            let ch = self
+                .take()
+                .ok_or_else(|| error(offset, "Unterminated regular expression literal"))?;
+            if line_terminator(ch) {
+                return Err(error(
+                    position,
+                    "Line terminator in regular expression literal",
+                ));
+            }
+            match ch {
+                '\\' => {
+                    let position = self.pos;
+                    let escaped = self
+                        .take()
+                        .ok_or_else(|| error(offset, "Unterminated regular expression escape"))?;
+                    if line_terminator(escaped) {
+                        return Err(error(
+                            position,
+                            "Line terminator in regular expression escape",
+                        ));
+                    }
+                }
+                '/' if !in_class => break position,
+                '[' if !in_class => in_class = true,
+                ']' if in_class => in_class = false,
+                _ => {}
+            }
+        };
+        // Flags are passed uninterpreted, as required by ES5 7.8.5. Escaped
+        // flags and non-ASCII IdentifierParts cannot be any supported g/i/m flag.
+        let flag_start = self.pos;
+        while self.peek().is_some_and(identifier_part) {
+            self.take();
+        }
+        if self.peek() == Some('\\') {
+            return Err(error(
+                self.pos,
+                "Escaped regular expression flags are invalid",
+            ));
+        }
+        let flags = self.source[flag_start..self.pos].to_owned();
+        let pattern: Vec<u16> = self.source[start..end].encode_utf16().collect();
+        match super::regexp::Regex::compile(&pattern, &flags) {
+            Ok(_) => Ok((pattern, flags)),
+            Err(super::regexp::Error::Syntax(message)) => Err(error(
+                offset,
+                &format!("Invalid regular expression: {message}"),
+            )),
+            Err(super::regexp::Error::Limit(_)) => Err(error(
+                offset,
+                "Regular expression compilation limit exceeded",
+            )),
         }
     }
 }
@@ -391,9 +448,12 @@ struct Label {
     iteration: bool,
 }
 
-struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+struct Parser<'a> {
+    lexer: Lexer<'a>,
+    current: Token,
+    lookahead: Option<Token>,
+    tokens: usize,
+    token_limit: usize,
     nesting: usize,
     nodes: usize,
     functions: usize,
@@ -407,8 +467,7 @@ pub fn parse(source: &str) -> Result<Program, String> {
     if source.len() > MAX_SOURCE {
         return Err(error(MAX_SOURCE, "Source exceeds one MiB"));
     }
-    let tokens = Lexer { source, pos: 0 }.tokens()?;
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(source, MAX_TOKENS);
     let (body, _) = parser.body(false, true)?;
     Ok(Program(body))
 }
@@ -426,15 +485,7 @@ pub fn parse_function(parameters: &str, body: &str) -> Result<Expr, String> {
     if parameters.len().saturating_add(body.len()) > MAX_SOURCE {
         return Err(error(MAX_SOURCE, "Source exceeds one MiB"));
     }
-    let tokens = Lexer {
-        source: parameters,
-        pos: 0,
-    }
-    .tokens()
-    .map_err(|error| format!("Function parameters: {error}"))?;
-    // End-of-input sentinels are not source tokens, consistent with tokens().
-    let remaining_tokens = MAX_TOKENS - (tokens.len() - 1);
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(parameters, MAX_TOKENS);
     let params = (|| {
         let mut params = Vec::new();
         if !parser.end() {
@@ -454,16 +505,12 @@ pub fn parse_function(parameters: &str, body: &str) -> Result<Expr, String> {
     })()
     .map_err(|error| format!("Function parameters: {error}"))?;
 
-    // Drop parameter tokens before allocating body tokens. There is no synthetic
-    // source concatenation or second copy of either input string.
-    parser.tokens = Vec::new();
-    parser.tokens = Lexer {
-        source: body,
-        pos: 0,
-    }
-    .tokens_with_limit(remaining_tokens)
-    .map_err(|error| format!("Function body: {error}"))?;
-    parser.pos = 0;
+    // Separate grammar streams share token/node caps. Neither fragment can
+    // supply a delimiter or comment terminator for the other.
+    let remaining_tokens = MAX_TOKENS - parser.tokens;
+    let nodes = parser.nodes;
+    let mut parser = Parser::new(body, remaining_tokens);
+    parser.nodes = nodes;
     parser.functions = 1;
     let (body, depth) = parser
         .nested(|parser| parser.body(false, true))
@@ -500,27 +547,61 @@ pub fn is_limit_error(message: &str) -> bool {
                 | "AST depth limit exceeded"
                 | "AST node limit exceeded"
                 | "Label nesting limit exceeded"
+                | "Regular expression compilation limit exceeded"
         )
 }
 
-impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self {
-            tokens,
-            pos: 0,
+impl<'a> Parser<'a> {
+    fn new(source: &'a str, token_limit: usize) -> Self {
+        let mut parser = Self {
+            lexer: Lexer { source, pos: 0 },
+            current: Token {
+                kind: Kind::End,
+                offset: 0,
+                newline: false,
+            },
+            lookahead: None,
+            tokens: 0,
+            token_limit,
             nesting: 0,
             nodes: 0,
             functions: 0,
             loops: 0,
             labels: Vec::new(),
+        };
+        parser.current = parser.scan();
+        parser
+    }
+
+    fn scan(&mut self) -> Token {
+        match self.lexer.next_div(self.token_limit - self.tokens) {
+            Ok(token) => {
+                if !matches!(token.kind, Kind::End) {
+                    self.tokens += 1;
+                }
+                token
+            }
+            Err(message) => Token {
+                kind: Kind::Invalid(message),
+                offset: self.lexer.pos,
+                newline: false,
+            },
         }
     }
 
+    fn advance(&mut self) {
+        self.current = self.lookahead.take().unwrap_or_else(|| self.scan());
+    }
+
     fn token(&self) -> &Token {
-        &self.tokens[self.pos]
+        &self.current
     }
     fn fail(&self, message: &str) -> String {
-        error(self.token().offset, message)
+        if let Kind::Invalid(message) = &self.token().kind {
+            message.clone()
+        } else {
+            error(self.token().offset, message)
+        }
     }
     fn punct(&self, value: &str) -> bool {
         matches!(&self.token().kind, Kind::Punct(actual) if *actual == value)
@@ -533,7 +614,7 @@ impl Parser {
     }
     fn eat(&mut self, value: &str) -> bool {
         if self.punct(value) {
-            self.pos += 1;
+            self.advance();
             true
         } else {
             false
@@ -541,7 +622,7 @@ impl Parser {
     }
     fn eat_word(&mut self, value: &str) -> bool {
         if self.word(value) {
-            self.pos += 1;
+            self.advance();
             true
         } else {
             false
@@ -588,7 +669,7 @@ impl Parser {
         if let Kind::Word(name) = &self.token().kind {
             if property || !reserved(name) {
                 let name = name.clone();
-                self.pos += 1;
+                self.advance();
                 return Ok(name);
             }
         }
@@ -644,12 +725,14 @@ impl Parser {
         self.nested(|parser| parser.statement_inner(declarations))
     }
 
-    fn label_start(&self) -> bool {
-        matches!(&self.token().kind, Kind::Word(name) if !reserved(name))
-            && self
-                .tokens
-                .get(self.pos + 1)
-                .is_some_and(|token| matches!(token.kind, Kind::Punct(":")))
+    fn label_start(&mut self) -> bool {
+        if !matches!(&self.token().kind, Kind::Word(name) if !reserved(name)) {
+            return false;
+        }
+        if self.lookahead.is_none() {
+            self.lookahead = Some(self.scan());
+        }
+        matches!(&self.lookahead, Some(token) if matches!(token.kind, Kind::Punct(":")))
     }
 
     fn labelled_statement(&mut self) -> Result<S, String> {
@@ -745,7 +828,7 @@ impl Parser {
             let offset = self.token().offset;
             let is_break = self.eat_word("break");
             if !is_break {
-                self.pos += 1;
+                self.advance();
             }
             let target_offset = self.token().offset;
             let target = if !self.token().newline && matches!(self.token().kind, Kind::Word(_)) {
@@ -1017,7 +1100,7 @@ impl Parser {
             if !assignable(&left.value) {
                 return Err(parser.fail("Invalid assignment target"));
             }
-            parser.pos += 1;
+            parser.advance();
             let right = parser.assignment(allow_in)?;
             let depth = left.depth.max(right.depth) + 1;
             parser.expr(
@@ -1060,7 +1143,7 @@ impl Parser {
                 break;
             }
             let op = op.to_owned();
-            self.pos += 1;
+            self.advance();
             let right = self.binary(precedence + 1, allow_in)?;
             let depth = left.depth.max(right.depth) + 1;
             left = self.expr(
@@ -1085,7 +1168,7 @@ impl Parser {
                 _ => None,
             };
             if let Some(op) = op {
-                parser.pos += 1;
+                parser.advance();
                 let expression = parser.unary()?;
                 let depth = expression.depth + 1;
                 return if op == "++" || op == "--" {
@@ -1118,7 +1201,7 @@ impl Parser {
                 let Kind::Punct(op) = parser.token().kind else {
                     unreachable!()
                 };
-                parser.pos += 1;
+                parser.advance();
                 let depth = expression.depth + 1;
                 parser.expr(
                     Expr::Update {
@@ -1224,20 +1307,20 @@ impl Parser {
         let token = self.token().clone();
         match token.kind {
             Kind::Number(value) => {
-                self.pos += 1;
+                self.advance();
                 self.expr(Expr::Number(value), 1)
             }
             Kind::String(value) => {
-                self.pos += 1;
+                self.advance();
                 self.expr(Expr::String(value), 1)
             }
             Kind::Word(ref word) if word == "function" => {
-                self.pos += 1;
+                self.advance();
                 let (name, params, body, depth) = self.function(false)?;
                 self.expr(Expr::Function { name, params, body }, depth + 1)
             }
             Kind::Word(word) => {
-                self.pos += 1;
+                self.advance();
                 let expression = match word.as_str() {
                     "true" => Expr::Bool(true),
                     "false" => Expr::Bool(false),
@@ -1254,13 +1337,13 @@ impl Parser {
                 self.expr(expression, 1)
             }
             Kind::Punct("(") => {
-                self.pos += 1;
+                self.advance();
                 let value = self.expression(true)?;
                 self.expect(")")?;
                 Ok(value)
             }
             Kind::Punct("[") => {
-                self.pos += 1;
+                self.advance();
                 let mut values = Vec::new();
                 let mut depth = 0;
                 while !self.punct("]") {
@@ -1279,10 +1362,15 @@ impl Parser {
                 self.expr(Expr::Array(values), depth + 1)
             }
             Kind::Punct("{") => self.object(),
-            Kind::Punct("/" | "/=") => Err(error(
-                token.offset,
-                "Regular expression literals are unsupported",
-            )),
+            Kind::Punct("/" | "/=") => {
+                // Lookahead is requested only while the current token is a
+                // possible label name, never while it is a slash.
+                debug_assert!(self.lookahead.is_none());
+                let (pattern, flags) = self.lexer.regexp(token.offset)?;
+                self.advance();
+                self.expr(Expr::RegExp { pattern, flags }, 1)
+            }
+            Kind::Invalid(message) => Err(message),
             Kind::End => Err(error(
                 token.offset,
                 "Unexpected end of source; expected expression",
@@ -1310,13 +1398,12 @@ impl Parser {
                 })?,
                 Kind::Number(value) => number_property(value),
                 _ => {
-                    return Err(error(
-                        token.offset,
+                    return Err(self.fail(
                         "Expected object property name; computed properties are unsupported",
                     ));
                 }
             };
-            self.pos += 1;
+            self.advance();
             if !self.eat(":") {
                 return Err(
                     self.fail("Expected colon; object accessors and shorthand are unsupported")
@@ -1692,6 +1779,7 @@ mod tests {
             "AST depth limit exceeded",
             "AST node limit exceeded",
             "Label nesting limit exceeded",
+            "Regular expression compilation limit exceeded",
         ] {
             for prefix in ["", "Function parameters: ", "Function body: "] {
                 assert!(is_limit_error(&format!("{prefix}{reason} at byte 12")));
@@ -1707,6 +1795,178 @@ mod tests {
         ] {
             assert!(!is_limit_error(error), "{error}");
         }
+    }
+
+    #[test]
+    fn regexp_patterns_preserve_utf16_escapes_classes_and_flags() {
+        for (source, pattern, flags) in [
+            (r"/a\/b/gi", r"a\/b", "gi"),
+            (r"/[a/b\]c]+/m", r"[a/b\]c]+", "m"),
+            (r"/\uD800\x2f\n/", r"\uD800\x2f\n", ""),
+            ("/café😀/", "café😀", ""),
+            ("/=/", "=", ""),
+            ("/a=b/", "a=b", ""),
+            ("/(?:)/", "(?:)", ""),
+            (r"/[/*]/", "[/*]", ""),
+            ("/[]/", "[]", ""),
+            ("/[^]/", "[^]", ""),
+            ("/['\"`]/", "['\"`]", ""),
+            ("/a=>b/", "a=>b", ""),
+        ] {
+            assert_eq!(
+                expression(source),
+                Expr::RegExp {
+                    pattern: pattern.encode_utf16().collect(),
+                    flags: flags.into(),
+                },
+                "{source}"
+            );
+        }
+        assert_eq!(
+            parse("// not an empty regex\n/* ordinary comment */").unwrap(),
+            Program(vec![])
+        );
+        assert!(matches!(
+            expression(r"/a/ /* trailing comment */ .test('a')"),
+            Expr::Call { .. }
+        ));
+    }
+
+    #[test]
+    fn regexp_lexical_goal_follows_grammar_not_previous_token() {
+        for source in [
+            "if(true) /a/.test('a'); else /b/.test('b');",
+            "while(false) /a/.test('a');",
+            "for(;false;) /a/.test('a');",
+            "do /a/.test('a'); while(false); /b/;",
+            "{} /a/;",
+            "function f(){} /a/;",
+            "try{}catch(e){}finally{} /a/;",
+            "label: /a/;",
+            "var r={p:/a/,q:[/b/]};",
+            "var r = true ? /a/ : /b/;",
+            "var r = /a/ / /b/;",
+            "x /= /a/.test('a');",
+            "function f(){ return /a/; }",
+            "throw /a/;",
+        ] {
+            assert!(parse(source).is_ok(), "{source}: {:?}", parse(source));
+        }
+        for source in [
+            "8 / 2 / 2",
+            "({n:8}).n / 2",
+            "({}) / 2",
+            "(function(){}) / 2",
+            "function(){} / 2",
+        ] {
+            let source = if source.starts_with("function()") {
+                format!("({source})")
+            } else {
+                source.into()
+            };
+            assert!(
+                matches!(expression(&source), Expr::Binary { op, .. } if op == "/"),
+                "{source}"
+            );
+        }
+        assert!(matches!(expression("x /= 2"), Expr::Assign { op, .. } if op == "/="));
+        // A newline alone cannot force RegExp where division is grammatical.
+        let Program(body) = parse("a = b\n/hi/g.exec(c)").unwrap();
+        assert_eq!(body.len(), 1);
+        assert!(
+            matches!(&body[0], Stmt::Expr(Expr::Assign { right, .. }) if matches!(right.as_ref(), Expr::Binary { op, .. } if op == "/"))
+        );
+        let Program(body) = parse("function f(){return\n/a/;}").unwrap();
+        assert!(
+            matches!(&body[0], Stmt::Function { body, .. } if matches!(&body[..], [Stmt::Return(None), Stmt::Expr(Expr::RegExp { .. })]))
+        );
+        assert!(parse("while(false){break\n/a/; continue\n/b/;}").is_ok());
+    }
+
+    #[test]
+    fn malformed_regexp_literals_reject_the_entire_script() {
+        for literal in [
+            "/unterminated",
+            "/[abc/",
+            "/abc\\",
+            "/abc\n/",
+            "/abc\r/",
+            "/abc\u{2028}/",
+            "/abc\u{2029}/",
+            "/abc\\\n/",
+            "/abc\\\r\n/",
+            "/[abc\n]/",
+            "/a/gg",
+            "/a/gig",
+            "/a/s",
+            "/a/u",
+            "/a/y",
+            "/a/d",
+            "/a/v",
+            "/a/G",
+            "/a/1",
+            "/a/gfoo",
+            r"/a/\u0067",
+            "/a/é",
+            "/(/",
+            "/a{2,1}/",
+            "/[z-a]/",
+            "/a/ @",
+        ] {
+            let source = format!("var marker=1; {literal}");
+            let message = parse(&source).expect_err(literal);
+            assert!(message.contains(" at byte "), "{literal}: {message}");
+            assert!(!is_limit_error(&message), "{literal}: {message}");
+        }
+        assert!(
+            parse("'é'; /unterminated")
+                .unwrap_err()
+                .ends_with("at byte 6")
+        );
+        // A lexical error encountered by the label lookahead remains an error.
+        assert!(
+            parse("marker @")
+                .unwrap_err()
+                .contains("Unsupported character")
+        );
+    }
+
+    #[test]
+    fn regexp_dynamic_fragments_and_demand_scanning_keep_parser_bounds() {
+        let function = parse_function("value", "return /a/.test(value);").unwrap();
+        assert!(
+            matches!(function, Expr::Function { body, .. } if matches!(body[0], Stmt::Return(Some(Expr::Call { .. }))))
+        );
+        for (parameters, body) in [
+            ("value /a/", "return value;"),
+            ("value/*", "*/return /a/;"),
+            ("value", "return /unterminated"),
+            ("value", "return /a/gg;"),
+            ("value", "return /a/; }"),
+        ] {
+            assert!(parse_function(parameters, body).is_err());
+        }
+        // A regex literal is one source token irrespective of punctuation in
+        // its pattern. EOF is not counted and label lookahead never double counts.
+        let mut parser = Parser::new("var r=/[a/b]+/;", 5);
+        assert!(parser.body(false, true).is_ok());
+        assert_eq!(parser.tokens, 5);
+        let mut parser = Parser::new("var r=/[a/b]+/;", 4);
+        assert!(is_limit_error(&parser.body(false, true).unwrap_err()));
+        let mut parser = Parser::new("label: /a/;", 4);
+        assert!(parser.body(false, true).is_ok());
+        assert_eq!(parser.tokens, 4);
+        let mut parser = Parser::new("label: /a/;", 3);
+        assert!(is_limit_error(&parser.body(false, true).unwrap_err()));
+        let source = format!("{} /a/;", ";".repeat(MAX_TOKENS - 2));
+        assert!(parse(&source).is_ok());
+        assert!(is_limit_error(&parse(&format!(";{source}")).unwrap_err()));
+        assert!(is_limit_error(
+            &parse(&format!("{} /a/ {}", "(".repeat(200), ")".repeat(200))).unwrap_err()
+        ));
+        assert!(is_limit_error(
+            &parse(&format!("/a/{}", ".source".repeat(200))).unwrap_err()
+        ));
     }
 
     #[test]
@@ -1912,7 +2172,6 @@ mod tests {
             "import x from 'x'",
             "x=>x",
             "`hello`",
-            "/abc/g",
             "for(var x in y){}",
             "switch(x){}",
             "'use strict'; x=1",

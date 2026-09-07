@@ -15,6 +15,11 @@ The loopback CDP subset provides discovery, navigation, DOM inspection, input an
 PNG screenshots; see [the protocol contract and example client](docs/CDP.md).
 Full CDP support is the long-term target, not current compatibility.
 
+The original interpreter includes bounded Function/eval and UTF-16 regular
+expressions with RegExp and String matching/replacement/splitting. Authored
+script-created forms are tested through real worker, native and CDP paths;
+this remains a small, opt-in language subset, not general web compatibility.
+
 - Website: https://mgbrowser.org
 - [MVP and architecture plan](docs/MVP.md)
 - [Feature specification and acceptance](FEATURES.md)

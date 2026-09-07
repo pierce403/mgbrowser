@@ -1,4 +1,5 @@
 //! An original, bounded JavaScript interpreter; not a conforming ECMAScript engine yet.
+pub mod regexp;
 pub mod runtime;
 pub mod syntax;
 pub mod uri;
@@ -58,6 +59,10 @@ pub enum Expr {
     Bool(bool),
     Number(f64),
     String(Vec<u16>),
+    RegExp {
+        pattern: Vec<u16>,
+        flags: String,
+    },
     Ident(String),
     This,
     Array(Vec<Option<Expr>>),

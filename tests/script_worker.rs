@@ -162,3 +162,55 @@ fn restricted_child_dynamic_compilation_creates_real_form_controls() {
             .any(|item| matches!(item,mg_deps::document::Item::Input{name,..} if name=="q"))
     );
 }
+
+#[test]
+fn restricted_child_regexp_execution_creates_real_form_controls() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-regexp".into(),
+        html: include_str!("fixtures/script/regexp.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Regex-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(
+        document
+            .items
+            .iter()
+            .any(|item| matches!(item, mg_deps::document::Item::Input { name, .. } if name == "q"))
+    );
+    assert!(
+        reply
+            .html
+            .contains("captures, lastIndex, replacement created this usable form.")
+    );
+}
+
+#[test]
+fn restricted_child_rejects_invalid_literal_before_dom_prefix_effects() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-regexp-syntax".into(),
+        html: "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>document.title='Incorrect prefix';var broken=/(/;</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1);
+    assert!(
+        reply.errors[0].contains("SyntaxError"),
+        "{:?}",
+        reply.errors
+    );
+    assert!(reply.html.contains("<title>Original title</title>"));
+    assert!(reply.html.contains("Later script executes"));
+}

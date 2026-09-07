@@ -115,6 +115,13 @@ to read a local variable. Use that path in the native command above or as the
 CDP journey URL below to exercise dynamic compilation inside the same restricted
 worker. JavaScript's `eval` does not imply support for CDP `Runtime.evaluate`.
 
+`/script-regexp` likewise has no static controls. Original regex captures,
+`lastIndex`, replacement and splitting create its usable form. Substitute that
+path in either journey command to exercise the matcher through a real worker and
+native/CDP input. Both paths passed on 2026-09-07, with rendered frames inspected.
+`cargo test --locked --test js_regexp` runs the independent regex semantics and
+resource-limit cases without a display or external JavaScript engine.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial

@@ -36,13 +36,17 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   arguments return unchanged; malformed source is a catchable SyntaxError, while
   parser/resource exhaustion remains fatal. Dynamic source containing unpaired
   UTF-16 surrogates is explicitly rejected, not rewritten with replacement characters.
+- Original UTF-16 regular expressions support literals, the RegExp constructor,
+  `exec`/`test`/`toString`, and String `match`/`search`/`replace`/`split`, including
+  capture groups, replacement callbacks and stateful global matching. See below
+  for the supported grammar and deliberate limitations.
 
 Unsupported syntax rejects the complete script with a byte-offset diagnostic,
 not a successfully parsed prefix. Current exclusions include strict directives,
-non-ASCII identifiers, `let`/`const`, arrows, classes, modules, templates, regular
-expressions, `switch`, `for-in`, object accessors and block-level function
+non-ASCII identifiers, `let`/`const`, arrows, classes, modules, templates,
+`switch`, `for-in`, object accessors and block-level function
 declarations. There is no garbage collector, Promise implementation, module loader or general event
-loop. Several Array methods and String.split are exposed but not
+loop. Several Array methods are exposed but not
 implemented. The source is authoritative for individual builtin coverage.
 
 Known approximations remain: `arguments` is an unmapped snapshot rather than
@@ -55,6 +59,29 @@ available, but Error prototype and `instanceof` fidelity remain partial.
 `Math.random` is deterministic research
 output, never cryptographic randomness. Passing the local tests is not a claim
 that supported-looking real-world programs always evaluate correctly.
+
+## Regular expressions
+
+`src/js/regexp.rs` is our own compiler and matcher, not a regex dependency or
+another language engine. Supported patterns include literals, dot, character
+classes/ranges, builtin classes, anchors/boundaries, alternation, capturing and
+noncapturing groups, greedy/lazy quantifiers, backreferences and positive/negative
+lookahead. Only `g`, `i` and `m` flags are accepted. Lookbehind, named captures,
+Unicode property escapes, legacy octal and quantified assertions are unsupported.
+The parser selects the regex lexical goal from grammar context, preserving
+division, comments and automatic-semicolon rules. Malformed literals reject the
+whole script before effects; invalid constructor patterns throw SyntaxError.
+
+Indices and captures use UTF-16 code units, including lone surrogates. Case
+matching uses Rust's Unicode uppercase tables with ES5-style no-expansion and
+no-non-ASCII-to-ASCII-fold rules, not a pinned historical Unicode version. RegExp
+construction, metadata and String builtin dispatch are ES5-shaped; modern Symbol
+protocols and custom `exec` dispatch from String methods are not implemented.
+Global String match/replace deliberately advance an empty match by one code unit
+at its actual position, avoiding the historical ES5 duplicate-empty-match quirk.
+`exec` itself does not advance empty matches. Search/split ignore and preserve
+`lastIndex`; replacement callbacks run after the bounded match set is collected.
+These choices and the documented resource limits are not full ES5 conformance.
 
 ## Document execution and DOM capabilities
 
@@ -114,6 +141,8 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Document startup | 32 eligible scripts, including unsupported external/module entries; 32 listeners |
 | Evaluator realm | 1,000,000 fuel; 4 MiB cumulative logical allocation; 10,000 objects, functions or environments; call depth 64; array/argument length 10,000 |
 | URI conversion | 1,048,576 UTF-16 units each input/output, with exact encoded-size preflight; allocations also charge the realm budget |
+| Regex compilation | 16,384 pattern units; 8,192 nodes; 64 captures; nesting 64; 128 bracket classes; 2 MiB compiled storage; 2,000,000 compile steps; numeric quantifiers at most 1,000,000 |
+| Regex matching | 1,048,576 input units; caller's remaining realm fuel; 16,384 tasks; 4,096 pending states; 4 MiB cumulative state-work accounting per find; lookahead depth 16 |
 | DOM bridge | 50,000 nodes; depth 256; 4 MiB cumulative logical allocation; 1,024 snapshot collections |
 | Serialized DOM / diagnostics | 2 MiB HTML; at most 64 reported errors |
 | Worker protocol | 2 MiB request JSON; 4 MiB response JSON |
@@ -127,6 +156,15 @@ the per-parse limits but are not individually charged as cumulative heap usage.
 The OS address-space cap is independent. Evaluator fuel/allocation/call exhaustion
 is uncatchable and latched for the realm. The parent bounds pipe traffic, kills
 and reaps timed-out/oversized workers, and reports an explicit error.
+
+Regex compile attempts charge a pattern-sized realm reservation, including
+syntax failures; successful compiled storage receives an additional charge when
+larger than that reservation. Compiler temporaries and matcher state copies have
+the independent per-operation bounds above, not exact cumulative realm/RSS
+accounting. Returned captures and String output also charge the realm. Match fuel
+uses the caller's remaining budget without resetting it; any regex resource error
+is fatal and latches the realm, never a successful non-match. Matching uses
+explicit task/backtrack stacks and bounded lookahead submachines.
 
 Isolation is implemented only on Linux x86_64 and requires the kernel controls
 above, including `close_range`. Unsupported platforms or failed setup refuse
@@ -153,13 +191,24 @@ budget. `/script-dynamic` has no static controls: its Function/eval-created form
 completed Unicode submission and result/destination navigation through both native
 handlers and the external CDP client. The form and destination frames were inspected.
 
+The regular-expression increment passes 18 independent integration groups plus
+parser/matcher/runtime regressions. `/script-regexp` creates every form control
+using actual capture, lastIndex, replacement and splitting results. Its real
+restricted-worker test and native/CDP form-to-destination journeys pass; rendered
+form and destination frames were inspected. Another actual worker test verifies
+that an invalid literal prevents all prefix DOM effects while a later valid
+script still runs. No site-specific patterns or challenge code were inputs.
+
 The real Google attempt with `--enable-scripts` still failed: its homepage returned
 HTTP 200 with partial script errors; the actual form submitted successfully, but
 the HTTP 200 page titled “Google Search” produced no rendered result items or
 forms. The labels/URI checkpoint advanced the first search error from labeled
 syntax to missing dynamic compilation. After Function/eval implementation, search
 instead reported an identifier-escape lexer error, another unsupported-character
-error, and missing `setTimeout`. The journey exited 2. These are
+error, and missing `setTimeout`. The post-regex checkpoint instead reported
+unsupported `for-in`/other statements and missing `setTimeout`; the homepage
+completed three scripts with seven errors, and search still had two completed
+scripts, three errors and no items/forms. The journey exited 2. These are
 observed failures in changing public responses, not an exhaustive diagnosis or
 a promise that fixing the first diagnostic will make Google work. No
 site-specific rewriting or challenge logic was added. The requested first-result

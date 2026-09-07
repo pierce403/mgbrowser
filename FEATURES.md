@@ -154,6 +154,7 @@ Live Google search currently requires this work. Develop against bounded local l
 - [x] Language/runtime subset, authored conformance cases and active-content isolation gates are specified before implementation in docs/JAVASCRIPT.md.
 - [x] Authored language and DOM tests cover evaluation order, UTF-16, closures, exceptions, mutation validity and cumulative limits.
 - [x] Independent labeled-control-flow, URI and dynamic-compilation cases pass; dynamically compiled forms work through actual workers and native/CDP journeys.
+- [x] Original regex literals, matcher and RegExp/String operations pass independent semantics/limit tests and actual-worker/native/CDP form journeys.
 - [x] Actual worker probes verify denied capabilities, resource termination, bounded pipe transfer and owned-child cleanup.
 - [x] Native/CDP local journeys use a script-created form; script navigation and loop-error recovery are verified in a real window.
 - [x] Source/projection rejection preserves original fallback and discards proposed navigation; stale completions cannot replace the active page.
@@ -165,6 +166,8 @@ Live Google search currently requires this work. Develop against bounded local l
 Evidence: 2026-09-07 original-runtime and DOM tests, real Linux worker-denial/limit probes, native /script-redirect → script-created form → local result → destination, and external CDP input/navigation/screenshot checks passed. An endless local loop exhausted fuel, retained readable content and allowed onward CDP navigation. Live Google still returns no result links with scripts enabled; partial language/browser support remains substantial work. This containment applies to the script worker, not the entire browser.
 
 Language follow-up: labeled statements, all four URI builtins and bounded direct/indirect eval plus Function construction pass authored semantics tests. The /script-dynamic fixture creates every form control via compiled source and completes the same real native/CDP journey. Repeated valid/invalid compilation cannot reset resource budgets; cross-script var redeclaration preserves existing eval binding attributes. No dependency, worker-permission or CDP Runtime expansion was introduced.
+
+Regex follow-up: original UTF-16 compiler/matcher, grammar-directed literals, RegExp state and String match/search/replace/split pass 18 integration groups plus parser/matcher/runtime regressions. The /script-regexp form completes both native and external CDP journeys; actual workers verify real controls and invalid-literal rejection before prefix effects. Local suite: 182 tests. Limits, ES5-shaped semantics and deliberate differences are documented in docs/JAVASCRIPT.md. No new crates or worker capabilities. Remote verification for this increment is recorded separately in the daily log.
 
 Remote evidence: implementation b9cde9e passed Rust CI 34133745718 with 88 tests and all three native/CDP journey steps. Pages 34133745636 deployed matching HTTPS content; the certificate is approved, HTTPS enforced and HTTP redirects to HTTPS. Broader JavaScript compatibility remains in-progress.
 
@@ -210,6 +213,8 @@ Open our native Rust browser, navigate to google.com, enter and submit a search,
 Evidence: 2026-09-07 native Google journey returned HTTP 200 homepage, submitted “Rust programming language”, and followed the served no-JavaScript refresh to a page titled “Enable JavaScript to use search”. The journey correctly exited 2 because there were no result links. Separately, the explicitly labeled localhost fixture journey completed all stages and exited 0. The user goal is not achieved.
 
 Follow-ups with --enable-scripts: actual homepage and served form submission returned HTTP 200. Labels/URI support advanced the first search error to missing dynamic compilation; after Function/eval support it advanced to an identifier-escape lexer error, alongside another lexer error and missing setTimeout. Search still completed two scripts with three errors, title “Google Search”, no projected results/controls, and journey exit 2. No actual first-result destination has been verified; exact dated checkpoints are in the log.
+
+Post-regex checkpoint: HTTP 200 homepage, three completed scripts/seven errors, 26 items and one form; actual served form submission worked. Search returned HTTP 200, two completed scripts/three errors, no items/forms, with unsupported for-in/other statements and missing setTimeout diagnostics. Journey exit 2; no result link or destination was reached. Changing diagnostics are observations, not proof that the next missing feature will complete the goal.
 
 ## F-011 — Chrome DevTools Protocol automation
 
