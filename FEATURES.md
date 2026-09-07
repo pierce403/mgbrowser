@@ -4,7 +4,7 @@ Exact stability values: `planned`, `in-progress`, `stable`. Checked criteria req
 
 ## F-001 — Project foundation and website
 
-Stability: in-progress
+Stability: stable
 
 ### Properties
 
@@ -12,14 +12,16 @@ Public source, readable MVP plan, and an HTTPS project site at mgbrowser.org. Ev
 
 ### Test Criteria
 
-- [ ] GitHub repository exists and matches the published commit.
-- [ ] Pages deploys the intended commit; live HTML matches local bytes.
-- [ ] Custom-domain TLS is valid and HTTPS enforcement is enabled.
-- [ ] Generated website status passes the Rust tool's `--check`.
+- [x] GitHub repository exists and matches the published commit.
+- [x] Pages deploys the intended commit; live HTML matches local bytes.
+- [x] Custom-domain TLS is valid and HTTPS enforcement is enabled.
+- [x] Generated website status passes the Rust tool's `--check`.
+
+Evidence: 2026-09-07 initial Pages run 34120255103 succeeded for aed2386; live HTTPS HTML matched byte-for-byte, certificate approved and HTTPS enforcement confirmed by API. See daily log for subsequent publication checks. Visual browser QA is not yet available.
 
 ## F-002 — Agent continuity and reusable skills
 
-Stability: in-progress
+Stability: stable
 
 ### Properties
 
@@ -27,8 +29,10 @@ Canonical AGENTS.md, measurable feature contracts, bounded task queue, daily log
 
 ### Test Criteria
 
-- [ ] Instructions, indexes, referenced skills and first daily log exist.
-- [ ] Skill frontmatter validates; harness instruction aliases resolve to AGENTS.md.
+- [x] Instructions, indexes, referenced skills and first daily log exist.
+- [x] Skill frontmatter validates; harness instruction aliases resolve to AGENTS.md.
+
+Evidence: 2026-09-07 both skills passed quick_validate.py; instruction alias targets checked; website sync passed locally and in CI. Portable catalog-based selection is configured; individual agent-client autodiscovery has not been tested.
 
 ## F-003 — Local document rendering
 

@@ -2,7 +2,7 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-1. **T-001 / F-001, F-002:** Publish foundation and verify GitHub Pages, exact deployed content, custom TLS, and HTTPS enforcement. In progress.
+1. **T-001 / F-001, F-002:** Publish foundation and verify GitHub Pages, exact deployed content, custom TLS, and HTTPS enforcement. Complete; evidence in the 2026-09-07 log.
 2. **T-002 / F-003:** Confirm Linux-first and Rust dependency boundary; choose license; freeze 20 small MVP fixtures with expected DOM/layout output and attribution. Next.
 3. **T-003 / F-003:** Create minimal Rust workspace and local bytes-to-pixels slice with headless checks, then display it in a Linux window.
 4. **T-004 / F-006:** Measure the baseline; implement deterministic Rust fixture evaluator and result schema. Do not start unattended research before limits and failure classification work.
