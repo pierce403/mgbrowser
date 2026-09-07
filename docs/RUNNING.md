@@ -22,15 +22,51 @@ there is no clipboard or full cursor/selection editor yet.
 
 HTML is parsed by our own bounded tokenizer/tree builder, then flattened into a
 simple flowing document with headings, text, links, and form controls. Rustybuzz
-shapes text and fontdue rasterizes it. This is an early document view: full CSS,
-JavaScript, font fallback/bidi layout, and downloaded image rendering are not yet
-implemented. Images show a placeholder and alt text. Those limits are visible
-in the browser and must not be mistaken for compatibility with the modern web.
+shapes text and fontdue rasterizes it. An original partial JavaScript interpreter
+is available only with `--enable-scripts`; see below. Full CSS, font fallback/bidi
+layout and downloaded image rendering are not implemented. Images show a
+placeholder and alt text. These limits must not be mistaken for compatibility
+with the modern web.
 
 HTTP(S) uses our own HTTP/1.1 transport and the selected experimental RustCrypto
 TLS provider, with public trust roots and certificate verification. Cookies are
-memory-only. HTML zero-delay refreshes are bounded. There is no browser sandbox,
-credential store, HTTP/2, proxy configuration, or persistent browsing profile.
+memory-only. HTML zero-delay refreshes are bounded. The script worker has a
+restricted process boundary, but the browser's renderer/network do not. There is
+no credential store, HTTP/2, proxy configuration or persistent browsing profile.
+
+## Experimental scripting
+
+Scripting defaults to off. On Linux x86_64, opt in explicitly:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-home --enable-scripts
+```
+
+Start the local fixture server described below first. The script creates the
+form, title and startup status; no form controls are present outside its script.
+The worker executes a small non-strict language subset and startup DOM callbacks,
+then returns the changed document. It has no external script loading, persistent
+realm, general event loop/timers, fetch/XHR, or script cookie access. Most modern
+sites will still fail. [JAVASCRIPT.md](JAVASCRIPT.md) records exact capabilities,
+limits and known semantic approximations.
+
+Every script document uses a fresh worker with an empty environment, closed
+inherited descriptors, Linux seccomp/resource limits and a two-second parent
+deadline. Unsupported isolation/platforms refuse execution. A worker failure or
+rejected document retains the original page, including `noscript`; a valid partial
+snapshot can still be applied while showing script errors. The status bar and
+stderr distinguish completed, partial, rejected and failed worker results.
+`--disable-scripts` explicitly selects the default behavior.
+
+The local containment self-test requires no display and starts only owned children:
+
+```sh
+cargo run --locked --bin mgbrowser -- --script-worker-selftest
+```
+
+This checks denied worker capabilities, memory/CPU/wall/output limits and bounded
+pipe exchange. It is not an audit of the whole browser or authorization to treat
+it as production-safe.
 
 ## Repeatable local interaction check
 
@@ -55,11 +91,30 @@ are scripted application-handler checks, not independent physical keyboard input
 or proof about Google's server behavior. The local pages are explicitly labeled
 fixtures and contain no fabricated Google results.
 
-For the live target, use the same command with `https://www.google.com/` and
-`--evidence-dir tmp/google-journey`. It uses the actual returned form controls,
-actual heading links, and ordinary session behavior. A JavaScript/interstitial
+With the same server running, exercise the script-built form and script redirect:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-redirect \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/script-journey
+```
+
+`/script-redirect` uses `location.replace('/script-home')`. `/script-home` creates
+the actual query/hidden/submit controls with DOM methods and updates visible text
+in a `DOMContentLoaded` callback. `/script-loop` is an explicitly local infinite
+loop fixture: it should show a readable fuel error and allow normal navigation
+afterward. On a headless Linux host, prefix the browser command with `xvfb-run -a`.
+The native script-redirect/form/result/destination journey passed under Xvfb on
+2026-09-07; rendered frames were inspected.
+
+For the live target, use the same command with `https://www.google.com/`,
+`--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
+returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
-checks manual and bounded; ordinary CI uses only the local fixture.
+checks manual and bounded; ordinary CI uses only the local fixture. The
+2026-09-07 scripted Google attempt submitted the real form, but the response
+titled “Google Search” had script errors and no rendered results; it exited 2.
+Google's first-result/destination acceptance goal remains unmet.
 
 ## Browser automation
 
@@ -75,6 +130,28 @@ and prints its address. Debugging is disabled by default and grants local client
 control of the page. See [CDP.md](CDP.md) for commands, limits, and the external
 Rust fixture client. This is not yet full DevTools/Playwright compatibility.
 
+For the scripted local fixture, start the server, then launch the browser with
+both flags (on an unused debugger port):
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-home \
+  --enable-scripts --remote-debugging-port=9222
+```
+
+Run the independent client in another terminal:
+
+```sh
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-home tmp/cdp-script-journey.png
+```
+
+This checks the real DOM-created form, Unicode input, hidden field, result click,
+destination response and PNG through our public CDP endpoint. That journey and
+recovery after `/script-loop` passed on 2026-09-07. It does not use
+`Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
+page interpreter. Stop only the fixture/browser processes you started.
+
 ## Validation
 
 ```sh
@@ -87,5 +164,7 @@ tmp/check-dependencies
 
 The unit/integration checks cover parser behavior, Rust font painting, verified
 local TLS handshakes and rejection cases, HTTP framing, redirects, cookie scope,
-and UI state transitions. Consult FEATURES.md and the daily log for which end-to-end
-checks have actually run and what remains incomplete.
+UI/CDP state transitions, original JS syntax/evaluation, DOM mutation and actual
+restricted worker children. Consult FEATURES.md and the daily log for dated
+end-to-end evidence and remaining acceptance gates. Fixture success is not
+language conformance or public-site compatibility.

@@ -32,11 +32,13 @@ tmp/site --check
 git diff --check
 ```
 
-The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked` covers transport, parser, paint and UI state; the local X11 journey exercises the actual application handlers. A local fixture is not evidence that Google returns search results. The general autoresearch executor and JavaScript engine are not implemented.
+The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked --all-targets` covers transport, parser, paint, original JS/DOM behavior, restricted workers and UI state; local X11/CDP journeys exercise real controls. A local fixture is not evidence that Google returns search results. The general autoresearch executor is not implemented. The original JavaScript subset is experimental and opt-in with `--enable-scripts`; read docs/JAVASCRIPT.md before changing execution or its boundary.
 
 `src/document.rs` owns HTML parsing, `src/net.rs` owns HTTP/TLS/session cookies, `src/paint.rs` owns Rust shaping/rasterization, and `src/main.rs` owns layout and window/input/navigation. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
 
 `src/cdp.rs` owns loopback discovery/WebSocket transport; `src/cdp_browser.rs` binds the documented CDP subset to real browser behavior. Read docs/CDP.md and its schema before changing protocol commands. Use the external examples/cdp_journey.rs fixture client for CDP input/navigation verification. Protocol support is partial; never return success for an unimplemented behavior or claim general automation-client compatibility without a pinned client test.
+
+`src/js/` owns the original language implementation; `src/js_browser.rs` exposes bounded DOM/navigation capabilities. `src/script_worker.rs` executes page scripts in a restricted Linux x86_64 child; unsupported isolation fails closed. Do not execute live scripts in the parent, weaken TLS, impersonate another browser, or port site challenge logic. Unsupported language/platform behavior is compatibility work, not permission for a substitute engine. Preserve readable fallback on source/projection rejection and keep proposed navigation parent-validated.
 
 ## Collaboration
 

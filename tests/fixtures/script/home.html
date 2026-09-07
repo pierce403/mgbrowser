@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head><title>Local script fixture waiting</title></head>
+<body>
+<h1>Local script-created form fixture</h1>
+<p>This is a local browser test, not a public search engine or fabricated Google page.</p>
+<p id="script-status">The search form has not been created. This fixture requires JavaScript.</p>
+<noscript><p>Scripts are disabled; this local fixture has no static search form.</p></noscript>
+<script>
+(function () {
+    document.title = 'Script-built local fixture';
+    var status = document.getElementById('script-status');
+    var form = document.createElement('form');
+    form.id = 'script-search';
+    form.action = '/search';
+    form.method = 'get';
+
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.name = 'source';
+    hidden.value = 'fixture';
+    form.appendChild(hidden);
+
+    var label = document.createElement('label');
+    label.textContent = 'Local query ';
+    var query = document.createElement('input');
+    query.type = 'text';
+    query.name = 'q';
+    query.value = '';
+    label.appendChild(query);
+    form.appendChild(label);
+
+    var submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.name = 'submit';
+    submit.value = 'search';
+    submit.textContent = 'Search local fixture';
+    form.appendChild(submit);
+    document.body.appendChild(form);
+
+    status.textContent = 'The script created a form; waiting for DOMContentLoaded.';
+    document.addEventListener('DOMContentLoaded', function () {
+        status.textContent = 'DOMContentLoaded completed. The search form below was created by JavaScript.';
+    });
+}());
+</script>
+</body>
+</html>

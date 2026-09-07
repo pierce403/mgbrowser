@@ -354,6 +354,12 @@ fn identifier_start(ch: char) -> bool {
 /// nesting produce a readable prefix; malformed input never requires recursion
 /// deeper than MAX_DEPTH. Network byte limits remain a separate layer.
 pub fn parse(html: &str, page_url: &str) -> Document {
+    parse_with_scripting(html, page_url, false)
+}
+
+/// The scripting flag controls noscript projection and its meta-refresh effects.
+/// This remains the documented partial HTML tree builder, not full HTML parsing.
+pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Document {
     let nodes = build_tree(html);
     let base_url = nodes
         .iter()
@@ -378,7 +384,9 @@ pub fn parse(html: &str, page_url: &str) -> Document {
             }
             let mut ancestor = node.parent;
             while ancestor != 0 {
-                if nodes[ancestor].tag == "template" {
+                if nodes[ancestor].tag == "template"
+                    || (scripting && nodes[ancestor].tag == "noscript")
+                {
                     return None;
                 }
                 ancestor = nodes[ancestor].parent;
@@ -422,6 +430,7 @@ pub fn parse(html: &str, page_url: &str) -> Document {
         form_nodes,
         form_ids,
         bytes: 0,
+        scripting,
     };
     output.walk(0, None, false, false, false);
     while matches!(output.document.items.last(), Some(Item::Break)) {
@@ -780,6 +789,7 @@ struct Projection<'a> {
     form_nodes: HashMap<usize, usize>,
     form_ids: HashMap<&'a str, usize>,
     bytes: usize,
+    scripting: bool,
 }
 
 impl Projection<'_> {
@@ -865,6 +875,9 @@ impl Projection<'_> {
             return;
         }
         let node = &self.nodes[id];
+        if self.scripting && node.tag == "noscript" {
+            return;
+        }
         if matches!(
             node.tag.as_str(),
             "script" | "style" | "template" | "head" | "title"

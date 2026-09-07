@@ -3,6 +3,8 @@
 
 pub mod cdp;
 pub mod document;
+pub mod js;
+pub mod js_browser;
 pub mod net;
 pub mod paint;
 

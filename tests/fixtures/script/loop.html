@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><title>Local script resource-limit fixture</title></head>
+<body>
+<h1>Local script resource-limit fixture</h1>
+<p>This local browser test deliberately runs an endless JavaScript loop.</p>
+<p id="loop-status">Fallback content remains readable when the browser stops script execution.</p>
+<script>while (true) {}</script>
+<p>Content after the script remains part of this local fixture.</p>
+</body>
+</html>

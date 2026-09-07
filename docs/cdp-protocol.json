@@ -7,7 +7,7 @@
       "commands": [
         {
           "name": "getVersion",
-          "description": "Report mgbrowser identity. An empty jsVersion means no JavaScript runtime is available.",
+          "description": "Report mgbrowser identity and the bundled experimental interpreter version. This does not imply scripting is enabled or the Runtime domain is implemented.",
           "returns": [
             { "name": "protocolVersion", "type": "string" },
             { "name": "product", "type": "string" },

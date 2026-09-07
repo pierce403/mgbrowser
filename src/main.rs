@@ -1,5 +1,6 @@
 //! Minimal desktop research browser: own HTML document flow and software paint.
 mod cdp_browser;
+mod script_worker;
 use mg_deps::{
     document::{self, Document, Item},
     net,
@@ -56,6 +57,7 @@ enum Focus {
 struct Loaded {
     generation: u64,
     result: Result<net::Response, String>,
+    script: Option<Result<mg_deps::js_browser::Reply, String>>,
 }
 struct App {
     session: net::Session,
@@ -72,6 +74,7 @@ struct App {
     boxes: Vec<cdp_browser::LayoutBox>,
     cdp_enabled: bool,
     cdp_events: Vec<cdp_browser::Event>,
+    scripts_enabled: bool,
     values: HashMap<usize, String>,
     hits: Vec<Hit>,
     focus: Focus,
@@ -105,7 +108,7 @@ impl App {
             width: 1100,
             height: 820,
             address: String::new(),
-            status: "Experimental browser · Rust document flow · No JavaScript yet".into(),
+            status: "Experimental browser · Rust document flow · JavaScript is opt-in".into(),
             document: document::parse(
                 "<title>mgbrowser</title><h1>mgbrowser</h1><p>Enter a URL above to begin browsing.</p>",
                 "https://mgbrowser.org/",
@@ -118,6 +121,7 @@ impl App {
             boxes: Vec::new(),
             cdp_enabled: false,
             cdp_events: Vec::new(),
+            scripts_enabled: false,
             hits: Vec::new(),
             focus: Focus::Address,
             select_all: false,
@@ -142,6 +146,15 @@ impl App {
         })
     }
     fn navigate(&mut self, target: String, body: Option<String>, add_history: bool) {
+        self.navigate_inner(target, body, add_history, false);
+    }
+    fn navigate_inner(
+        &mut self,
+        target: String,
+        body: Option<String>,
+        add_history: bool,
+        automatic: bool,
+    ) {
         let target = if target.contains("://") {
             target
         } else {
@@ -162,8 +175,10 @@ impl App {
         self.focus = Focus::Page;
         self.status = format!("Loading {target}");
         self.dirty = true;
-        if add_history {
+        if !automatic {
             self.refresh_count = 0;
+        }
+        if add_history {
             if !self.history.is_empty() {
                 self.history.truncate(self.history_at + 1);
             }
@@ -173,6 +188,7 @@ impl App {
         let generation = self.generation;
         let tx = self.tx.clone();
         let session = self.session.clone();
+        let scripts_enabled = self.scripts_enabled;
         eprintln!(
             "NAVIGATE {} {}",
             if body.is_some() { "POST" } else { "GET" },
@@ -180,7 +196,27 @@ impl App {
         );
         thread::spawn(move || {
             let result = session.submit(&target, body.as_deref());
-            let _ = tx.send(Loaded { generation, result });
+            let script = if scripts_enabled {
+                result
+                    .as_ref()
+                    .ok()
+                    .filter(|response| {
+                        response.content_type.contains("html") || response.content_type.is_empty()
+                    })
+                    .map(|response| {
+                        script_worker::execute(mg_deps::js_browser::Request {
+                            url: response.url.to_string(),
+                            html: decode_text(&response.body, &response.content_type),
+                        })
+                    })
+            } else {
+                None
+            };
+            let _ = tx.send(Loaded {
+                generation,
+                result,
+                script,
+            });
         });
     }
     fn poll(&mut self) {
@@ -196,6 +232,7 @@ impl App {
             self.select_all = false;
             self.last_load_ok = false;
             let mut load_error = None;
+            let mut script_navigation = None;
             match loaded.result {
                 Ok(response) => {
                     self.last_load_ok = (200..300).contains(&response.status);
@@ -209,11 +246,70 @@ impl App {
                     if !self.history.is_empty() {
                         self.history[self.history_at] = self.address.clone();
                     }
-                    let source = decode_text(&response.body, &response.content_type);
+                    let mut source = decode_text(&response.body, &response.content_type);
+                    let mut scripting = false;
+                    let script_status = match loaded.script {
+                        Some(Ok(reply))
+                            if reply.applied
+                                && reply.html.len() <= 2 * 1024 * 1024
+                                && reply.scripts_executed <= 32
+                                && reply.errors.len() <= 64
+                                && reply.errors.iter().all(|error| error.len() <= 4096) =>
+                        {
+                            source = reply.html;
+                            scripting = true;
+                            script_navigation = reply.navigation.and_then(|target| {
+                                if target.len() > 16_384 {
+                                    return None;
+                                }
+                                url::Url::parse(&target)
+                                    .ok()
+                                    .filter(|url| {
+                                        matches!(url.scheme(), "http" | "https")
+                                            && url.username().is_empty()
+                                            && url.password().is_none()
+                                    })
+                                    .map(|url| url.to_string())
+                            });
+                            if let Some(error) = reply.errors.first() {
+                                let error: String = error.chars().take(240).collect();
+                                eprintln!(
+                                    "SCRIPT_PARTIAL executed={} errors={} first={error}",
+                                    reply.scripts_executed,
+                                    reply.errors.len()
+                                );
+                                format!(
+                                    "JS: {} scripts, {} errors ({error})",
+                                    reply.scripts_executed,
+                                    reply.errors.len()
+                                )
+                            } else {
+                                eprintln!("SCRIPT_COMPLETE executed={}", reply.scripts_executed);
+                                format!("JS: {} inline scripts", reply.scripts_executed)
+                            }
+                        }
+                        Some(Ok(reply)) => {
+                            let error: String = reply
+                                .errors
+                                .first()
+                                .map(String::as_str)
+                                .unwrap_or("Invalid or oversized document projection")
+                                .chars()
+                                .take(240)
+                                .collect();
+                            eprintln!("SCRIPT_REJECTED {error}");
+                            format!("JS rejected; original document retained: {error}")
+                        }
+                        Some(Err(error)) => {
+                            eprintln!("SCRIPT_ERROR {error}");
+                            format!("JS worker failed: {error}")
+                        }
+                        None => "JavaScript disabled".into(),
+                    };
                     self.document = if response.content_type.contains("html")
                         || response.content_type.is_empty()
                     {
-                        document::parse(&source, &self.address)
+                        document::parse_with_scripting(&source, &self.address, scripting)
                     } else {
                         document::parse(
                             &format!(
@@ -224,7 +320,7 @@ impl App {
                         )
                     };
                     self.status = format!(
-                        "HTTP {} · {} bytes · {} links · HTML flow view; scripts and full CSS unavailable",
+                        "HTTP {} · {} bytes · {} links · {script_status} · CSS partial",
                         response.status,
                         response.body.len(),
                         self.document
@@ -267,13 +363,12 @@ impl App {
                 });
             }
             self.dirty = true;
-            if let Some(target) = self.document.refresh.clone() {
+            if let Some(target) = script_navigation.or_else(|| self.document.refresh.clone()) {
                 if self.refresh_count < 4 {
                     self.refresh_count += 1;
-                    self.navigate(target, None, false);
+                    self.navigate_inner(target, None, false, true);
                 } else {
-                    self.status =
-                        "HTML refresh limit reached; automatic navigation stopped.".into();
+                    self.status = "Automatic navigation limit reached; navigation stopped.".into();
                 }
             }
         }
@@ -843,6 +938,15 @@ fn fit_head(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Worker dispatch must precede fonts, display, networking and debug-server setup.
+    match std::env::args().nth(1).as_deref() {
+        Some("--script-worker") => script_worker::worker_entry(),
+        Some("--script-worker-selftest") => {
+            script_worker::selftest()?;
+            return Ok(());
+        }
+        _ => {}
+    }
     let mut app = App::new()?;
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut initial = "https://www.google.com/".to_string();
@@ -850,6 +954,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--enable-scripts" => app.scripts_enabled = true,
+            "--disable-scripts" => app.scripts_enabled = false,
             "--remote-debugging-port" => {
                 i += 1;
                 debug_port = Some(
@@ -879,7 +985,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--remote-debugging-port PORT] [--smoke-search QUERY] [--exit-after-smoke] [--evidence-dir DIR]\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY] [--exit-after-smoke] [--evidence-dir DIR]\nOwn JavaScript interpreter is experimental and opt-in; see docs/JAVASCRIPT.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
             }
@@ -1088,6 +1194,7 @@ mod tests {
         app.tx
             .send(Loaded {
                 generation: 1,
+                script: None,
                 result: Ok(net::Response {
                     url: url::Url::parse("https://example.org/").unwrap(),
                     status: 200,
@@ -1121,5 +1228,96 @@ mod tests {
         app.smoke_step(&canvas);
         assert!(app.smoke_failed);
         assert!(app.status.contains("did not load"));
+    }
+
+    #[test]
+    fn script_rejection_or_worker_failure_retains_noscript_and_drops_navigation() {
+        let html = "<html><body><noscript><p>Readable fallback</p></noscript></body></html>";
+        for script in [
+            Ok(mg_deps::js_browser::Reply {
+                applied: false,
+                html: "<p>Do not apply</p>".into(),
+                navigation: Some("https://example.test/unwanted".into()),
+                errors: vec!["Rejected source".into()],
+                scripts_executed: 0,
+            }),
+            Err("Worker deadline".into()),
+        ] {
+            let mut app = App::new().unwrap();
+            app.generation = 1;
+            app.tx
+                .send(Loaded {
+                    generation: 1,
+                    script: Some(script),
+                    result: Ok(net::Response {
+                        url: url::Url::parse("https://example.test/").unwrap(),
+                        status: 200,
+                        content_type: "text/html".into(),
+                        body: html.as_bytes().to_vec(),
+                    }),
+                })
+                .unwrap();
+            app.poll();
+            assert!(
+                app.document
+                    .items
+                    .iter()
+                    .any(|i| matches!(i,Item::Text{text,..} if text=="Readable fallback"))
+            );
+            assert_eq!(app.generation, 1);
+            assert_eq!(app.address, "https://example.test/");
+            assert!(app.last_load_ok);
+            assert!(!app.loading);
+        }
+    }
+
+    #[test]
+    fn manual_navigation_resets_automatic_chain_budget_even_without_history_entry() {
+        for automatic in [false, true] {
+            let mut app = App::new().unwrap();
+            app.refresh_count = 4;
+            app.navigate_inner("unsupported://local-fixture".into(), None, false, automatic);
+            assert_eq!(app.refresh_count, if automatic { 4 } else { 0 });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while app.loading && Instant::now() < deadline {
+                app.poll();
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(!app.loading);
+        }
+    }
+
+    #[test]
+    fn stale_script_reply_cannot_replace_document_or_request_navigation() {
+        let mut app = App::new().unwrap();
+        app.generation = 2;
+        app.loading = true;
+        app.inflight = 1;
+        app.address = "https://example.test/current".into();
+        app.document = document::parse("<title>Current</title>", &app.address);
+        app.tx
+            .send(Loaded {
+                generation: 1,
+                script: Some(Ok(mg_deps::js_browser::Reply {
+                    applied: true,
+                    html: "<title>Stale</title>".into(),
+                    navigation: Some("https://example.test/unwanted".into()),
+                    errors: vec![],
+                    scripts_executed: 1,
+                })),
+                result: Ok(net::Response {
+                    url: url::Url::parse("https://example.test/old").unwrap(),
+                    status: 200,
+                    content_type: "text/html".into(),
+                    body: vec![],
+                }),
+            })
+            .unwrap();
+        app.poll();
+        assert_eq!(app.generation, 2);
+        assert_eq!(app.address, "https://example.test/current");
+        assert_eq!(app.document.title, "Current");
+        assert!(app.loading);
+        assert_eq!(app.inflight, 0);
     }
 }

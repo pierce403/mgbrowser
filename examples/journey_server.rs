@@ -18,6 +18,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/journey/home.html"),
             ),
+            "/script-home" => ("200 OK", include_str!("../tests/fixtures/script/home.html")),
+            "/script-redirect" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/redirect.html"),
+            ),
+            "/script-loop" => ("200 OK", include_str!("../tests/fixtures/script/loop.html")),
             "/search"
                 if fields.iter().any(|(k, v)| k == "q" && !v.is_empty())
                     && fields.iter().any(|(k, v)| k == "source" && v == "fixture") =>
@@ -44,4 +50,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("{status} {}", url.path());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mg_deps::{document, js::syntax};
+
+    #[test]
+    fn script_fixtures_parse_without_a_static_search_form() {
+        for source in [
+            include_str!("../tests/fixtures/script/home.html"),
+            include_str!("../tests/fixtures/script/redirect.html"),
+            include_str!("../tests/fixtures/script/loop.html"),
+        ] {
+            let document = document::parse(source, "http://127.0.0.1:7878/script-home");
+            assert!(document.forms.is_empty());
+            assert!(
+                !document
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node.tag.as_str(), "form" | "input" | "button"))
+            );
+            let scripts: Vec<_> = document
+                .nodes
+                .iter()
+                .filter(|node| node.tag == "script")
+                .collect();
+            assert_eq!(scripts.len(), 1);
+            let source: String = scripts[0]
+                .children
+                .iter()
+                .map(|id| document.nodes[*id].text.as_str())
+                .collect();
+            syntax::parse(&source)
+                .expect("local fixture must use the implemented classic-script syntax");
+        }
+    }
 }

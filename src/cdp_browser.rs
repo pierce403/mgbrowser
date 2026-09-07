@@ -280,7 +280,7 @@ impl BrowserCdp {
                 keys(p, &[])?;
                 return Ok(
                     json!({"protocolVersion":"1.3","product":concat!("mgbrowser/",env!("CARGO_PKG_VERSION")),
-                    "revision":"experimental-cdp-subset","userAgent":mg_deps::net::USER_AGENT,"jsVersion":""}),
+                    "revision":"experimental-cdp-subset","userAgent":mg_deps::net::USER_AGENT,"jsVersion":"mgbrowser-js/0.1-experimental"}),
                 );
             }
             "Target.getTargets" => {

@@ -70,6 +70,41 @@ jobs:
           [[ "$debugger_ready" == true ]]
           target/debug/examples/cdp_journey "ws://127.0.0.1:$cdp_port/devtools/page/page-1" http://127.0.0.1:7878/ tmp/cdp-journey.png 2>&1 | tee tmp/cdp-client.log
           CDP
+      - name: Exercise isolated scripts, fallback recovery and external CDP
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/script-journey
+          target/debug/examples/journey_server > tmp/script-journey/server.log 2>&1 &
+          script_fixture_pid=$!
+          trap 'kill "$script_fixture_pid" 2>/dev/null || true; wait "$script_fixture_pid" 2>/dev/null || true' EXIT
+          fixture_ready=false
+          fixture_deadline=$((SECONDS + 10))
+          while (( SECONDS < fixture_deadline )); do
+            kill -0 "$script_fixture_pid"
+            if curl --fail --silent --max-time 1 http://127.0.0.1:7878/script-home > /dev/null; then fixture_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$fixture_ready" == true ]]
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-redirect --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native
+          timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
+          set -euo pipefail
+          target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
+          script_browser_pid=$!
+          trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
+          debugger_ready=false
+          debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < debugger_deadline )); do
+            kill -0 "$script_browser_pid"
+            script_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/script-journey/browser.log)
+            if [[ -n "$script_port" ]] && curl --fail --silent --max-time 1 "http://127.0.0.1:$script_port/json/version" > /dev/null; then debugger_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$debugger_ready" == true ]]
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-loop"}},{"method":"DOM.getDocument","params":{"depth":-1}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/loop.png > tmp/script-journey/loop.json
+          grep -F 'JavaScript fuel exhausted' tmp/script-journey/browser.log
+          grep -F 'Fallback content remains readable' tmp/script-journey/loop.json > /dev/null
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-home tmp/script-journey/cdp-destination.png 2>&1 | tee tmp/script-journey/cdp-client.log
+          SCRIPT_CDP
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4
@@ -83,3 +118,4 @@ jobs:
             tmp/cdp-browser.log
             tmp/cdp-client.log
             tmp/cdp-version.json
+            tmp/script-journey

@@ -137,7 +137,7 @@ Installable experimental static browser with documented limitations and no claim
 
 ## F-008 — JavaScript and broader compatibility
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -145,13 +145,22 @@ Own language/runtime, DOM integration and execution-boundary roadmap; now requir
 
 ### Properties
 
-Future own Rust JavaScript engine and expanded platform support; no embedded existing browser/runtime shortcut.
+Original Rust lexer/parser/tree-walking interpreter with an explicit classic-script subset, bounded DOM capabilities and opt-in --enable-scripts. Inline scripts share one realm during document preparation; their real mutations produce native controls and CDP-visible nodes. A restricted Linux x86_64 child denies new file/network/process access and has independent logical, CPU, memory and wall limits. Unsupported platforms fail closed. No embedded existing browser/runtime shortcut or ECMAScript conformance claim.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 
 ### Test Criteria
 
-- [ ] Language/runtime subset, conformance suite and active-content isolation gates are specified before implementation.
+- [x] Language/runtime subset, authored conformance cases and active-content isolation gates are specified before implementation in docs/JAVASCRIPT.md.
+- [x] Authored language and DOM tests cover evaluation order, UTF-16, closures, exceptions, mutation validity and cumulative limits.
+- [x] Actual worker probes verify denied capabilities, resource termination, bounded pipe transfer and owned-child cleanup.
+- [x] Native/CDP local journeys use a script-created form; script navigation and loop-error recovery are verified in a real window.
+- [x] Source/projection rejection preserves original fallback and discards proposed navigation; stale completions cannot replace the active page.
+- [ ] Parent-brokered external scripts, persistent realms, UI event dispatch and timers are implemented with independent fixtures.
+- [ ] A pinned, licensed upstream conformance corpus and compatibility matrix complement the authored tests.
+- [ ] Sufficient language and web-platform behavior passes the actual Google journey.
+
+Evidence: 2026-09-07 original-runtime and DOM tests, real Linux worker-denial/limit probes, native /script-redirect → script-created form → local result → destination, and external CDP input/navigation/screenshot checks passed. An endless local loop exhausted fuel, retained readable content and allowed onward CDP navigation. Live Google still returns no result links with scripts enabled; partial language/browser support remains substantial work. This containment applies to the script worker, not the entire browser.
 
 ## F-009 — Experimental Rust dependency foundation
 
@@ -192,6 +201,8 @@ Open our native Rust browser, navigate to google.com, enter and submit a search,
 
 Evidence: 2026-09-07 native Google journey returned HTTP 200 homepage, submitted “Rust programming language”, and followed the served no-JavaScript refresh to a page titled “Enable JavaScript to use search”. The journey correctly exited 2 because there were no result links. Separately, the explicitly labeled localhost fixture journey completed all stages and exited 0. The user goal is not achieved.
 
+Follow-up with --enable-scripts: actual homepage and served form submission both returned HTTP 200. The homepage completed one inline script with nine errors; search completed two with three errors, first reporting unsupported labeled-statement syntax. Search title was “Google Search”, with no projected results/controls, and the journey correctly exited 2. No actual first-result destination has been verified.
+
 ## F-011 — Chrome DevTools Protocol automation
 
 Stability: in-progress
@@ -214,6 +225,6 @@ Opt-in, loopback-only CDP controls the actual native browser. The first subset c
 - [x] GitHub CI independently reproduces the CDP fixture journey for the published revision.
 - [ ] A pinned upstream schema inventory and client-version compatibility matrix cover the entire protocol as underlying capabilities become available.
 
-Evidence: 2026-09-07 cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate explicitly returns -32601 because no JavaScript engine exists. Initial subset is working; full protocol remains in-progress.
+Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate still explicitly returns -32601: the new script worker does not yet expose persistent execution contexts or remote objects. Initial subset is working; full protocol remains in-progress.
 
 Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.

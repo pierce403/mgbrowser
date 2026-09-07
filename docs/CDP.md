@@ -2,7 +2,7 @@
 
 mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The first implementation is a bounded subset for one page. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
 
-The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. In particular, the browser has no JavaScript engine and `Runtime.evaluate` returns method-not-found (`-32601`). There is no Runtime domain in the advertised subset.
+The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. The browser now has an opt-in [original JavaScript subset](JAVASCRIPT.md), but no persistent remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). There is no Runtime domain in the advertised subset.
 
 ## Connection and scope
 
@@ -46,7 +46,7 @@ The initial local CDP journey passed on 2026-09-07: the external WebSocket clien
 | DOM | `enable`, `disable`, `getDocument`, `querySelector`, `querySelectorAll`, `getAttributes`, `getBoxModel`, `focus` |
 | Input | `dispatchMouseEvent`, `dispatchKeyEvent`, `insertText` |
 
-`Browser.getVersion` identifies mgbrowser and leaves `jsVersion` empty. Protocol fields have their ordinary [Browser-domain meanings](https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-getVersion).
+`Browser.getVersion` identifies mgbrowser and reports `jsVersion: "mgbrowser-js/0.1-experimental"`. This identifies the bundled partial interpreter, not whether script execution is enabled for a document. Protocol fields have their ordinary [Browser-domain meanings](https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-getVersion).
 
 The page implementation uses one top-level frame, real navigation, the actual parser tree, existing editable controls, and the software raster. It does not introduce a second HTML renderer or a JavaScript interpretation shortcut. There are no additional tabs, frames, workers, browser contexts, emulation, full CSS inspection, touch gestures, or downloads. `Page.navigate` requires an absolute HTTP(S) URL, accepts only the sole frame, and delays its reply until completion. Transport failures and superseded navigations return `errorText`; HTTP error responses still represent delivered documents. `Page.reload` acknowledges initiation, with completion reported through enabled events. Frame metadata separates the fragment-free `url` from optional `urlFragment`, which includes its leading `#`.
 
@@ -94,7 +94,7 @@ The full-protocol direction is staged around real browser capabilities:
 
 1. Freeze the advertised subset and add independent protocol/client fixtures. Validate every advertised method, optional parameter, result, event, and error path. Pin a reviewed upstream schema revision for future changes; tip-of-tree changes are not automatically adopted.
 2. Add real frame/target lifecycles, navigation history, cancellation, Network request/response/error events, resource bodies, and more accurate layout/DOM inspection as their browser implementations mature.
-3. Implement the project's own Rust JavaScript engine and web bindings, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Execution and isolation tests precede compatibility claims.
+3. Expand the project's own Rust JavaScript engine and web bindings to persistent realms, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Execution and isolation tests precede compatibility claims. The current per-document worker can project real mutations but cannot stand in for a retained Runtime context.
 4. Connect actual style/compositing and platform features to CSS, DOMSnapshot, Accessibility, Emulation, storage, workers, profiling, tracing, and the remaining relevant domains. Maintain an explicit inventory of unsupported platform-specific features.
 5. Run pinned external clients and DevTools frontend versions against documented workflows. Claim compatibility per client/version/workflow only after observed success; retain the full protocol as the longer-term goal.
 
