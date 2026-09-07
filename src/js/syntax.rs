@@ -1048,7 +1048,7 @@ impl<'a> Parser<'a> {
             let depth = init.depth.max(object.depth).max(body.depth) + 1;
             return self.stmt(
                 Stmt::ForIn {
-                    binding,
+                    binding: Box::new(binding),
                     object: object.value,
                     body: Box::new(body.value),
                 },
@@ -1078,8 +1078,8 @@ impl<'a> Parser<'a> {
         self.stmt(
             Stmt::For {
                 init: init.map(|s| Box::new(s.value)),
-                test: test.map(|e| e.value),
-                update: update.map(|e| e.value),
+                test: test.map(|e| Box::new(e.value)),
+                update: update.map(|e| Box::new(e.value)),
                 body: Box::new(body.value),
             },
             depth,
@@ -2110,24 +2110,123 @@ mod tests {
     }
 
     #[test]
+    fn boxed_loop_fields_preserve_nodes_depth_and_expression_trees() {
+        for (source, nodes, depth) in [
+            ("for(;1;2);", 4, 2),
+            ("for(key in object);", 5, 3),
+            ("for(var key=2 in object);", 5, 3),
+            ("for(var i=0;i<3;i++);", 9, 3),
+        ] {
+            let mut parser = Parser::new(source, MAX_TOKENS);
+            let statement = parser.statement(true).unwrap();
+            assert!(parser.end());
+            assert_eq!(parser.nodes, nodes, "{source}");
+            assert_eq!(statement.depth, depth, "{source}");
+            assert_eq!(parser.nesting, 0);
+            assert_eq!(parser.loops, 0);
+            assert_eq!(parser.breakables, 0);
+            assert_eq!(parse(source).unwrap(), Program(vec![statement.value]));
+        }
+        let Program(body) = parse("for(;left < right; next());").unwrap();
+        let Stmt::For {
+            init,
+            test,
+            update,
+            body,
+        } = &body[0]
+        else {
+            panic!("expected ordinary for");
+        };
+        assert!(init.is_none());
+        assert!(
+            matches!(test.as_deref(), Some(Expr::Binary { op, left, right })
+            if op == "<" && **left == Expr::Ident("left".into()) && **right == Expr::Ident("right".into()))
+        );
+        assert!(
+            matches!(update.as_deref(), Some(Expr::Call { callee, args })
+            if **callee == Expr::Ident("next".into()) && args.is_empty())
+        );
+        assert_eq!(**body, Stmt::Empty);
+        let Program(body) = parse("for(;;);").unwrap();
+        assert!(matches!(
+            &body[0],
+            Stmt::For {
+                init: None,
+                test: None,
+                update: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn boxed_loop_trees_clone_drop_and_reject_depth_overflow_on_default_stack() {
+        let loops = 40;
+        let labels = MAX_DEPTH - loops - 1;
+        let source = |extra| {
+            let prefix = "for(;true;index++)for(var key in object)".repeat(loops / 2);
+            let labels: String = (0..labels + extra)
+                .map(|index| format!("depth{index}:"))
+                .collect();
+            format!("{prefix}{labels};")
+        };
+        let program = parse(&source(0)).unwrap();
+        let copied = program.clone();
+        assert_eq!(program, copied);
+        drop(program);
+        let mut statement = &copied.0[0];
+        for index in 0..loops {
+            statement = match statement {
+                Stmt::For {
+                    test, update, body, ..
+                } if index % 2 == 0 => {
+                    assert_eq!(test.as_deref(), Some(&Expr::Bool(true)));
+                    assert!(matches!(update.as_deref(), Some(Expr::Update { .. })));
+                    body
+                }
+                Stmt::ForIn { binding, body, .. } if index % 2 == 1 => {
+                    assert!(
+                        matches!(binding.as_ref(), ForInBinding::Var { name, init: None } if name == "key")
+                    );
+                    body
+                }
+                _ => panic!("expected alternating boxed loop fields"),
+            };
+        }
+        for _ in 0..labels {
+            let Stmt::Label { body, .. } = statement else {
+                panic!("expected depth label");
+            };
+            statement = body;
+        }
+        assert_eq!(*statement, Stmt::Empty);
+        drop(copied);
+        let error = parse(&source(1)).unwrap_err();
+        assert!(error.starts_with("AST depth limit exceeded"), "{error}");
+        assert!(is_limit_error(&error));
+    }
+
+    #[test]
     fn for_in_preserves_single_var_initializers_and_assignment_references() {
         let Program(body) = parse("for(var key=2 in object) ;").unwrap();
         assert_eq!(
             body,
             vec![Stmt::ForIn {
-                binding: ForInBinding::Var {
+                binding: Box::new(ForInBinding::Var {
                     name: "key".into(),
                     init: Some(Expr::Number(2.0))
-                },
+                }),
                 object: Expr::Ident("object".into()),
                 body: Box::new(Stmt::Empty),
             }]
         );
         let Program(body) = parse("for(holder[next()] in source()) break;").unwrap();
-        assert!(matches!(&body[0], Stmt::ForIn {
-            binding: ForInBinding::Reference(Expr::Member { property, .. }),
-            object: Expr::Call { .. }, body,
-        } if matches!(property.as_ref(), Expr::Call { .. }) && matches!(body.as_ref(), Stmt::Break(None))));
+        assert!(
+            matches!(&body[0], Stmt::ForIn { binding, object: Expr::Call { .. }, body }
+            if matches!(binding.as_ref(), ForInBinding::Reference(Expr::Member { property, .. })
+                if matches!(property.as_ref(), Expr::Call { .. }))
+                && matches!(body.as_ref(), Stmt::Break(None)))
+        );
         for source in [
             "for(var key in object) continue;",
             "for(key in first(), second()) ;",
@@ -2146,9 +2245,8 @@ mod tests {
             assert!(parse(source).is_ok(), "{source}: {:?}", parse(source));
         }
         let Program(body) = parse("for(var key=(needle in haystack) in object) ;").unwrap();
-        assert!(
-            matches!(&body[0], Stmt::ForIn { binding: ForInBinding::Var { init: Some(Expr::Binary { op, .. }), .. }, .. } if op == "in")
-        );
+        assert!(matches!(&body[0], Stmt::ForIn { binding, .. }
+                if matches!(binding.as_ref(), ForInBinding::Var { init: Some(Expr::Binary { op, .. }), .. } if op == "in")));
     }
 
     #[test]

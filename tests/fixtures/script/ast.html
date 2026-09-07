@@ -1,0 +1,7 @@
+<!doctype html>
+<html><head><title>AST worker baseline</title></head><body>
+<p id="status">AST baseline fallback.</p>
+<script>
+Function(Array(10000).join('0;0;') + "document.title='AST-built local fixture';var form=document.createElement('form');form.method='GET';form.action='/search';var q=document.createElement('input');q.type='text';q.name='q';var source=document.createElement('input');source.type='hidden';source.name='source';source.value='fixture';var go=document.createElement('button');go.type='submit';go.textContent='Search';form.appendChild(q);form.appendChild(source);form.appendChild(go);document.body.appendChild(form);document.getElementById('status').textContent='AST form ready';")();
+</script></body></html>
+

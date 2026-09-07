@@ -222,6 +222,65 @@ unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
 
+### Compact AST and retained-storage boundary
+
+The independently measured storage change boxes only ordinary For test/update
+expressions and the ForIn binding, reducing the x86_64 statement layout from
+144 to 80 bytes without adding language nodes or logical depth. Successful AST
+admission counts root/block/case vector capacity, expression/tuple capacity
+including holes, boxed children and separately owned String/UTF-16 buffers.
+Inline children already occupy their containing slots and contribute only owned
+descendant storage. Shared function slices pay their length-based payload and
+two-word reference-count control allowance once per parse, not per closure.
+
+The accounting contract adds an explicit 16-byte logical overhead to each
+allocated block (including empty Rc slices); zero-capacity vectors/strings have
+no allocation. Arithmetic saturates. This is conservative retained requested
+storage accounting, not allocator RSS or a proof of native allocator overhead.
+Source/attempt and real-copy charges, cumulative failure latching, all caps and
+parser semantics remain unchanged. Sparse holes and spare capacity must receive
+higher charges than the old per-present-node policy. Parser temporaries and
+failed partial trees remain independently bounded as documented above.
+
+Before implementation, the unchanged authored 730-byte `/script-ast` HTML
+fixture generated 19,998 harmless statements and 19 form-building statements.
+The actual restricted worker rejected 4,492,773 AST bytes after 864,771 accepted
+bytes, leaving readable fallback and no controls. Its bytes are frozen for this
+increment. It now completes one script without errors at 2,481,036 accepted bytes
+(Ast 1,615,150), creating the actual query/hidden/submit controls. Native and
+external CDP journeys submit the Unicode query and reach the local destination;
+both rendered frames were inspected. These runs perform different amounts of
+work, so accepted totals are not an equal-work memory comparison.
+
+An independent Rust allocator wrapper measures retained allocation requests after
+parsing the same ten authored inputs. Every new AST charge exactly matches the
+measured bytes plus the stated 16-byte allowance per live allocation block.
+For the unchanged 20,000-statement retained function, requested storage falls
+from 2,880,612 to 1,600,356 bytes, with 1,600,420 charged. A 10,000-hole uncalled
+array instead rises from the old incorrect 388-byte charge to 918,020, covering
+917,940 retained bytes and capacity for 16,384 slots. Dense 4,096→4,097 arrays
+also pay their full backing-capacity increase. These are x86_64 requested-storage
+measurements, excluding parser temporaries and allocator/RSS overhead.
+
+Ten private storage groups cover all AST variants, capacity, boxes, empty shared
+slices, alignment and saturation. Nine independent integration groups verify a
+20,000-statement function remains callable, capacity transitions, loop execution,
+shared closure identity/lifetime, repeated ordinary/eval/Function parsing, early
+AST rejection and fatal latching. New parser groups preserve exact node/depth
+counts and clone/drop at depth 128 without enlarging native stacks. A real-worker
+sparse negative control rejects a 917,689-byte AST request after 3,993,182 accepted
+bytes, retaining fallback without catch/finally/later-script/navigation effects.
+
+Three old assertions required reviewed accounting updates: the 24,000-statement
+input now fits, so the prefix/hoist rejection case uses a 40,000-statement tree;
+five sparse-literal evaluations fit while the original six-evaluation input is
+retained as a fatal regression; and the shared-factory worker asserts actual
+10,000 statement-slot storage instead of the obsolete two-MiB node weight.
+Dense literals, six native Array constructions and all semantic/failure checks
+remain. All 368 debug tests, 258 selected release checks and all three exact CI
+journey steps pass locally (11 native and 11 external CDP destinations).
+Live/publication evidence follows in the dated log.
+
 ### Sole Function parameter-source ownership
 
 The narrow ownership change moves the already-owned UTF-16 buffer when a
@@ -237,14 +296,14 @@ and Source one bytes/unit (formerly two/three), a 900,000-unit callable case,
 separate parameter/body grammar, unpaired UTF-16 source rejection and fatal cumulative limits.
 The authored `/script-sources` form uses a generated 749,925-unit whitespace
 fragment. Before the change its worker rejected Source 749,925 after 3,664,599
-accepted bytes. The unchanged fixture now creates and uses real controls below
+accepted bytes. At that increment, the unchanged fixture created and used real controls below
 4 MiB: 2,935,365 accepted bytes, one completed script and no errors. Native and
 external CDP journeys submit its real query/hidden field and reach the local
 destination; native query and CDP destination frames were inspected. These runs
 complete different amounts of work and are not an RSS comparison.
 
-All 344 debug tests, 234 selected release checks and all three exact CI journey
-steps pass locally on 2026-09-07. Twelve independent source groups and three new
+That increment passed 344 debug tests, 234 selected release checks and all three
+exact CI journey steps locally on 2026-09-07. Twelve independent source groups and three new
 private ownership/preflight groups cover the contract; 21 actual-worker groups
 include a multi-fragment control that still pays for real joining and rejects
 UTF-8 allocation without body/catch/finally/later-script effects. Parser source
@@ -267,20 +326,21 @@ distinct parameter/original pointers, preserved duplicate/missing parameters and
 unmapped arguments, unchanged ingress/catch/real-copy charges and fatal latching.
 The authored `/script-bindings` fixture creates controls only after binding a
 749,925-unit generated string. Its baseline worker rejects a 1,499,850-byte
-Runtime move charge after 3,678,037 accepted bytes. The unchanged fixture now
-completes with 3,681,962 accepted bytes, one script and no errors; its real query
+Runtime move charge after 3,678,037 accepted bytes. At that increment, the unchanged fixture
+completed with 3,681,962 accepted bytes, one script and no errors; its real query
 and hidden field submit through native and external CDP input to the local result
 and destination. The old run stopped before creating controls, so these totals
 are not equal-work or RSS measurements.
 
-All 327 debug tests, 217 selected release checks and all three exact CI journey
-steps pass locally on 2026-09-07. This includes ten independent binding groups,
+That increment passed 327 debug tests, 217 selected release checks and all three
+exact CI journey steps locally on 2026-09-07. This includes ten independent binding groups,
 three new private copy/move/preflight groups and 19 actual-worker groups. A larger
 worker input still fails on the required actual parameter clone and prevents
 body/catch/finally/later-script effects while preserving readable fallback.
 Native query and CDP destination frames were inspected. The earlier array
 increment's formal slope of six is historical: it is now four, with no-formal
-two unchanged. Other bindings/property transfers and AST policy are unchanged.
+two unchanged. Other bindings/property transfers and AST policy were unchanged
+in that parameter-copy increment.
 See the daily log for separate exact-SHA remote acceptance.
 
 ### Prepaid array and argument ownership
@@ -321,7 +381,7 @@ at most 15 times through 10,000 slots, with rejection before failed growth.
 
 The `/script-arrays` fixture retains six independent 10,000-slot arrays before
 creating any controls. Its baseline failed with 3,883,859 accepted bytes and a
-rejected 640,000-byte Runtime charge. The complete worker now accepts 3,891,459
+rejected 640,000-byte Runtime charge. At that increment, the complete worker accepted 3,891,459
 bytes, with one completed script and no errors; a seventh maximum array still
 fails cumulatively without catch/finally/later-script effects. These are logical
 charges, not a peak-memory comparison: the old run stopped before doing all work.
@@ -540,18 +600,31 @@ checkpoint. The homepage still supplies its real form. The inspected search fram
 is blank; exit 2, no actual result or destination. This optimization has no observed
 benefit on that served search response, and does not complete the Google goal.
 
-Next is a separately reviewed AST representation/accounting change. An authored
-x86_64 allocator probe measures 144-byte statements; boxing only For test/update
-expressions and the ForIn binding projects an 80-byte statement. A retained
-20,000-statement function currently requests 2,880,612 storage bytes and fails a
-4,480,164-byte AST charge; the layout-only projection is 1,600,356 storage bytes.
-These are requested retained allocations, not parser temporaries or RSS, and the
-representation change is not implemented yet. Lowering fixed weights alone is
-incorrect: an uncalled function with 10,000 array holes retains 918,260 bytes,
-including capacity for 16,384 slots, while its current AST charge is only 388.
-The new boundary must charge container capacity, holes, new boxes and separately
-owned payloads without counting inline values twice; some charges must increase.
+The subsequent separately reviewed AST representation/accounting change is
+implemented above. Its pre-change authored x86_64 allocator probe measured
+144-byte statements; boxing only For test/update expressions and the ForIn
+binding projected an 80-byte statement. A retained 20,000-statement function
+requested 2,880,612 storage bytes and failed a 4,480,164-byte AST charge;
+the layout-only projection was 1,600,356 storage bytes.
+These were requested retained allocations and layout projections, not parser
+temporaries or RSS. Lowering fixed weights alone would have been
+incorrect: an uncalled function with 10,000 array holes retained 918,260 bytes,
+including capacity for 16,384 slots, while its old AST charge was only 388.
+The new boundary charges container capacity, holes, new boxes and separately
+owned payloads without counting inline values twice; some charges increased.
 Source/attempt accounting, real copies, grammar and all caps remain unchanged.
+
+After the AST change, the bounded live checkpoint still produces no Google
+result links. Homepage HTTP 200 retains its real form and no rejected allocation
+(2,255,667 accepted bytes). Search HTTP 200 completes two scripts with three
+errors: first `ReferenceError: Symbol is not defined`, then an AST rejection
+requesting 387,844 after 4,078,595 accepted bytes, repeated by the later script.
+Accepted search Ast is 2,438,297 and Runtime 1,451,075. The earlier first admission
+failure is no longer the leading diagnostic, but the inspected search frame is
+still blank and exit 2 records no result or destination. Next work targets genuine
+Symbol/value/property-key semantics against independent authored cases, with
+separate cumulative-storage diagnosis; no string shim, fake API success or site
+challenge adaptation. Changing live responses are not controlled benchmarks.
 
 Language references are [ECMAScript 5.1](https://262.ecma-international.org/5.1/),
 the [current ECMAScript specification](https://tc39.es/ecma262/) and the
@@ -559,3 +632,28 @@ the [current ECMAScript specification](https://tc39.es/ecma262/) and the
 Imported conformance corpora need a recorded revision and license. Extend against
 independent local cases, not one site's source; keep private browsing/script
 artifacts in ignored `tmp/`, and use only explicit local fixtures in CI.
+
+### Next: core Symbols (proposed, not implemented)
+
+Use opaque immutable symbol identity and typed string-or-symbol property keys,
+not description strings. The proposed core includes Symbol calls, constructor
+rejection, a bounded registry, boxing, branded prototype methods, and own-symbol
+reflection. Keep string-only enumeration distinct from symbol keys.
+Reference: [Symbol objects](https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-symbol-objects).
+
+Property-key conversion must preserve symbols. Audit implicit string/numeric
+conversion, truthiness, equality, and DOM string arguments; a diagnostic display
+string must not become an implicit conversion. Explicit Default/String/Number
+hints are needed for genuine toPrimitive dispatch. Reference:
+[conversion operations](https://tc39.es/ecma262/multipage/abstract-operations.html#sec-type-conversion).
+
+Only expose well-known hooks with implemented algorithms; initial candidates are
+toPrimitive and toStringTag, not iterator/regex/species compatibility flags.
+Keep all existing caps and charge identity/description/registry/reflection
+storage and ingress. Public foreign-symbol ingress needs explicit identity and
+admission rules. Independent cases must cover distinct same-description keys,
+array descriptions such as length/0, prototype lookup/deletion/reflection,
+coercion order/errors, closure/eval/Function lifetime, cumulative fatal limits,
+and a symbol-dependent real-worker/native/CDP form. No live script source is an
+implementation input, and this proposal does not resolve the later allocation
+failure or establish Google acceptance.

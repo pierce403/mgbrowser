@@ -382,9 +382,11 @@ fn oversized_successful_ast_rejects_before_prefix_effects_and_hoisting() {
     let before = runtime.allocation_report();
     // Fewer than 100,000 source tokens/nodes and shallow AST depth. The logical
     // AST reservation, not parser nesting or fuel, is the intended boundary.
+    // Selective boxing lets the old 24k input fit. The 40k input's 65,536-slot
+    // root capacity exceeds the same cap under retained-storage accounting.
     let source = format!(
         "marker=9;function untouched(){{return 1;}}{}",
-        "0;".repeat(24_000)
+        "0;".repeat(40_000)
     );
     let error = runtime.execute(&source, &mut NoIo).unwrap_err();
     assert!(error.contains("allocation budget exhausted"), "{error}");

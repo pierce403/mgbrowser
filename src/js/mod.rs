@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 pub mod regexp;
 pub mod runtime;
+mod storage;
 pub mod syntax;
 pub mod uri;
 
@@ -50,12 +51,14 @@ pub enum Stmt {
     },
     For {
         init: Option<Box<Stmt>>,
-        test: Option<Expr>,
-        update: Option<Expr>,
+        // Keep infrequent loop fields out of every statement's inline size.
+        // Boxes are storage only; they add no grammar node or logical depth.
+        test: Option<Box<Expr>>,
+        update: Option<Box<Expr>>,
         body: Box<Stmt>,
     },
     ForIn {
-        binding: ForInBinding,
+        binding: Box<ForInBinding>,
         object: Expr,
         body: Box<Stmt>,
     },
@@ -134,4 +137,29 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod layout_tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn selective_loop_boxes_keep_statement_layout_compact() {
+        // A measured layout regression on this target, not a public Rust ABI
+        // guarantee or an allocator/RSS estimate. Other AST variants stay inline.
+        eprintln!(
+            "AST_LAYOUT Stmt={} Expr={} ForInBinding={} OptionBoxExpr={} BoxForInBinding={}",
+            size_of::<Stmt>(),
+            size_of::<Expr>(),
+            size_of::<ForInBinding>(),
+            size_of::<Option<Box<Expr>>>(),
+            size_of::<Box<ForInBinding>>(),
+        );
+        assert_eq!(size_of::<Stmt>(), 80);
+        assert_eq!(size_of::<Expr>(), 56);
+        assert_eq!(size_of::<ForInBinding>(), 80);
+        assert_eq!(size_of::<Option<Box<Expr>>>(), 8);
+        assert_eq!(size_of::<Box<ForInBinding>>(), 8);
+    }
 }

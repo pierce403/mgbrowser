@@ -93,18 +93,36 @@ fn six_maximum_hole_arrays_succeed_under_the_unchanged_realm_budget() {
 
 #[test]
 fn repeated_dense_and_hole_literals_pay_new_storage_once_per_evaluation() {
-    for (literal, length, has_first) in [
-        (format!("[{}]", ",".repeat(10_000)), 10_000, false),
-        (format!("[{}0]", "0,".repeat(4999)), 5000, true),
+    // Sparse AST slots are now admitted even without child expressions. Five
+    // large sparse evaluations still fit; dense/six behavior stays unchanged.
+    for (literal, length, has_first, evaluations) in [
+        (format!("[{}]", ",".repeat(10_000)), 10_000, false, 5),
+        (format!("[{}0]", "0,".repeat(4999)), 5000, true, 6),
     ] {
         let mut runtime = Runtime::new();
         let source = format!(
-            "var last;for(var i=0;i<6;i++)last={literal};last.length==={length}&&(0 in last)==={has_first};"
+            "var last;for(var i=0;i<{evaluations};i++)last={literal};last.length==={length}&&(0 in last)==={has_first};"
         );
         let result = runtime.execute(&source, &mut NoIo);
         eprintln!("Authored literal length {length}: {:?}", report(&runtime));
         assert_eq!(result.unwrap(), Value::Bool(true));
     }
+    // Retain the exact old six-sparse source as a fatal boundary regression;
+    // do not erase the extra AST storage to preserve its former success.
+    let literal = format!("[{}]", ",".repeat(10_000));
+    let source = format!(
+        "var last;for(var i=0;i<6;i++)last={literal};last.length===10000&&(0 in last)===false;"
+    );
+    let mut runtime = Runtime::new();
+    let error = runtime.execute(&source, &mut NoIo).unwrap_err();
+    assert!(error.contains("allocation budget exhausted"), "{error}");
+    assert_eq!(runtime.get_global("i"), Value::Number(5.0));
+    let first = report(&runtime);
+    assert!(first.phases.ast >= (10_000 * std::mem::size_of::<Option<mg_deps::js::Expr>>()) as u64);
+    let rejected = first.first_rejected.unwrap();
+    assert_eq!(rejected.phase, AllocationPhase::Runtime);
+    assert_eq!(rejected.requested_bytes, 640_000);
+    latched(&mut runtime, &error, first);
 }
 
 #[test]

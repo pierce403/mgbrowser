@@ -104,6 +104,78 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_retains_large_ast_and_calls_real_form_builder() {
+    // Frozen before the AST change: 19,998 harmless statements followed by 19
+    // DOM-building statements. Its original AST admission exceeded 4 MiB.
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-ast-worker-baseline".into(),
+        html: include_str!("fixtures/script/ast.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    println!("large AST fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    // Body storage remains charged even though inline number expressions do
+    // not each own another allocation. Original array/source creation still pays.
+    assert!(report.phases.ast >= 20_000 * 80);
+    assert!(report.phases.runtime >= 10_000 * 64 + 39_996 * 4);
+    assert!(report.phases.source >= 40_530);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "AST-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(reply.html.contains("AST form ready"));
+}
+
+#[test]
+fn restricted_child_sparse_ast_capacity_stays_cumulative_and_fatal() {
+    // Merely retaining a function with holes must pay its AST slot capacity,
+    // even though the returned array is never executed or created at runtime.
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-sparse-ast-limit".into(),
+        html: "<html><head><title>Original sparse fallback</title></head><body><p>Readable sparse AST fallback</p><script>try{for(var i=0;i<6;i++){Function('return ['+Array(10000).join(',')+'];');}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("sparse AST fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let rejected = report.first_rejected.unwrap();
+    assert_eq!(rejected.phase, mg_deps::js::runtime::AllocationPhase::Ast);
+    assert!(rejected.requested_bytes >= 16_384 * 56);
+    assert!(report.phases.ast >= 2 * 16_384 * 56);
+    let first = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(first.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Original sparse fallback");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable sparse AST fallback"));
+}
+
+#[test]
 fn restricted_child_uses_labeled_control_flow_and_uri_builtins() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/local-language-fixture".into(),
@@ -499,7 +571,9 @@ fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budg
     assert!(report.is_valid());
     assert!(report.first_rejected.is_none());
     assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
-    assert!(report.phases.ast > 2_000_000);
+    // 9,999 numbers plus a return occupy the shared body slots. The former
+    // two-MiB threshold described fixed node weights, not retained storage.
+    assert!(report.phases.ast >= 10_000 * std::mem::size_of::<mg_deps::js::Stmt>() as u64);
     assert!(report.phases.function_code < 1024, "{report:?}");
     let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
     assert_eq!(document.title, "Shared-code local fixture");

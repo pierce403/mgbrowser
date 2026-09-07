@@ -16,7 +16,7 @@
 //! Unsupported exposed builtins throw an explicit error. Math.random
 //! is a deterministic research PRNG and must never be used for cryptography.
 
-use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, syntax, uri};
+use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
 
 const MAX_FUEL: u64 = 1_000_000;
@@ -781,14 +781,10 @@ impl Runtime {
                 AllocationPhase::Source,
                 128usize.saturating_add(source.len()),
             )?;
-            let Program(statements) = self.parse_result(syntax::parse(source))?;
-            self.budget.allocate_in(
-                AllocationPhase::Ast,
-                statements
-                    .iter()
-                    .map(statement_bytes)
-                    .fold(0usize, usize::saturating_add),
-            )?;
+            let program = self.parse_result(syntax::parse(source))?;
+            self.budget
+                .allocate_in(AllocationPhase::Ast, storage::program_bytes(&program))?;
+            let Program(statements) = program;
             self.hoist(&statements, 0, 0, false)?;
             match self.statements(&statements, 0, &Value::Object(0), host)? {
                 Flow::Normal(value) => Ok(value.unwrap_or(Value::Undefined)),
@@ -888,14 +884,10 @@ impl Runtime {
         };
         let source = self.utf8_source(&units)?;
         self.budget.allocate_in(AllocationPhase::Source, 128)?;
-        let Program(statements) = self.parse_result(syntax::parse(&source))?;
-        self.budget.allocate_in(
-            AllocationPhase::Ast,
-            statements
-                .iter()
-                .map(statement_bytes)
-                .fold(0usize, usize::saturating_add),
-        )?;
+        let program = self.parse_result(syntax::parse(&source))?;
+        self.budget
+            .allocate_in(AllocationPhase::Ast, storage::program_bytes(&program))?;
+        let Program(statements) = program;
         let variable = self.environments[environment].variable;
         self.hoist(&statements, variable, environment, true)?;
         match self.statements(&statements, environment, this, host)? {
@@ -921,7 +913,7 @@ impl Runtime {
         self.budget.allocate_in(AllocationPhase::Source, 128)?;
         let parsed = self.parse_result(syntax::parse_function(&parameters, &body))?;
         self.budget
-            .allocate_in(AllocationPhase::Ast, expression_bytes(&parsed))?;
+            .allocate_in(AllocationPhase::Ast, storage::expression_bytes(&parsed))?;
         let Expr::Function { name, params, body } = parsed else {
             return Err(Fault::Fatal(
                 "Invalid dynamic function parser result".into(),
@@ -1504,7 +1496,7 @@ impl Runtime {
                     )?;
                 }
                 Stmt::ForIn { binding, body, .. } => {
-                    if let ForInBinding::Var { name, .. } = binding {
+                    if let ForInBinding::Var { name, .. } = binding.as_ref() {
                         self.declare(environment, name, deletable)?;
                     }
                     self.hoist(
@@ -1713,7 +1705,7 @@ impl Runtime {
                 if let Some(init) = init {
                     self.statement(init, &[], environment, this, host)?;
                 }
-                (body, test.as_ref(), update.as_ref(), false)
+                (body, test.as_deref(), update.as_deref(), false)
             }
             _ => unreachable!("iteration dispatch only accepts loops"),
         };
@@ -4498,91 +4490,6 @@ fn parse_integer(text: &str, mut radix: i32, budget: &mut Budget) -> Eval<f64> {
         result
     })
 }
-fn statement_bytes(statement: &Stmt) -> usize {
-    let add = |a: usize, b: usize| a.saturating_add(b);
-    128usize.saturating_add(match statement {
-        Stmt::Empty => 0,
-        Stmt::Break(target) | Stmt::Continue(target) => target.as_ref().map_or(0, String::len),
-        Stmt::Label { name, body } => name.len().saturating_add(statement_bytes(body)),
-        Stmt::Expr(expr) | Stmt::Throw(expr) => expression_bytes(expr),
-        Stmt::Return(expr) => expr.as_ref().map_or(0, expression_bytes),
-        Stmt::Var(bindings) => bindings
-            .iter()
-            .map(|(name, expr)| {
-                64usize
-                    .saturating_add(name.len())
-                    .saturating_add(expr.as_ref().map_or(0, expression_bytes))
-            })
-            .fold(0, add),
-        Stmt::Function { name, params, body } => name
-            .len()
-            .saturating_add(4 * std::mem::size_of::<usize>())
-            .saturating_add(params.iter().map(|name| name.len() + 32).sum::<usize>())
-            .saturating_add(body.iter().map(statement_bytes).fold(0, add)),
-        Stmt::Block(body) => body.iter().map(statement_bytes).fold(0, add),
-        Stmt::If {
-            test,
-            consequent,
-            alternate,
-        } => expression_bytes(test)
-            .saturating_add(statement_bytes(consequent))
-            .saturating_add(alternate.as_ref().map_or(0, |s| statement_bytes(s))),
-        Stmt::While { test, body } | Stmt::DoWhile { body, test } => {
-            expression_bytes(test).saturating_add(statement_bytes(body))
-        }
-        Stmt::For {
-            init,
-            test,
-            update,
-            body,
-        } => init
-            .as_ref()
-            .map_or(0, |s| statement_bytes(s))
-            .saturating_add(test.as_ref().map_or(0, expression_bytes))
-            .saturating_add(update.as_ref().map_or(0, expression_bytes))
-            .saturating_add(statement_bytes(body)),
-        Stmt::ForIn {
-            binding,
-            object,
-            body,
-        } => {
-            let binding = match binding {
-                ForInBinding::Var { name, init } => name
-                    .len()
-                    .saturating_add(init.as_ref().map_or(0, expression_bytes)),
-                ForInBinding::Reference(expr) => expression_bytes(expr),
-            };
-            binding
-                .saturating_add(expression_bytes(object))
-                .saturating_add(statement_bytes(body))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => expression_bytes(discriminant).saturating_add(
-            cases
-                .iter()
-                .map(|case| {
-                    64usize
-                        .saturating_add(case.test.as_ref().map_or(0, expression_bytes))
-                        .saturating_add(case.body.iter().map(statement_bytes).fold(0, add))
-                })
-                .fold(0, add),
-        ),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => statement_bytes(body)
-            .saturating_add(
-                catch
-                    .as_ref()
-                    .map_or(0, |(name, s)| name.len() + statement_bytes(s)),
-            )
-            .saturating_add(finally.as_ref().map_or(0, |s| statement_bytes(s))),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5994,47 +5901,4 @@ mod tests {
             assert_eq!(runtime.budget.calls, 0);
         }
     }
-}
-fn expression_bytes(expr: &Expr) -> usize {
-    let add = |a: usize, b: usize| a.saturating_add(b);
-    96usize.saturating_add(match expr {
-        Expr::String(value) => value.len().saturating_mul(2),
-        Expr::RegExp { pattern, flags } => {
-            pattern.len().saturating_mul(2).saturating_add(flags.len())
-        }
-        Expr::Ident(name) => name.len(),
-        Expr::Array(items) => items
-            .iter()
-            .map(|expr| expr.as_ref().map_or(0, expression_bytes))
-            .fold(0, add),
-        Expr::Object(properties) => properties
-            .iter()
-            .map(|(name, expr)| name.len().saturating_add(expression_bytes(expr)))
-            .fold(0, add),
-        Expr::Function { name, params, body } => name
-            .as_ref()
-            .map_or(0, String::len)
-            .saturating_add(4 * std::mem::size_of::<usize>())
-            .saturating_add(params.iter().map(|name| name.len() + 32).sum::<usize>())
-            .saturating_add(body.iter().map(statement_bytes).fold(0, add)),
-        Expr::Unary { expr, .. } | Expr::Update { expr, .. } => expression_bytes(expr),
-        Expr::Binary { left, right, .. }
-        | Expr::Assign { left, right, .. }
-        | Expr::Member {
-            object: left,
-            property: right,
-        } => expression_bytes(left).saturating_add(expression_bytes(right)),
-        Expr::Conditional {
-            test,
-            consequent,
-            alternate,
-        } => expression_bytes(test)
-            .saturating_add(expression_bytes(consequent))
-            .saturating_add(expression_bytes(alternate)),
-        Expr::Sequence(exprs) => exprs.iter().map(expression_bytes).fold(0, add),
-        Expr::Call { callee, args } | Expr::New { callee, args } => {
-            expression_bytes(callee).saturating_add(args.iter().map(expression_bytes).fold(0, add))
-        }
-        _ => 0,
-    })
 }
