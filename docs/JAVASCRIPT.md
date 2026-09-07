@@ -829,5 +829,8 @@ frame remained blank; exit 2, no result or destination. This change has no obser
 benefit on that leading live diagnostic, whose supplied argument and cause remain
 unknown. Changing responses are not controlled benchmarks. Further builtin/
 prototype correctness and storage proposals require independent authored cases;
-no live-source inspection or additional retry was used. Publication remains
-pending for this increment.
+no live-source inspection or additional retry was used. Implementation a3295d5
+passed exact-SHA remote CI with all 492 debug/394 selected release tests and
+13 native/13 external CDP destinations. Pages deployed matching HTTPS HTML with
+an approved certificate and HTTPS enforcement; publication evidence is in the
+dated log. The actual Google goal remains incomplete.
