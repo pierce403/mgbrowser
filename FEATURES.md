@@ -169,6 +169,8 @@ Language follow-up: labeled statements, all four URI builtins and bounded direct
 
 Regex follow-up: original UTF-16 compiler/matcher, grammar-directed literals, RegExp state and String match/search/replace/split pass 18 integration groups plus parser/matcher/runtime regressions. The /script-regexp form completes both native and external CDP journeys; actual workers verify real controls and invalid-literal rejection before prefix effects. Local suite: 182 tests. Limits, ES5-shaped semantics and deliberate differences are documented in docs/JAVASCRIPT.md. No new crates or worker capabilities. Remote verification for this increment is recorded separately in the daily log.
 
+Regex remote acceptance: 5daf77b passed Rust CI 34140478124, including the full suite and all three native/CDP journey steps. Pages 34140478195 deployed matching HTTPS content; the apex certificate is approved and HTTPS enforced. This verifies the published increment, not general JavaScript or Google compatibility.
+
 Remote evidence: implementation b9cde9e passed Rust CI 34133745718 with 88 tests and all three native/CDP journey steps. Pages 34133745636 deployed matching HTTPS content; the certificate is approved, HTTPS enforced and HTTP redirects to HTTPS. Broader JavaScript compatibility remains in-progress.
 
 Follow-up remote evidence: 8603918 passed Rust CI 34136335877 with all 148 tests and every native/CDP journey, including dynamically compiled forms. Pages 34136335825 deployed exact matching HTTPS HTML with the approved apex certificate and HTTPS enforcement. This closes the language increment's publication gate, not F-008/F-010 compatibility.
