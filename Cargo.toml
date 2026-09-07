@@ -1,0 +1,17 @@
+[package]
+name = "mg-deps"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+description = "Experimental Rust-only browser dependency foundation"
+
+[dependencies]
+# Never enable rustls's default aws-lc-rs provider or ring.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", rev = "70f76c039e587192688af18a80d5d6435dedaf22", default-features = false, features = ["std", "tls12", "zeroize"] }
+# Explicit codec allowlist. Add formats only after auditing the resolved graph.
+image = { version = "0.25", default-features = false, features = ["png"] }
+fontdue = { version = "0.9", default-features = false }
+rustybuzz = { version = "0.20", default-features = false, features = ["std"] }
+

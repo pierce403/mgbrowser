@@ -1,0 +1,24 @@
+name: Rust dependency foundation
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --component rustfmt
+      - name: Check formatting and dependency boundary
+        run: |
+          cargo +1.91.1 fmt --all -- --check
+          mkdir -p tmp
+          rustc +1.91.1 --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
+          tmp/check-dependencies
+      - name: Run dependency smoke tests
+        run: cargo +1.91.1 test --locked

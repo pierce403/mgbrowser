@@ -64,10 +64,13 @@ F-003.
 
 HTTP(S), relative links, address bar, reload, back/forward, cancellation, scroll, and visible load/errors; invalid TLS never silently succeeds.
 
+TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEPENDENCIES.md. Native crypto fallback is prohibited.
+
 ### Test Criteria
 
 - [ ] Local-server tests cover redirects, failures, request/body/time limits and cancellation.
 - [ ] Manual Linux navigation and keyboard-control scenarios pass.
+- [ ] Local TLS handshake fixtures cover trusted/untrusted certificates and hostname mismatch with the selected provider.
 
 ## F-005 — Styled text and images
 
@@ -81,10 +84,14 @@ F-003.
 
 The documented static MVP HTML/CSS subset supports cascade/inheritance, block and inline flow, wrapped UTF-8 text, box styling and PNG images.
 
+Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled, initially PNG only. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
+
 ### Test Criteria
 
 - [ ] All required versioned DOM/layout/pixel fixtures pass.
 - [ ] Unsupported syntax and malformed input produce bounded, documented behavior.
+- [ ] Unsupported/corrupt image fixtures display a placeholder and preserve surrounding document layout and alt text.
+- [ ] Resolved font/image features contain no native implementations or implicit codec fallback.
 
 ## F-006 — Reproducible autoresearch evaluator
 
@@ -137,3 +144,20 @@ Future own Rust JavaScript engine and expanded platform support; no embedded exi
 ### Test Criteria
 
 - [ ] Language/runtime subset, conformance suite and active-content isolation gates are specified before implementation.
+
+## F-009 — Experimental Rust dependency foundation
+
+Stability: in-progress
+
+### Properties
+
+Cargo configuration pins rustls-rustcrypto and explicitly selects Rust font/image implementations. image defaults are disabled with PNG as the only codec. The library constructs TLS configuration with an explicit provider and caller-supplied roots. A CI denylist guards known native backends; dependency source review remains required. This is not yet an HTTPS or document-rendering implementation.
+
+### Test Criteria
+
+- [x] Locked dependencies compile and TLS client construction succeeds with the explicit provider.
+- [x] PNG round-trip succeeds, a disabled codec is rejected, and Rust font APIs reject invalid font input.
+- [x] Active Linux normal/build dependency graph passes the native-backend regression guard.
+- [ ] GitHub CI reproduces the locked build and dependency checks.
+
+Evidence: local cargo test --locked passed all three smoke tests on 2026-09-07; docs/DEPENDENCIES.md records the initial build/dependency review. No handshake or font-rendering validation is claimed.

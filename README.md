@@ -2,7 +2,7 @@
 
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.
 
-**Status: pre-MVP.** This repository currently contains the implementation plan, agent workflow, and project website. There is no runnable browser or autoresearch executor yet.
+**Status: pre-MVP research.** This repository contains the implementation plan, agent workflow, project website and an experimental Rust dependency foundation. There is no runnable browser or autoresearch executor yet.
 
 - Website: https://mgbrowser.org
 - [MVP and architecture plan](docs/MVP.md)
@@ -15,6 +15,8 @@ A web browser written from the ground up in Rust, developed through reproducible
 ## Direction
 
 Own the browser engine: HTML parsing, DOM, CSS cascade, layout, painting, navigation, and eventually JavaScript. Start with a useful static-document browser on Linux, then expand compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
+
+TLS uses the experimental rustls-rustcrypto provider. Fonts and PNG decoding use Rust implementations with native backends disabled. Unsupported images are preferable to C bindings. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked` for dependency integration smoke tests. These are not browser acceptance tests.
 
 ## Website development
 
