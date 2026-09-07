@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Local iteration fixture</title></head>
+<body>
+<h1>Local iteration and switch form fixture</h1>
+<p>This is an authored localhost test, not a Google page or search service.</p>
+<p id="status">The script must create the form before it can be used.</p>
+<script>
+var inherited = {source: 'fixture'};
+var fields = Object.create(inherited);
+fields.q = '';
+fields.submit = 'search';
+var form = document.createElement('form');
+form.action = '/search';
+form.method = 'get';
+var count = 0;
+for (var key in fields) {
+  var control;
+  switch (key) {
+    case 'q':
+      var label = document.createElement('label');
+      label.textContent = 'Local query ';
+      form.appendChild(label);
+      control = document.createElement('input');
+      control.type = 'text';
+      break;
+    case 'submit':
+      control = document.createElement('button');
+      control.type = 'submit';
+      control.textContent = 'Search local iteration fixture';
+      break;
+    default:
+      control = document.createElement('input');
+      control.type = 'hidden';
+      break;
+  }
+  control.name = key;
+  control.value = fields[key];
+  form.appendChild(control);
+  count++;
+}
+if (count !== 3) throw 'Unexpected enumerable field count';
+document.body.appendChild(form);
+document.title = 'Iteration-built local fixture';
+document.getElementById('status').textContent = 'Own and inherited fields plus switch created this usable form.';
+</script>
+<noscript><p>Enable the experimental script worker to create this local form.</p></noscript>
+</body>
+</html>

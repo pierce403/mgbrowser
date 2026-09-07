@@ -155,6 +155,7 @@ Live Google search currently requires this work. Develop against bounded local l
 - [x] Authored language and DOM tests cover evaluation order, UTF-16, closures, exceptions, mutation validity and cumulative limits.
 - [x] Independent labeled-control-flow, URI and dynamic-compilation cases pass; dynamically compiled forms work through actual workers and native/CDP journeys.
 - [x] Original regex literals, matcher and RegExp/String operations pass independent semantics/limit tests and actual-worker/native/CDP form journeys.
+- [x] Bounded for-in enumeration and switch control flow pass independent language, actual-worker and native/CDP created-form journeys.
 - [x] Actual worker probes verify denied capabilities, resource termination, bounded pipe transfer and owned-child cleanup.
 - [x] Native/CDP local journeys use a script-created form; script navigation and loop-error recovery are verified in a real window.
 - [x] Source/projection rejection preserves original fallback and discards proposed navigation; stale completions cannot replace the active page.
@@ -170,6 +171,8 @@ Language follow-up: labeled statements, all four URI builtins and bounded direct
 Regex follow-up: original UTF-16 compiler/matcher, grammar-directed literals, RegExp state and String match/search/replace/split pass 18 integration groups plus parser/matcher/runtime regressions. The /script-regexp form completes both native and external CDP journeys; actual workers verify real controls and invalid-literal rejection before prefix effects. Local suite: 182 tests. Limits, ES5-shaped semantics and deliberate differences are documented in docs/JAVASCRIPT.md. No new crates or worker capabilities. Remote verification for this increment is recorded separately in the daily log.
 
 Regex remote acceptance: 5daf77b passed Rust CI 34140478124, including the full suite and all three native/CDP journey steps. Pages 34140478195 deployed matching HTTPS content; the apex certificate is approved and HTTPS enforced. This verifies the published increment, not general JavaScript or Google compatibility.
+
+Iteration follow-up: for-in supports own/inherited enumerable properties with duplicate suppression, nonenumerable shadowing and a bounded initial-key snapshot; switch uses strict matching, ordered selectors, fallthrough and scoped control flow. Boxed-string and builtin metadata now share own-property/enumeration rules. Independent tests cover mutation, hoisting, completion values, early errors and fatal cumulative limits. The /script-iteration fixture creates every form control using these statements, submits the real Unicode query/hidden field and reaches the local destination through both native handlers and external CDP. Local suite: 218 tests; all three exact CI journey steps pass. No new dependencies or worker/CDP capabilities. See docs/JAVASCRIPT.md for deliberate limits and the daily log for publication evidence.
 
 Remote evidence: implementation b9cde9e passed Rust CI 34133745718 with 88 tests and all three native/CDP journey steps. Pages 34133745636 deployed matching HTTPS content; the certificate is approved, HTTPS enforced and HTTP redirects to HTTPS. Broader JavaScript compatibility remains in-progress.
 
@@ -217,6 +220,8 @@ Evidence: 2026-09-07 native Google journey returned HTTP 200 homepage, submitted
 Follow-ups with --enable-scripts: actual homepage and served form submission returned HTTP 200. Labels/URI support advanced the first search error to missing dynamic compilation; after Function/eval support it advanced to an identifier-escape lexer error, alongside another lexer error and missing setTimeout. Search still completed two scripts with three errors, title “Google Search”, no projected results/controls, and journey exit 2. No actual first-result destination has been verified; exact dated checkpoints are in the log.
 
 Post-regex checkpoint: HTTP 200 homepage, three completed scripts/seven errors, 26 items and one form; actual served form submission worked. Search returned HTTP 200, two completed scripts/three errors, no items/forms, with unsupported for-in/other statements and missing setTimeout diagnostics. Journey exit 2; no result link or destination was reached. Changing diagnostics are observations, not proof that the next missing feature will complete the goal.
+
+Post-iteration checkpoint: actual homepage HTTP 200, two completed scripts/eight errors, 26 items and one form; real served form submission worked. Search returned HTTP 200, title “Google Search”, two completed scripts/three parser-nesting-limit errors and no items/forms. Journey exit 2; inspected frame contains no results, and no destination was reached. Parser resource safety, language compatibility and missing browser APIs remain work; this observation does not justify blindly increasing execution limits.
 
 ## F-011 — Chrome DevTools Protocol automation
 

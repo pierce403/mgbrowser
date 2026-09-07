@@ -2,9 +2,9 @@
 //!
 //! This initial ES5-shaped subset uses ASCII identifiers (including ASCII
 //! Unicode escapes), UTF-16 strings and parser-directed regular-expression
-//! literals. Strict mode, accessors, for-in and newer syntax are explicit errors.
+//! literals. Strict mode, accessors and newer syntax are explicit errors.
 
-use super::{Expr, Program, Stmt};
+use super::{Expr, ForInBinding, Program, Stmt, SwitchCase};
 
 const MAX_SOURCE: usize = 1024 * 1024;
 const MAX_TOKENS: usize = 100_000;
@@ -458,6 +458,7 @@ struct Parser<'a> {
     nodes: usize,
     functions: usize,
     loops: usize,
+    breakables: usize,
     labels: Vec<Label>,
 }
 
@@ -567,6 +568,7 @@ impl<'a> Parser<'a> {
             nodes: 0,
             functions: 0,
             loops: 0,
+            breakables: 0,
             labels: Vec::new(),
         };
         parser.current = parser.scan();
@@ -848,8 +850,10 @@ impl<'a> Parser<'a> {
                     }
                     Some(_) => {}
                 }
-            } else if self.loops == 0 {
-                return Err(error(offset, "break or continue outside a loop"));
+            } else if is_break && self.breakables == 0 {
+                return Err(error(offset, "break outside a loop or switch"));
+            } else if !is_break && self.loops == 0 {
+                return Err(error(offset, "continue outside a loop"));
             }
             self.semicolon()?;
             return self.stmt(
@@ -912,7 +916,13 @@ impl<'a> Parser<'a> {
             );
         }
         if self.eat_word("for") {
-            return self.for_statement();
+            // The helper retains header AST values across recursive bodies;
+            // count that parser frame as well as the statement frame.
+            return self.nested(|parser| parser.for_statement());
+        }
+        if self.eat_word("switch") {
+            // Clause containers likewise remain live during nested statements.
+            return self.nested(|parser| parser.switch_statement());
         }
         if self.eat_word("try") {
             let body = self.block()?;
@@ -949,7 +959,7 @@ impl<'a> Parser<'a> {
         if let Kind::Word(word) = &self.token().kind {
             if matches!(
                 word.as_str(),
-                "let" | "const" | "class" | "import" | "export" | "switch" | "with" | "debugger"
+                "let" | "const" | "class" | "import" | "export" | "with" | "debugger"
             ) {
                 return Err(self.fail("Unsupported declaration or statement"));
             }
@@ -987,7 +997,9 @@ impl<'a> Parser<'a> {
 
     fn loop_body(&mut self) -> Result<S, String> {
         self.loops += 1;
+        self.breakables += 1;
         let result = self.statement(false);
+        self.breakables -= 1;
         self.loops -= 1;
         result
     }
@@ -1002,8 +1014,38 @@ impl<'a> Parser<'a> {
             let expression = self.expression(false)?;
             Some(self.stmt(Stmt::Expr(expression.value), expression.depth + 1)?)
         };
-        if self.word("in") || self.word("of") {
-            return Err(self.fail("for-in and for-of are unsupported"));
+        if self.word("of") {
+            return Err(self.fail("for-of is unsupported"));
+        }
+        if self.eat_word("in") {
+            let Some(init) = init else {
+                return Err(self.fail("Expected a for-in binding"));
+            };
+            let binding = match init.value {
+                Stmt::Var(mut variables) if variables.len() == 1 => {
+                    let (name, init) = variables.pop().unwrap();
+                    ForInBinding::Var { name, init }
+                }
+                Stmt::Var(_) => {
+                    return Err(self.fail("for-in requires exactly one variable declaration"));
+                }
+                Stmt::Expr(reference) if assignable(&reference) => {
+                    ForInBinding::Reference(reference)
+                }
+                _ => return Err(self.fail("Invalid for-in assignment target")),
+            };
+            let object = self.expression(true)?;
+            self.expect(")")?;
+            let body = self.loop_body()?;
+            let depth = init.depth.max(object.depth).max(body.depth) + 1;
+            return self.stmt(
+                Stmt::ForIn {
+                    binding,
+                    object: object.value,
+                    body: Box::new(body.value),
+                },
+                depth,
+            );
         }
         self.expect(";")?;
         let test = if self.punct(";") {
@@ -1036,6 +1078,61 @@ impl<'a> Parser<'a> {
         )
     }
 
+    fn switch_statement(&mut self) -> Result<S, String> {
+        let discriminant = self.condition()?;
+        self.expect("{")?;
+        self.breakables += 1;
+        let result = self.switch_cases();
+        self.breakables -= 1;
+        let (cases, depth) = result?;
+        self.stmt(
+            Stmt::Switch {
+                discriminant: discriminant.value,
+                cases,
+            },
+            discriminant.depth.max(depth) + 1,
+        )
+    }
+
+    fn switch_cases(&mut self) -> Result<(Vec<SwitchCase>, usize), String> {
+        let mut cases = Vec::new();
+        let mut depth = 0;
+        let mut has_default = false;
+        while !self.punct("}") {
+            let offset = self.token().offset;
+            let test = if self.eat_word("case") {
+                Some(self.expression(true)?)
+            } else if self.eat_word("default") {
+                if has_default {
+                    return Err(error(offset, "Duplicate default clause"));
+                }
+                has_default = true;
+                None
+            } else {
+                return Err(self.fail("Expected case, default or closing switch brace"));
+            };
+            self.expect(":")?;
+            let mut body = Vec::new();
+            let mut clause_depth = test.as_ref().map_or(0, |test| test.depth);
+            while !self.punct("}") && !self.word("case") && !self.word("default") {
+                let statement = self.statement(false)?;
+                clause_depth = clause_depth.max(statement.depth);
+                body.push(statement.value);
+            }
+            // Clause containers are real retained AST structure, including
+            // empty/default clauses; charge them independently of their bodies.
+            clause_depth += 1;
+            self.node(clause_depth)?;
+            depth = depth.max(clause_depth);
+            cases.push(SwitchCase {
+                test: test.map(|test| test.value),
+                body,
+            });
+        }
+        self.expect("}")?;
+        Ok((cases, depth))
+    }
+
     fn function(
         &mut self,
         declaration: bool,
@@ -1058,12 +1155,15 @@ impl<'a> Parser<'a> {
         self.expect(")")?;
         self.expect("{")?;
         let previous_loops = self.loops;
+        let previous_breakables = self.breakables;
         let previous_labels = std::mem::take(&mut self.labels);
         self.loops = 0;
+        self.breakables = 0;
         self.functions += 1;
         let result = self.nested(|parser| parser.body(true, true));
         self.functions -= 1;
         self.loops = previous_loops;
+        self.breakables = previous_breakables;
         self.labels = previous_labels;
         let (body, depth) = result?;
         Ok((name, params, body, depth))
@@ -2152,6 +2252,190 @@ mod tests {
     }
 
     #[test]
+    fn for_in_preserves_single_var_initializers_and_assignment_references() {
+        let Program(body) = parse("for(var key=2 in object) ;").unwrap();
+        assert_eq!(
+            body,
+            vec![Stmt::ForIn {
+                binding: ForInBinding::Var {
+                    name: "key".into(),
+                    init: Some(Expr::Number(2.0))
+                },
+                object: Expr::Ident("object".into()),
+                body: Box::new(Stmt::Empty),
+            }]
+        );
+        let Program(body) = parse("for(holder[next()] in source()) break;").unwrap();
+        assert!(matches!(&body[0], Stmt::ForIn {
+            binding: ForInBinding::Reference(Expr::Member { property, .. }),
+            object: Expr::Call { .. }, body,
+        } if matches!(property.as_ref(), Expr::Call { .. }) && matches!(body.as_ref(), Stmt::Break(None))));
+        for source in [
+            "for(var key in object) continue;",
+            "for(key in first(), second()) ;",
+            "for((key) in object) ;",
+            "for(make().key in object) ;",
+            "for(of in object) ;",
+            "for(var of in object) ;",
+            "outer: inner: for(var key in object) {continue outer; break inner;}",
+            "for(var key=(needle in haystack) in object) ;",
+            "for(var key=condition ? (needle in haystack) : 0 in object) ;",
+            "for(var key=/a/ in object) /b/;",
+            "for(key in /a/) /b/;",
+            "for(var a=1,b=2; a<b; a++) ;",
+            "for((needle in haystack); false; ) ;",
+        ] {
+            assert!(parse(source).is_ok(), "{source}: {:?}", parse(source));
+        }
+        let Program(body) = parse("for(var key=(needle in haystack) in object) ;").unwrap();
+        assert!(
+            matches!(&body[0], Stmt::ForIn { binding: ForInBinding::Var { init: Some(Expr::Binary { op, .. }), .. }, .. } if op == "in")
+        );
+    }
+
+    #[test]
+    fn switch_retains_ordered_clauses_and_statement_bodies() {
+        assert_eq!(
+            parse("switch(value){case 1: case 2: 3; break; default: 4; case 5:}").unwrap(),
+            Program(vec![Stmt::Switch {
+                discriminant: Expr::Ident("value".into()),
+                cases: vec![
+                    SwitchCase {
+                        test: Some(Expr::Number(1.0)),
+                        body: vec![]
+                    },
+                    SwitchCase {
+                        test: Some(Expr::Number(2.0)),
+                        body: vec![Stmt::Expr(Expr::Number(3.0)), Stmt::Break(None)]
+                    },
+                    SwitchCase {
+                        test: None,
+                        body: vec![Stmt::Expr(Expr::Number(4.0))]
+                    },
+                    SwitchCase {
+                        test: Some(Expr::Number(5.0)),
+                        body: vec![]
+                    },
+                ],
+            }])
+        );
+        for source in [
+            "switch(value){}",
+            "switch(value){default:}",
+            "switch(value){default: ; case 1: ;}",
+            "switch(value){case 1: case 1:}", // Duplicate selectors are legal.
+            "switch(value){case 1: var local=2; break;}",
+            "switch(value){case /a/: /b/; default: /c/;} /d/;",
+            "switch(value){case flag ? /a/ : /b/: break;}",
+            "switch(value){case {property:/a/}: ;}",
+            "switch(value){case one(),two(): ;}",
+            "switch(value){case 1: { label: break label; } break;}",
+            "if(true) switch(value){default: break;} else /a/;",
+        ] {
+            assert!(parse(source).is_ok(), "{source}: {:?}", parse(source));
+        }
+        let Program(body) = parse("switch(0){} /a/;").unwrap();
+        assert!(matches!(
+            &body[..],
+            [Stmt::Switch { .. }, Stmt::Expr(Expr::RegExp { .. })]
+        ));
+    }
+
+    #[test]
+    fn switch_breakability_does_not_create_a_continue_target() {
+        for source in [
+            "switch(0){default: break;}",
+            "outer: switch(0){default: break outer;}",
+            "outer: while(false){switch(0){default: continue; continue outer;}}",
+            "outer: for(var key in object){switch(key){case 1:continue outer;default:break;}}",
+            "switch(0){default: while(false){continue;} break;}",
+            "switch(0){default:(function(){switch(1){default:break;}})();break;}",
+            "switch(0){default:break\n/a/;}",
+            "outer: for(key in object){switch(0){default:continue /* line\n */ outer;}}",
+        ] {
+            assert!(parse(source).is_ok(), "{source}: {:?}", parse(source));
+        }
+        for source in [
+            "switch(0){default: continue;}",
+            "outer:switch(0){default:continue outer;}",
+            "while(false){choice:switch(0){default:continue choice;}}",
+            "switch(0){default:(function(){break;})();}",
+            "outer:switch(0){default:(function(){break outer;})();}",
+            "for(key in object){(function(){continue;})();}",
+            "switch(0){} break;",
+            "for(key in object); continue;",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
+        assert!(parse_function("", "switch(0){default:return /a/;}").is_ok());
+        assert!(parse_function("", "switch(0){default:continue;}").is_err());
+    }
+
+    #[test]
+    fn invalid_for_in_and_switch_reject_whole_sources() {
+        for source in [
+            "for(var a,b in object);",
+            "for(var a=1,b=2 in object);",
+            "for(a,b in object);",
+            "for(a=1 in object);",
+            "for(a+1 in object);",
+            "for(a?b:c in object);",
+            "for(call() in object);",
+            "for([] in object);",
+            "for({} in object);",
+            "for(1 in object);",
+            "for(this in object);",
+            "for(var key in);",
+            "for(var key in object;);",
+            "for(var key of object);",
+            "for(key of object);",
+            "switch(0){default:default:}",
+            "switch(0){case 1:default:case 2:default:}",
+            "switch(0){1;}",
+            "switch(0){case:}",
+            "switch(0){case 1;}",
+            "switch(0){default 1:}",
+            "switch(0){case 1:",
+            "switch(0){case 1: {case 2:}}",
+            "switch(0){case 1: function nested(){}}",
+            "case 1: ;",
+            "default: ;",
+        ] {
+            let message = parse(&format!("var marker=1; {source}")).expect_err(source);
+            assert!(message.contains(" at byte "), "{source}: {message}");
+            assert!(!is_limit_error(&message), "{source}: {message}");
+        }
+        let error = parse_function("", "switch(0){default:default:}").unwrap_err();
+        assert!(error.starts_with("Function body: Duplicate default clause"));
+    }
+
+    #[test]
+    fn for_in_and_switch_share_token_node_and_nesting_limits() {
+        for (source, tokens) in [("for(k in o);", 7), ("switch(0){case 1:;default:}", 12)] {
+            let mut parser = Parser::new(source, tokens);
+            assert!(parser.body(false, true).is_ok());
+            assert_eq!(parser.tokens, tokens);
+            let mut parser = Parser::new(source, tokens - 1);
+            assert!(is_limit_error(&parser.body(false, true).unwrap_err()));
+        }
+        // One discriminant expression, one otherwise-empty clause, one switch.
+        let mut parser = Parser::new("switch(0){default:}", MAX_TOKENS);
+        parser.nodes = MAX_NODES - 3;
+        assert!(parser.body(false, true).is_ok());
+        assert_eq!(parser.nodes, MAX_NODES);
+        let mut parser = Parser::new("switch(0){default:}", MAX_TOKENS);
+        parser.nodes = MAX_NODES - 2;
+        assert!(is_limit_error(&parser.body(false, true).unwrap_err()));
+        for source in [
+            format!("{};{}", "switch(0){default:".repeat(150), "}".repeat(150)),
+            format!("{};", "for(k in o)".repeat(150)),
+        ] {
+            assert!(is_limit_error(&parse(&source).unwrap_err()));
+            assert!(is_limit_error(&parse_function("", &source).unwrap_err()));
+        }
+    }
+
+    #[test]
     fn invalid_and_unsupported_sources_never_return_a_prefix() {
         for source in [
             "var x=1; @",
@@ -2172,8 +2456,6 @@ mod tests {
             "import x from 'x'",
             "x=>x",
             "`hello`",
-            "for(var x in y){}",
-            "switch(x){}",
             "'use strict'; x=1",
             "function f(){'use strict';}",
             "({get x(){return 1}})",

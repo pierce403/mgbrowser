@@ -44,7 +44,8 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-home --enable
 
 Start the local fixture server described below first. The script creates the
 form, title and startup status; no form controls are present outside its script.
-The worker executes a small non-strict language subset and startup DOM callbacks,
+The worker executes a small non-strict language subset, including bounded
+`for-in`/`switch` and regular expressions, plus startup DOM callbacks,
 then returns the changed document. It has no external script loading, persistent
 realm, general event loop/timers, fetch/XHR, or script cookie access. Most modern
 sites will still fail. [JAVASCRIPT.md](JAVASCRIPT.md) records exact capabilities,
@@ -122,14 +123,33 @@ native/CDP input. Both paths passed on 2026-09-07, with rendered frames inspecte
 `cargo test --locked --test js_regexp` runs the independent regex semantics and
 resource-limit cases without a display or external JavaScript engine.
 
+`/script-iteration` creates every control by enumerating own and inherited fields
+with `for-in` and choosing input/button types with `switch`. Run it with the same
+fixture server:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-iteration \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/iteration-journey
+```
+
+Its native and external CDP form/query/hidden-field/result/destination journeys
+passed on 2026-09-07; rendered frames were inspected. Use
+`cargo test --locked --test js_iteration` for independently authored iteration,
+switch, mutation, scope and resource-limit cases. Enumeration has a bounded
+snapshot policy and does not support DOM host objects; see [JAVASCRIPT.md](JAVASCRIPT.md).
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 scripted Google attempt submitted the real form, but the response
-titled “Google Search” had script errors and no rendered results; it exited 2.
-Google's first-result/destination acceptance goal remains unmet.
+2026-09-07 post-iteration Google attempt submitted the real form, but the HTTP 200
+response titled “Google Search” reported parser nesting-limit errors and had no
+rendered items or forms. No result or destination was reached. Google's
+first-result/destination acceptance goal remains unmet. Next parser work requires
+independent nesting fixtures and stack/resource-safe architecture, not blindly
+raising limits; real DOM events and timers are still missing.
 
 ## Browser automation
 
@@ -159,6 +179,18 @@ Run the independent client in another terminal:
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-home tmp/cdp-script-journey.png
+```
+
+The same client can navigate that scripting-enabled browser to the regex or
+iteration fixture:
+
+```sh
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-regexp tmp/cdp-regexp-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-iteration tmp/cdp-iteration-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,

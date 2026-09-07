@@ -16,8 +16,9 @@ PNG screenshots; see [the protocol contract and example client](docs/CDP.md).
 Full CDP support is the long-term target, not current compatibility.
 
 The original interpreter includes bounded Function/eval and UTF-16 regular
-expressions with RegExp and String matching/replacement/splitting. Authored
-script-created forms are tested through real worker, native and CDP paths;
+expressions with RegExp and String matching/replacement/splitting, plus
+for-in enumeration and switch control flow. Authored script-created forms
+are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
 
 - Website: https://mgbrowser.org

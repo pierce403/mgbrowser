@@ -16,7 +16,7 @@
 //! Unsupported exposed builtins throw an explicit error. Math.random
 //! is a deterministic research PRNG and must never be used for cryptography.
 
-use super::{Expr, Program, Stmt, regexp, syntax, uri};
+use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, syntax, uri};
 use std::rc::Rc;
 
 const MAX_FUEL: u64 = 1_000_000;
@@ -141,6 +141,76 @@ struct Object {
     boxed: Option<Value>,
     regexp: Option<Rc<regexp::Regex>>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnumerationOwner {
+    Object(usize),
+    Function(usize),
+    Native,
+}
+struct EnumerationEntry {
+    owner: EnumerationOwner,
+    key: String,
+    enumerable: bool,
+}
+fn enumeration_equal(budget: &mut Budget, left: &str, right: &str) -> Eval<bool> {
+    budget.step()?;
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.bytes().zip(right.bytes()) {
+        budget.step()?;
+        if left != right {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn enumeration_add(
+    budget: &mut Budget,
+    entries: &mut Vec<EnumerationEntry>,
+    owner: EnumerationOwner,
+    key: &str,
+    enumerable: bool,
+) -> Eval<()> {
+    budget.step()?;
+    for entry in entries.iter() {
+        if enumeration_equal(budget, &entry.key, key)? {
+            return Ok(());
+        }
+    }
+    budget.allocate(64usize.saturating_add(key.len()))?;
+    entries.push(EnumerationEntry {
+        owner,
+        key: key.into(),
+        enumerable,
+    });
+    Ok(())
+}
+fn native_virtual_names(name: &str) -> &'static [&'static str] {
+    match name {
+        "Object" => &[
+            "name",
+            "length",
+            "prototype",
+            "keys",
+            "create",
+            "getPrototypeOf",
+            "getOwnPropertyNames",
+        ],
+        "Array" => &["name", "length", "prototype", "isArray"],
+        "String" => &["name", "length", "prototype", "fromCharCode"],
+        "Number" => &[
+            "name",
+            "length",
+            "prototype",
+            "isNaN",
+            "isFinite",
+            "isInteger",
+        ],
+        "Function" | "Boolean" | "RegExp" => &["name", "length", "prototype"],
+        _ => &["name", "length"],
+    }
+}
 struct Environment {
     parent: Option<usize>,
     variable: usize,
@@ -214,6 +284,7 @@ pub struct Runtime {
     functions: Vec<Function>,
     environments: Vec<Environment>,
     native_properties: Vec<(String, usize)>,
+    native_deleted: Vec<(String, String)>,
     budget: Budget,
     fatal: Option<String>,
     random: u64,
@@ -245,6 +316,7 @@ impl Runtime {
                 bindings: Vec::new(),
             }],
             native_properties: Vec::new(),
+            native_deleted: Vec::new(),
             budget: Budget {
                 fuel: MAX_FUEL,
                 allocated: 128,
@@ -705,6 +777,17 @@ impl Runtime {
             .objects
             .get(object)
             .ok_or_else(|| exception("TypeError: unknown object"))?;
+        if let Some(Value::String(units)) = &entry.boxed {
+            if key == "length" {
+                return Ok(Some(Value::Number(units.len() as f64)));
+            }
+            if let Some(index) = array_index(key)
+                && let Some(unit) = units.get(index)
+            {
+                self.budget.allocate(2)?;
+                return Ok(Some(Value::String(vec![*unit])));
+            }
+        }
         if let Some(array) = &entry.array {
             if key == "length" {
                 return Ok(Some(Value::Number(array.len() as f64)));
@@ -723,6 +806,221 @@ impl Runtime {
             .find(|property| property.key == key)
             .map(|property| self.budget.copy(&property.value))
             .transpose()
+    }
+    fn enumeration_owner(value: &Value) -> Eval<EnumerationOwner> {
+        match value {
+            Value::Object(id) => Ok(EnumerationOwner::Object(*id)),
+            Value::Function(id) => Ok(EnumerationOwner::Function(*id)),
+            Value::Native(_) => Ok(EnumerationOwner::Native),
+            Value::Host(_) => Err(unsupported("for-in enumeration of host objects")),
+            _ => Err(exception("TypeError: enumeration requires an object")),
+        }
+    }
+    fn native_properties_id(&mut self, name: &str) -> Eval<Option<usize>> {
+        for (existing, id) in &self.native_properties {
+            if enumeration_equal(&mut self.budget, existing, name)? {
+                return Ok(Some(*id));
+            }
+        }
+        Ok(None)
+    }
+    fn native_property_deleted(&mut self, name: &str, key: &str) -> Eval<bool> {
+        for (owner, property) in &self.native_deleted {
+            if enumeration_equal(&mut self.budget, owner, name)?
+                && enumeration_equal(&mut self.budget, property, key)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    fn enumeration_parent(&mut self, owner: EnumerationOwner) -> Eval<Option<EnumerationOwner>> {
+        self.budget.step()?;
+        let prototype = match owner {
+            EnumerationOwner::Object(id) => self.objects[id].prototype,
+            EnumerationOwner::Function(id) => self.objects[self.functions[id].properties].prototype,
+            EnumerationOwner::Native => Some(self.function_prototype),
+        };
+        Ok(prototype.map(EnumerationOwner::Object))
+    }
+    fn enumeration_object_keys(
+        &mut self,
+        id: usize,
+        owner: EnumerationOwner,
+        entries: &mut Vec<EnumerationEntry>,
+    ) -> Eval<()> {
+        let object = &self.objects[id];
+        if let Some(Value::String(units)) = &object.boxed {
+            for index in 0..units.len() {
+                self.budget.step()?;
+                self.budget.allocate(20)?;
+                enumeration_add(&mut self.budget, entries, owner, &index.to_string(), true)?;
+            }
+            enumeration_add(&mut self.budget, entries, owner, "length", false)?;
+        }
+        if let Some(array) = &object.array {
+            for (index, item) in array.iter().enumerate() {
+                self.budget.step()?;
+                if item.is_some() {
+                    self.budget.allocate(20)?;
+                    enumeration_add(&mut self.budget, entries, owner, &index.to_string(), true)?;
+                }
+            }
+            enumeration_add(&mut self.budget, entries, owner, "length", false)?;
+        }
+        for property in &object.properties {
+            self.budget.step()?;
+            enumeration_add(
+                &mut self.budget,
+                entries,
+                owner,
+                &property.key,
+                property.enumerable,
+            )?;
+        }
+        Ok(())
+    }
+    fn enumeration_own_keys(
+        &mut self,
+        owner: EnumerationOwner,
+        root: &Value,
+        entries: &mut Vec<EnumerationEntry>,
+    ) -> Eval<()> {
+        self.budget.step()?;
+        match owner {
+            EnumerationOwner::Object(id) => self.enumeration_object_keys(id, owner, entries),
+            EnumerationOwner::Function(id) => {
+                enumeration_add(&mut self.budget, entries, owner, "length", false)?;
+                enumeration_add(&mut self.budget, entries, owner, "name", false)?;
+                self.enumeration_object_keys(self.functions[id].properties, owner, entries)
+            }
+            EnumerationOwner::Native => {
+                let Value::Native(name) = root else {
+                    return Err(Fault::Fatal("Invalid native enumeration owner".into()));
+                };
+                if let Some(id) = self.native_properties_id(name)? {
+                    self.enumeration_object_keys(id, owner, entries)?;
+                }
+                for key in native_virtual_names(name) {
+                    if self.native_property_deleted(name, key)? {
+                        continue;
+                    }
+                    enumeration_add(&mut self.budget, entries, owner, key, false)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    fn enumeration_object_descriptor(&mut self, id: usize, key: &str) -> Eval<Option<bool>> {
+        self.budget.step()?;
+        let object = &self.objects[id];
+        if let Some(Value::String(units)) = &object.boxed {
+            if key == "length" {
+                return Ok(Some(false));
+            }
+            if array_index(key).is_some_and(|index| index < units.len()) {
+                return Ok(Some(true));
+            }
+        }
+        if let Some(array) = &object.array {
+            if key == "length" {
+                return Ok(Some(false));
+            }
+            if let Some(index) = array_index(key)
+                && array.get(index).is_some_and(Option::is_some)
+            {
+                return Ok(Some(true));
+            }
+        }
+        for property in &object.properties {
+            if enumeration_equal(&mut self.budget, &property.key, key)? {
+                return Ok(Some(property.enumerable));
+            }
+        }
+        Ok(None)
+    }
+    fn enumeration_descriptor(
+        &mut self,
+        owner: EnumerationOwner,
+        root: &Value,
+        key: &str,
+    ) -> Eval<Option<bool>> {
+        self.budget.step()?;
+        match owner {
+            EnumerationOwner::Object(id) => self.enumeration_object_descriptor(id, key),
+            EnumerationOwner::Function(id) => {
+                if matches!(key, "name" | "length") {
+                    return Ok(Some(false));
+                }
+                self.enumeration_object_descriptor(self.functions[id].properties, key)
+            }
+            EnumerationOwner::Native => {
+                let Value::Native(name) = root else {
+                    return Err(Fault::Fatal("Invalid native enumeration owner".into()));
+                };
+                if let Some(id) = self.native_properties_id(name)?
+                    && let Some(enumerable) = self.enumeration_object_descriptor(id, key)?
+                {
+                    return Ok(Some(enumerable));
+                }
+                for native_key in native_virtual_names(name) {
+                    if enumeration_equal(&mut self.budget, native_key, key)? {
+                        return Ok(if self.native_property_deleted(name, key)? {
+                            None
+                        } else {
+                            Some(false)
+                        });
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+    fn enumeration_snapshot(&mut self, root: &Value) -> Eval<Vec<EnumerationEntry>> {
+        // Deterministic research policy: snapshot first-visible owner/key pairs,
+        // including nonenumerable shadows, before entering the body. New names
+        // are excluded. Recheck the same visible owner and enumerability before
+        // visiting; deletion/new shadowing skips it. Delete+readd on the same
+        // owner before visitation may visit the replacement property.
+        let mut entries = Vec::new();
+        let mut current = Some(Self::enumeration_owner(root)?);
+        for _ in 0..MAX_CALLS {
+            let Some(owner) = current else {
+                return Ok(entries);
+            };
+            self.enumeration_own_keys(owner, root, &mut entries)?;
+            current = self.enumeration_parent(owner)?;
+        }
+        if current.is_none() {
+            Ok(entries)
+        } else {
+            Err(Fault::Fatal(
+                "JavaScript enumeration prototype depth limit exhausted".into(),
+            ))
+        }
+    }
+    fn enumeration_visible(
+        &mut self,
+        root: &Value,
+        key: &str,
+    ) -> Eval<Option<(EnumerationOwner, bool)>> {
+        let mut current = Some(Self::enumeration_owner(root)?);
+        for _ in 0..MAX_CALLS {
+            let Some(owner) = current else {
+                return Ok(None);
+            };
+            if let Some(enumerable) = self.enumeration_descriptor(owner, root, key)? {
+                return Ok(Some((owner, enumerable)));
+            }
+            current = self.enumeration_parent(owner)?;
+        }
+        if current.is_none() {
+            Ok(None)
+        } else {
+            Err(Fault::Fatal(
+                "JavaScript enumeration prototype depth limit exhausted".into(),
+            ))
+        }
     }
     fn lookup(&self, mut environment: usize, name: &str) -> Option<usize> {
         loop {
@@ -927,6 +1225,23 @@ impl Runtime {
                         deletable,
                     )?;
                 }
+                Stmt::ForIn { binding, body, .. } => {
+                    if let ForInBinding::Var { name, .. } = binding {
+                        self.declare(environment, name, deletable)?;
+                    }
+                    self.hoist(
+                        std::slice::from_ref(body.as_ref()),
+                        environment,
+                        lexical,
+                        deletable,
+                    )?;
+                }
+                Stmt::Switch { cases, .. } => {
+                    for case in cases {
+                        self.budget.step()?;
+                        self.hoist(&case.body, environment, lexical, deletable)?;
+                    }
+                }
                 Stmt::Try {
                     body,
                     catch,
@@ -1054,6 +1369,15 @@ impl Runtime {
             Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => {
                 self.iteration(statement, labels, environment, this, host)
             }
+            Stmt::ForIn {
+                binding,
+                object,
+                body,
+            } => self.for_in(binding, object, body, labels, environment, this, host),
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => self.switch_statement(discriminant, cases, labels, environment, this, host),
             Stmt::Try { .. } => self.try_statement(statement, environment, this, host),
         }
     }
@@ -1109,6 +1433,112 @@ impl Runtime {
                 && !self.expression(test, environment, this, host)?.truthy()
             {
                 break;
+            }
+        }
+        Ok(Flow::Normal(last))
+    }
+
+    fn for_in(
+        &mut self,
+        binding: &ForInBinding,
+        object: &Expr,
+        body: &Stmt,
+        labels: &[&str],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        if let ForInBinding::Var {
+            name,
+            init: Some(init),
+        } = binding
+        {
+            let value = self.expression(init, environment, this, host)?;
+            let target = self.lookup(environment, name).unwrap_or(0);
+            self.budget.allocate(name.len())?;
+            self.write_reference(Reference::Binding(target, name.clone()), value, host)?;
+        }
+        let object = self.expression(object, environment, this, host)?;
+        if matches!(object, Value::Null | Value::Undefined) {
+            return Ok(Flow::Normal(None));
+        }
+        if matches!(object, Value::Host(_)) {
+            return Err(unsupported("for-in enumeration of host objects"));
+        }
+        let object = self.boxed(object)?;
+        let entries = self.enumeration_snapshot(&object)?;
+        let mut last = None;
+        for entry in entries {
+            self.budget.step()?;
+            if !entry.enumerable
+                || self.enumeration_visible(&object, &entry.key)? != Some((entry.owner, true))
+            {
+                continue;
+            }
+            let reference = match binding {
+                ForInBinding::Var { name, .. } => {
+                    self.budget.allocate(name.len())?;
+                    Reference::Binding(self.lookup(environment, name).unwrap_or(0), name.clone())
+                }
+                ForInBinding::Reference(expr) => self.reference(expr, environment, this, host)?,
+            };
+            let key = self.text(&entry.key)?;
+            self.write_reference(reference, key, host)?;
+            match loop_step(
+                self.statement(body, &[], environment, this, host)?,
+                &mut last,
+                labels,
+            ) {
+                LoopStep::Stop => break,
+                LoopStep::Next => {}
+                LoopStep::Abrupt(flow) => return Ok(flow),
+            }
+        }
+        Ok(Flow::Normal(last))
+    }
+    fn switch_statement(
+        &mut self,
+        discriminant: &Expr,
+        cases: &[SwitchCase],
+        labels: &[&str],
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+    ) -> Eval<Flow> {
+        let value = self.expression(discriminant, environment, this, host)?;
+        let mut default = None;
+        let mut selected = None;
+        for (index, case) in cases.iter().enumerate() {
+            self.budget.step()?;
+            if let Some(test) = &case.test {
+                let selector = self.expression(test, environment, this, host)?;
+                if strict_equal(&value, &selector) {
+                    selected = Some(index);
+                    break;
+                }
+            } else {
+                default = Some(index);
+            }
+        }
+        let Some(selected) = selected.or(default) else {
+            return Ok(Flow::Normal(None));
+        };
+        let mut last = None;
+        for case in &cases[selected..] {
+            self.budget.step()?;
+            match self
+                .statements(&case.body, environment, this, host)?
+                .update_empty(last.take())
+            {
+                Flow::Normal(value) => last = value,
+                Flow::Break(target, value)
+                    if target
+                        .as_ref()
+                        .is_none_or(|target| labels.contains(&target.as_str())) =>
+                {
+                    return Ok(Flow::Normal(value));
+                }
+                other => return Ok(other),
             }
         }
         Ok(Flow::Normal(last))
@@ -1562,10 +1992,13 @@ impl Runtime {
                         return Ok(value);
                     }
                 }
+                if self.native_property_deleted(name, key)? {
+                    return self.get(&Value::Object(self.function_prototype), key, host);
+                }
                 if key == "name" {
                     return self.text(name.rsplit('.').next().unwrap_or(name));
                 }
-                if key == "prototype" {
+                if key == "prototype" && native_virtual_names(name).contains(&"prototype") {
                     return Ok(match name.as_str() {
                         "Object" => Value::Object(self.object_prototype),
                         "Array" => Value::Object(self.array_prototype),
@@ -1617,31 +2050,55 @@ impl Runtime {
             "JavaScript prototype depth limit exhausted".into(),
         ))
     }
+    fn inherited_readonly(&mut self, id: usize, key: &str) -> Eval<bool> {
+        let index = array_index(key);
+        if index.is_none()
+            && !matches!(
+                key,
+                "length" | "source" | "global" | "ignoreCase" | "multiline"
+            )
+        {
+            return Ok(false);
+        }
+        let mut current = Some(id);
+        for _ in 0..MAX_CALLS {
+            self.budget.step()?;
+            let Some(id) = current else {
+                return Ok(false);
+            };
+            let object = &self.objects[id];
+            if object.regexp.is_some()
+                && matches!(key, "source" | "global" | "ignoreCase" | "multiline")
+            {
+                return Ok(true);
+            }
+            if let Some(Value::String(units)) = &object.boxed
+                && (key == "length" || index.is_some_and(|index| index < units.len()))
+            {
+                return Ok(true);
+            }
+            let parent = object.prototype;
+            // Any nearer ordinary own descriptor stops the inherited search.
+            if self.enumeration_object_descriptor(id, key)?.is_some() {
+                return Ok(false);
+            }
+            current = parent;
+        }
+        if current.is_none() {
+            Ok(false)
+        } else {
+            Err(Fault::Fatal(
+                "JavaScript prototype depth limit exhausted".into(),
+            ))
+        }
+    }
     fn set(&mut self, object: Value, key: &str, value: Value, host: &mut impl Host) -> Eval<()> {
         self.budget.step()?;
         match object {
             Value::Host(object) => host.set(&object, key, value).map_err(exception),
             Value::Object(id) => {
-                if matches!(key, "source" | "global" | "ignoreCase" | "multiline") {
-                    let mut current = Some(id);
-                    for _ in 0..MAX_CALLS {
-                        self.budget.step()?;
-                        let Some(index) = current else { break };
-                        if self.objects[index].regexp.is_some() {
-                            return Ok(());
-                        }
-                        // An ordinary own property shadows inherited metadata.
-                        if self.objects[index].properties.iter().any(|p| p.key == key) {
-                            current = None;
-                            break;
-                        }
-                        current = self.objects[index].prototype;
-                    }
-                    if current.is_some() {
-                        return Err(Fault::Fatal(
-                            "JavaScript prototype depth limit exhausted".into(),
-                        ));
-                    }
+                if self.inherited_readonly(id, key)? {
+                    return Ok(());
                 }
                 if id == 0
                     && let Some((_, object, property)) =
@@ -1706,9 +2163,11 @@ impl Runtime {
                 self.put_own(object, key, value, true)
             }
             Value::Native(name) => {
-                if name == "RegExp" && matches!(key, "prototype" | "length") {
+                let virtual_key = native_virtual_names(&name).contains(&key);
+                if matches!(key, "name" | "length") || (key == "prototype" && virtual_key) {
                     return Ok(());
                 }
+                let enumerable = !virtual_key || self.native_property_deleted(&name, key)?;
                 let object = if let Some((_, id)) = self
                     .native_properties
                     .iter()
@@ -1721,7 +2180,7 @@ impl Runtime {
                     self.native_properties.push((name, id));
                     id
                 };
-                self.put_own(object, key, value, true)
+                self.put_own(object, key, value, enumerable)
             }
             Value::Null | Value::Undefined => Err(exception(
                 "TypeError: property assignment on null or undefined",
@@ -1730,10 +2189,29 @@ impl Runtime {
         }
     }
     fn delete(&mut self, object: Value, key: &str) -> Eval<Value> {
-        if matches!(&object, Value::Native(name) if name == "RegExp")
-            && matches!(key, "prototype" | "length")
-        {
+        if matches!(&object, Value::Function(_)) && matches!(key, "name" | "length" | "prototype") {
             return Ok(Value::Bool(false));
+        }
+        if let Value::Native(name) = &object {
+            let virtual_key = native_virtual_names(name).contains(&key);
+            if matches!(key, "name" | "length") || (key == "prototype" && virtual_key) {
+                return Ok(Value::Bool(false));
+            }
+            if virtual_key && !self.native_property_deleted(name, key)? {
+                self.budget
+                    .allocate(64usize.saturating_add(name.len()).saturating_add(key.len()))?;
+                self.native_deleted.push((name.clone(), key.into()));
+            }
+            if let Some(id) = self.native_properties_id(name)? {
+                let properties = &mut self.objects[id].properties;
+                for index in 0..properties.len() {
+                    if enumeration_equal(&mut self.budget, &properties[index].key, key)? {
+                        properties.remove(index);
+                        break;
+                    }
+                }
+            }
+            return Ok(Value::Bool(true));
         }
         let id = match object {
             Value::Object(id) => id,
@@ -1760,6 +2238,11 @@ impl Runtime {
             .objects
             .get_mut(id)
             .ok_or_else(|| exception("TypeError: unknown object"))?;
+        if let Some(Value::String(units)) = &object.boxed
+            && (key == "length" || array_index(key).is_some_and(|index| index < units.len()))
+        {
+            return Ok(Value::Bool(false));
+        }
         if object.regexp.is_some()
             && matches!(
                 key,
@@ -2190,40 +2673,33 @@ impl Runtime {
             }),
             "Object.hasOwnProperty" => {
                 let key = self.property_key(first, host)?;
-                let id = match this {
-                    Value::Object(id) => id,
-                    Value::Function(id) => self.functions[id].properties,
+                let owner = match &this {
+                    Value::Object(_) | Value::Function(_) | Value::Native(_) => {
+                        Self::enumeration_owner(&this)?
+                    }
                     Value::Host(_) => return Err(unsupported("hasOwnProperty on host objects")),
                     _ => return Ok(Value::Bool(false)),
                 };
-                Ok(Value::Bool(self.own(id, &key)?.is_some()))
+                Ok(Value::Bool(
+                    self.enumeration_descriptor(owner, &this, &key)?.is_some(),
+                ))
             }
             "Object.keys" | "Object.getOwnPropertyNames" => {
-                let id = match first {
-                    Value::Object(id) => id,
-                    Value::Function(id) => self.functions[id].properties,
+                let owner = match &first {
+                    Value::Object(_) | Value::Function(_) | Value::Native(_) => {
+                        Self::enumeration_owner(&first)?
+                    }
                     _ => return Err(unsupported("Object keys on primitive/host values")),
                 };
-                let object = &self.objects[id];
                 let mut keys = Vec::new();
-                if let Some(array) = &object.array {
-                    for (index, value) in array.iter().enumerate() {
-                        if value.is_some() {
-                            keys.push(index.to_string());
-                        }
-                    }
-                    if name.ends_with("Names") {
-                        keys.push("length".into());
-                    }
-                }
-                for property in &object.properties {
-                    if property.enumerable || name.ends_with("Names") {
-                        keys.push(property.key.clone());
-                    }
-                }
+                self.enumeration_own_keys(owner, &first, &mut keys)?;
                 let mut values = Vec::new();
-                for key in keys {
-                    values.push(Some(self.text(&key)?));
+                for entry in keys {
+                    self.budget.step()?;
+                    if entry.enumerable || name.ends_with("Names") {
+                        let key = self.text(&entry.key)?;
+                        self.result_push(&mut values, key)?;
+                    }
                 }
                 Ok(Value::Object(
                     self.object(Some(self.array_prototype), Some(values))?,
@@ -3242,8 +3718,16 @@ fn fault_text(error: Fault) -> String {
     }
 }
 fn array_index(key: &str) -> Option<usize> {
+    // Canonical uint32 keys without formatting/allocation during descriptor scans.
+    if key.is_empty()
+        || key.len() > 10
+        || (key.len() > 1 && key.starts_with('0'))
+        || !key.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
     let index = key.parse::<u32>().ok()?;
-    (index != u32::MAX && index.to_string() == key).then_some(index as usize)
+    (index != u32::MAX).then_some(index as usize)
 }
 fn strict_equal(left: &Value, right: &Value) -> bool {
     left == right
@@ -3453,6 +3937,34 @@ fn statement_bytes(statement: &Stmt) -> usize {
             .saturating_add(test.as_ref().map_or(0, expression_bytes))
             .saturating_add(update.as_ref().map_or(0, expression_bytes))
             .saturating_add(statement_bytes(body)),
+        Stmt::ForIn {
+            binding,
+            object,
+            body,
+        } => {
+            let binding = match binding {
+                ForInBinding::Var { name, init } => name
+                    .len()
+                    .saturating_add(init.as_ref().map_or(0, expression_bytes)),
+                ForInBinding::Reference(expr) => expression_bytes(expr),
+            };
+            binding
+                .saturating_add(expression_bytes(object))
+                .saturating_add(statement_bytes(body))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => expression_bytes(discriminant).saturating_add(
+            cases
+                .iter()
+                .map(|case| {
+                    64usize
+                        .saturating_add(case.test.as_ref().map_or(0, expression_bytes))
+                        .saturating_add(case.body.iter().map(statement_bytes).fold(0, add))
+                })
+                .fold(0, add),
+        ),
         Stmt::Try {
             body,
             catch,
@@ -3500,6 +4012,108 @@ mod tests {
     }
     fn yes(source: &str) {
         assert_eq!(evaluate(source), Value::Bool(true), "{source}");
+    }
+
+    #[test]
+    fn enumeration_and_boxed_string_descriptors_agree() {
+        yes(
+            "var s=Object('ab');s[0]='wrong';s.length=8;!(delete s[0]) && !(delete s.length) && s[0]==='a' && s.length===2 && s.hasOwnProperty('0') && Object.keys(s).join(',')==='0,1' && Object.getOwnPropertyNames(s).join(',')==='0,1,length';",
+        );
+        yes(
+            "var s=Object.create(Object('ab'));s[0]='wrong';s.length=8;var keys='';for(var k in s){keys+=k;}s[0]==='a' && s.length===2 && !s.hasOwnProperty('0') && !s.hasOwnProperty('length') && keys==='01';",
+        );
+        yes(
+            "var s=Object.create({length:3,0:'old'});s.length=4;s[0]='new';s.length===4 && s[0]==='new' && s.hasOwnProperty('length');",
+        );
+        yes("var caught=false;try{Object.keys('ab');}catch(e){caught=true;}caught;");
+    }
+
+    #[test]
+    fn enumeration_builtin_metadata_preserves_overwrite_delete_and_readd_attributes() {
+        yes(
+            "Function.prototype.prototype=7;var seen='';for(var k in parseInt){seen+=k;}seen==='prototype' && parseInt.prototype===7 && !parseInt.hasOwnProperty('prototype');",
+        );
+        yes(
+            "Function.prototype.isArray=1;Array.isArray=function(){return 2;};var seen='';for(var k in Array){seen+=k;}seen==='' && Object.keys(Array).length===0 && Array.isArray()===2;",
+        );
+        yes(
+            "Function.prototype.isArray=1;delete Array.isArray;var seen='';for(var k in Array){seen+=k;}seen==='isArray' && Array.isArray===1 && Object.keys(Array).length===0;",
+        );
+        yes(
+            "delete Array.isArray;Array.isArray=3;Object.keys(Array).join(',')==='isArray' && Array.isArray===3;",
+        );
+        yes(
+            "Array.extra=1;Array.later=2;var seen='';for(var k in Array){seen+=k;delete Array.later;}seen==='extra' && Array.later===undefined;",
+        );
+        yes(
+            "function f(){}f.length=7;f.name='wrong';!(delete f.length) && !(delete f.name) && !(delete f.prototype) && f.length===0 && f.name==='f' && f.hasOwnProperty('length') && Object.keys(f).length===0;",
+        );
+        yes(
+            "Array.length=99;Array.name='wrong';!(delete Array.length) && !(delete Array.name) && Array.length===1 && Array.name==='Array' && Array.hasOwnProperty('length');",
+        );
+    }
+
+    #[test]
+    fn enumeration_snapshot_rechecks_original_owner_not_newly_revealed_or_shadowing_owner() {
+        yes(
+            "var o=Object.create({b:2});o.a=1;o.b=3;var seen='';for(var k in o){seen+=k;if(k==='a'){delete o.b;}}seen==='a';",
+        );
+        yes(
+            "var o=Object.create({b:2});o.a=1;var seen='';for(var k in o){seen+=k;if(k==='a'){o.b=3;}}seen==='a';",
+        );
+        yes(
+            "var o={a:1,b:2};var seen='';for(var k in o){seen+=k;if(k==='a'){delete o.b;o.b=3;}}seen==='ab';",
+        );
+    }
+
+    #[test]
+    fn enumeration_limits_are_fatal_before_partial_completion_and_remain_latched() {
+        for (setup, operation, expected) in [
+            (
+                "var o={};for(var i=0;i<64;i++){o=Object.create(o);}",
+                "for(var k in o){visited=true;}",
+                "prototype depth limit",
+            ),
+            (
+                "var o=Object.create(null);o[String.fromCharCode(65,66,67)]=1;",
+                "while(true){for(var k in o){visited=true;}}",
+                "exhausted",
+            ),
+            (
+                "var o=Object('a');for(var i=0;i<64;i++){o=Object.create(o);}",
+                "o[0]='wrong';",
+                "prototype depth limit",
+            ),
+        ] {
+            let mut runtime = Runtime::new();
+            let mut host = TestHost::default();
+            runtime.execute(setup, &mut host).unwrap();
+            let source = format!(
+                "var visited=false,caught=false,finalized=false;try{{{operation}}}catch(e){{caught=true;}}finally{{finalized=true;}}"
+            );
+            let error = runtime.execute(&source, &mut host).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert_eq!(runtime.get_global("caught"), Value::Bool(false));
+            assert_eq!(runtime.get_global("finalized"), Value::Bool(false));
+            if expected.contains("prototype") {
+                assert_eq!(runtime.get_global("visited"), Value::Bool(false));
+            }
+            assert_eq!(runtime.execute("1", &mut host).unwrap_err(), error);
+        }
+    }
+
+    #[test]
+    fn recursive_iteration_and_switch_reach_configured_call_limit_on_default_stack() {
+        for source in [
+            "function f(){for(var k in {a:1}){return f();}}f();",
+            "function f(){switch(1){case 1:return f();}}f();",
+        ] {
+            let mut runtime = Runtime::new();
+            let error = runtime
+                .execute(source, &mut TestHost::default())
+                .unwrap_err();
+            assert!(error.contains("call depth exhausted"), "{error}");
+        }
     }
 
     #[test]

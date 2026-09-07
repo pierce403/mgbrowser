@@ -8,6 +8,18 @@ pub mod uri;
 pub struct Program(pub Vec<Stmt>);
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum ForInBinding {
+    Var { name: String, init: Option<Expr> },
+    Reference(Expr),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwitchCase {
+    pub test: Option<Expr>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     Empty,
     Expr(Expr),
@@ -37,6 +49,15 @@ pub enum Stmt {
         test: Option<Expr>,
         update: Option<Expr>,
         body: Box<Stmt>,
+    },
+    ForIn {
+        binding: ForInBinding,
+        object: Expr,
+        body: Box<Stmt>,
+    },
+    Switch {
+        discriminant: Expr,
+        cases: Vec<SwitchCase>,
     },
     Label {
         name: String,

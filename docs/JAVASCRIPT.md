@@ -18,7 +18,7 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   properties, `this`, member access, calls, `new`, unary/binary operators,
   assignment/update, conditional and sequence expressions.
 - Statements include `var`, functions/closures and IIFEs, `return`, `if`,
-  `while`/`do`/ordinary `for`, `break`/`continue`, `throw`, and
+  `while`/`do`/ordinary `for`, `for-in`, `switch`, `break`/`continue`, `throw`, and
   `try`/`catch`/`finally`, labeled statements and scoped labeled break/continue.
   Function-scoped declarations are hoisted. Tests exercise
   precedence, left-to-right side effects, short circuits, calls and exceptions.
@@ -44,7 +44,7 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
 Unsupported syntax rejects the complete script with a byte-offset diagnostic,
 not a successfully parsed prefix. Current exclusions include strict directives,
 non-ASCII identifiers, `let`/`const`, arrows, classes, modules, templates,
-`switch`, `for-in`, object accessors and block-level function
+`for-of`, `with`, `debugger`, object accessors and block-level function
 declarations. There is no garbage collector, Promise implementation, module loader or general event
 loop. Several Array methods are exposed but not
 implemented. The source is authoritative for individual builtin coverage.
@@ -59,6 +59,42 @@ available, but Error prototype and `instanceof` fidelity remain partial.
 `Math.random` is deterministic research
 output, never cryptographic randomness. Passing the local tests is not a claim
 that supported-looking real-world programs always evaluate correctly.
+
+## Iteration and switch
+
+`for-in` supports a single `var` binding, including an ES5-style initializer, or
+an assignable identifier/member reference. The initializer runs before the RHS;
+the RHS is evaluated once and the assignment reference is evaluated for each
+visited key. Null and undefined produce no iterations. Other primitives are
+boxed, with string indices referring to UTF-16 code units. Host-object enumeration,
+including DOM handles, is explicitly unsupported.
+
+Enumeration snapshots first-visible owner/name pairs across the prototype chain,
+including non-enumerable names that shadow inherited properties. A name is never
+visited twice. Within each owner, virtual string/array indices precede stored
+insertion-ordered properties; nearer owners precede their prototypes. Before each
+visit, the runtime checks that the same owner still exposes an enumerable
+property. Deletion or a new nearer shadow skips that candidate; newly added names
+wait for a later enumeration. Deleting and readding a property on the same owner
+before its visit may visit the replacement. This deterministic research policy
+is not a claim of modern property-order or complete descriptor conformance.
+
+`switch` evaluates its discriminant once, checks selectors in source order using
+strict equality, and selects default only when no selector matches. Execution
+falls through subsequent clause bodies without reevaluating their selectors.
+Breaks, loop continues, labels, returns and exceptions preserve their scoped
+completion behavior. A switch permits an unlabeled break but does not create a
+continue target; function boundaries reset both scopes. Variable declarations in
+unvisited branches still hoist. Duplicate defaults, invalid for-in targets and
+multiple for-in declarations reject the entire script before effects. Clause
+containers count toward parser AST limits, including empty clauses; both new
+statement forms participate in dynamic-compilation allocation accounting.
+
+Own-property inspection and enumeration share the virtual metadata rules for
+boxed strings, functions and supported native builtins. String indices/length
+remain readonly and nonconfigurable, including inherited access. Overwriting a
+native builtin preserves its nonenumerability; deletion followed by readdition
+creates an ordinary enumerable property. Broader descriptor fidelity is partial.
 
 ## Regular expressions
 
@@ -140,6 +176,7 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Each parsed script | 1 MiB source; 100,000 tokens and AST nodes; nesting/AST depth 128; Function fragments share these caps |
 | Document startup | 32 eligible scripts, including unsupported external/module entries; 32 listeners |
 | Evaluator realm | 1,000,000 fuel; 4 MiB cumulative logical allocation; 10,000 objects, functions or environments; call depth 64; array/argument length 10,000 |
+| For-in enumeration | Prototype depth 64; candidate snapshots, including non-enumerable shadows, charge shared realm fuel and cumulative allocation; no separate candidate-count cap |
 | URI conversion | 1,048,576 UTF-16 units each input/output, with exact encoded-size preflight; allocations also charge the realm budget |
 | Regex compilation | 16,384 pattern units; 8,192 nodes; 64 captures; nesting 64; 128 bracket classes; 2 MiB compiled storage; 2,000,000 compile steps; numeric quantifiers at most 1,000,000 |
 | Regex matching | 1,048,576 input units; caller's remaining realm fuel; 16,384 tasks; 4,096 pending states; 4 MiB cumulative state-work accounting per find; lookahead depth 16 |
@@ -147,6 +184,11 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | Serialized DOM / diagnostics | 2 MiB HTML; at most 64 reported errors |
 | Worker protocol | 2 MiB request JSON; 4 MiB response JSON |
 | Worker OS / parent deadline | 256 MiB address space; 1 CPU second; 2-second wall deadline including transfer/startup |
+
+Parser nesting counts guarded grammar/helper frames, not just visible braces.
+The for/switch helpers charge this existing budget to bound their retained Rust
+stack frames. Object.keys/getOwnPropertyNames additionally obey the ordinary
+10,000-element result-array cap; for-in does not construct such a result array.
 
 Logical allocation accounting is conservative and cumulative, not allocator RSS.
 Dynamic compilation charges source conversion and fixed attempt overhead even on
@@ -199,24 +241,32 @@ form and destination frames were inspected. Another actual worker test verifies
 that an invalid literal prevents all prefix DOM effects while a later valid
 script still runs. No site-specific patterns or challenge code were inputs.
 
-The real Google attempt with `--enable-scripts` still failed: its homepage returned
-HTTP 200 with partial script errors; the actual form submitted successfully, but
-the HTTP 200 page titled “Google Search” produced no rendered result items or
-forms. The labels/URI checkpoint advanced the first search error from labeled
-syntax to missing dynamic compilation. After Function/eval implementation, search
-instead reported an identifier-escape lexer error, another unsupported-character
-error, and missing `setTimeout`. The post-regex checkpoint instead reported
-unsupported `for-in`/other statements and missing `setTimeout`; the homepage
-completed three scripts with seven errors, and search still had two completed
-scripts, three errors and no items/forms. The journey exited 2. These are
-observed failures in changing public responses, not an exhaustive diagnosis or
-a promise that fixing the first diagnostic will make Google work. No
-site-specific rewriting or challenge logic was added. The requested first-result
-journey remains open; see the dated log for commands and artifacts.
+The for-in/switch increment passed the full local suite of 218 tests on
+2026-09-07, including eight actual-worker tests. All three CI journey steps were
+also reproduced locally. `/script-iteration` creates its form by enumerating own
+and inherited fields and selecting control types with switch; native and external
+CDP journeys submitted the Unicode query and hidden field and reached the local
+destination. Form and destination screenshots were inspected. Authored cases
+cover mutation/shadowing, boxed values, hoisting, scope, completions, early errors
+and cumulative resource limits. Publication/remote CI evidence is recorded
+separately in the daily log.
 
-Next work is general language/builtin correctness, a pinned independent
-conformance corpus, parent-brokered external script loading, persistent realms,
-real event dispatch/timers and broader DOM support. CDP Runtime/Debugger remain
+The subsequent single Google attempt with `--enable-scripts` still failed. The
+HTTP 200 homepage retained 26 rendered items and one form, with two completed
+scripts and eight errors, including unsupported submit/onload/onclick behavior,
+non-callable values and allocation exhaustion. The actual form submitted, but
+the HTTP 200 page titled “Google Search” had no rendered items or forms: two
+scripts completed and three errors reported the parser nesting limit. No result
+or destination was reached. These are observations of a changing public response,
+not an exhaustive diagnosis or a promise that fixing one diagnostic will make
+Google work. No site-specific rewriting or challenge logic was added. The
+requested first-result journey remains open; see the dated log for evidence.
+
+Next work starts with independently authored nesting cases and a stack/resource-safe
+parser architecture; do not blindly increase limits or port site challenge code.
+General language/builtin correctness, a pinned independent conformance corpus,
+parent-brokered external scripts, persistent realms, real DOM event dispatch/timers
+and broader DOM support remain open. CDP Runtime/Debugger remain
 unsupported until backed by actual realm and remote-object lifecycles;
 `Runtime.evaluate` still returns an unsupported-method error.
 
