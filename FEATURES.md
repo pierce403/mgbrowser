@@ -156,11 +156,14 @@ Live Google search currently requires this work. Develop against bounded local l
 - [x] Actual worker probes verify denied capabilities, resource termination, bounded pipe transfer and owned-child cleanup.
 - [x] Native/CDP local journeys use a script-created form; script navigation and loop-error recovery are verified in a real window.
 - [x] Source/projection rejection preserves original fallback and discards proposed navigation; stale completions cannot replace the active page.
+- [x] GitHub CI reproduces the language/DOM/worker tests and scripted native/CDP fixture journeys for the published implementation.
 - [ ] Parent-brokered external scripts, persistent realms, UI event dispatch and timers are implemented with independent fixtures.
 - [ ] A pinned, licensed upstream conformance corpus and compatibility matrix complement the authored tests.
 - [ ] Sufficient language and web-platform behavior passes the actual Google journey.
 
 Evidence: 2026-09-07 original-runtime and DOM tests, real Linux worker-denial/limit probes, native /script-redirect → script-created form → local result → destination, and external CDP input/navigation/screenshot checks passed. An endless local loop exhausted fuel, retained readable content and allowed onward CDP navigation. Live Google still returns no result links with scripts enabled; partial language/browser support remains substantial work. This containment applies to the script worker, not the entire browser.
+
+Remote evidence: implementation b9cde9e passed Rust CI 34133745718 with 88 tests and all three native/CDP journey steps. Pages 34133745636 deployed matching HTTPS content; the certificate is approved, HTTPS enforced and HTTP redirects to HTTPS. Broader JavaScript compatibility remains in-progress.
 
 ## F-009 — Experimental Rust dependency foundation
 
