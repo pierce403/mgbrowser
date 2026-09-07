@@ -191,3 +191,27 @@ Open our native Rust browser, navigate to google.com, enter and submit a search,
 - [ ] Clicking the first result navigates to its actual destination, with an observed response or clear load failure.
 
 Evidence: 2026-09-07 native Google journey returned HTTP 200 homepage, submitted “Rust programming language”, and followed the served no-JavaScript refresh to a page titled “Enable JavaScript to use search”. The journey correctly exited 2 because there were no result links. Separately, the explicitly labeled localhost fixture journey completed all stages and exited 0. The user goal is not achieved.
+
+## F-011 — Chrome DevTools Protocol automation
+
+Stability: in-progress
+
+### Dependencies
+
+F-003 and F-004 initially; broader browser capabilities for eventual full protocol coverage.
+
+### Properties
+
+Opt-in, loopback-only CDP controls the actual native browser. The first subset covers discovery, one page/target, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
+
+### Test Criteria
+
+- [x] Discovery and real WebSocket tests cover endpoint identity, Host/Origin restrictions, bounded messages, connection limits and cleanup.
+- [x] DOM commands inspect retained source nodes; stale node/session handles and unsupported selectors/methods are rejected.
+- [x] Session enablement and navigation lifecycle events distinguish load failures from successful delivery.
+- [x] Page coordinates and PNG dimensions exclude native toolbar/status pixels, including after scrolling.
+- [x] An external Rust CDP client completes the actual local fixture form → result → destination journey, captures PNG and verifies flattened sessions.
+- [ ] GitHub CI independently reproduces the CDP fixture journey for the published revision.
+- [ ] A pinned upstream schema inventory and client-version compatibility matrix cover the entire protocol as underlying capabilities become available.
+
+Evidence: 2026-09-07 cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate explicitly returns -32601 because no JavaScript engine exists. Initial subset is working; full protocol remains in-progress.

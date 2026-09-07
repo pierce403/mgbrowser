@@ -1,6 +1,7 @@
 //! Dependency foundation for an experimental browser, not a browser implementation.
 //! TLS uses the selected RustCrypto provider explicitly, without global fallback.
 
+pub mod cdp;
 pub mod document;
 pub mod net;
 pub mod paint;

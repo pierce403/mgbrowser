@@ -61,11 +61,25 @@ actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture.
 
+## Browser automation
+
+Enable the experimental Chrome DevTools Protocol subset explicitly:
+
+```sh
+cargo run --locked --bin mgbrowser -- https://www.google.com/ --remote-debugging-port=9222
+```
+
+Discovery is at `http://127.0.0.1:9222/json/list`; the page WebSocket is
+`ws://127.0.0.1:9222/devtools/page/page-1`. Port zero chooses an available port
+and prints its address. Debugging is disabled by default and grants local clients
+control of the page. See [CDP.md](CDP.md) for commands, limits, and the external
+Rust fixture client. This is not yet full DevTools/Playwright compatibility.
+
 ## Validation
 
 ```sh
 cargo fmt --all -- --check
-cargo test --locked
+cargo test --locked --all-targets
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

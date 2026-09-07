@@ -21,22 +21,65 @@ jobs:
           rustc +1.91.1 --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
           tmp/check-dependencies
       - name: Run browser component and interaction tests
-        run: cargo +1.91.1 test --locked
+        run: cargo +1.91.1 test --locked --all-targets
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
         run: |
           target/debug/examples/journey_server > tmp/fixture-server.log 2>&1 &
           fixture_pid=$!
-          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
           for attempt in 1 2 3 4 5; do
             if target/debug/examples/net_probe http://127.0.0.1:7878/ > /dev/null; then break; fi
             sleep 1
           done
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/ --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/local-journey
+      - name: Exercise the real external CDP journey in an X11 window
+        run: |
+          set -euo pipefail
+          target/debug/examples/journey_server > tmp/cdp-fixture-server.log 2>&1 &
+          cdp_fixture_pid=$!
+          trap 'kill "$cdp_fixture_pid" 2>/dev/null || true; wait "$cdp_fixture_pid" 2>/dev/null || true' EXIT
+          fixture_ready=false
+          fixture_deadline=$((SECONDS + 10))
+          while (( SECONDS < fixture_deadline )); do
+            kill -0 "$cdp_fixture_pid"
+            if curl --fail --silent --show-error --max-time 1 http://127.0.0.1:7878/ > /dev/null 2>&1; then
+              fixture_ready=true
+              break
+            fi
+            sleep 0.1
+          done
+          [[ "$fixture_ready" == true ]]
+          timeout 45s xvfb-run -a bash <<'CDP'
+          set -euo pipefail
+          target/debug/mgbrowser http://127.0.0.1:7878/ --remote-debugging-port=0 > tmp/cdp-browser.log 2>&1 &
+          cdp_browser_pid=$!
+          trap 'kill "$cdp_browser_pid" 2>/dev/null || true; wait "$cdp_browser_pid" 2>/dev/null || true' EXIT
+          debugger_ready=false
+          debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < debugger_deadline )); do
+            kill -0 "$cdp_browser_pid"
+            cdp_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/cdp-browser.log)
+            if [[ -n "$cdp_port" ]] && curl --fail --silent --show-error --max-time 1 "http://127.0.0.1:$cdp_port/json/version" > tmp/cdp-version.json 2>/dev/null; then
+              debugger_ready=true
+              break
+            fi
+            sleep 0.1
+          done
+          [[ "$debugger_ready" == true ]]
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$cdp_port/devtools/page/page-1" http://127.0.0.1:7878/ tmp/cdp-journey.png 2>&1 | tee tmp/cdp-client.log
+          CDP
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: local-browser-journey
-          path: tmp/local-journey
+          path: |
+            tmp/local-journey
+            tmp/fixture-server.log
+            tmp/cdp-journey.png
+            tmp/cdp-fixture-server.log
+            tmp/cdp-browser.log
+            tmp/cdp-client.log
+            tmp/cdp-version.json

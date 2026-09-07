@@ -21,7 +21,7 @@ const MAX_COOKIE_BYTES: usize = 4096;
 const MAX_COOKIE_HEADER: usize = 16 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
-const USER_AGENT: &str =
+pub const USER_AGENT: &str =
     "mgbrowser/0.1 (experimental Rust research browser; +https://mgbrowser.org)";
 
 #[derive(Debug)]

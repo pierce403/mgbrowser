@@ -1,4 +1,5 @@
 //! Minimal desktop research browser: own HTML document flow and software paint.
+mod cdp_browser;
 use mg_deps::{
     document::{self, Document, Item},
     net,
@@ -21,6 +22,7 @@ const TOP: i32 = 108;
 const BG: u32 = 0xfafbf8;
 const INK: u32 = 0x26342b;
 const LINK: u32 = 0x174ea6;
+const MAX_EDIT_BYTES: usize = 8191;
 
 #[derive(Clone, Debug)]
 enum Action {
@@ -63,6 +65,13 @@ struct App {
     address: String,
     status: String,
     document: Document,
+    page_url: String,
+    page_mime: String,
+    page_loader: u64,
+    dom_epoch: u64,
+    boxes: Vec<cdp_browser::LayoutBox>,
+    cdp_enabled: bool,
+    cdp_events: Vec<cdp_browser::Event>,
     values: HashMap<usize, String>,
     hits: Vec<Hit>,
     focus: Focus,
@@ -102,6 +111,13 @@ impl App {
                 "https://mgbrowser.org/",
             ),
             values: HashMap::new(),
+            page_url: "about:blank".into(),
+            page_mime: "text/html".into(),
+            page_loader: 0,
+            dom_epoch: 1,
+            boxes: Vec::new(),
+            cdp_enabled: false,
+            cdp_events: Vec::new(),
             hits: Vec::new(),
             focus: Focus::Address,
             select_all: false,
@@ -137,6 +153,9 @@ impl App {
             return;
         }
         self.generation += 1;
+        if self.cdp_enabled {
+            self.cdp_events.push(cdp_browser::Event::Started);
+        }
         self.inflight += 1;
         self.loading = true;
         self.address = target.clone();
@@ -176,10 +195,17 @@ impl App {
             self.focus = Focus::Page;
             self.select_all = false;
             self.last_load_ok = false;
+            let mut load_error = None;
             match loaded.result {
                 Ok(response) => {
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
+                    self.page_mime = response
+                        .content_type
+                        .split(';')
+                        .next()
+                        .unwrap_or("text/html")
+                        .to_string();
                     if !self.history.is_empty() {
                         self.history[self.history_at] = self.address.clone();
                     }
@@ -217,6 +243,8 @@ impl App {
                     );
                 }
                 Err(error) => {
+                    load_error = Some(error.clone());
+                    self.page_mime = "text/html".into();
                     self.status = format!("Load failed: {error}");
                     self.document = document::parse(
                         &format!(
@@ -227,6 +255,16 @@ impl App {
                     );
                     eprintln!("LOAD_ERROR {error}");
                 }
+            }
+            self.page_url = self.address.clone();
+            self.page_loader = loaded.generation;
+            self.dom_epoch += 1;
+            if self.cdp_enabled {
+                self.cdp_events.push(cdp_browser::Event::Finished {
+                    generation: loaded.generation,
+                    frame: cdp_browser::frame(self),
+                    error: load_error,
+                });
             }
             self.dirty = true;
             if let Some(target) = self.document.refresh.clone() {
@@ -341,12 +379,14 @@ impl App {
             Focus::Page => None,
         };
         if let Some(dest) = dest {
+            let retained = if self.select_all { 0 } else { dest.len() };
+            if retained.saturating_add(text.len()) > MAX_EDIT_BYTES {
+                return;
+            }
             if self.select_all {
                 dest.clear();
             }
-            if dest.len() + text.len() < 8192 {
-                dest.push_str(text);
-            }
+            dest.push_str(text);
         }
         self.select_all = false;
         self.dirty = true;
@@ -486,6 +526,7 @@ impl App {
     fn paint(&mut self) -> Canvas {
         let mut c = Canvas::new(self.width, self.height, BG);
         self.hits.clear();
+        self.boxes.clear();
         let left = 32;
         let right = self.width as i32 - 38;
         let mut x = left;
@@ -517,6 +558,7 @@ impl App {
                             x = left;
                             y += row;
                         }
+                        self.layout_box(i, x, y, ww.max(1) as u32, row as u32);
                         if y + row > TOP && y < self.height as i32 - 30 {
                             c.text(
                                 &mut self.fonts,
@@ -545,6 +587,7 @@ impl App {
                         x = left;
                     }
                     let w = (right - left).clamp(120, 550) as u32;
+                    self.layout_box(i, x, y, w, 40);
                     if y + 40 > TOP && y < self.height as i32 - 30 {
                         c.rect(
                             x,
@@ -585,6 +628,7 @@ impl App {
                         x = left;
                         y += 42;
                     }
+                    self.layout_box(i, x, y, w, 36);
                     if y + 38 > TOP && y < self.height as i32 - 30 {
                         c.rect(x, y, w, 36, 0xe0e8f3);
                         c.text(&mut self.fonts, x + 12, y + 7, &label, 16., LINK);
@@ -604,6 +648,7 @@ impl App {
                         x = left;
                         y += row;
                     }
+                    self.layout_box(i, x, y, ww.max(1) as u32, row as u32);
                     if y + row > TOP {
                         c.text(&mut self.fonts, x, y, &label, 14., 0x667164);
                     }
@@ -801,9 +846,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut app = App::new()?;
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut initial = "https://www.google.com/".to_string();
+    let mut debug_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--remote-debugging-port" => {
+                i += 1;
+                debug_port = Some(
+                    args.get(i)
+                        .ok_or("--remote-debugging-port requires a port")?
+                        .parse()?,
+                );
+            }
+            value if value.starts_with("--remote-debugging-port=") => {
+                debug_port = Some(value.split_once('=').unwrap().1.parse()?);
+            }
             "--smoke-search" => {
                 i += 1;
                 app.smoke = Some(
@@ -822,14 +879,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--smoke-search QUERY] [--exit-after-smoke] [--evidence-dir DIR]\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--remote-debugging-port PORT] [--smoke-search QUERY] [--exit-after-smoke] [--evidence-dir DIR]\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("Unknown option: {value}").into());
             }
             value => initial = value.to_string(),
         }
         i += 1;
     }
+    let mut cdp = debug_port.map(cdp_browser::BrowserCdp::bind).transpose()?;
+    app.cdp_enabled = cdp.is_some();
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
     let depth = screen.root_depth;
@@ -927,6 +989,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         app.poll();
+        if let Some(cdp) = &mut cdp {
+            cdp.tick(&mut app);
+        }
         if app.dirty {
             let canvas = app.paint();
             // Split uploads below the core X11 request-size limit.

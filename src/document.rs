@@ -1,7 +1,8 @@
 //! A small, bounded HTML tokenizer/tree builder and readable document projection.
 //!
 //! This is our initial HTML subset, not the HTML Living Standard tree builder.
-//! It deliberately executes no script and does not implement CSS selectors.
+//! It deliberately executes no script. DOM inspection supports a documented
+//! selector subset; this is separate from a future CSS cascade.
 
 use std::collections::HashMap;
 
@@ -16,6 +17,12 @@ const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 pub struct Document {
     pub title: String,
     pub items: Vec<Item>,
+    /// Indices into the actual parser arena, aligned one-to-one with `items`.
+    /// Linked text maps to its anchor; merged ordinary text maps to the lowest
+    /// common ancestor of its source nodes. Breaks map to their block element.
+    pub item_nodes: Vec<usize>,
+    /// The actual bounded parser arena. Node zero is the document root.
+    pub nodes: Vec<Node>,
     pub forms: Vec<Form>,
     pub base_url: String,
     /// A standard zero-delay HTML meta refresh. Navigation caps belong to the
@@ -58,26 +65,289 @@ pub struct Form {
     pub fields: Vec<(String, String)>,
 }
 
-#[derive(Debug)]
-struct Node {
-    tag: String,
-    attributes: Vec<(String, String)>,
-    text: String,
-    parent: usize,
-    children: Vec<usize>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Node {
+    pub tag: String,
+    pub attributes: Vec<(String, String)>,
+    pub text: String,
+    pub parent: usize,
+    pub children: Vec<usize>,
 }
 
 impl Node {
-    fn attr(&self, name: &str) -> Option<&str> {
+    pub fn attr(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
     }
 
-    fn has(&self, name: &str) -> bool {
+    pub fn has(&self, name: &str) -> bool {
         self.attr(name).is_some()
     }
+}
+
+impl Document {
+    /// Return the first matching descendant in tree order. The root itself is
+    /// excluded, as with DOM Element.querySelector. Matching may use ancestors
+    /// outside the root's subtree, as ordinary descendant selectors do.
+    ///
+    /// Supported: tag names, `*`, IDs, classes, attribute presence/equality,
+    /// compound combinations, and the whitespace descendant combinator.
+    /// Other combinators, selector lists, pseudos, escapes, namespaces, and
+    /// attribute operators/flags return an explicit error.
+    pub fn query_selector(&self, root: usize, selector: &str) -> Result<Option<usize>, String> {
+        Ok(self.query(root, selector, true)?.into_iter().next())
+    }
+
+    /// Return every matching descendant in tree order, with no duplicates.
+    pub fn query_selector_all(&self, root: usize, selector: &str) -> Result<Vec<usize>, String> {
+        self.query(root, selector, false)
+    }
+
+    fn query(&self, root: usize, selector: &str, first: bool) -> Result<Vec<usize>, String> {
+        let parts = SelectorParser::parse(selector)?;
+        let node = self
+            .nodes
+            .get(root)
+            .ok_or("DOM root index is out of range")?;
+        let mut pending: Vec<_> = node.children.iter().rev().copied().collect();
+        let mut visited = vec![false; self.nodes.len()];
+        visited[root] = true;
+        let mut result = Vec::new();
+        let mut budget = 4_000_000;
+        while let Some(id) = pending.pop() {
+            let node = self
+                .nodes
+                .get(id)
+                .ok_or("DOM child index is out of range")?;
+            if visited[id] {
+                return Err("DOM contains a cycle or repeated child".to_owned());
+            }
+            visited[id] = true;
+            if self.matches_selector(id, &parts, &mut budget)? {
+                result.push(id);
+                if first {
+                    return Ok(result);
+                }
+            }
+            pending.extend(node.children.iter().rev().copied());
+        }
+        Ok(result)
+    }
+
+    fn matches_selector(
+        &self,
+        id: usize,
+        parts: &[SelectorPart],
+        budget: &mut usize,
+    ) -> Result<bool, String> {
+        let mut remaining = parts.iter().rev();
+        let last = remaining.next().ok_or("Empty selector")?;
+        spend_selector_step(budget)?;
+        if !last.matches(&self.nodes[id]) {
+            return Ok(false);
+        }
+        let mut id = id;
+        for part in remaining {
+            loop {
+                spend_selector_step(budget)?;
+                if id == 0 {
+                    return Ok(false);
+                }
+                id = self.nodes[id].parent;
+                let node = self
+                    .nodes
+                    .get(id)
+                    .ok_or("DOM parent index is out of range")?;
+                if part.matches(node) {
+                    break;
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
+fn spend_selector_step(budget: &mut usize) -> Result<(), String> {
+    *budget = budget
+        .checked_sub(1)
+        .ok_or("Selector traversal budget exceeded")?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SelectorPart {
+    tag: Option<String>,
+    conditions: Vec<SelectorCondition>,
+}
+
+#[derive(Debug)]
+enum SelectorCondition {
+    Id(String),
+    Class(String),
+    Attribute(String, Option<String>),
+}
+
+impl SelectorPart {
+    fn matches(&self, node: &Node) -> bool {
+        if node.tag.starts_with('#') || self.tag.as_ref().is_some_and(|tag| *tag != node.tag) {
+            return false;
+        }
+        self.conditions.iter().all(|condition| match condition {
+            SelectorCondition::Id(value) => node.attr("id") == Some(value.as_str()),
+            SelectorCondition::Class(value) => node.attr("class").is_some_and(|classes| {
+                classes.split_ascii_whitespace().any(|class| class == value)
+            }),
+            SelectorCondition::Attribute(name, None) => node.has(name),
+            SelectorCondition::Attribute(name, Some(value)) => {
+                node.attr(name) == Some(value.as_str())
+            }
+        })
+    }
+}
+
+struct SelectorParser<'a> {
+    source: &'a str,
+    pos: usize,
+}
+
+impl<'a> SelectorParser<'a> {
+    fn parse(source: &'a str) -> Result<Vec<SelectorPart>, String> {
+        if source.len() > 4096 {
+            return Err("Selector exceeds 4096 bytes".to_owned());
+        }
+        let mut parser = Self { source, pos: 0 };
+        let mut result = Vec::new();
+        parser.whitespace();
+        while parser.peek().is_some() {
+            if result.len() == 32 {
+                return Err("Selector exceeds 32 descendant components".to_owned());
+            }
+            result.push(parser.compound()?);
+            parser.whitespace();
+        }
+        if result.is_empty() {
+            return Err("Selector must not be empty".to_owned());
+        }
+        Ok(result)
+    }
+
+    fn compound(&mut self) -> Result<SelectorPart, String> {
+        let mut part = SelectorPart {
+            tag: None,
+            conditions: Vec::new(),
+        };
+        let mut consumed = false;
+        if self.peek() == Some('*') {
+            self.pos += 1;
+            consumed = true;
+        } else if self.peek().is_some_and(identifier_start) {
+            part.tag = Some(self.identifier()?.to_ascii_lowercase());
+            consumed = true;
+        }
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_whitespace() {
+                break;
+            }
+            match ch {
+                '#' | '.' => {
+                    self.pos += 1;
+                    let value = self.identifier()?;
+                    part.conditions.push(if ch == '#' {
+                        SelectorCondition::Id(value)
+                    } else {
+                        SelectorCondition::Class(value)
+                    });
+                }
+                '[' => {
+                    self.pos += 1;
+                    self.whitespace();
+                    let name = self.identifier()?.to_ascii_lowercase();
+                    self.whitespace();
+                    let value = if self.peek() == Some('=') {
+                        self.pos += 1;
+                        self.whitespace();
+                        let value = match self.peek() {
+                            Some(quote @ ('\'' | '"')) => {
+                                self.pos += 1;
+                                let begin = self.pos;
+                                while self.peek().is_some_and(|ch| {
+                                    ch != quote && ch != '\\' && ch != '\n' && ch != '\r'
+                                }) {
+                                    self.pos += self.peek().unwrap().len_utf8();
+                                }
+                                if self.peek() != Some(quote) {
+                                    return Err(self.error());
+                                }
+                                let value = self.source[begin..self.pos].to_owned();
+                                self.pos += 1;
+                                value
+                            }
+                            _ => self.identifier()?,
+                        };
+                        self.whitespace();
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    if self.peek() != Some(']') {
+                        return Err(self.error());
+                    }
+                    self.pos += 1;
+                    part.conditions
+                        .push(SelectorCondition::Attribute(name, value));
+                }
+                _ => return Err(self.error()),
+            }
+            consumed = true;
+        }
+        if !consumed {
+            return Err(self.error());
+        }
+        Ok(part)
+    }
+
+    fn identifier(&mut self) -> Result<String, String> {
+        let begin = self.pos;
+        if !self.peek().is_some_and(identifier_start) {
+            return Err(self.error());
+        }
+        while let Some(ch) = self.peek() {
+            if !identifier_start(ch) && !ch.is_ascii_digit() {
+                break;
+            }
+            self.pos += ch.len_utf8();
+        }
+        let value = &self.source[begin..self.pos];
+        if value == "-"
+            || value.starts_with('-') && value.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
+        {
+            return Err(self.error());
+        }
+        Ok(value.to_owned())
+    }
+
+    fn whitespace(&mut self) {
+        while self.peek().is_some_and(|ch| ch.is_ascii_whitespace()) {
+            self.pos += 1;
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.source[self.pos..].chars().next()
+    }
+
+    fn error(&self) -> String {
+        format!(
+            "Unsupported or invalid selector syntax at byte {}",
+            self.pos
+        )
+    }
+}
+
+fn identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_' || ch == '-' || !ch.is_ascii()
 }
 
 /// Parse a bounded document. Oversized input, excessive nodes, or excessive
@@ -98,6 +368,8 @@ pub fn parse(html: &str, page_url: &str) -> Document {
     let mut document = Document {
         title,
         items: Vec::new(),
+        item_nodes: Vec::new(),
+        nodes: Vec::new(),
         forms: Vec::new(),
         base_url,
         refresh: nodes.iter().find_map(|node| {
@@ -154,8 +426,11 @@ pub fn parse(html: &str, page_url: &str) -> Document {
     output.walk(0, None, false, false, false);
     while matches!(output.document.items.last(), Some(Item::Break)) {
         output.document.items.pop();
+        output.document.item_nodes.pop();
     }
-    output.document
+    let mut document = output.document;
+    document.nodes = nodes;
+    document
 }
 
 fn resolve(base: &str, reference: &str) -> Option<String> {
@@ -281,9 +556,12 @@ fn build_tree(source: &str) -> Vec<Node> {
         nodes[parent].children.push(id);
         if matches!(tag.as_str(), "script" | "style" | "textarea" | "title") {
             let end = raw_end(source, pos, &tag).unwrap_or(source.len());
-            if tag == "textarea" || tag == "title" {
-                add_text(&mut nodes, id, decode_entities(&source[pos..end]));
-            }
+            let text = if tag == "textarea" || tag == "title" {
+                decode_entities(&source[pos..end])
+            } else {
+                source[pos..end].to_owned()
+            };
+            add_text(&mut nodes, id, text);
             pos = if end < source.len() {
                 tag_end(source, end + 2).map_or(source.len(), |n| n + 1)
             } else {
@@ -510,7 +788,7 @@ impl Projection<'_> {
         self.bytes <= MAX_OUTPUT
     }
 
-    fn text(&mut self, text: &str, href: Option<&str>, heading: bool) {
+    fn text(&mut self, id: usize, text: &str, href: Option<&str>, heading: bool) {
         let mut text = collapse(text);
         if text.is_empty() || !self.charge(text.len() + href.map_or(0, str::len)) {
             return;
@@ -521,11 +799,17 @@ impl Projection<'_> {
             heading: previous_heading,
         }) = self.document.items.last_mut()
         {
-            if previous_href.as_deref() == href && *previous_heading == heading {
+            if previous_href.as_deref() == href
+                && *previous_heading == heading
+                && (href.is_none() || self.document.item_nodes.last() == Some(&id))
+            {
                 if previous.ends_with(' ') && text.starts_with(' ') {
                     text.remove(0);
                 }
                 previous.push_str(&text);
+                if let Some(previous_id) = self.document.item_nodes.last_mut() {
+                    *previous_id = common_ancestor(self.nodes, *previous_id, id);
+                }
                 return;
             }
         }
@@ -539,10 +823,11 @@ impl Projection<'_> {
                 href: href.map(str::to_owned),
                 heading,
             });
+            self.document.item_nodes.push(id);
         }
     }
 
-    fn line_break(&mut self) {
+    fn line_break(&mut self, id: usize) {
         if let Some(Item::Text { text, .. }) = self.document.items.last_mut() {
             text.truncate(text.trim_end_matches(' ').len());
         }
@@ -550,6 +835,7 @@ impl Projection<'_> {
             && !matches!(self.document.items.last(), Some(Item::Break))
         {
             self.document.items.push(Item::Break);
+            self.document.item_nodes.push(id);
         }
     }
 
@@ -607,12 +893,18 @@ impl Projection<'_> {
         };
         if node.tag == "#text" {
             if !hidden {
-                self.text(&node.text, href, heading);
+                let mut source = id;
+                if href.is_some() {
+                    while source != 0 && self.nodes[source].tag != "a" {
+                        source = self.nodes[source].parent;
+                    }
+                }
+                self.text(source, &node.text, href, heading);
             }
             return;
         }
         if !hidden && is_block(&node.tag) {
-            self.line_break();
+            self.line_break(id);
         }
         if matches!(
             node.tag.as_str(),
@@ -636,13 +928,14 @@ impl Projection<'_> {
                     alt: alt.to_owned(),
                     src,
                 });
+                self.document.item_nodes.push(id);
             }
         }
         for child in &node.children {
             self.walk(*child, href, heading, hidden, disabled);
         }
         if !hidden && is_block(&node.tag) {
-            self.line_break();
+            self.line_break(id);
         }
     }
 
@@ -722,6 +1015,7 @@ impl Projection<'_> {
                     value,
                     label,
                 });
+                self.document.item_nodes.push(id);
             }
         } else if self.charge(name.len() + value.len() + kind.len() + 32) {
             self.document.items.push(Item::Input {
@@ -734,8 +1028,26 @@ impl Projection<'_> {
                     kind
                 },
             });
+            self.document.item_nodes.push(id);
         }
     }
+}
+
+fn common_ancestor(nodes: &[Node], first: usize, second: usize) -> usize {
+    let mut ancestors = Vec::new();
+    let mut id = first;
+    loop {
+        ancestors.push(id);
+        if id == 0 {
+            break;
+        }
+        id = nodes[id].parent;
+    }
+    let mut id = second;
+    while !ancestors.contains(&id) {
+        id = nodes[id].parent;
+    }
+    id
 }
 
 fn inline_hidden(style: &str) -> bool {
@@ -849,6 +1161,130 @@ fn entity_char(value: u32) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_dom_and_item_sources_describe_actual_nodes() {
+        let doc = parse(
+            r#"<html><head><script>if (a < b) text = '&amp;';</script></head><body><form id=search><input name=q><button>Search</button></form><p id=prose>Hello <strong>world</strong></p><a id=first href=/next>Read <b>this</b></a><a id=second href=/next>Other</a><div hidden id=secret>Hidden content</div><img src=/photo.png alt=Photo></body></html>"#,
+            "https://example.org/",
+        );
+        assert_eq!(doc.nodes[0].tag, "#document");
+        assert_eq!(doc.nodes[doc.nodes[0].children[0]].tag, "html");
+        let script = doc.query_selector(0, "script").unwrap().unwrap();
+        assert_eq!(
+            doc.nodes[doc.nodes[script].children[0]].text,
+            "if (a < b) text = '&amp;';"
+        );
+        let secret = doc.query_selector(0, "#secret").unwrap().unwrap();
+        assert_eq!(
+            doc.nodes[doc.nodes[secret].children[0]].text,
+            "Hidden content"
+        );
+        assert_eq!(doc.items.len(), doc.item_nodes.len());
+        for id in &doc.item_nodes {
+            assert!(*id < doc.nodes.len());
+        }
+        let input = doc.query_selector(0, "input[name=q]").unwrap().unwrap();
+        let button = doc.query_selector(0, "button").unwrap().unwrap();
+        let first = doc.query_selector(0, "#first").unwrap().unwrap();
+        let second = doc.query_selector(0, "#second").unwrap().unwrap();
+        let prose = doc.query_selector(0, "#prose").unwrap().unwrap();
+        assert!(
+            doc.items
+                .iter()
+                .zip(&doc.item_nodes)
+                .any(|(item, id)| matches!(item, Item::Input { .. }) && *id == input)
+        );
+        assert!(
+            doc.items
+                .iter()
+                .zip(&doc.item_nodes)
+                .any(|(item, id)| matches!(item, Item::Submit { .. }) && *id == button)
+        );
+        assert!(doc.items.iter().zip(&doc.item_nodes).any(
+            |(item, id)| matches!(item, Item::Text { text, .. } if text == "Read this")
+                && *id == first
+        ));
+        assert!(doc.items.iter().zip(&doc.item_nodes).any(
+            |(item, id)| matches!(item, Item::Text { text, .. } if text == "Other")
+                && *id == second
+        ));
+        assert!(doc.items.iter().zip(&doc.item_nodes).any(
+            |(item, id)| matches!(item, Item::Text { text, .. } if text == "Hello world")
+                && *id == prose
+        ));
+        assert!(!doc.item_nodes.contains(&secret));
+    }
+
+    #[test]
+    fn selector_subset_returns_tree_order_with_scoped_descendants() {
+        let doc = parse(
+            r#"<main id=outer><section id=scope class="panel primary"><form id=search><input class="field focus" name=q data-label="Search terms"><input class=field name=other disabled></form><a class="fieldish" href=/next>Next</a></section><input class=field name=outside></main>"#,
+            "https://example.org/",
+        );
+        let scope = doc.query_selector(0, "#scope").unwrap().unwrap();
+        let first = doc
+            .query_selector(scope, "INPUT.field[name=q][data-label='Search terms']")
+            .unwrap()
+            .unwrap();
+        let second = doc.query_selector(scope, "[disabled]").unwrap().unwrap();
+        assert_eq!(
+            doc.query_selector_all(scope, ".field").unwrap(),
+            [first, second]
+        );
+        assert_eq!(
+            doc.query_selector_all(scope, "section.panel form#search input.field")
+                .unwrap(),
+            [first, second]
+        );
+        assert_eq!(
+            doc.query_selector(scope, "main input[name=q]").unwrap(),
+            Some(first)
+        );
+        assert_eq!(doc.query_selector(scope, "#scope").unwrap(), None);
+        assert_eq!(doc.query_selector(scope, ".FIELD").unwrap(), None);
+        assert!(
+            doc.query_selector_all(scope, "*")
+                .unwrap()
+                .iter()
+                .all(|id| !doc.nodes[*id].tag.starts_with('#'))
+        );
+        assert_eq!(doc.query_selector_all(0, "[name]").unwrap().len(), 3);
+        assert!(doc.query_selector(doc.nodes.len(), "input").is_err());
+    }
+
+    #[test]
+    fn unsupported_selectors_return_errors_instead_of_empty_success() {
+        let doc = parse("<div><input name=q></div>", "https://example.org/");
+        for selector in [
+            "",
+            " ",
+            "div > input",
+            "div+input",
+            "div~input",
+            "div,input",
+            ":scope",
+            "input:first-child",
+            "[name^=q]",
+            "[name=q i]",
+            "[name",
+            "[name='q]",
+            "#",
+            ".",
+            r"#escaped\:id",
+            "svg|a",
+            "[name='a\\b']",
+        ] {
+            assert!(
+                doc.query_selector(0, selector).is_err(),
+                "selector unexpectedly supported: {selector:?}"
+            );
+            assert!(
+                doc.query_selector_all(0, selector).is_err(),
+                "selector unexpectedly supported: {selector:?}"
+            );
+        }
+    }
 
     #[test]
     fn search_form_controls_and_relative_result_link() {

@@ -1,0 +1,328 @@
+{
+  "version": { "major": "1", "minor": "3" },
+  "domains": [
+    {
+      "domain": "Browser",
+      "description": "Experimental mgbrowser CDP subset. This schema describes only implemented research-browser behavior, not Chrome or full CDP compatibility.",
+      "commands": [
+        {
+          "name": "getVersion",
+          "description": "Report mgbrowser identity. An empty jsVersion means no JavaScript runtime is available.",
+          "returns": [
+            { "name": "protocolVersion", "type": "string" },
+            { "name": "product", "type": "string" },
+            { "name": "revision", "type": "string" },
+            { "name": "userAgent", "type": "string" },
+            { "name": "jsVersion", "type": "string" }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Target",
+      "description": "One page target. Browser connections can attach using flattened sessions; no target creation, workers, or browser contexts.",
+      "types": [
+        { "id": "TargetID", "type": "string" },
+        { "id": "SessionID", "type": "string" },
+        {
+          "id": "TargetInfo",
+          "type": "object",
+          "properties": [
+            { "name": "targetId", "$ref": "TargetID" },
+            { "name": "type", "type": "string" },
+            { "name": "title", "type": "string" },
+            { "name": "url", "type": "string" },
+            { "name": "attached", "type": "boolean" },
+            { "name": "canAccessOpener", "type": "boolean", "experimental": true }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "getTargets",
+          "description": "Return the sole available page; target filters are unsupported.",
+          "returns": [ { "name": "targetInfos", "type": "array", "items": { "$ref": "TargetInfo" } } ]
+        },
+        {
+          "name": "getTargetInfo",
+          "experimental": true,
+          "parameters": [ { "name": "targetId", "$ref": "TargetID", "optional": true } ],
+          "returns": [ { "name": "targetInfo", "$ref": "TargetInfo" } ]
+        },
+        {
+          "name": "attachToTarget",
+          "description": "Attach to the existing page. This subset requires flatten=true; nested message sessions are unsupported.",
+          "parameters": [
+            { "name": "targetId", "$ref": "TargetID" },
+            { "name": "flatten", "type": "boolean" }
+          ],
+          "returns": [ { "name": "sessionId", "$ref": "SessionID" } ]
+        },
+        {
+          "name": "detachFromTarget",
+          "parameters": [ { "name": "sessionId", "$ref": "SessionID" } ]
+        }
+      ],
+      "events": [
+        {
+          "name": "attachedToTarget",
+          "experimental": true,
+          "parameters": [
+            { "name": "sessionId", "$ref": "SessionID" },
+            { "name": "targetInfo", "$ref": "TargetInfo" },
+            { "name": "waitingForDebugger", "type": "boolean" }
+          ]
+        },
+        {
+          "name": "detachedFromTarget",
+          "experimental": true,
+          "parameters": [ { "name": "sessionId", "$ref": "SessionID" } ]
+        }
+      ]
+    },
+    {
+      "domain": "Page",
+      "description": "Single-frame navigation and software-rendered viewport inspection. Browser toolbar and status strip are excluded; scale is fixed at one.",
+      "dependencies": [ "DOM" ],
+      "types": [
+        { "id": "FrameId", "type": "string" },
+        {
+          "id": "Frame",
+          "type": "object",
+          "description": "Core committed-frame metadata for the sole top-level frame; experimental Chrome security and isolation metadata is not supplied.",
+          "properties": [
+            { "name": "id", "$ref": "FrameId" },
+            { "name": "loaderId", "type": "string" },
+            { "name": "url", "type": "string", "description": "Committed document URL without its fragment." },
+            { "name": "urlFragment", "type": "string", "description": "Fragment including the leading #, when present.", "optional": true, "experimental": true },
+            { "name": "securityOrigin", "type": "string" },
+            { "name": "mimeType", "type": "string" }
+          ]
+        },
+        {
+          "id": "FrameTree",
+          "type": "object",
+          "properties": [
+            { "name": "frame", "$ref": "Frame" },
+            { "name": "childFrames", "type": "array", "items": { "$ref": "FrameTree" }, "optional": true }
+          ]
+        },
+        {
+          "id": "LayoutViewport",
+          "type": "object",
+          "properties": [
+            { "name": "pageX", "type": "integer" },
+            { "name": "pageY", "type": "integer" },
+            { "name": "clientWidth", "type": "integer" },
+            { "name": "clientHeight", "type": "integer" }
+          ]
+        },
+        {
+          "id": "VisualViewport",
+          "type": "object",
+          "properties": [
+            { "name": "offsetX", "type": "number" },
+            { "name": "offsetY", "type": "number" },
+            { "name": "pageX", "type": "number" },
+            { "name": "pageY", "type": "number" },
+            { "name": "clientWidth", "type": "number" },
+            { "name": "clientHeight", "type": "number" },
+            { "name": "scale", "type": "number" },
+            { "name": "zoom", "type": "number", "optional": true }
+          ]
+        }
+      ],
+      "commands": [
+        { "name": "enable", "description": "Enable Page notifications for this connection or session." },
+        { "name": "disable", "description": "Disable Page notifications for this connection or session." },
+        {
+          "name": "navigate",
+          "description": "Navigate to an absolute HTTP(S) URL of at most 16 KiB. The response waits for navigation completion; transport failure or supersession produces errorText. frameId, when present, must be frame-1.",
+          "parameters": [
+            { "name": "url", "type": "string" },
+            { "name": "frameId", "$ref": "FrameId", "optional": true }
+          ],
+          "returns": [
+            { "name": "frameId", "$ref": "FrameId" },
+            { "name": "loaderId", "type": "string", "optional": true },
+            { "name": "errorText", "type": "string", "optional": true }
+          ]
+        },
+        {
+          "name": "reload",
+          "description": "Reload using existing browser navigation. No script injection or cache implementation is provided.",
+          "parameters": [ { "name": "ignoreCache", "type": "boolean", "optional": true } ]
+        },
+        { "name": "getFrameTree", "returns": [ { "name": "frameTree", "$ref": "FrameTree" } ] },
+        {
+          "name": "getLayoutMetrics",
+          "description": "Page viewport geometry at scale one. Deprecated device-pixel fields equal CSS-pixel fields in this implementation.",
+          "returns": [
+            { "name": "layoutViewport", "$ref": "LayoutViewport", "deprecated": true },
+            { "name": "visualViewport", "$ref": "VisualViewport", "deprecated": true },
+            { "name": "contentSize", "$ref": "DOM.Rect", "deprecated": true },
+            { "name": "cssLayoutViewport", "$ref": "LayoutViewport" },
+            { "name": "cssVisualViewport", "$ref": "VisualViewport" },
+            { "name": "cssContentSize", "$ref": "DOM.Rect" }
+          ]
+        },
+        {
+          "name": "captureScreenshot",
+          "description": "Return a base64 PNG of the current page viewport. format defaults to png; other codecs, clip, and captureBeyondViewport=true are unsupported. Both fromSurface values use the same software raster. No scaling or full-page capture. Encoded output is limited to 7 MiB.",
+          "parameters": [
+            { "name": "format", "type": "string", "enum": [ "png" ], "optional": true },
+            { "name": "fromSurface", "type": "boolean", "optional": true, "experimental": true },
+            { "name": "captureBeyondViewport", "type": "boolean", "optional": true, "experimental": true }
+          ],
+          "returns": [ { "name": "data", "type": "string" } ]
+        }
+      ],
+      "events": [
+        { "name": "frameStartedLoading", "experimental": true, "parameters": [ { "name": "frameId", "$ref": "FrameId" } ] },
+        {
+          "name": "frameNavigated",
+          "parameters": [
+            { "name": "frame", "$ref": "Frame" },
+            { "name": "type", "type": "string", "enum": [ "Navigation", "BackForwardCacheRestore" ], "experimental": true }
+          ]
+        },
+        { "name": "domContentEventFired", "parameters": [ { "name": "timestamp", "type": "number", "description": "Monotonic seconds." } ] },
+        { "name": "loadEventFired", "parameters": [ { "name": "timestamp", "type": "number", "description": "Monotonic seconds." } ] },
+        { "name": "frameStoppedLoading", "experimental": true, "parameters": [ { "name": "frameId", "$ref": "FrameId" } ] }
+      ]
+    },
+    {
+      "domain": "DOM",
+      "description": "Inspection of mgbrowser's actual bounded HTML tree. Selectors are a declared subset. Node references are invalidated by document replacement; Runtime object handles are unsupported.",
+      "types": [
+        { "id": "NodeId", "type": "integer" },
+        { "id": "BackendNodeId", "type": "integer" },
+        {
+          "id": "Node",
+          "type": "object",
+          "properties": [
+            { "name": "nodeId", "$ref": "NodeId" },
+            { "name": "parentId", "$ref": "NodeId", "optional": true },
+            { "name": "backendNodeId", "$ref": "BackendNodeId" },
+            { "name": "nodeType", "type": "integer" },
+            { "name": "nodeName", "type": "string" },
+            { "name": "localName", "type": "string" },
+            { "name": "nodeValue", "type": "string" },
+            { "name": "childNodeCount", "type": "integer", "optional": true },
+            { "name": "children", "type": "array", "items": { "$ref": "Node" }, "optional": true },
+            { "name": "attributes", "type": "array", "items": { "type": "string" }, "optional": true },
+            { "name": "documentURL", "type": "string", "optional": true },
+            { "name": "baseURL", "type": "string", "optional": true }
+          ]
+        },
+        { "id": "Quad", "type": "array", "items": { "type": "number" }, "description": "Eight values describing four x,y corners." },
+        {
+          "id": "BoxModel",
+          "type": "object",
+          "properties": [
+            { "name": "content", "$ref": "Quad" },
+            { "name": "padding", "$ref": "Quad" },
+            { "name": "border", "$ref": "Quad" },
+            { "name": "margin", "$ref": "Quad" },
+            { "name": "width", "type": "integer" },
+            { "name": "height", "type": "integer" }
+          ]
+        },
+        {
+          "id": "Rect",
+          "type": "object",
+          "properties": [
+            { "name": "x", "type": "number" },
+            { "name": "y", "type": "number" },
+            { "name": "width", "type": "number" },
+            { "name": "height", "type": "number" }
+          ]
+        }
+      ],
+      "commands": [
+        { "name": "enable" },
+        { "name": "disable" },
+        {
+          "name": "getDocument",
+          "description": "Read the parser tree and enable documentUpdated events. depth defaults to one, accepts 0..256, and -1 requests the bounded subtree. pierce=true is unsupported. Serialized root is limited to 4 MiB.",
+          "parameters": [
+            { "name": "depth", "type": "integer", "optional": true },
+            { "name": "pierce", "type": "boolean", "optional": true }
+          ],
+          "returns": [ { "name": "root", "$ref": "Node" } ]
+        },
+        {
+          "name": "querySelector",
+          "description": "Query the supported selector subset within the requested node. A missing match returns nodeId zero.",
+          "parameters": [ { "name": "nodeId", "$ref": "NodeId" }, { "name": "selector", "type": "string" } ],
+          "returns": [ { "name": "nodeId", "$ref": "NodeId" } ]
+        },
+        {
+          "name": "querySelectorAll",
+          "parameters": [ { "name": "nodeId", "$ref": "NodeId" }, { "name": "selector", "type": "string" } ],
+          "returns": [ { "name": "nodeIds", "type": "array", "items": { "$ref": "NodeId" } } ]
+        },
+        {
+          "name": "getAttributes",
+          "parameters": [ { "name": "nodeId", "$ref": "NodeId" } ],
+          "returns": [ { "name": "attributes", "type": "array", "items": { "type": "string" } } ]
+        },
+        {
+          "name": "getBoxModel",
+          "description": "Union of this node's own or descendant flow boxes, with viewport intersection required. The four model quads are currently equal and may extend outside the viewport. Wholly offscreen/non-rendered nodes, layout collections reaching 100000 rectangles, and queries exceeding four million traversal steps return an error without a partial model. This is not a full CSS box model.",
+          "parameters": [ { "name": "nodeId", "$ref": "NodeId" } ],
+          "returns": [ { "name": "model", "$ref": "BoxModel" } ]
+        },
+        {
+          "name": "focus",
+          "description": "Focus an editable control represented by nodeId. Other node-handle forms are unsupported.",
+          "parameters": [ { "name": "nodeId", "$ref": "NodeId" } ]
+        }
+      ],
+      "events": [ { "name": "documentUpdated", "description": "Document replaced; discard previous nodeId references and request the new root." } ]
+    },
+    {
+      "domain": "Input",
+      "description": "Input for the existing page controls, using CSS viewport coordinates and fixed scale one. No touch, drag, IME composition, or JavaScript event dispatch.",
+      "types": [ { "id": "MouseButton", "type": "string", "enum": [ "none", "left" ] } ],
+      "commands": [
+        {
+          "name": "dispatchMouseEvent",
+          "description": "Basic left click and vertical wheel input within the page viewport. Press/release require button:left; buttons and clickCount are limited to 0 or 1, modifiers to zero, deltaX to zero, and absolute deltaY to at most 100000. A release within five pixels of its session's press activates once. Mouse movement has no hover/drag behavior.",
+          "parameters": [
+            { "name": "type", "type": "string", "enum": [ "mousePressed", "mouseReleased", "mouseMoved", "mouseWheel" ] },
+            { "name": "x", "type": "number" },
+            { "name": "y", "type": "number" },
+            { "name": "modifiers", "type": "integer", "optional": true },
+            { "name": "button", "$ref": "MouseButton", "optional": true },
+            { "name": "buttons", "type": "integer", "optional": true },
+            { "name": "clickCount", "type": "integer", "optional": true },
+            { "name": "deltaX", "type": "number", "optional": true },
+            { "name": "deltaY", "type": "number", "optional": true }
+          ]
+        },
+        {
+          "name": "dispatchKeyEvent",
+          "description": "Page keys: Enter, Backspace, Tab, PageUp/Down, ArrowUp/Down, Shift, Control, or one character. Only Ctrl=2 and Shift=8 modifier bits are supported, and Ctrl+A is the sole control shortcut. windowsVirtualKeyCode fallback handles 13, 8, and 9; code, nativeVirtualKeyCode, unmodifiedText, and autoRepeat are validated metadata, not alternative key translation. Editing-command arrays are unsupported. Text insertion requires focused input, printable text, and a resulting value of at most 8191 UTF-8 bytes; rejection preserves the value and selection. rawKeyDown does not insert printable text, and keyUp has no edit action.",
+          "parameters": [
+            { "name": "type", "type": "string", "enum": [ "keyDown", "keyUp", "rawKeyDown", "char" ] },
+            { "name": "modifiers", "type": "integer", "optional": true },
+            { "name": "text", "type": "string", "optional": true },
+            { "name": "unmodifiedText", "type": "string", "optional": true },
+            { "name": "key", "type": "string", "optional": true },
+            { "name": "code", "type": "string", "optional": true },
+            { "name": "windowsVirtualKeyCode", "type": "integer", "optional": true },
+            { "name": "nativeVirtualKeyCode", "type": "integer", "optional": true },
+            { "name": "autoRepeat", "type": "boolean", "optional": true }
+          ]
+        },
+        {
+          "name": "insertText",
+          "experimental": true,
+          "description": "Insert printable UTF-8 text into the focused editable page control. The resulting value must be at most 8191 UTF-8 bytes, accounting for selected text replacement. Invalid text or excess size returns an error without changing value or selection.",
+          "parameters": [ { "name": "text", "type": "string" } ]
+        }
+      ]
+    }
+  ]
+}

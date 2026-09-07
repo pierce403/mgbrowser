@@ -36,6 +36,8 @@ The site is plain HTML/CSS, without a build dependency download. `.github/workfl
 
 `src/document.rs` owns HTML parsing, `src/net.rs` owns HTTP/TLS/session cookies, `src/paint.rs` owns Rust shaping/rasterization, and `src/main.rs` owns layout and window/input/navigation. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
 
+`src/cdp.rs` owns loopback discovery/WebSocket transport; `src/cdp_browser.rs` binds the documented CDP subset to real browser behavior. Read docs/CDP.md and its schema before changing protocol commands. Use the external examples/cdp_journey.rs fixture client for CDP input/navigation verification. Protocol support is partial; never return success for an unimplemented behavior or claim general automation-client compatibility without a pinned client test.
+
 ## Collaboration
 
 Lead with the result, then evidence and limitations. Favor concrete progress and repo-local records. Keep planning distinct from adopted implementation. Report local validation, GitHub deployment, HTTPS delivery, and visual inspection separately.
