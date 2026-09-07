@@ -311,6 +311,25 @@ form and destination frames were inspected. Independent semantic/resource checks
 pass with no limit changes. Publication evidence is in the daily log; authored
 local success is not Google compatibility.
 
+`/script-concat` is the frozen concat-built form. Dense and sparse concatenation,
+inherited numeric reads, trailing holes, nested identity, UTF-16 and unchanged
+source slots must work before any control is created:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-concat \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/concat-journey
+```
+
+The unchanged authored page passes the actual-worker check at 75,704 accepted
+bytes, one completed script/no errors. Focused tests cover opaque DOM node identity
+and actual text/title/navigation, Symbol conversion rejection, ordinary nullish
+receiver recovery, and fatal result-length/element-copy limits. The daily log
+records 604 debug tests, 506 selected release checks and all three exact CI
+journey steps passing locally (15 native/15 external CDP destinations). Root
+inspected the real query and destination frames. This is application-handler
+and public CDP verification, not physical keyboard or Google acceptance.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
@@ -348,6 +367,15 @@ accepted bytes. Exit 2, no result or destination; blank frame inspected. The pri
 prototype error is absent in this response, not a controlled benchmark or proof
 of its original argument. Next is independently authored bounded concat support
 and separate cumulative-storage diagnosis, with every execution limit retained.
+
+The post-concat checkpoint still submits the real Google form with verified TLS
+and ordinary cookies. Homepage HTTP 200 has 26 items/one form and no allocation
+rejection (2,511,733 accepted bytes). Search HTTP 200 remains blank with two
+completed scripts/three errors, now repeating a FunctionCode allocation rejection
+after 4,194,294 accepted bytes, requesting 128 against the 4,194,304 limit. Exit 2,
+no result/destination; blank frame inspected. Unsupported concat is absent in this
+response, not a controlled benchmark. Next is independent cumulative-storage
+ownership diagnosis without raised limits or adapting live page source.
 
 ## Browser automation
 
@@ -416,11 +444,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-errors tmp/cdp-errors-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-concat tmp/cdp-concat-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype and Error-family
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family and concat
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -430,7 +461,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

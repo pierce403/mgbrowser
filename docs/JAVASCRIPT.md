@@ -24,7 +24,7 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   precedence, left-to-right side effects, short circuits, calls and exceptions.
 - Basic prototypes and selected Object, Array, String, Number, Boolean, Function,
   Error and Math operations exist. Examples include `call`/`apply`,
-  `Object.create` without descriptors, `Object.keys`, array push/pop/slice/join,
+  `Object.create` without descriptors, `Object.keys`, array push/pop/slice/join/concat,
   string indexing/slicing, numeric conversion, and the four URI encoding/decoding
   functions. URI conversion preserves UTF-16/UTF-8 semantics and distinguishes
   complete-URI reserved separators from component data. This is not complete builtin
@@ -915,3 +915,77 @@ inspected. This response no longer reports the prototype error, but does not
 establish its original argument or a controlled benchmark. Next is generic bounded
 concat support using independent authored cases and separate storage diagnosis.
 Exact-SHA remote acceptance/publication is recorded in the daily log when verified.
+
+### Bounded Array.concat and array identity
+
+Array.prototype.concat now accepts a generic receiver, boxes primitives and
+rejects null/undefined. The receiver comes first, followed by arguments in order.
+Only genuine arrays spread, exactly one level. Other values—including functions,
+Errors, boxed values, arguments snapshots and opaque Host handles—are single
+elements. There is no element coercion, array-like length read, Host callback,
+constructor lookup, species or isConcatSpreadable protocol. The result is a fresh
+intrinsic Array independently of replaced globals or source constructor fields.
+
+Each array's intrinsic length is captured when that operand is reached, after
+earlier getters may have changed it. Ascending HasProperty then Get operations
+include inherited numeric properties with the original receiver; missing indices
+remain holes, explicit undefined stays present, and trailing holes contribute to
+the full result length. Nested objects/arrays and Symbols retain identity; string
+copies preserve UTF-16. New result slots are own properties, not inherited writes,
+and do not change source slots. References: [ES5 concat](https://262.ecma-international.org/5.1/#sec-15.4.4.4)
+and [current concat](https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array.prototype.concat).
+The explicit final length preserves trailing holes rather than reproducing the
+printed ES5 algorithm's omission; modern spreadability/species hooks remain absent.
+
+Array.prototype is now itself an empty genuine array. Arguments snapshots retain
+their prepaid indexed storage and independent parameter copies, but have a distinct
+own Arguments brand and Object.prototype parent. Array.isArray returns false for
+them, concat appends them whole, and Object.prototype.toString uses Arguments
+unless the existing toStringTag hook overrides it. This is not full arguments
+semantics: unmapped parameters, array-style index/length coupling and partial
+descriptors remain explicit approximations. Borrowing existing array methods on
+indexed snapshots retains its current behavior; unrelated generic methods are
+not expanded by concat.
+
+The unpublished empty result pays its existing 128-byte metadata/object-cap cost
+before source getters. A private builder prepays bounded geometric capacity at
+64 bytes per slot before each HasProperty/Get, including holes and spare credits.
+Each operand's known length must fit the remaining 10,000-element allowance before
+visiting its slots. Real element-read payload copies stay charged; already-owned
+nonarray payloads and the completed builder move without redundant copies. Index
+names use a bounded five-byte stack buffer, not an uncharged heap string. Shared
+fuel and existing prototype-depth rules apply; failures remain fatal/latched and
+return no partial array. An unpublished empty object remains cumulatively charged
+on failure. Other construction, mutation, ingress and every cap stay unchanged.
+
+The frozen 1,852-byte tests/fixtures/script/concat.html is served at /script-concat.
+Its actual-worker baseline stopped at the first dense concat call at 69,290
+accepted bytes, no heap rejection and no controls. The unchanged page now completes
+one script/no errors and creates real controls at 75,704 bytes: Bootstrap 25,854,
+Source 1,798, Ast 38,070 and Runtime 9,982, FunctionCode/regex zero. These are
+different completed workloads, not a memory-performance comparison. Focused
+checks pass 26 semantic, 26 DOM and 37 actual-worker groups. Worker negatives
+preserve fallback/latching at the 10,001st result slot and a real 159,984-byte
+element-copy rejection; ordinary null-receiver errors allow a later script.
+All 26 independent semantic, 15 resource and 10 private groups pass. Private
+checks cover inherited getter mutation/order, recursive re-entry on default
+stacks, admission before callbacks and owned moves versus actual paid copies.
+Object remains 112 bytes, Property 64 bytes and bootstrap 25,854 bytes. The frozen
+full suite passes 604 debug tests and 506 selected release checks with unchanged
+limits. The three exact CI journey steps pass locally with 15 native and 15
+external CDP destinations, including real Unicode query/hidden/submit controls
+from the concat fixture. Root inspected the query and destination frames.
+
+One bounded post-concat Google checkpoint still renders no result links.
+Homepage HTTP 200 has 26 items/one form, three completed scripts/seven errors and
+no allocation rejection (2,511,733 accepted bytes). Actual form submission works
+with verified TLS and ordinary cookies. Search HTTP 200/title Google Search has
+zero items/forms and two completed scripts/three errors repeating a FunctionCode
+rejection: 4,194,294 accepted, 128 requested, 4,194,304 limit. Phases are Bootstrap
+25,854, Source 132,384, Ast 2,438,297, FunctionCode 21,760 and Runtime 1,575,999,
+regex zero. Exit 2/JOURNEY_INCOMPLETE; blank frame inspected, no result/destination.
+Unsupported concat is absent in this response, not a controlled performance
+comparison or a guarantee that one more change will finish compatibility. Next
+is independent cumulative-storage ownership diagnosis; the last rejected phase
+is not automatically the best optimization target. No live-source inspection,
+adaptation or retry. Exact publication evidence follows in the daily log.

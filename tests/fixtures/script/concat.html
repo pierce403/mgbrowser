@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><title>Array concat worker baseline</title></head><body>
+<p id="status">Authored local Array.concat fixture fallback.</p>
+<script>
+var joined=[1].concat([2],3);
+if(joined.length!==3 || joined[0]!==1 || joined[1]!==2 || joined[2]!==3) throw 'Dense concat failed';
+var shared={value:7};
+var nested=[9];
+var source=[,shared,'\ud800'];
+var result=source.concat([nested],null);
+if(result===source || result.length!==5 || (0 in result) || result[1]!==shared || result[2].charCodeAt(0)!==55296 || result[3]!==nested || result[4]!==null) throw 'Shallow identity or UTF16 concat failed';
+result[1]='replacement';
+result[2]='changed';
+if(source.length!==3 || (0 in source) || source[1]!==shared || source[2].charCodeAt(0)!==55296 || nested[0]!==9) throw 'Concat mutated source slots';
+Array.prototype[1]='inherited';
+var sparse=Array(3);
+var copied=sparse.concat([]);
+if(copied.length!==3 || copied.hasOwnProperty('0') || !copied.hasOwnProperty('1') || copied.hasOwnProperty('2') || copied[1]!=='inherited' || sparse.hasOwnProperty('1')) throw 'Inherited element or trailing hole failed';
+delete Array.prototype[1];
+if(copied[1]!=='inherited' || (1 in sparse)) throw 'Inherited concat copy failed';
+document.title='Concat-built local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var hidden=document.createElement('input');
+hidden.type='hidden';
+hidden.name='source';
+hidden.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.name='submit';
+go.value='search';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(hidden);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local concat form ready';
+</script></body></html>

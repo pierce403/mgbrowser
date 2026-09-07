@@ -104,6 +104,133 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-concat-worker-baseline".into(),
+        html: include_str!("fixtures/script/concat.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("concat fixture allocation: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Concat-built local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(document.nodes.iter().any(|node| node.tag == "button"
+        && node.attr("type") == Some("submit")
+        && node.attr("name") == Some("submit")
+        && node.attr("value") == Some("search")));
+    assert!(reply.html.contains("Authored local concat form ready"));
+}
+
+#[test]
+fn restricted_child_concat_null_receiver_is_ordinary_and_later_script_recovers() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-concat-recovery".into(),
+        html: "<html><head><title>Concat fallback</title></head><body><p id=output>Readable concat fallback</p><script>Array.prototype.concat.call(null);document.title='Incorrect completion';location.href='/incorrect';</script><script>var result=[1].concat([2]);if(result.length!==2 || result[1]!==2)throw 'Concat recovery failed';document.getElementById('output').textContent='Recovered with actual concat';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+    assert!(reply.errors[0].contains("TypeError:"));
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Concat fallback");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Recovered with actual concat"));
+}
+
+#[test]
+fn restricted_child_concat_total_length_cap_is_fatal_and_latched() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-concat-length-limit".into(),
+        html: "<html><head><title>Concat length fallback</title></head><body><p id=output>Readable concat length fallback</p><script>var source=Array(10000);var first=source.concat();if(first===source || first.length!==10000 || first.hasOwnProperty('9999'))throw 'First concat failed';document.getElementById('output').setAttribute('data-concat','ready');try{source.concat([1]);document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    for error in &reply.errors {
+        assert_eq!(
+            error.split_once(": ").unwrap().1,
+            "JavaScript array limit exhausted"
+        );
+    }
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Concat length fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-concat"), Some("ready"));
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable concat length fallback"));
+}
+
+#[test]
+fn restricted_child_concat_real_element_copy_exhaustion_preserves_fallback() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-concat-copy-limit".into(),
+        html: "<html><head><title>Concat copy fallback</title></head><body><p id=output>Readable concat copy fallback</p><script>var source=[Array(10000).join('abcdefgh')];var first=source.concat();if(first===source || first.length!==1 || first[0].length!==79992)throw 'First concat copy failed';document.getElementById('output').setAttribute('data-concat','ready');try{for(var index=0;index<30;index++){source.concat();}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("concat real-copy rejection: {report:?}");
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let rejected = report.first_rejected.unwrap();
+    assert_eq!(
+        rejected.phase,
+        mg_deps::js::runtime::AllocationPhase::Runtime
+    );
+    assert_eq!(rejected.requested_bytes, 79_992 * 2);
+    let diagnostic = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(diagnostic.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, diagnostic);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Concat copy fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-concat"), Some("ready"));
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable concat copy fallback"));
+}
+
+#[test]
 fn restricted_child_uses_error_family_prototypes_before_creating_controls() {
     // Exact frozen authored baseline: no controls exist until every Error-family
     // prototype/default/instance/string-conversion requirement has succeeded.

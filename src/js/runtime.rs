@@ -18,6 +18,8 @@
 
 use super::{Expr, ForInBinding, Program, Stmt, SwitchCase, regexp, storage, syntax, uri};
 use std::rc::Rc;
+#[path = "array.rs"]
+mod array;
 #[path = "error.rs"]
 mod error;
 #[path = "prototype.rs"]
@@ -342,7 +344,9 @@ impl PrepaidArray {
             growing: true,
         }
     }
-    fn push_owned(&mut self, budget: &mut Budget, value: Option<Value>) -> Eval<()> {
+    // Concat must reserve a slot before a source getter can run. Other producers
+    // retain their existing push-time admission through the same helper.
+    fn prepare_push(&mut self, budget: &mut Budget) -> Eval<()> {
         if self.values.len() >= MAX_ARRAY {
             return Err(Fault::Fatal("JavaScript array limit exhausted".into()));
         }
@@ -360,6 +364,10 @@ impl PrepaidArray {
             self.values.reserve_exact(target - self.values.len());
             self.paid_slots = target;
         }
+        Ok(())
+    }
+    fn push_owned(&mut self, budget: &mut Budget, value: Option<Value>) -> Eval<()> {
+        self.prepare_push(budget)?;
         self.values.push(value);
         Ok(())
     }
@@ -398,6 +406,8 @@ struct Object {
     boxed: Option<Value>,
     regexp: Option<Rc<regexp::Regex>>,
     error: Option<ErrorKind>,
+    // Snapshot storage is indexed, but an arguments object is not an Array.
+    arguments: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrototypeIdentity {
@@ -639,6 +649,14 @@ impl Runtime {
                 .object(prototype, None)
                 .expect("fixed bounded runtime bootstrap");
         }
+        let empty_array =
+            PrepaidArray::with_slots(&mut runtime.budget, 0, AllocationPhase::Runtime)
+                .expect("fixed empty Array prototype");
+        runtime.objects[runtime.array_prototype].array = Some(
+            empty_array
+                .into_values()
+                .expect("prepaid empty Array prototype"),
+        );
         for (id, prefix, methods) in [
             (1, "Object", &["toString", "valueOf", "hasOwnProperty"][..]),
             (
@@ -1038,6 +1056,7 @@ impl Runtime {
             boxed: None,
             regexp: None,
             error: None,
+            arguments: false,
         });
         Ok(id)
     }
@@ -2941,7 +2960,8 @@ impl Runtime {
                     for arg in args {
                         items.push_owned(&mut self.budget, Some(arg))?;
                     }
-                    let arguments = self.object(Some(self.array_prototype), Some(items))?;
+                    let arguments = self.object(Some(self.object_prototype), Some(items))?;
+                    self.objects[arguments].arguments = true;
                     self.put_own(arguments, "callee", Value::Function(id), false)?;
                     self.define(environment, "arguments", Value::Object(arguments))?;
                 }
@@ -3102,9 +3122,8 @@ impl Runtime {
                     self.object(Some(self.array_prototype), Some(array))?,
                 ))
             }
-            "Array.isArray" => Ok(Value::Bool(
-                matches!(first, Value::Object(id) if self.objects.get(id).is_some_and(|object| object.array.is_some())),
-            )),
+            "Array.isArray" => Ok(Value::Bool(self.is_array(&first))),
+            "Array.concat" => self.array_concat(this, args, host),
             "Function.call" => {
                 let receiver = if args.is_empty() {
                     Value::Undefined

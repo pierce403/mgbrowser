@@ -746,6 +746,58 @@ fn error_message_symbol_conversion_preserves_dom_target_and_prior_hook_effects()
 }
 
 #[test]
+fn concat_preserves_host_node_identity_and_drives_dom_text_title_navigation() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var node=document.getElementById('output');
+        var receiver=Array.prototype.concat.call(node,['Rust & café']);
+        if(receiver.length!==2 || receiver[0]!==node)throw 'Host concat identity failed';
+        receiver[0].textContent=receiver[1];
+        var parts=['Concat'].concat(['DOM','ready']);document.title=parts.join(' ');
+        var destination=['/concat'].concat(['-destination']);location.href=destination.join('');
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/concat-destination")
+    );
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Concat DOM ready");
+    assert_eq!(content(&doc, "#output"), "Rust & café");
+    readable(&doc);
+}
+
+#[test]
+fn concat_keeps_symbol_values_until_dom_conversion_rejects_without_mutation() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var value=Symbol('not DOM text');var result=[].concat([value]);
+        if(result.length!==1 || result[0]!==value)throw 'Concat changed Symbol';
+        document.title='Concat Symbol preserved';
+        try{document.getElementById('output').textContent=result[0];location.href='/incorrect';}
+        catch(error){if(String(error)!=='TypeError: cannot convert Symbol to string')throw error;}
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Concat Symbol preserved");
+    assert_eq!(content(&doc, "#output"), "Unchanged output");
+    readable(&doc);
+}
+
+#[test]
 fn fatal_dom_coercion_cannot_run_handlers_or_a_later_script() {
     let reply = page(
         "",

@@ -34,11 +34,13 @@ conversion. Functions and native builtins now retain genuine prototype identity,
 including inherited metadata and Symbol keys, construction and instanceof.
 Six existing Error families now have genuine prototypes and instances, ordered
 string conversion and bounded callback-free host diagnostics.
-All 547 debug tests and 449 selected release checks pass locally, alongside
-14 native and 14 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt replaces the prior prototype error with
-unsupported Array.concat; a later allocation rejection remains, with no actionable
-results. Next is independently tested concat support and cumulative-storage work.
+Generic Array.concat now preserves one-level spreading, inherited reads, holes
+and identity, with distinct Array/Arguments branding and prepaid result storage.
+All 604 debug tests and 506 selected release checks pass locally, alongside
+15 native and 15 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt no longer reports unsupported concat,
+but stops at the unchanged 4 MiB cumulative allocation limit, with no actionable
+results. Next is independently measured storage-ownership work.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

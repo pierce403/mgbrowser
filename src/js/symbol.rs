@@ -711,8 +711,21 @@ impl Runtime {
         key: &PropertyKey,
         own_only: bool,
     ) -> Eval<bool> {
+        let key = match key {
+            PropertyKey::String(key) => KeyRef::String(key),
+            PropertyKey::Symbol(key) => KeyRef::Symbol(key),
+        };
+        self.has_property(object, key, own_only)
+    }
+
+    pub(super) fn has_property(
+        &mut self,
+        object: &Value,
+        key: KeyRef<'_>,
+        own_only: bool,
+    ) -> Eval<bool> {
         if matches!(object, Value::Host(_)) {
-            return Err(unsupported(if matches!(key, PropertyKey::Symbol(_)) {
+            return Err(unsupported(if matches!(key, KeyRef::Symbol(_)) {
                 "Symbol keys on host objects"
             } else {
                 "property inspection on host objects"
@@ -721,10 +734,6 @@ impl Runtime {
         if own_only && object.primitive() {
             return Ok(false);
         }
-        let key = match key {
-            PropertyKey::String(key) => KeyRef::String(key),
-            PropertyKey::Symbol(key) => KeyRef::Symbol(key),
-        };
         let mut current = Some(self.object_identity(object)?);
         for _ in 0..MAX_CALLS {
             let Some(owner) = current else {
@@ -815,6 +824,7 @@ impl Runtime {
             return Ok(Value::String(output));
         }
         let fallback = match &value {
+            Value::Object(id) if self.objects[*id].arguments => "Arguments",
             Value::Object(id) if self.objects[*id].array.is_some() => "Array",
             Value::Object(id) if self.objects[*id].regexp.is_some() => "RegExp",
             Value::Object(id) if self.objects[*id].error.is_some() => "Error",
