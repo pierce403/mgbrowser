@@ -63,7 +63,9 @@ so a first parser failure does not hide other missing capabilities in that respo
 `SCRIPT_ALLOCATION` contains a fixed JSON realm report with accepted bytes,
 exclusive charge-site totals and the first rejected allocation. Repeated script
 errors can be the same latched failure; they are not separate allocation attempts.
-These diagnostics contain no source text or URLs and do not expose a page API.
+Only the fixed `SCRIPT_ALLOCATION` report excludes source text and URLs; it adds
+no page API. `SCRIPT_DIAGNOSTIC` can contain page-supplied exception text or URLs:
+escaping is not redaction, so keep raw live logs in ignored `tmp/`.
 The report is cumulative logical accounting, not measured process memory.
 `--disable-scripts` explicitly selects the default behavior.
 
