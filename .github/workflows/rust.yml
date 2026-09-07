@@ -23,7 +23,7 @@ jobs:
       - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked --all-targets
       - name: Check expressions, allocations and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test script_worker
+        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test script_worker
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
@@ -95,6 +95,7 @@ jobs:
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-allocation --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-allocation
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-arrays
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bindings --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bindings
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-sources
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
           target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
@@ -127,6 +128,8 @@ jobs:
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-arrays tmp/script-journey/cdp-arrays-destination.png 2>&1 | tee tmp/script-journey/cdp-arrays-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-bindings"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/bindings-home.png > tmp/script-journey/bindings-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-bindings tmp/script-journey/cdp-bindings-destination.png 2>&1 | tee tmp/script-journey/cdp-bindings-client.log
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-sources"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/sources-home.png > tmp/script-journey/sources-home.json
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-sources tmp/script-journey/cdp-sources-destination.png 2>&1 | tee tmp/script-journey/cdp-sources-client.log
           SCRIPT_CDP
       - name: Preserve rendered local journey
         if: always()

@@ -518,6 +518,74 @@ fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budg
 }
 
 #[test]
+fn restricted_child_owned_function_source_creates_form_inside_unchanged_budget() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-sources".into(),
+        html: include_str!("fixtures/script/sources.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    println!("source fixture allocation: {report:?}");
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert!(report.first_rejected.is_none());
+    assert!(report.phases.runtime >= 10_000 * 64 + 749_925 * 2);
+    assert!(report.phases.source >= 749_925);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Source-owned local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(reply.html.contains("Owned source and real controls fit"));
+}
+
+#[test]
+fn restricted_child_multiple_source_fragments_keep_real_join_and_utf8_limits() {
+    let separator = " ".repeat(75);
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-multiple-source-limit".into(),
+        html: format!(
+            "<html><head><title>Original source title</title></head><body><p>Readable source fallback</p><script>try{{Function(Array(10000).join('{separator}'),'',\"document.title='Incorrect body';\")();location.href='/incorrect';}}catch(error){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later script';</script></body></html>"
+        ),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    let first = report.first_rejected.unwrap();
+    assert_eq!(first.phase, mg_deps::js::runtime::AllocationPhase::Source);
+    // Two parameter fragments still require a real joined buffer and comma,
+    // admitted before the required ASCII-to-UTF8 source copy is rejected.
+    assert_eq!(first.requested_bytes, 749_926);
+    assert!(report.phases.source >= 749_926 * 2);
+    assert!(report.phases.runtime >= 10_000 * 64 + 749_925 * 2);
+    let diagnostic = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(diagnostic.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, diagnostic);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(document.title, "Original source title");
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable source fallback"));
+}
+
+#[test]
 fn restricted_child_parameter_copy_creates_form_inside_unchanged_budget() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/script-bindings".into(),

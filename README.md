@@ -24,8 +24,11 @@ function code keep an authored large compiled factory within the unchanged
 4 MiB budget. Prepaid array construction and moved argument snapshots now also
 let six maximum-sized arrays and a real form fit below that cap. Formal parameters
 keep their charged independent copies without paying again for the move into a
-local binding; a separate large-parameter form also fits. All 327 debug tests and
-217 selected release checks pass locally, with ingress and real-copy limits intact.
+local binding; a separate large-parameter form also fits. A sole Function parameter
+fragment now moves without redundant joining while real UTF-8 conversion stays
+charged. All 344 debug tests and 234 selected release checks pass locally, with
+ingress and real-copy limits intact. The latest source optimization did not change
+Google's observed search-allocation failure.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

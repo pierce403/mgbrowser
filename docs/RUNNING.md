@@ -212,23 +212,41 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-bindings \
   --evidence-dir tmp/bindings-journey
 ```
 
-All 327 debug tests, 217 selected release checks and all three exact CI journey
-steps pass locally, including native/CDP submission and destination navigation for
+That increment passed 327 debug tests, 217 selected release checks and all three exact CI journey
+steps locally, including native/CDP submission and destination navigation for
 this form. Native query and CDP destination frames were inspected. A larger real
 copy still fails fatally; generic ingress/binding/catch and read charges remain.
+
+`/script-sources` compiles and calls a form builder using a generated 749,925-unit
+whitespace parameter fragment. A sole owned fragment now moves without an
+unnecessary joined-buffer copy; source creation and UTF-8 conversion still pay.
+The unchanged fixture completes with 2,935,365 accepted bytes below 4 MiB:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-sources \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/sources-journey
+```
+
+All 344 debug tests, 234 selected release checks and all three exact CI journey
+steps pass locally. Native/CDP paths submit its real Unicode query and hidden
+field, click the local result and reach the destination; frames inspected.
+Multiple source fragments still require a charged joined buffer, and the worker
+negative control preserves fatal UTF-8 exhaustion and readable fallback.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
 response without results is a failed journey, not a pass. Keep public-network
 checks manual and bounded; ordinary CI uses only the local fixture. The
-2026-09-07 post-parameter Google attempt submitted the real form. The homepage no
+2026-09-07 post-source Google attempt submitted the real form. The homepage no
 longer exhausted the allocation budget, but the HTTP 200 “Google Search” response
 still rejected an AST charge: 1,684,603 accepted bytes plus a requested 2,575,110
 bytes exceeds the unchanged 4 MiB limit. Three errors repeat this first failure;
 no rendered items/forms, result or destination were reached. Google's acceptance
-goal remains unmet. The remaining admission gap is 65,409 bytes. Next is further
-independently tested AST/runtime storage work, not blindly raising limits; real
+goal remains unmet. The remaining admission gap is 65,409 bytes, identical to the
+preceding checkpoint: this source optimization did not help that served search
+response. Next is measured AST representation/container accounting, not blindly raising limits; real
 DOM events and timers are still missing.
 
 ## Browser automation
@@ -283,11 +301,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-bindings tmp/cdp-bindings-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-sources tmp/cdp-sources-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array and parameter-copy
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy and source-ownership
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -297,7 +318,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

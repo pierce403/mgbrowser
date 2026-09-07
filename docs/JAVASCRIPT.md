@@ -222,6 +222,36 @@ unsuitable for sensitive accounts or arbitrary hostile browsing.
 
 ## Evidence and next gates
 
+### Sole Function parameter-source ownership
+
+The narrow ownership change moves the already-owned UTF-16 buffer when a
+Function constructor has exactly one parameter fragment after all ToString
+conversions and body removal. No joining is needed in that case. Zero/multiple
+fragments retain their current preflighted joining policy, including commas.
+Real source creation, UTF-8 conversion, ingress, parse attempts and every limit
+remain charged; coercion completes in the same order before grammar validation.
+
+Independent tests verify pointer/capacity preservation for the sole buffer, unchanged
+zero/multiple-fragment charges, independent ASCII-padding slopes of Runtime two
+and Source one bytes/unit (formerly two/three), a 900,000-unit callable case,
+separate parameter/body grammar, unpaired UTF-16 source rejection and fatal cumulative limits.
+The authored `/script-sources` form uses a generated 749,925-unit whitespace
+fragment. Before the change its worker rejected Source 749,925 after 3,664,599
+accepted bytes. The unchanged fixture now creates and uses real controls below
+4 MiB: 2,935,365 accepted bytes, one completed script and no errors. Native and
+external CDP journeys submit its real query/hidden field and reach the local
+destination; native query and CDP destination frames were inspected. These runs
+complete different amounts of work and are not an RSS comparison.
+
+All 344 debug tests, 234 selected release checks and all three exact CI journey
+steps pass locally on 2026-09-07. Twelve independent source groups and three new
+private ownership/preflight groups cover the contract; 21 actual-worker groups
+include a multi-fragment control that still pays for real joining and rejects
+UTF-8 allocation without body/catch/finally/later-script effects. Parser source
+limits still reject excessive source even when heap admission fits. No existing
+tests, caps, dependencies, worker capabilities or CDP commands changed.
+Publication evidence is recorded separately in the daily log.
+
 ### Parameter-copy binding ownership
 
 The bounded ownership change removes only the payload surcharge when a
@@ -501,6 +531,27 @@ inspected search frame remains blank and the journey exits 2 without a result or
 destination. Changing responses are not a controlled performance comparison or
 proof that another optimization completes compatibility. Next work remains an
 independent ownership/AST audit with true-copy/ingress charges and all caps intact.
+
+The post-source-ownership live checkpoint is unchanged at search admission:
+HTTP 200, no items/forms, two completed scripts and three errors repeating the
+same AST failure (accepted 1,684,603/requested 2,575,110/limit 4,194,304). The
+65,409-byte gap and all accepted search-phase totals match the preceding
+checkpoint. The homepage still supplies its real form. The inspected search frame
+is blank; exit 2, no actual result or destination. This optimization has no observed
+benefit on that served search response, and does not complete the Google goal.
+
+Next is a separately reviewed AST representation/accounting change. An authored
+x86_64 allocator probe measures 144-byte statements; boxing only For test/update
+expressions and the ForIn binding projects an 80-byte statement. A retained
+20,000-statement function currently requests 2,880,612 storage bytes and fails a
+4,480,164-byte AST charge; the layout-only projection is 1,600,356 storage bytes.
+These are requested retained allocations, not parser temporaries or RSS, and the
+representation change is not implemented yet. Lowering fixed weights alone is
+incorrect: an uncalled function with 10,000 array holes retains 918,260 bytes,
+including capacity for 16,384 slots, while its current AST charge is only 388.
+The new boundary must charge container capacity, holes, new boxes and separately
+owned payloads without counting inline values twice; some charges must increase.
+Source/attempt accounting, real copies, grammar and all caps remain unchanged.
 
 Language references are [ECMAScript 5.1](https://262.ecma-international.org/5.1/),
 the [current ECMAScript specification](https://tc39.es/ecma262/) and the

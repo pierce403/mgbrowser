@@ -915,19 +915,7 @@ impl Runtime {
             parts.push(self.units_in(argument, host, AllocationPhase::Source)?);
         }
         let body = parts.pop().unwrap_or_default();
-        let length = parts
-            .iter()
-            .map(Vec::len)
-            .fold(parts.len().saturating_sub(1), usize::saturating_add);
-        self.budget
-            .allocate_in(AllocationPhase::Source, length.saturating_mul(2))?;
-        let mut parameters = Vec::with_capacity(length);
-        for (index, part) in parts.into_iter().enumerate() {
-            if index != 0 {
-                parameters.push(b',' as u16);
-            }
-            parameters.extend(part);
-        }
+        let parameters = self.function_parameter_source(parts)?;
         let parameters = self.utf8_source(&parameters)?;
         let body = self.utf8_source(&body)?;
         self.budget.allocate_in(AllocationPhase::Source, 128)?;
@@ -941,6 +929,31 @@ impl Runtime {
         };
         // "anonymous" is display metadata, not a self-name lexical binding.
         self.function(name.as_ref(), &params, &body, 0, false)
+    }
+
+    // Called only after all Function arguments were converted and the body was
+    // removed. A sole owned fragment needs no join/copy; UTF-8 conversion and
+    // grammar/resource admission still happen in dynamic_function afterward.
+    fn function_parameter_source(&mut self, mut parts: Vec<Vec<u16>>) -> Eval<Vec<u16>> {
+        if parts.len() == 1 {
+            // Retain first-failure latching without an accepted payload charge.
+            self.budget.allocate_in(AllocationPhase::Source, 0)?;
+            return Ok(parts.pop().expect("one parameter fragment"));
+        }
+        let length = parts
+            .iter()
+            .map(Vec::len)
+            .fold(parts.len().saturating_sub(1), usize::saturating_add);
+        self.budget
+            .allocate_in(AllocationPhase::Source, length.saturating_mul(2))?;
+        let mut parameters = Vec::with_capacity(length);
+        for (index, part) in parts.into_iter().enumerate() {
+            if index != 0 {
+                parameters.push(b',' as u16);
+            }
+            parameters.extend(part);
+        }
+        Ok(parameters)
     }
 
     fn object(&mut self, prototype: Option<usize>, array: Option<PrepaidArray>) -> Eval<usize> {
@@ -4573,6 +4586,133 @@ fn statement_bytes(statement: &Stmt) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sole_function_parameter_fragment_moves_pointer_capacity_and_units() {
+        for units in [
+            vec![],
+            vec![b'a' as u16, b',' as u16, b'b' as u16],
+            vec![0xd800],
+        ] {
+            let mut runtime = Runtime::new();
+            let mut fragment = Vec::with_capacity(16);
+            fragment.extend(&units);
+            let pointer = fragment.as_ptr();
+            let capacity = fragment.capacity();
+            let before = runtime.allocation_report();
+            let parameters = runtime.function_parameter_source(vec![fragment]).unwrap();
+            assert_eq!(parameters.as_ptr(), pointer);
+            assert_eq!(parameters.capacity(), capacity);
+            assert_eq!(parameters, units);
+            assert_eq!(runtime.allocation_report(), before);
+            if units == [0xd800] {
+                // Ownership transfer must not sanitize invalid source. The
+                // existing UTF-8 boundary still rejects this unchanged unit.
+                assert!(matches!(
+                    runtime.utf8_source(&parameters),
+                    Err(Fault::Throw(_))
+                ));
+                assert_eq!(
+                    runtime.allocation_report().phases.source,
+                    before.phases.source
+                );
+            }
+            assert!(runtime.allocation_report().is_valid());
+        }
+    }
+
+    #[test]
+    fn zero_and_multiple_function_parameter_fragments_keep_join_charges() {
+        let mut runtime = Runtime::new();
+        let before = runtime.allocation_report();
+        assert!(
+            runtime
+                .function_parameter_source(vec![])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(runtime.allocation_report(), before);
+        let first = vec![b'a' as u16];
+        let second = vec![b'b' as u16];
+        let first_pointer = first.as_ptr();
+        let second_pointer = second.as_ptr();
+        let parameters = runtime
+            .function_parameter_source(vec![first, second])
+            .unwrap();
+        assert_eq!(parameters, vec![b'a' as u16, b',' as u16, b'b' as u16]);
+        assert_ne!(parameters.as_ptr(), first_pointer);
+        assert_ne!(parameters.as_ptr(), second_pointer);
+        assert_eq!(
+            runtime.allocation_report().phases.source - before.phases.source,
+            6
+        );
+        let before = runtime.allocation_report();
+        assert_eq!(
+            runtime
+                .function_parameter_source(vec![vec![], vec![], vec![]])
+                .unwrap(),
+            vec![b',' as u16, b',' as u16]
+        );
+        assert_eq!(
+            runtime.allocation_report().phases.source - before.phases.source,
+            4
+        );
+        assert_eq!(
+            runtime.allocation_report().phases.runtime,
+            before.phases.runtime
+        );
+        assert!(runtime.allocation_report().is_valid());
+    }
+
+    #[test]
+    fn function_parameter_join_and_utf8_preflight_preserve_first_failure() {
+        let mut runtime = Runtime::new();
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - 5)
+            .unwrap();
+        let before = runtime.allocation_report();
+        assert!(
+            runtime
+                .function_parameter_source(vec![vec![b'a' as u16], vec![b'b' as u16]])
+                .is_err()
+        );
+        let rejected = runtime.allocation_report();
+        assert_eq!(rejected.accepted_bytes, before.accepted_bytes);
+        assert_eq!(rejected.first_rejected.unwrap().requested_bytes, 6);
+        assert_eq!(
+            rejected.first_rejected.unwrap().phase,
+            AllocationPhase::Source
+        );
+        for parts in [vec![], vec![vec![]], vec![vec![], vec![]]] {
+            assert!(runtime.function_parameter_source(parts).is_err());
+            assert_eq!(runtime.allocation_report(), rejected);
+        }
+        assert!(rejected.is_valid());
+
+        let mut runtime = Runtime::new();
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - 2)
+            .unwrap();
+        let before = runtime.allocation_report();
+        let parameters = runtime
+            .function_parameter_source(vec![vec![b'a' as u16; 3]])
+            .unwrap();
+        assert_eq!(runtime.allocation_report(), before);
+        assert!(matches!(
+            runtime.utf8_source(&parameters),
+            Err(Fault::Fatal(_))
+        ));
+        let report = runtime.allocation_report();
+        assert_eq!(report.accepted_bytes, before.accepted_bytes);
+        assert_eq!(report.first_rejected.unwrap().requested_bytes, 3);
+        assert_eq!(
+            report.first_rejected.unwrap().phase,
+            AllocationPhase::Source
+        );
+        assert!(report.is_valid());
+    }
 
     #[test]
     fn formal_binding_copies_payload_once_and_preserves_local_metadata() {

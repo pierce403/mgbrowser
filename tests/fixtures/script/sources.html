@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Local source-storage fixture</title></head>
+<body>
+<h1>Local Function-source form fixture</h1>
+<p>This is an authored localhost storage test, not a public search service.</p>
+<p id="status">The bounded worker must compile and call the form builder.</p>
+<script>
+// One already-owned parameter fragment needs no joined-buffer copy.
+// 9,999 separators of 75 ASCII spaces give 749,925 units of valid empty formals.
+// Real source creation and UTF-8 conversion remain charged before parsing.
+Function(Array(10000).join('                                                                           '), "var form=document.createElement('form');form.action='/search';form.method='get';var label=document.createElement('label');label.textContent='Local query ';var query=document.createElement('input');query.name='q';query.type='text';var hidden=document.createElement('input');hidden.type='hidden';hidden.name='source';hidden.value='fixture';var submit=document.createElement('button');submit.type='submit';submit.textContent='Search local source-storage fixture';form.appendChild(label);form.appendChild(query);form.appendChild(hidden);form.appendChild(submit);document.body.appendChild(form);document.title='Source-owned local fixture';document.getElementById('status').textContent='Owned source and real controls fit within the unchanged allocation budget.';")();
+</script>
+<noscript><p>Enable the experimental script worker to create this local form.</p></noscript>
+</body>
+</html>
