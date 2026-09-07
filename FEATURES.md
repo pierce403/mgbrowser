@@ -211,7 +211,9 @@ Opt-in, loopback-only CDP controls the actual native browser. The first subset c
 - [x] Session enablement and navigation lifecycle events distinguish load failures from successful delivery.
 - [x] Page coordinates and PNG dimensions exclude native toolbar/status pixels, including after scrolling.
 - [x] An external Rust CDP client completes the actual local fixture form → result → destination journey, captures PNG and verifies flattened sessions.
-- [ ] GitHub CI independently reproduces the CDP fixture journey for the published revision.
+- [x] GitHub CI independently reproduces the CDP fixture journey for the published revision.
 - [ ] A pinned upstream schema inventory and client-version compatibility matrix cover the entire protocol as underlying capabilities become available.
 
 Evidence: 2026-09-07 cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate explicitly returns -32601 because no JavaScript engine exists. Initial subset is working; full protocol remains in-progress.
+
+Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.

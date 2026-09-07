@@ -2,7 +2,7 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented and locally verified; publish and verify CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
+Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
 
 1. **T-001 / F-001, F-002:** Publish foundation and verify GitHub Pages, exact deployed content, custom TLS, and HTTPS enforcement. Complete; evidence in the 2026-09-07 log.
 2. **T-007 / F-010, F-008:** Active user goal: open our browser, browse to Google, search, click the first result and attempt the destination. Native window/homepage/form submission verified; Google requires JavaScript and provides no result links. Next: own JavaScript runtime and DOM/browser integration, with bounded local language/DOM fixtures before executing live scripts. Do not substitute an existing engine or fabricate results.
