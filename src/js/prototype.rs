@@ -260,6 +260,7 @@ impl Runtime {
         Ok(None)
     }
 
+    #[cfg(test)]
     fn native_own_value(
         &mut self,
         native: usize,
@@ -267,8 +268,20 @@ impl Runtime {
         receiver: &Value,
         host: &mut impl Host,
     ) -> Eval<Option<Value>> {
+        self.native_own_value_observed(native, key, receiver, host, None)
+    }
+    fn native_own_value_observed(
+        &mut self,
+        native: usize,
+        key: &str,
+        receiver: &Value,
+        host: &mut impl Host,
+        mut observation: Option<&mut ProducerKind>,
+    ) -> Eval<Option<Value>> {
         let storage = self.native_properties[native].1;
-        if let Some(value) = self.get_own_value(storage, key, receiver, host)? {
+        if let Some(value) =
+            self.get_own_value_observed(storage, key, receiver, host, observation.as_deref_mut())?
+        {
             return Ok(Some(value));
         }
         if self.native_identity_deleted(native, key)? {
@@ -283,6 +296,7 @@ impl Runtime {
             };
             self.budget
                 .allocate(name.encode_utf16().count().saturating_mul(2))?;
+            ProducerKind::PresentProperty.record(observation);
             return Ok(Some(Value::text(name)));
         }
         if key == "prototype" && native_virtual_names(name).contains(&"prototype") {
@@ -297,6 +311,7 @@ impl Runtime {
                 "Symbol" => self.symbol_prototype,
                 _ => return Ok(None),
             };
+            ProducerKind::PresentProperty.record(observation);
             return Ok(Some(Value::Object(prototype)));
         }
         if matches!(
@@ -315,6 +330,7 @@ impl Runtime {
         ) {
             self.budget
                 .allocate(name.len().saturating_add(1).saturating_add(key.len()))?;
+            ProducerKind::PresentProperty.record(observation);
             return Ok(Some(Value::Native(format!("{name}.{key}"))));
         }
         if key == "length" {
@@ -324,17 +340,29 @@ impl Runtime {
                 "parseInt" | "RegExp" => 2.0,
                 _ => 1.0,
             };
+            ProducerKind::PresentProperty.record(observation);
             return Ok(Some(Value::Number(length)));
         }
         Ok(None)
     }
 
+    #[cfg(test)]
     pub(super) fn identity_own_value(
         &mut self,
         owner: PrototypeIdentity,
         key: KeyRef<'_>,
         receiver: &Value,
         host: &mut impl Host,
+    ) -> Eval<Option<Value>> {
+        self.identity_own_value_observed(owner, key, receiver, host, None)
+    }
+    fn identity_own_value_observed(
+        &mut self,
+        owner: PrototypeIdentity,
+        key: KeyRef<'_>,
+        receiver: &Value,
+        host: &mut impl Host,
+        observation: Option<&mut ProducerKind>,
     ) -> Eval<Option<Value>> {
         self.budget.step()?;
         let id = self.identity_storage(owner)?;
@@ -349,17 +377,20 @@ impl Runtime {
                     match &self.functions[function].kind {
                         FunctionKind::Ordinary(code) => {
                             if key == "length" {
+                                ProducerKind::PresentProperty.record(observation);
                                 return Ok(Some(Value::Number(code.params.len() as f64)));
                             }
                             if key == "name" {
                                 let name = code.name.as_deref().unwrap_or("");
                                 self.budget
                                     .allocate(name.encode_utf16().count().saturating_mul(2))?;
+                                ProducerKind::PresentProperty.record(observation);
                                 return Ok(Some(Value::text(name)));
                             }
                         }
                         FunctionKind::Bound(bound) => {
                             if key == "length" {
+                                ProducerKind::PresentProperty.record(observation);
                                 return Ok(Some(Value::Number(bound.length)));
                             }
                             if matches!(key, "caller" | "arguments") {
@@ -371,11 +402,17 @@ impl Runtime {
                     }
                 }
                 PrototypeIdentity::Native(native) => {
-                    return self.native_own_value(native, key, receiver, host);
+                    return self.native_own_value_observed(
+                        native,
+                        key,
+                        receiver,
+                        host,
+                        observation,
+                    );
                 }
                 PrototypeIdentity::Object(_) => {}
             }
-            return self.get_own_value(id, key, receiver, host);
+            return self.get_own_value_observed(id, key, receiver, host, observation);
         }
         if let Some(index) = self.matching_property(id, key)? {
             let property = &self.objects[id].properties[index];
@@ -383,18 +420,22 @@ impl Runtime {
             let value = self.budget.copy(&property.value)?;
             if getter {
                 let receiver = self.copy(receiver)?;
-                return self.call(value, receiver, vec![], None, host).map(Some);
+                let value = self.call(value, receiver, vec![], None, host)?;
+                ProducerKind::GetterResult.record(observation);
+                return Ok(Some(value));
             }
+            ProducerKind::PresentProperty.record(observation);
             return Ok(Some(value));
         }
         Ok(None)
     }
 
-    pub(super) fn read_property(
+    pub(super) fn read_property_observed(
         &mut self,
         receiver: &Value,
         key: KeyRef<'_>,
         host: &mut impl Host,
+        mut observation: Option<&mut ProducerKind>,
     ) -> Eval<Value> {
         let mut current = Some(self.property_root(receiver)?);
         // Preserve the established read boundary: ordinary/native string reads
@@ -404,16 +445,29 @@ impl Runtime {
             && matches!(receiver, Value::Object(_) | Value::Native(_))
         {
             let owner = current.unwrap();
-            if let Some(value) = self.identity_own_value(owner, key, receiver, host)? {
+            if let Some(value) = self.identity_own_value_observed(
+                owner,
+                key,
+                receiver,
+                host,
+                observation.as_deref_mut(),
+            )? {
                 return Ok(value);
             }
             current = self.identity_parent(owner)?;
         }
         for _ in 0..MAX_CALLS {
             let Some(owner) = current else {
+                ProducerKind::MissingProperty.record(observation);
                 return Ok(Value::Undefined);
             };
-            if let Some(value) = self.identity_own_value(owner, key, receiver, host)? {
+            if let Some(value) = self.identity_own_value_observed(
+                owner,
+                key,
+                receiver,
+                host,
+                observation.as_deref_mut(),
+            )? {
                 return Ok(value);
             }
             current = self.identity_parent(owner)?;

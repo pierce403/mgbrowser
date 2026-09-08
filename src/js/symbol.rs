@@ -629,14 +629,23 @@ impl Runtime {
         key: &PropertyKey,
         host: &mut impl Host,
     ) -> Eval<Value> {
+        self.get_key_observed(value, key, host, None)
+    }
+    pub(super) fn get_key_observed(
+        &mut self,
+        value: &Value,
+        key: &PropertyKey,
+        host: &mut impl Host,
+        observation: Option<&mut ProducerKind>,
+    ) -> Eval<Value> {
         let PropertyKey::Symbol(symbol) = key else {
-            return self.get(value, key.string().unwrap(), host);
+            return self.get_observed(value, key.string().unwrap(), host, observation);
         };
         self.admit(&Value::Symbol(symbol.clone()))?;
         if matches!(value, Value::Host(_)) {
             return Err(unsupported("Symbol keys on host objects"));
         }
-        self.read_property(value, KeyRef::Symbol(symbol), host)
+        self.read_property_observed(value, KeyRef::Symbol(symbol), host, observation)
     }
 
     pub(super) fn set_key(
@@ -752,12 +761,23 @@ impl Runtime {
         ))
     }
 
+    #[cfg(test)]
     pub(super) fn get_own_value(
         &mut self,
         id: usize,
         key: &str,
         receiver: &Value,
         host: &mut impl Host,
+    ) -> Eval<Option<Value>> {
+        self.get_own_value_observed(id, key, receiver, host, None)
+    }
+    pub(super) fn get_own_value_observed(
+        &mut self,
+        id: usize,
+        key: &str,
+        receiver: &Value,
+        host: &mut impl Host,
+        observation: Option<&mut ProducerKind>,
     ) -> Eval<Option<Value>> {
         let getter = self.objects[id]
             .properties
@@ -768,9 +788,15 @@ impl Runtime {
         if let Some(getter) = getter {
             let getter = self.budget.copy(getter)?;
             let receiver = self.copy(receiver)?;
-            return self.call(getter, receiver, vec![], None, host).map(Some);
+            let value = self.call(getter, receiver, vec![], None, host)?;
+            ProducerKind::GetterResult.record(observation);
+            return Ok(Some(value));
         }
-        self.own(id, key)
+        let value = self.own(id, key)?;
+        if value.is_some() {
+            ProducerKind::PresentProperty.record(observation);
+        }
+        Ok(value)
     }
 
     pub(super) fn own_symbols(&mut self, value: Value) -> Eval<Value> {

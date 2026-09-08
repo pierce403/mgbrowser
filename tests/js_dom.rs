@@ -395,6 +395,34 @@ fn scripts_and_load_callbacks_preserve_order_and_ready_state() {
 }
 
 #[test]
+fn listener_receiver_normalization_preserves_bare_registration_and_removal() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var add=addEventListener,remove=removeEventListener,trail='',rejected=0;
+        function removed(){trail+='wrong';}
+        add('load',removed);remove('load',removed);
+        add('load',function(){trail+='B';});
+        window.addEventListener.call(undefined,'load',function(){trail+='U';});
+        window.addEventListener.call(null,'load',function(){trail+='N';});
+        var domAdd=document.addEventListener;
+        domAdd('load',function(){trail+='D';});
+        try{add.call({},'load',removed);}catch(e){rejected++;}
+        try{domAdd.call(3,'load',removed);}catch(e){rejected++;}
+        window.addEventListener('load',function(){
+            document.getElementById('output').textContent=trail+':'+rejected;
+        });
+    "#,
+    );
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(content(&rendered(&reply), "#output"), "BUND:2");
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+}
+
+#[test]
 fn symbol_dom_setters_reject_before_mutation_or_navigation() {
     for value in ["Symbol('value')", "Object(Symbol('value'))"] {
         for assignment in [
@@ -874,7 +902,7 @@ fn missing_dom_lookup_diagnostic_preserves_effects_and_skips_call_arguments() {
     assert_eq!(
         reply.errors,
         [
-            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild]"
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild] [producer kind=host-call]"
         ]
     );
     assert!(reply.navigation.is_none());

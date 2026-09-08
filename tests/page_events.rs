@@ -55,6 +55,33 @@ fn click(realm: &mut PageRealm, target: usize) -> SessionReply {
 }
 
 #[test]
+fn listener_receiver_normalization_keeps_window_target_in_later_dispatch() {
+    let (mut realm, init) = page(
+        r#"
+        var add=addEventListener,remove=removeEventListener,count=0;
+        function gone(){throw 'removed callback ran';}
+        add('click',gone);remove('click',gone);
+        function handle(event){
+            if(this!==window||event.currentTarget!==window)throw 'wrong Window receiver';
+            count++;event.preventDefault();
+            document.getElementById('state').textContent='window:'+count;
+        }
+        add('click',handle);
+        document.addEventListener.call(null,'click',handle);
+        window.removeEventListener.call(undefined,'click',handle);
+        document.addEventListener.call(undefined,'click',handle);
+    "#,
+    );
+    let link = node(&init, "#link");
+    let reply = click(&mut realm, link);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.state, RealmState::Ready);
+    assert_eq!(reply.outcome.click_canceled, Some(true));
+    assert_eq!(reply.default_action, DefaultAction::None);
+    assert_eq!(text(&reply, "#state"), "window:1");
+}
+
+#[test]
 fn frozen_fixture_requires_real_later_handlers_and_retains_original_node_ids() {
     let (mut realm, init) = start(include_str!("fixtures/script/events.html"));
     let query = node(&init, "#query");

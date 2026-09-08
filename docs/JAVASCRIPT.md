@@ -1445,3 +1445,84 @@ The additional 794 accepted search bytes are the explicitly measured host setup;
 the served source/request size is not a controlled benchmark. Exit 2 and an
 inspected blank frame leave the first-result/destination goal incomplete. Raw
 live artifacts remain ignored; no website-source adaptation or retry occurred.
+
+## Call receivers and immediate producer context
+
+This increment passes local acceptance. Independently authored cases froze the
+old non-member-call discrepancy: the evaluator supplied the global object before
+dispatch, so a detached Object.prototype.toString observed Object instead of
+Undefined. Per ES5.1 sections 11.2.3, 10.2.1.1.6, 10.2.1.2.6 and 15.2.4.2,
+non-member calls in the supported environments supply undefined. Ordinary
+non-strict user functions perform their existing global substitution themselves;
+native functions must receive the actual receiver. Preserve member, bound,
+primitive, direct/indirect eval and argument evaluation behavior. This is a generic
+semantic correction, not a diagnosis of Google's error.
+
+The browser's existing EventTarget add/remove-listener entries must apply their
+own nullish-to-Window receiver rule, following [Web IDL operation functions](https://webidl.spec.whatwg.org/#es-operations).
+This applies to the shared Window/document/node listener operation, not arbitrary
+Host functions or JavaScript builtins. Explicit document/node receivers retain
+their targets and other invalid receivers still reject. Preserve existing
+argument conversion, listener identity/capture/removal, limits and callback order.
+
+For nullish member failures, add one successful evaluation's immediate origin to
+the private fault. Retain the existing member block and append
+` [producer kind=K]`, with ` key=KEY` before its closing bracket for a property
+read. Fixed kinds are binding, expression, present-property, missing-property,
+getter-result, host-get, user-call, native-call, host-call and bound-call. A binding
+read stops attribution; assignments, conditional/sequence results and other
+expressions use expression without tracing backward. Calls describe the immediate
+dispatch, not the ultimate producer through eval/call/apply/bound forwarding.
+Host-returned undefined does not prove an absent or unsupported Host capability.
+The existing primitive-string out-of-range index fast path does not inspect the
+prototype chain; conservatively label its result expression without a key, not
+missing-property. This increment does not repair that separate lookup limitation.
+
+Observe property presence/getter invocation during the existing single traversal,
+not a repeated has/descriptor/get operation. Classify a producer property key only
+from the already-converted PropertyKey, using the same fixed public vocabulary
+and redaction; no source, arbitrary names, values or handles are retained. The
+metadata belongs to the caller-local evaluation result, never global last-error
+state. Later key evaluation, nested callbacks and caught failures cannot overwrite
+it. A failing inner operation retains its own context. Do not expand this into a
+provenance history or infer the cause of a missing value.
+
+Producer instrumentation preserves page-visible exceptions, catch/finally/fatal
+behavior and exact fuel/allocation reports. The separate receiver correction
+intentionally changes formerly incorrect native-call behavior. Preserve existing
+caps, dependency policy and worker isolation. The
+complete host diagnostic stays within 256 ASCII bytes without realm charges or
+callbacks. Keep existing Fault/Value/Flow/Reference result-layout bounds and
+default-stack guards; at most seven fixed bytes of MemberContext are permitted.
+Acceptance requires independent authored order/privacy/semantics tests, frozen
+pre-change resource reports, actual-worker recovery and the existing native/CDP
+script-created-form and retained-event journeys. Only then run one bounded live
+checkpoint, keeping the full Google goal open unless actual results and onward
+navigation are observed.
+
+Acceptance — 2026-09-07: 24 independent receiver cases (eight fail on the old
+build), 26 producer-semantic and nine resource groups pass, alongside 11 private
+diagnostic, 35 DOM, 18 page-event and 50 actual-worker groups. Seven frozen phase
+tuples, 21,120 remaining fuel ticks, Host/getter counts and old diagnostic resource
+checkpoints remain exact. MemberContext is seven fixed bytes; Fault and
+Eval<Value>/Eval<Flow>/Eval<Reference> remain 40/40/64/56 bytes. Bootstrap remains
+25,999. A formerly failing authored page now creates its real form at 56,597
+accepted bytes, after an ordinary missing-property failure with the expected
+producer suffix. The unchanged legacy diagnostic page retains its 58,273-byte
+browser checkpoint. All 971 debug tests, 858 selected release checks and all four
+exact native/CDP CI steps pass locally: 21 native and 21 external CDP journeys,
+including retained cancellations and zero trap requests. Query/destination frames
+were inspected; owned workers and fixture processes were reaped.
+
+One subsequent live Google attempt returned HTTP 200 homepage with 26 items/one
+form, five completed scripts/five errors and 2,429,450 accepted bytes. Two later
+activations completed before submitting the actual form. Search HTTP 200 remained
+blank with zero items/forms, two completed scripts and three errors. Its first
+diagnostic is now `[member operation=resolve-call-target base=undefined key=<string>]
+[producer kind=binding]`. Attribution stops at that binding and does not identify
+its origin or a missing capability. Later Source 26,963 was rejected after
+4,192,013 accepted bytes against the unchanged 4,194,304 cap, repeated by the next
+script. That later failure does not establish the earlier TypeError's cause.
+Exit 2 and the inspected blank search frame leave the first-result/destination
+goal incomplete. No live-source inspection, adaptation or retry occurred; raw
+artifacts remain ignored. Changing server responses are not a controlled benchmark.

@@ -22,19 +22,24 @@ impl Host for NoIo {
     }
 }
 
-fn assert_member(error: &str, operation: &str, base: &str, key: &str) {
+// Additive host-only context: keep the complete original member block and
+// explicitly author each immediate producer expectation, never infer it from
+// the source string or actual output. Property producers also specify their key.
+fn assert_member(error: &str, operation: &str, base: &str, key: &str, producer: &str) {
     assert_eq!(
         error,
-        format!("{UNCAUGHT} [member operation={operation} base={base} key={key}]")
+        format!(
+            "{UNCAUGHT} [member operation={operation} base={base} key={key}] [producer kind={producer}]"
+        )
     );
     assert!(error.is_ascii(), "{error:?}");
     assert!(error.len() <= 256, "{} bytes: {error:?}", error.len());
 }
 
-fn diagnostic(source: &str, operation: &str, base: &str, key: &str) -> Runtime {
+fn diagnostic(source: &str, operation: &str, base: &str, key: &str, producer: &str) -> Runtime {
     let mut runtime = Runtime::new();
     let error = runtime.execute(source, &mut NoIo).unwrap_err();
-    assert_member(&error, operation, base, key);
+    assert_member(&error, operation, base, key, producer);
     let report = runtime.allocation_report();
     assert!(report.is_valid(), "{report:?}");
     assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
@@ -73,6 +78,7 @@ fn seven_origin_operations_distinguish_null_and_undefined() {
                 operation,
                 base,
                 "length",
+                "binding",
             );
         }
     }
@@ -119,6 +125,7 @@ fn normal_finally_preserves_origin_and_earlier_effects() {
         "resolve-write-target",
         "null",
         "length",
+        "expression",
     );
     assert_eq!(runtime.get_global("before"), Value::Number(1.0));
     assert_eq!(runtime.get_global("after"), Value::Number(2.0));
@@ -131,6 +138,7 @@ fn an_inner_caught_fault_in_finally_does_not_replace_the_pending_fault() {
         "resolve-read",
         "null",
         "length",
+        "expression",
     );
     assert_eq!(runtime.get_global("saved"), Value::text(CAUGHT));
 }
@@ -146,6 +154,7 @@ fn replacement_throw_in_finally_replaces_context_as_well_as_value() {
         "resolve-call-target",
         "undefined",
         "name",
+        "binding",
     );
     plain(
         "try{null.length;}finally{try{undefined.name;}catch(error){throw error;}}",
@@ -171,6 +180,7 @@ fn a_new_fault_from_catch_gets_only_its_own_context() {
         "resolve-write-target",
         "undefined",
         "name",
+        "binding",
     );
 }
 
@@ -181,6 +191,7 @@ fn base_and_key_expressions_run_once_in_the_original_order() {
         "resolve-read",
         "null",
         "length",
+        "user-call",
     );
     assert_eq!(runtime.get_global("order"), Value::text("BK"));
 }
@@ -196,6 +207,7 @@ fn nullish_rejection_never_coerces_the_evaluated_object_key() {
         "resolve-read",
         "null",
         "<object>",
+        "expression",
     );
     assert_eq!(runtime.get_global("touched"), Value::Number(0.0));
 }
@@ -217,10 +229,34 @@ fn base_or_key_expression_exceptions_keep_precedence_and_do_not_gain_context() {
 
 #[test]
 fn an_inner_reference_failure_is_not_relabelled_by_outer_target_operations() {
-    diagnostic("null.length.name=7;", "resolve-read", "null", "length");
-    diagnostic("null.length.name();", "resolve-read", "null", "length");
-    diagnostic("delete null.length.name;", "resolve-read", "null", "length");
-    diagnostic("null[undefined.name];", "resolve-read", "undefined", "name");
+    diagnostic(
+        "null.length.name=7;",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
+    diagnostic(
+        "null.length.name();",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
+    diagnostic(
+        "delete null.length.name;",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
+    diagnostic(
+        "null[undefined.name];",
+        "resolve-read",
+        "undefined",
+        "name",
+        "binding",
+    );
 }
 
 #[test]
@@ -230,6 +266,7 @@ fn a_fault_from_key_coercion_keeps_the_inner_operation_context() {
         "resolve-read",
         "null",
         "name",
+        "expression",
     );
 }
 
@@ -245,15 +282,23 @@ fn rejected_targets_precede_assignment_rhs_and_call_arguments() {
             operation,
             "null",
             "length",
+            "expression",
         );
         assert_eq!(runtime.get_global("effects"), Value::Number(0.0));
     }
-    diagnostic("++null.length;", "resolve-update-target", "null", "length");
+    diagnostic(
+        "++null.length;",
+        "resolve-update-target",
+        "null",
+        "length",
+        "expression",
+    );
     diagnostic(
         "--undefined.length;",
         "resolve-update-target",
         "undefined",
         "length",
+        "binding",
     );
 }
 
@@ -264,6 +309,7 @@ fn for_in_resolves_reference_only_after_rhs_and_only_for_an_actual_key() {
         "resolve-for-in-target",
         "null",
         "length",
+        "user-call",
     );
     assert_eq!(runtime.get_global("order"), Value::text("RB"));
     yes(
@@ -281,12 +327,19 @@ fn short_circuit_and_conditional_branches_never_report_unevaluated_accesses() {
         false ? undefined[(effects++,'call')] : 2;
         effects===0 && typeof undeclaredFixtureName==='undefined';
     "#);
-    diagnostic("typeof null.length;", "resolve-read", "null", "length");
+    diagnostic(
+        "typeof null.length;",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
     diagnostic(
         "new null.constructor();",
         "resolve-read",
         "null",
         "constructor",
+        "expression",
     );
 }
 
@@ -371,14 +424,32 @@ fn complete_declared_standard_key_vocabulary_is_named_without_guessing() {
         "focus",
     ];
     for key in keys {
-        diagnostic(&format!("null['{key}'];"), "resolve-read", "null", key);
+        diagnostic(
+            &format!("null['{key}'];"),
+            "resolve-read",
+            "null",
+            key,
+            "expression",
+        );
     }
 }
 
 #[test]
 fn key_matching_uses_exact_evaluated_ascii_contents_not_source_spelling() {
-    diagnostic(r"null['\u006cength'];", "resolve-read", "null", "length");
-    diagnostic("null['len'+'gth'];", "resolve-read", "null", "length");
+    diagnostic(
+        r"null['\u006cength'];",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
+    diagnostic(
+        "null['len'+'gth'];",
+        "resolve-read",
+        "null",
+        "length",
+        "expression",
+    );
     for key in [
         "Length",
         "length-extra",
@@ -394,9 +465,16 @@ fn key_matching_uses_exact_evaluated_ascii_contents_not_source_spelling() {
             "resolve-read",
             "null",
             "<string>",
+            "expression",
         );
     }
-    diagnostic(r"null['length\u0000'];", "resolve-read", "null", "<string>");
+    diagnostic(
+        r"null['length\u0000'];",
+        "resolve-read",
+        "null",
+        "<string>",
+        "expression",
+    );
 }
 
 #[test]
@@ -417,7 +495,13 @@ fn primitive_key_categories_never_reveal_their_values_or_descriptions() {
         ("function privateName(){}", "<function>"),
         ("parseInt", "<native>"),
     ] {
-        diagnostic(&format!("null[{key}];"), "resolve-read", "null", category);
+        diagnostic(
+            &format!("null[{key}];"),
+            "resolve-read",
+            "null",
+            category,
+            "expression",
+        );
     }
 }
 
@@ -436,6 +520,7 @@ fn arbitrary_strings_controls_urls_and_surrogates_are_redacted_by_default() {
             "resolve-read",
             "null",
             "<string>",
+            "expression",
         );
     }
 }
@@ -456,7 +541,7 @@ fn long_public_string_and_opaque_handle_keys_produce_the_same_fixed_bound() {
         let mut runtime = Runtime::new();
         runtime.set_global("key", value);
         let error = runtime.execute("null[key];", &mut NoIo).unwrap_err();
-        assert_member(&error, "resolve-read", "null", category);
+        assert_member(&error, "resolve-read", "null", category, "expression");
         assert!(!error.contains("private"));
         assert!(!error.contains("https://"));
     }
@@ -476,7 +561,7 @@ fn caught_faults_and_unrelated_errors_do_not_leave_stale_execute_context() {
         "Uncaught JavaScript exception: later"
     );
     let error = runtime.execute("undefined.name;", &mut NoIo).unwrap_err();
-    assert_member(&error, "resolve-read", "undefined", "name");
+    assert_member(&error, "resolve-read", "undefined", "name", "binding");
     assert_eq!(
         runtime.execute("42;", &mut NoIo).unwrap(),
         Value::Number(42.0)
@@ -496,7 +581,7 @@ fn invoke_annotates_only_the_current_uncaught_fault_and_preserves_caught_values(
     let error = runtime
         .invoke(fail.clone(), Value::Null, vec![], &mut NoIo)
         .unwrap_err();
-    assert_member(&error, "resolve-read", "null", "length");
+    assert_member(&error, "resolve-read", "null", "length", "expression");
     assert_eq!(
         runtime
             .invoke(recover, Value::Null, vec![], &mut NoIo)
@@ -506,7 +591,7 @@ fn invoke_annotates_only_the_current_uncaught_fault_and_preserves_caught_values(
     let error = runtime
         .invoke(fail, Value::Null, vec![], &mut NoIo)
         .unwrap_err();
-    assert_member(&error, "resolve-read", "null", "length");
+    assert_member(&error, "resolve-read", "null", "length", "expression");
     assert_eq!(
         runtime.execute("throw 9;", &mut NoIo).unwrap_err(),
         "Uncaught JavaScript exception: 9"
@@ -523,7 +608,7 @@ fn direct_indirect_dynamic_and_bound_calls_preserve_the_original_inner_fault() {
         "(function(){return null.length;}).call(null);",
         "(function(){return null.length;}).apply(null,[]);",
     ] {
-        diagnostic(source, "resolve-read", "null", "length");
+        diagnostic(source, "resolve-read", "null", "length", "expression");
     }
 }
 
@@ -567,7 +652,7 @@ fn named_versus_redacted_equal_size_keys_do_not_change_realm_accounting() {
         let error = runtime
             .invoke(function, Value::Null, vec![Value::text(key)], &mut NoIo)
             .unwrap_err();
-        assert_member(&error, "resolve-read", "null", category);
+        assert_member(&error, "resolve-read", "null", category, "expression");
         reports.push(runtime.allocation_report());
     }
     assert_eq!(reports[0], reports[1]);
@@ -629,7 +714,13 @@ fn downstream_host_nullish_errors_add_no_host_reads_or_calls() {
         let error = runtime
             .execute(&format!("fixture.{key}.length;"), &mut host)
             .unwrap_err();
-        assert_member(&error, "resolve-read", base, "length");
+        assert_member(
+            &error,
+            "resolve-read",
+            base,
+            "length",
+            "host-get key=<string>",
+        );
         assert_eq!(host.gets, vec![("fixture".into(), key.into())]);
         assert_eq!(host.calls, 0);
     }
@@ -659,13 +750,19 @@ fn host_call_result_is_checked_once_but_rejected_call_target_skips_arguments() {
     let error = runtime
         .execute("fixture.method().length;", &mut host)
         .unwrap_err();
-    assert_member(&error, "resolve-read", "null", "length");
+    assert_member(&error, "resolve-read", "null", "length", "host-call");
     assert_eq!(host.gets, vec![("fixture".into(), "method".into())]);
     assert_eq!(host.calls, 1);
     let error = runtime
         .execute("null.length(fixture.method());", &mut host)
         .unwrap_err();
-    assert_member(&error, "resolve-call-target", "null", "length");
+    assert_member(
+        &error,
+        "resolve-call-target",
+        "null",
+        "length",
+        "expression",
+    );
     assert_eq!(host.gets.len(), 1);
     assert_eq!(host.calls, 1);
 }

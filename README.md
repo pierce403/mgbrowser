@@ -54,8 +54,12 @@ actual form/link requests; busy or failed activation is not silently accepted.
 The existing cumulative fuel, 4 MiB allocation and process limits remain; retained
 interaction adds explicit lifetime, transaction and wire bounds. See the
 [page-session contract](docs/PAGE_SESSIONS.md).
-All 905 debug tests and 792 selected release checks pass locally, along with
-20 native and 20 external CDP journeys, including a handler-required interaction
+Non-member native calls now receive undefined correctly, while shared EventTarget
+listener methods apply their own nullish-to-Window rule. Host-only diagnostics
+also identify the immediate producer category without tracing private source or
+changing the observed expression's evaluation or resource costs.
+All 971 debug tests and 858 selected release checks pass locally, along with
+21 native and 21 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;
@@ -63,8 +67,9 @@ this remains a small, opt-in language subset, not general web compatibility.
 
 The latest bounded Google attempt loads the homepage and submits its actual form
 through the retained session. Search still has no actionable results: a method
-call resolves through undefined, then later source admission exceeds the existing
-4 MiB budget. The diagnostic identifies the operation, not its cause. No first
+call resolves through undefined read from a binding, then later source admission
+exceeds the existing 4 MiB budget. The diagnostic stops at that binding; it does
+not identify the underlying cause or missing capability. No first
 result or destination has been reached; further independently tested language,
 browser API and storage-ownership work is needed.
 

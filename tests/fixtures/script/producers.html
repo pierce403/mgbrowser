@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Call receiver fallback</title></head><body>
+<p id="status">Authored local call receiver fixture fallback.</p>
+<script>
+var bag={};
+bag.length.appendChild((document.title='Incorrect argument effect',1));
+</script>
+<script>
+var tag=Object.prototype.toString;
+if(tag()!=='[object Undefined]'||tag.call(null)!=='[object Null]')throw 'Call receiver contract failed';
+var caught=false,detached=Array.prototype.concat;
+try{detached();}catch(error){caught=String(error).indexOf('TypeError')>=0;}
+if(!caught)throw 'Detached receiver was accepted';
+if(document.title!=='Call receiver fallback')throw 'Rejected target evaluated arguments';
+var form=document.createElement('form');form.method='get';form.action='/search';
+var query=document.createElement('input');query.name='q';form.appendChild(query);
+var source=document.createElement('input');source.type='hidden';source.name='source';source.value='fixture';form.appendChild(source);
+var button=document.createElement('button');button.type='submit';button.name='submit';button.value='search';button.textContent='Search';form.appendChild(button);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local call receiver form ready';
+document.title='Call receiver local fixture';
+</script>
+</body></html>

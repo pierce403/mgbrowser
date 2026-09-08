@@ -33,7 +33,7 @@ mod prototype;
 #[path = "symbol.rs"]
 mod symbol;
 use bound::BoundData;
-use diagnostic::{MemberContext, MemberOperation};
+use diagnostic::{MemberContext, MemberOperation, Producer, ProducerKind};
 use error::ErrorKind;
 use prototype::KeyRef;
 pub use symbol::SymbolHandle;
@@ -2090,12 +2090,15 @@ impl Runtime {
                 name.clone(),
             )),
             Expr::Member { object, property } => {
-                let object = self.expression(object, environment, this, host)?;
+                let mut producer = Producer::simple(ProducerKind::Expression);
+                let object = self.member_base(object, environment, this, host, &mut producer)?;
                 let property = self.expression(property, environment, this, host)?;
                 // Evaluate the key expression, but reject an invalid base before
                 // ToPropertyKey can call user code on the resulting key value.
                 if matches!(object, Value::Null | Value::Undefined) {
-                    return Err(diagnostic::member_fault(operation, &object, &property));
+                    return Err(diagnostic::member_fault_observed(
+                        operation, &object, &property, producer,
+                    ));
                 }
                 let key = self.property_key(property, host)?;
                 Ok(Reference::Property(object, key))
@@ -2135,7 +2138,23 @@ impl Runtime {
         host: &mut impl Host,
     ) -> Eval<Value> {
         self.budget.enter_evaluation(true)?;
-        let result = self.expression_inner(expr, environment, this, host);
+        let result = self.expression_inner(expr, environment, this, host, None);
+        self.budget.leave_evaluation(true);
+        result
+    }
+    // Identical expression entry/exit accounting, with an observation local to
+    // one enclosing member base. Nested evaluation never receives this sink.
+    #[inline(never)]
+    fn member_base(
+        &mut self,
+        expr: &Expr,
+        environment: usize,
+        this: &Value,
+        host: &mut impl Host,
+        producer: &mut Producer,
+    ) -> Eval<Value> {
+        self.budget.enter_evaluation(true)?;
+        let result = self.expression_inner(expr, environment, this, host, Some(producer));
         self.budget.leave_evaluation(true);
         result
     }
@@ -2145,6 +2164,7 @@ impl Runtime {
         environment: usize,
         this: &Value,
         host: &mut impl Host,
+        producer: Option<&mut Producer>,
     ) -> Eval<Value> {
         self.budget.step()?;
         match expr {
@@ -2160,10 +2180,18 @@ impl Runtime {
                 let regex = self.compile_regexp(pattern, flags)?;
                 self.regexp_object(regex)
             }
-            Expr::Ident(name) => match self.lookup(environment, name) {
-                Some(environment) => self.binding_value(environment, name, host),
-                None => Err(exception(format!("ReferenceError: {name} is not defined"))),
-            },
+            Expr::Ident(name) => {
+                let value = match self.lookup(environment, name) {
+                    Some(environment) => self.binding_value(environment, name, host)?,
+                    None => {
+                        return Err(exception(format!("ReferenceError: {name} is not defined")));
+                    }
+                };
+                if let Some(producer) = producer {
+                    *producer = Producer::simple(ProducerKind::Binding);
+                }
+                Ok(value)
+            }
             Expr::This => self.copy(this),
             Expr::Array(items) => self.array_expression(items, environment, this, host),
             Expr::Object(properties) => self.object_expression(properties, environment, this, host),
@@ -2173,7 +2201,17 @@ impl Runtime {
             Expr::Member { .. } => {
                 let reference =
                     self.reference(expr, MemberOperation::Read, environment, this, host)?;
-                self.read_reference(&reference, host)
+                if let Some(producer) = producer {
+                    let Reference::Property(object, key) = &reference else {
+                        unreachable!("member expression resolves a property")
+                    };
+                    let mut kind = ProducerKind::PresentProperty;
+                    let value = self.get_key_observed(object, key, host, Some(&mut kind))?;
+                    *producer = Producer::property(kind, key);
+                    Ok(value)
+                } else {
+                    self.read_reference(&reference, host)
+                }
             }
             Expr::Unary { op, expr } => self.unary_expression(op, expr, environment, this, host),
             Expr::Binary { op, left, right } => {
@@ -2204,7 +2242,7 @@ impl Runtime {
                 Ok(result)
             }
             Expr::Call { callee, args } => {
-                self.call_expression(callee, args, environment, this, host)
+                self.call_expression(callee, args, environment, this, host, producer)
             }
             Expr::New { callee, args } => {
                 self.new_expression(callee, args, environment, this, host)
@@ -2445,6 +2483,7 @@ impl Runtime {
         environment: usize,
         this: &Value,
         host: &mut impl Host,
+        producer: Option<&mut Producer>,
     ) -> Eval<Value> {
         let eval_reference = matches!(callee, Expr::Ident(name) if name == "eval");
         let (callee, mut receiver) = if matches!(callee, Expr::Member { .. }) {
@@ -2458,9 +2497,12 @@ impl Runtime {
             };
             (callee, receiver)
         } else {
+            // These supported non-member references supply undefined. Ordinary
+            // non-strict functions substitute the global object in call();
+            // native receivers must not be normalized before their dispatch.
             (
                 self.expression(callee, environment, this, host)?,
-                Value::Object(0),
+                Value::Undefined,
             )
         };
         let direct_eval =
@@ -2471,7 +2513,25 @@ impl Runtime {
                 None
             };
         let args = self.arguments(args, environment, this, host)?;
-        self.call(callee, receiver, args, direct_eval, host)
+        let kind = match &callee {
+            Value::Native(name) if name.starts_with("host.") => ProducerKind::HostCall,
+            Value::Native(_) => ProducerKind::NativeCall,
+            Value::Function(id)
+                if self
+                    .functions
+                    .get(*id)
+                    .is_some_and(|function| matches!(function.kind, FunctionKind::Bound(_))) =>
+            {
+                ProducerKind::BoundCall
+            }
+            Value::Function(_) => ProducerKind::UserCall,
+            _ => ProducerKind::Expression,
+        };
+        let value = self.call(callee, receiver, args, direct_eval, host)?;
+        if let Some(producer) = producer {
+            *producer = Producer::simple(kind);
+        }
+        Ok(value)
     }
 
     // Keep unrelated expression temporaries out of every retained AST frame.
@@ -2569,25 +2629,45 @@ impl Runtime {
     }
 
     fn get(&mut self, value: &Value, key: &str, host: &mut impl Host) -> Eval<Value> {
+        self.get_observed(value, key, host, None)
+    }
+    fn get_observed(
+        &mut self,
+        value: &Value,
+        key: &str,
+        host: &mut impl Host,
+        observation: Option<&mut ProducerKind>,
+    ) -> Eval<Value> {
         self.budget.step()?;
         if let Value::Host(object) = value {
             let value = host.get(object, key).map_err(exception)?;
             self.admit(&value)?;
             self.budget.allocate(value_bytes(&value))?;
+            ProducerKind::HostGet.record(observation);
             return Ok(value);
         }
         if let Value::String(units) = value {
             if key == "length" {
+                ProducerKind::PresentProperty.record(observation);
                 return Ok(Value::Number(units.len() as f64));
             }
             if let Some(index) = array_index(key) {
                 return match units.get(index) {
-                    Some(unit) => self.string(vec![*unit]),
-                    None => Ok(Value::Undefined),
+                    Some(unit) => {
+                        let value = self.string(vec![*unit])?;
+                        ProducerKind::PresentProperty.record(observation);
+                        Ok(value)
+                    }
+                    None => {
+                        // The existing primitive-string index fast path does
+                        // not traverse prototypes, so it cannot establish absence.
+                        ProducerKind::Expression.record(observation);
+                        Ok(Value::Undefined)
+                    }
                 };
             }
         }
-        self.read_property(value, KeyRef::String(key), host)
+        self.read_property_observed(value, KeyRef::String(key), host, observation)
     }
     fn inherited_readonly(&mut self, id: usize, key: &str) -> Eval<bool> {
         self.readonly_property(PrototypeIdentity::Object(id), KeyRef::String(key))

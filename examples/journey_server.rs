@@ -111,6 +111,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/diagnostics.html"),
             ),
+            "/script-producers" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/producers.html"),
+            ),
             "/search"
                 if fields.iter().any(|(k, v)| k == "q" && !v.is_empty())
                     && fields.iter().any(|(k, v)| k == "source" && v == "fixture") =>

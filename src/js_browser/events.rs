@@ -193,7 +193,14 @@ impl BrowserHost {
         this: Value,
         args: Vec<Value>,
     ) -> Result<Value, String> {
-        let target = self.event_target(&this)?;
+        // Web IDL operation functions use the realm's global object for a
+        // nullish receiver. Window implements EventTarget; this normalization
+        // belongs to this Host entry, not every native JavaScript call.
+        let target = if matches!(this, Value::Null | Value::Undefined) {
+            Target::Window
+        } else {
+            self.event_target(&this)?
+        };
         let mut args = args.into_iter();
         let kind = Kind::parse(&args.next().unwrap_or(Value::Undefined).as_dom_text()?)?;
         let callback = args.next().unwrap_or(Value::Undefined);

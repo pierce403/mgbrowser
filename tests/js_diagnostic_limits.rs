@@ -61,11 +61,13 @@ fn runtime_delta(before: AllocationReport, after: AllocationReport) -> u64 {
     delta
 }
 
-fn annotated(error: &str, operation: &str, base: &str, key: &str) {
+// Retain every old exact member block, source, phase and fuel assertion. The
+// adopted additive suffix has an independently specified immediate producer.
+fn annotated(error: &str, operation: &str, base: &str, key: &str, producer: &str) {
     assert_eq!(
         error,
         format!(
-            "Uncaught JavaScript exception: {ORIGINAL} [member operation={operation} base={base} key={key}]"
+            "Uncaught JavaScript exception: {ORIGINAL} [member operation={operation} base={base} key={key}] [producer kind={producer}]"
         )
     );
     assert!(error.is_ascii());
@@ -211,7 +213,7 @@ fn fixed_whitelist_and_equal_length_redactions_have_identical_admitted_costs() {
             let reader = function(&mut runtime, "null[k];");
             let before = report(&runtime);
             let error = invoke(&mut runtime, reader, vec![Value::String(units)]).unwrap_err();
-            annotated(&error, "resolve-read", "null", label);
+            annotated(&error, "resolve-read", "null", label, "expression");
             results.push((runtime_delta(before, report(&runtime)), report(&runtime)));
         }
         assert_eq!(results[0], results[1], "whitelist scan charged for {key}");
@@ -234,7 +236,7 @@ fn all_origin_operations_keep_large_arbitrary_keys_out_of_bounded_output() {
         let units =
             "private-authored-key\r\n [member forged] https://fixture.invalid/".repeat(1000);
         let error = invoke(&mut runtime, target, vec![Value::text(&units)]).unwrap_err();
-        annotated(&error, operation, "null", "<string>");
+        annotated(&error, operation, "null", "<string>", "expression");
         assert!(!error.contains("private-authored") && !error.contains("fixture.invalid"));
         assert!(report(&runtime).first_rejected.is_none());
     }
@@ -250,7 +252,13 @@ fn string_cost(length: usize, fail: bool) -> u64 {
         vec![Value::String(vec![0xd800; length])],
     );
     if fail {
-        annotated(&outcome.unwrap_err(), "resolve-read", "null", "<string>");
+        annotated(
+            &outcome.unwrap_err(),
+            "resolve-read",
+            "null",
+            "<string>",
+            "expression",
+        );
     } else {
         assert_eq!(outcome.unwrap(), Value::String(vec![0xd800; length]));
     }
@@ -283,6 +291,7 @@ fn opaque_cost(length: usize, native: bool, fail: bool) -> u64 {
             "resolve-read",
             "null",
             if native { "<native>" } else { "<host>" },
+            "expression",
         );
     } else {
         assert_eq!(outcome.unwrap(), key);
@@ -335,7 +344,7 @@ fn scalar_symbol_and_object_categories_never_request_key_coercion() {
         (callable, "<function>"),
     ] {
         let error = invoke(&mut runtime, reader.clone(), vec![key]).unwrap_err();
-        annotated(&error, "resolve-read", "undefined", category);
+        annotated(&error, "resolve-read", "undefined", category, "binding");
         assert_eq!(runtime.get_global("coerced"), Value::Number(0.0));
     }
 }
@@ -349,7 +358,7 @@ fn repeated_uncaught_diagnostics_do_not_accumulate_realm_context_or_taint_succes
     for _ in 0..64 {
         let before = report(&runtime);
         let error = invoke(&mut runtime, reader.clone(), vec![Value::Null]).unwrap_err();
-        annotated(&error, "resolve-read", "null", "<null>");
+        annotated(&error, "resolve-read", "null", "<null>", "expression");
         let cost = runtime_delta(before, report(&runtime));
         if let Some(expected) = previous_cost {
             assert_eq!(cost, expected);
@@ -398,6 +407,7 @@ fn normal_finally_keeps_context_but_preserves_the_frozen_phase_totals() {
         "resolve-read",
         "null",
         "length",
+        "expression",
     );
     assert_eq!(runtime.get_global("prior"), Value::Number(7.0));
     exact_report(&runtime, 28_270, [25_999, 174, 1915, 0, 182, 0, 0]);
@@ -428,6 +438,7 @@ fn public_empty_invoke_preserves_both_frozen_reports_and_the_265_byte_call() {
         "resolve-read",
         "null",
         "<undefined>",
+        "expression",
     );
     exact_report(&runtime, 27_529, [25_999, 156, 716, 128, 530, 0, 0]);
     assert_eq!(runtime_delta(before, report(&runtime)), 265);
@@ -446,6 +457,7 @@ fn annotation_can_escape_near_the_heap_cap_without_any_new_admission() {
         "resolve-read",
         "null",
         "<undefined>",
+        "expression",
     );
     assert_eq!(runtime_delta(before, report(&runtime)), 265);
     assert!(LIMIT - report(&runtime).accepted_bytes <= 1);

@@ -215,7 +215,7 @@ fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline
     assert_eq!(
         reply.errors,
         [
-            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild]"
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild] [producer kind=binding]"
         ]
     );
     assert!(reply.navigation.is_none());
@@ -263,7 +263,7 @@ fn restricted_child_redacts_keys_and_does_not_taint_later_diagnostics() {
     assert_eq!(
         reply.errors,
         [
-            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-read base=null key=<string>]",
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-read base=null key=<string>] [producer kind=expression]",
             "Inline script 3: Uncaught JavaScript exception: authored later error"
         ]
     );
@@ -276,6 +276,40 @@ fn restricted_child_redacts_keys_and_does_not_taint_later_diagnostics() {
     assert!(reply.navigation.is_none());
     assert!(reply.allocations.unwrap().first_rejected.is_none());
     assert!(reply.html.contains("Readable diagnostics"));
+}
+
+#[test]
+fn restricted_child_corrected_receivers_create_form_after_missing_property_failure() {
+    // Frozen fixture failed on c05ba38: zero completed scripts/forms, with the
+    // second script reporting "Call receiver contract failed". Do not change
+    // its source to manufacture a form on the baseline implementation.
+    let (reply, document) = diagnostic_reply(include_str!("fixtures/script/producers.html"));
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=undefined key=appendChild] [producer kind=missing-property key=length]"
+        ]
+    );
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert_eq!(document.title, "Call receiver local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    for (tag, name, value) in [
+        ("input", "q", None),
+        ("input", "source", Some("fixture")),
+        ("button", "submit", Some("search")),
+    ] {
+        assert!(document.nodes.iter().any(|node| node.tag == tag
+            && node.attr("name") == Some(name)
+            && value.is_none_or(|value| node.attr("value") == Some(value))));
+    }
+    assert!(
+        reply
+            .html
+            .contains("Authored local call receiver form ready")
+    );
 }
 
 #[test]

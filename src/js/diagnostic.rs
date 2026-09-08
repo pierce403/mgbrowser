@@ -1,6 +1,6 @@
 //! Bounded host-only context for the originating nullish member reference.
 //! No source, arbitrary key buffer, value handle, or mutable error history is kept.
-use super::{Fault, Value};
+use super::{Fault, PropertyKey, Value};
 
 const NULLISH_MESSAGE: &str = "TypeError: property access on null or undefined";
 const MAX_FORMAT_BYTES: usize = 256;
@@ -130,6 +130,21 @@ enum KeyCategory {
     Host,
 }
 impl KeyCategory {
+    fn property(key: &PropertyKey) -> Self {
+        match key {
+            PropertyKey::Symbol(_) => Self::Symbol,
+            PropertyKey::String(key) => {
+                if key.len() <= MAX_MATCH_UNITS {
+                    for (index, name) in STANDARD_KEYS.iter().enumerate() {
+                        if key == name {
+                            return Self::Standard(index as u8);
+                        }
+                    }
+                }
+                Self::String
+            }
+        }
+    }
     fn classify(key: &Value) -> Self {
         match key {
             Value::String(units) => {
@@ -181,10 +196,70 @@ impl KeyCategory {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProducerKind {
+    Binding,
+    Expression,
+    PresentProperty,
+    MissingProperty,
+    GetterResult,
+    HostGet,
+    UserCall,
+    NativeCall,
+    HostCall,
+    BoundCall,
+}
+impl ProducerKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Binding => "binding",
+            Self::Expression => "expression",
+            Self::PresentProperty => "present-property",
+            Self::MissingProperty => "missing-property",
+            Self::GetterResult => "getter-result",
+            Self::HostGet => "host-get",
+            Self::UserCall => "user-call",
+            Self::NativeCall => "native-call",
+            Self::HostCall => "host-call",
+            Self::BoundCall => "bound-call",
+        }
+    }
+    pub(super) fn record(self, observation: Option<&mut Self>) {
+        if let Some(observation) = observation {
+            *observation = self;
+        }
+    }
+}
+
+/// One immediate successful evaluation, kept only by the enclosing reference.
+/// No Value, source, property buffer, or history can survive through this type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Producer {
+    kind: ProducerKind,
+    key: Option<KeyCategory>,
+}
+impl Producer {
+    pub(super) const fn simple(kind: ProducerKind) -> Self {
+        Self { kind, key: None }
+    }
+    pub(super) fn property(kind: ProducerKind, key: &PropertyKey) -> Self {
+        // An existing fast path may return a value without establishing either
+        // property presence or absence. Do not claim a completed lookup there.
+        if kind == ProducerKind::Expression {
+            return Self::simple(kind);
+        }
+        Self {
+            kind,
+            key: Some(KeyCategory::property(key)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MemberContext {
     operation: MemberOperation,
     base: NullishBase,
     key: KeyCategory,
+    producer: Producer,
 }
 impl MemberContext {
     pub(super) fn format(self) -> String {
@@ -206,6 +281,15 @@ impl MemberContext {
             " key=",
             self.key.label(),
             "]",
+            " [producer kind=",
+            self.producer.kind.label(),
+            if self.producer.key.is_some() {
+                " key="
+            } else {
+                ""
+            },
+            self.producer.key.map_or("", KeyCategory::label),
+            "]",
         ] {
             let length = text.len().min(MAX_FORMAT_BYTES - output.len());
             output.push_str(&text[..length]);
@@ -214,7 +298,22 @@ impl MemberContext {
     }
 }
 
-pub(super) fn member_fault(operation: MemberOperation, base: &Value, key: &Value) -> Fault {
+#[cfg(test)]
+fn member_fault(operation: MemberOperation, base: &Value, key: &Value) -> Fault {
+    member_fault_observed(
+        operation,
+        base,
+        key,
+        Producer::simple(ProducerKind::Expression),
+    )
+}
+
+pub(super) fn member_fault_observed(
+    operation: MemberOperation,
+    base: &Value,
+    key: &Value,
+    producer: Producer,
+) -> Fault {
     let base = match base {
         Value::Null => NullishBase::Null,
         Value::Undefined => NullishBase::Undefined,
@@ -227,6 +326,7 @@ pub(super) fn member_fault(operation: MemberOperation, base: &Value, key: &Value
             operation,
             base,
             key: KeyCategory::classify(key),
+            producer,
         },
     }
 }
@@ -295,7 +395,15 @@ mod tests {
             size_of::<super::super::Function>(),
         );
         assert!(!needs_drop::<MemberContext>());
-        assert!(size_of::<MemberContext>() <= 4);
+        assert!(size_of::<MemberContext>() <= 7);
+        assert!(size_of::<Producer>() <= 3);
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(size_of::<Fault>(), 40);
+            assert_eq!(size_of::<Eval<Value>>(), 40);
+            assert_eq!(size_of::<Eval<Flow>>(), 64);
+            assert_eq!(size_of::<Eval<Reference>>(), 56);
+        }
         assert!(size_of::<Fault>() <= size_of::<OriginalFault>() + 8);
         assert!(size_of::<Eval<Value>>() <= size_of::<Result<Value, OriginalFault>>() + 8);
         assert!(size_of::<Eval<Flow>>() <= size_of::<Result<Flow, OriginalFault>>() + 8);
@@ -346,6 +454,7 @@ mod tests {
                         operation,
                         base,
                         key,
+                        producer: Producer::simple(ProducerKind::Expression),
                     }
                     .format();
                     assert!(output.is_ascii() && output.len() <= MAX_FORMAT_BYTES);
@@ -450,7 +559,7 @@ mod tests {
             runtime
                 .execute("null[hostKey];", &mut NoIo)
                 .unwrap_err()
-                .ends_with("key=<host>]")
+                .ends_with("key=<host>] [producer kind=expression]")
         );
         assert!(
             runtime
@@ -459,7 +568,7 @@ mod tests {
                     &mut NoIo
                 )
                 .unwrap_err()
-                .ends_with("key=<object>]")
+                .ends_with("key=<object>] [producer kind=expression]")
         );
     }
 
@@ -473,11 +582,17 @@ mod tests {
                 &mut NoIo,
             )
             .unwrap_err();
-        assert!(retained.ends_with("operation=resolve-read base=null key=prototype]"));
+        assert!(retained.ends_with(
+            "operation=resolve-read base=null key=prototype] [producer kind=expression]"
+        ));
         let replaced = runtime
             .execute("try{null.prototype;}finally{null.length;}", &mut NoIo)
             .unwrap_err();
-        assert!(replaced.ends_with("operation=resolve-read base=null key=length]"));
+        assert!(
+            replaced.ends_with(
+                "operation=resolve-read base=null key=length] [producer kind=expression]"
+            )
+        );
         assert_eq!(
             runtime
                 .execute("try{null.prototype;}catch(e){throw e;}", &mut NoIo)
@@ -540,7 +655,11 @@ mod tests {
             match index {
                 0 => assert_eq!(result.unwrap(), Value::Number(128.0)),
                 1 => {
-                    assert!(result.unwrap_err().ends_with("key=length]"));
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .ends_with("key=length] [producer kind=expression]")
+                    );
                     assert_eq!(runtime.get_global("prior"), Value::Number(7.0));
                 }
                 _ => {
@@ -574,7 +693,7 @@ mod tests {
             runtime
                 .invoke(function, Value::Undefined, vec![], &mut NoIo)
                 .unwrap_err()
-                .ends_with("key=<undefined>]")
+                .ends_with("key=<undefined>] [producer kind=expression]")
         );
         assert_eq!(runtime.allocation_report().accepted_bytes, 27_529);
         counters(&runtime);
@@ -586,7 +705,7 @@ mod tests {
         if std::env::var_os(CHILD).is_some() {
             let mut runtime = Runtime::new();
             let error = runtime.execute("function recurse(n){try{null[n?'length':'prototype'];}finally{if(n)return recurse(n-1);}}recurse(8);", &mut NoIo).unwrap_err();
-            assert!(error.ends_with("key=prototype]"));
+            assert!(error.ends_with("key=prototype] [producer kind=expression]"));
             assert_eq!(
                 runtime.execute("42;", &mut NoIo).unwrap(),
                 Value::Number(42.0)
@@ -637,5 +756,225 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn producer_vocabulary_is_fixed_and_combined_output_remains_bounded() {
+        use std::mem::needs_drop;
+        assert!(!needs_drop::<Producer>());
+        let kinds = [
+            ProducerKind::Binding,
+            ProducerKind::Expression,
+            ProducerKind::PresentProperty,
+            ProducerKind::MissingProperty,
+            ProducerKind::GetterResult,
+            ProducerKind::HostGet,
+            ProducerKind::UserCall,
+            ProducerKind::NativeCall,
+            ProducerKind::HostCall,
+            ProducerKind::BoundCall,
+        ];
+        for kind in kinds {
+            for operation in OPERATIONS {
+                for base in [NullishBase::Null, NullishBase::Undefined] {
+                    for key in (0..STANDARD_KEYS.len())
+                        .map(|index| KeyCategory::Standard(index as u8))
+                        .chain([KeyCategory::String, KeyCategory::Symbol])
+                    {
+                        let producer = if matches!(
+                            kind,
+                            ProducerKind::PresentProperty
+                                | ProducerKind::MissingProperty
+                                | ProducerKind::GetterResult
+                                | ProducerKind::HostGet
+                        ) {
+                            Producer {
+                                kind,
+                                key: Some(key),
+                            }
+                        } else {
+                            Producer::simple(kind)
+                        };
+                        let output = MemberContext {
+                            operation,
+                            base,
+                            key,
+                            producer,
+                        }
+                        .format();
+                        assert!(output.is_ascii() && output.len() <= MAX_FORMAT_BYTES);
+                        assert!(output.ends_with(']'));
+                        assert!(output.contains("] [producer kind="));
+                    }
+                }
+            }
+        }
+        for name in STANDARD_KEYS {
+            let property = PropertyKey::String((*name).into());
+            assert_eq!(
+                KeyCategory::property(&property),
+                KeyCategory::classify(&Value::text(name))
+            );
+        }
+        for secret in [
+            "https://private.invalid/query",
+            "42",
+            "true",
+            "null",
+            "prototype\n",
+            "π",
+        ] {
+            assert_eq!(
+                KeyCategory::property(&PropertyKey::String(secret.into())),
+                KeyCategory::String
+            );
+        }
+    }
+
+    fn accessor_fixture(symbol: bool, inherited: bool) -> (Runtime, Value, PropertyKey) {
+        let mut runtime = Runtime::new();
+        let getter = runtime.execute(
+            "var reads=0;function getter(){reads++;if(this.marker!==7)throw 'wrong receiver';delete owner[key];try{null.name;}catch(e){}return this.absent;}getter;",
+            &mut NoIo,
+        ).unwrap();
+        let key = if symbol {
+            let Value::Symbol(symbol) = runtime
+                .execute("Symbol('private description');", &mut NoIo)
+                .unwrap()
+            else {
+                panic!("symbol")
+            };
+            runtime.set_global("key", Value::Symbol(symbol.clone()));
+            PropertyKey::Symbol(symbol)
+        } else {
+            runtime.set_global("key", Value::text("length"));
+            PropertyKey::String("length".into())
+        };
+        let owner = runtime
+            .object(Some(runtime.object_prototype), None)
+            .unwrap();
+        runtime.set_global("owner", Value::Object(owner));
+        match &key {
+            PropertyKey::String(key) => runtime.put_own(owner, key, getter, false).unwrap(),
+            PropertyKey::Symbol(key) => runtime.put_symbol(owner, key, getter, false).unwrap(),
+        }
+        runtime.objects[owner].properties.last_mut().unwrap().getter = true;
+        let receiver = if inherited {
+            runtime.object(Some(owner), None).unwrap()
+        } else {
+            owner
+        };
+        runtime
+            .put_own(receiver, "marker", Value::Number(7.0), true)
+            .unwrap();
+        (runtime, Value::Object(receiver), key)
+    }
+
+    #[test]
+    fn observation_uses_the_original_single_getter_and_receiver_without_extra_work() {
+        for symbol in [false, true] {
+            for inherited in [false, true] {
+                let (mut ordinary, receiver, key) = accessor_fixture(symbol, inherited);
+                assert_eq!(
+                    ordinary.get_key(&receiver, &key, &mut NoIo).unwrap(),
+                    Value::Undefined
+                );
+                let expected_report = ordinary.allocation_report();
+                let expected_fuel = ordinary.budget.fuel;
+                let (mut observed, receiver, key) = accessor_fixture(symbol, inherited);
+                let mut kind = ProducerKind::Expression;
+                assert_eq!(
+                    observed
+                        .get_key_observed(&receiver, &key, &mut NoIo, Some(&mut kind))
+                        .unwrap(),
+                    Value::Undefined
+                );
+                // The getter deleted itself and performed a nested missing read;
+                // neither a second traversal nor nested observations may relabel it.
+                assert_eq!(kind, ProducerKind::GetterResult);
+                assert_eq!(observed.get_global("reads"), Value::Number(1.0));
+                assert_eq!(observed.allocation_report(), expected_report);
+                assert_eq!(observed.budget.fuel, expected_fuel);
+                counters(&ordinary);
+                counters(&observed);
+                assert_eq!(
+                    observed
+                        .get_key_observed(&receiver, &key, &mut NoIo, Some(&mut kind))
+                        .unwrap(),
+                    Value::Undefined
+                );
+                assert_eq!(kind, ProducerKind::MissingProperty);
+                assert_eq!(observed.get_global("reads"), Value::Number(1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_getters_never_publish_successful_origin_or_relabel_inner_faults() {
+        for source in [
+            "function fail(){null.length;}fail;",
+            "function fail(){while(true){}}fail;",
+        ] {
+            let mut runtime = Runtime::new();
+            let getter = runtime.execute(source, &mut NoIo).unwrap();
+            let object = runtime
+                .object(Some(runtime.object_prototype), None)
+                .unwrap();
+            runtime.put_own(object, "prototype", getter, false).unwrap();
+            runtime.objects[object]
+                .properties
+                .last_mut()
+                .unwrap()
+                .getter = true;
+            let key = PropertyKey::String("prototype".into());
+            let mut kind = ProducerKind::Binding;
+            let outcome =
+                runtime.get_key_observed(&Value::Object(object), &key, &mut NoIo, Some(&mut kind));
+            assert_eq!(kind, ProducerKind::Binding);
+            let error = runtime.finish(outcome).unwrap_err();
+            if source.contains("while") {
+                assert_eq!(error, "JavaScript fuel exhausted");
+                assert!(runtime.is_fatal());
+            } else {
+                assert_eq!(
+                    error,
+                    "Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-read base=null key=length] [producer kind=expression]"
+                );
+                assert!(!runtime.is_fatal());
+            }
+            counters(&runtime);
+        }
+    }
+
+    #[test]
+    fn primitive_string_out_of_range_is_not_claimed_as_a_missing_lookup() {
+        let mut runtime = Runtime::new();
+        assert_eq!(
+            runtime
+                .execute("String.prototype[9]=null;String.prototype[9];", &mut NoIo)
+                .unwrap(),
+            Value::Null
+        );
+        let key = PropertyKey::String("9".into());
+        let mut kind = ProducerKind::MissingProperty;
+        let fuel = runtime.budget.fuel;
+        let before = runtime.allocation_report();
+        assert_eq!(
+            runtime
+                .get_key_observed(&Value::text("x"), &key, &mut NoIo, Some(&mut kind))
+                .unwrap(),
+            Value::Undefined
+        );
+        // Preserve the old untraversed primitive-string fast path. Inherited
+        // string-index compatibility is separate from diagnostic observation.
+        assert_eq!(kind, ProducerKind::Expression);
+        assert_eq!(Producer::property(kind, &key), Producer::simple(kind));
+        assert_eq!(runtime.budget.fuel, fuel - 1);
+        assert_eq!(runtime.allocation_report(), before);
+        assert_eq!(
+            runtime.execute("'x'[9].length;", &mut NoIo).unwrap_err(),
+            "Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-read base=undefined key=length] [producer kind=expression]"
+        );
+        counters(&runtime);
     }
 }

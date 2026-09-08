@@ -711,7 +711,7 @@ No new CDP commands or Runtime evaluation are exposed.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -729,3 +729,26 @@ and `cargo test --locked --test js_expressions --test script_worker`. The releas
 command above also exercises the library and real worker children; these tests
 do not increase the native thread-stack size. Passing language cases alone does
 not replace the native/CDP fixture journey or the bounded live-site gate.
+
+## Call receiver and immediate producer fixture
+
+The independently authored `/script-producers` page first encounters a missing
+property, then requires correct detached native receivers before creating its
+search form. On c05ba38 it remained readable but created no form: the second
+script reported Call receiver contract failed. Candidate acceptance uses the
+unchanged source, actual restricted worker and the existing native/CDP clients:
+
+```sh
+cargo test --locked --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test script_worker
+target/debug/mgbrowser http://127.0.0.1:7878/script-producers --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/producers-native
+target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-producers tmp/producers-cdp.png
+```
+
+Start the owned fixture service and debugging browser as documented above; 9222
+is an example chosen port. CI uses a fresh port and finite process deadlines.
+The first error must retain its exact member block and append
+`[producer kind=missing-property key=length]`. The corrected second script creates
+the real form and the clients submit it, click the first local result and reach
+the fixture destination. This is not a Google result or a new CDP command.
+The preexisting `/script-diagnostics` fixture's exact allocation checkpoint stays
+58,273 bytes; its nullish local binding now appends `[producer kind=binding]`.

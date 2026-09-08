@@ -26,6 +26,10 @@ worker mode and its isolation selftests remain supported.
   onclick/onsubmit handlers, and correct target/currentTarget/eventPhase.
   Listener additions do not alter an already captured listener-ID list;
   removals are rechecked. Property-handler replacement preserves its slot order.
+- The add/remove-listener Host entries map null/undefined receivers to this
+  realm's Window, including bare aliases; explicit document/node receivers keep
+  their target. This operation-specific Web IDL rule is not global normalization
+  of native JavaScript or other Host calls. Other invalid receivers still reject.
 - preventDefault cancels the default; stopPropagation and stopImmediatePropagation
   have distinct effects. Only a property handler returning literal false cancels
   through its return value. Ordinary callback errors are reported and other
