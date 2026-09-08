@@ -1283,5 +1283,8 @@ FunctionCode 25,376 + Runtime 1,567,991 + RegexCompile 1,152 + RegexResult 20.
 Exit 2/JOURNEY_INCOMPLETE; the blank 03-search.png was inspected. No actual result,
 destination or new live journey stage completed. No live-source inspection,
 adaptation or retry occurred; changing responses are not a controlled comparison
-or proof that bind caused the prior error. Local acceptance is verified, while
-exact-SHA remote CI, Pages and HTTPS publication verification remain pending.
+or proof that bind caused the prior error. Implementation 0c48eeb also passed
+exact-SHA Rust CI 34176183048 with the same 788/690 test totals and 18/18 journeys.
+Pages 34176182971 deployed matching full HTTPS HTML with the approved apex
+certificate, HTTPS enforcement and HTTP redirect. Publication does not complete
+the Google acceptance gate; the daily log preserves the evidence.

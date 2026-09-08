@@ -2,7 +2,7 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-Prior publication is verified through b8cbb12, including corrected bounded CDP batches. The bound-function increment passes local gates; its exact-SHA Rust CI, Pages and full HTTPS publication checks follow in the daily log. Tool access is restored; the Google goal remains incomplete.
+Publication handoff complete: bound-function implementation 0c48eeb passed exact-SHA Rust CI and Pages; the full HTTPS body matches the committed site, with approved certificate, HTTPS enforcement and HTTP redirect. Tool access is restored; the Google goal remains incomplete. See the daily log for evidence and the prospective, not-yet-adopted forEach follow-up.
 
 Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
 
