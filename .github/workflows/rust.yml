@@ -135,6 +135,23 @@ jobs:
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-arrays tmp/script-journey/cdp-arrays-destination.png 2>&1 | tee tmp/script-journey/cdp-arrays-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-bindings"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/bindings-home.png > tmp/script-journey/bindings-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-bindings tmp/script-journey/cdp-bindings-destination.png 2>&1 | tee tmp/script-journey/cdp-bindings-client.log
+          SCRIPT_CDP
+          # Keep eight journeys per owned browser batch; the growing corpus must
+          # not share one fixed deadline. All checks and worker limits remain.
+          timeout 50s xvfb-run -a bash <<'STORAGE_CDP'
+          set -euo pipefail
+          target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --remote-debugging-port=0 > tmp/script-journey/storage-browser.log 2>&1 &
+          script_browser_pid=$!
+          trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
+          debugger_ready=false
+          debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < debugger_deadline )); do
+            kill -0 "$script_browser_pid"
+            script_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/script-journey/storage-browser.log)
+            if [[ -n "$script_port" ]] && curl --fail --silent --max-time 1 "http://127.0.0.1:$script_port/json/version" > /dev/null; then debugger_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$debugger_ready" == true ]]
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-sources"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/sources-home.png > tmp/script-journey/sources-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-sources tmp/script-journey/cdp-sources-destination.png 2>&1 | tee tmp/script-journey/cdp-sources-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-ast"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/ast-home.png > tmp/script-journey/ast-home.json
@@ -151,7 +168,7 @@ jobs:
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-empty-arguments tmp/script-journey/cdp-empty-arguments-destination.png 2>&1 | tee tmp/script-journey/cdp-empty-arguments-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-function-prototypes"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/function-prototypes-home.png > tmp/script-journey/function-prototypes-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-function-prototypes tmp/script-journey/cdp-function-prototypes-destination.png 2>&1 | tee tmp/script-journey/cdp-function-prototypes-client.log
-          SCRIPT_CDP
+          STORAGE_CDP
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4

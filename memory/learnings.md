@@ -2,3 +2,4 @@
 
 - 2026-09-07: Feature status and work-log date drive a generated region of the project page. Initial local and GitHub CI validation passed; Pages served matching bytes. The rule is recorded in AGENTS.md and publish-site.
 - 2026-09-07: Certificate approval and HTTPS enforcement settings propagated before an already cached HTTP response changed. Check live HTTPS independently and avoid treating a successful settings mutation as proof of redirect behavior.
+- 2026-09-07: One documentation-only CI run hit the shared 50-second scripted-CDP deadline on its final fixture after all tests/native journeys and 16 total CDP journeys passed. The same implementation previously passed. Two eight-fixture browser batches pass the exact local replay with17 native/17 CDP destinations; remote verification follows. Every check is retained and harness scheduling remains distinct from browser/worker resource limits. This is a single observed timeout, not general guidance to relax limits.

@@ -392,6 +392,15 @@ servers exited and ports 7878/9222 were clear. These are application-handler and
 external protocol checks, not physical input or Google acceptance. The post-change
 live checkpoint below still fails; exact-SHA publication is recorded in the daily log.
 
+CI follow-up: the documentation closeout run exhausted the old shared 50-second
+deadline after 16 of 17 total CDP journeys, despite all component/release tests and
+native journeys passing. The 16 scripted CDP fixtures now run as two groups of
+eight, each with its own browser, log, cleanup and 50-second deadline. The original
+loop/fallback recovery still runs in the first browser before onward navigation.
+All fixture commands, screenshots and assertions remain; browser/worker resource
+limits and individual native journey deadlines are unchanged. This adjusts the
+aggregate test-harness schedule, not the engine's execution budget.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
