@@ -5,6 +5,15 @@ description: Refresh the mgbrowser project page from feature status and daily lo
 
 # Publish site
 
+Standing user policy: feature work includes publishing a new binary release and
+verifying that the public installer delivers it, not just pushing main. Use the
+next appropriate version, update Cargo.toml/Cargo.lock and docs/RELEASE-vVERSION.md,
+refresh README/site, and use the exact-commit gates below. Packaging, notes and
+smoke checks must follow that version rather than a hardcoded first release.
+Update the installer when its behavior needs to change; its latest-release URLs
+already follow each newly published release. Test reinstalls as well as clean
+installs. Do not move published tags or silently replace old release artifacts.
+
 Read FEATURES.md and the latest work log. Update descriptive index.html content when direction changes, with no unsupported readiness claims. Compile tools/site.rs into tmp/site and run it to refresh the marked generated section; run tmp/site --check and git diff --check.
 
 For an authorized publication, commit and push, then inspect the Pages workflow for the intended SHA. Check the repository Pages API for custom domain and certificate state, and confirm HTTPS enforcement. Fetch https://mgbrowser.org without bypassing TLS validation and compare the full HTML against index.html. HTTP success alone does not establish visual quality; inspect in a browser when available and state any QA limit.
@@ -16,3 +25,10 @@ tagging. The v* workflow packages the locked Rust 1.91.1 binary and tests instal
 before publishing a normal GitHub Release. Then verify assets/checksum, the public
 installer command in an isolated prefix, version, worker selftest and desktop/icon
 files. Preview publication does not complete F-007 or the Google compatibility goal.
+
+After publication, run `python3 tools/public-release-smoke.py VERSION` from the
+repo root. It verifies public bytes, the exact advertised curl command, current
+version, replacement of an in-use executable, a fresh worker selftest, desktop/icons
+and latest links. Existing browser processes must restart after installation;
+do not claim that an old process can keep spawning workers after its binary is replaced.
+This is a manually invoked release gate, not an unattended publication agent.

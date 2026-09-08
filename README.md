@@ -2,7 +2,7 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.1.0 Experimental Preview
+## v0.1.1 Experimental Preview
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -35,7 +35,10 @@ Project code/artwork is MIT; release archives include upstream license notices.
 
 The preview is separate from the formal MVP, whose stronger gates remain open.
 Engine work is frozen at `4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da` for v0.1.
-See [preview details](docs/RELEASE-v0.1.0.md) for manual install and uninstall.
+HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
+Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
+updates to the latest release. Restart any open browser windows after updating.
+See [preview details](docs/RELEASE-v0.1.1.md) for manual install and uninstall.
 
 ## Engineering background (pre-MVP)
 

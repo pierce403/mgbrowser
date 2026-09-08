@@ -2,6 +2,10 @@
 
 Exact stability values: `planned`, `in-progress`, `stable`. Checked criteria require recorded evidence. This file drives the public status section.
 
+Feature delivery policy: user-facing additions include a versioned GitHub Release
+and a verified current website installer before handoff. The installer tracks
+GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
+
 ## F-012 : v0.1 experimental preview
 
 Stability: stable

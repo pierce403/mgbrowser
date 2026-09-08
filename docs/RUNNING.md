@@ -18,12 +18,12 @@ buttons. Scroll with the wheel/Page Up/Page Down; Back/Next/Reload controls are 
 the toolbar. Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
 
-Plain `http://` URLs work as well as HTTPS. Current source builds display a red
+Plain `http://` URLs work as well as HTTPS. Since v0.1.1, the browser displays a red
 title/address strip and "HTTP: Not secure" for a loaded HTTP page; the desktop
 window manager still controls the outer decoration. Typing HTTPS in the location
 field does not clear the warning until that page loads. Ctrl+L selects the whole
 location from either the page or a form field; type a URL and press Enter.
-The immutable v0.1.0 release predates this visual warning.
+Re-run the website installer to get the latest feature release.
 
 ## What it renders
 

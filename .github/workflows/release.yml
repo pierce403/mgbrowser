@@ -54,4 +54,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --latest --title "mgbrowser $GITHUB_REF_NAME Experimental Preview" --notes-file docs/RELEASE-v0.1.0.md
+          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --latest --title "mgbrowser $GITHUB_REF_NAME Experimental Preview" --notes-file "docs/RELEASE-$GITHUB_REF_NAME.md"

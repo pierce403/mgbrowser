@@ -83,7 +83,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | litemap | 0.8.3 | Unicode-3.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-deps | 0.1.0 | MIT |
+| mg-deps | 0.1.1 | MIT |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |

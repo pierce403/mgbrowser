@@ -25,6 +25,16 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
 
 ## Work and closeout
 
+- Standing user instruction (2026-09-08): every user-facing feature addition must
+  finish with a new versioned GitHub Release and an updated, verified website
+  installer. A source-only push is not feature completion. Bump the package/lock
+  version, write matching release notes, refresh site/README, pass exact-commit
+  CI/Pages, tag that commit, verify release assets/checksum and a fresh public
+  install including version/worker/desktop/icons. Keep old tags immutable.
+  The installer tracks GitHub latest; update its code when needed and verify it
+  delivers the new feature release every time. Documentation-only changes do not
+  require a new binary release. This does not authorize unrelated feature work.
+
 - Keep changes bounded and reproducible. Update feature behavior and evidence in the same contribution.
 - Append a dated entry to `memory/logs/YYYY-MM-DD.md` (America/Los_Angeles) with intent, decisions, commands/results, failures, and next steps. Never record credentials or private browsing data.
 - Stage reusable observations in `memory/learnings.md`; promote verified recurring lessons into concise instructions or skills. User decisions can be recorded directly. Do not turn a single failure into a universal rule.

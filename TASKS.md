@@ -2,6 +2,12 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
+Active release follow-up: publish v0.1.1 for the HTTP warning and punctuation
+changes, refresh the installer/site, and verify public installation. Standing
+user policy: future user-facing features include a new binary release and public
+installer verification before handoff; docs-only changes do not need a release.
+No new browser compatibility iteration is included.
+
 2026-09-08 follow-up: user authorizes project-text em-dash replacement with colons,
 plain HTTP with a red title/address strip, and Ctrl+L location access. Keep this
 small UI/navigation change separate from deferred compatibility work and the

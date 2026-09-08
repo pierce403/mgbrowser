@@ -1,5 +1,10 @@
 # Decisions and open choices
 
+2026-09-08 standing user policy: whenever features are added, roll a new release
+and update/verify the installer on the public site. Apply now as v0.1.1 for the
+HTTP warning update. Source-only publication is no longer sufficient for feature
+handoff. Keep old release tags immutable; this does not revive deferred engine work.
+
 2026-09-08: User explicitly freezes engine/compatibility at
 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da for v0.1.0 Experimental Preview.
 Ship Linux x86_64 X11/XWayland with a binary tarball, checksum installer, Mg

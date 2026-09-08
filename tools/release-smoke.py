@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install the packaged payload in isolated prefixes, including bad checksum rejection."""
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,6 +9,8 @@ import sys
 import tempfile
 
 assets = Path(sys.argv[1]).resolve()
+expected_version = re.search(r'^version = "([^"]+)"', Path("Cargo.toml").read_text(), re.M).group(1)
+assert f"v{expected_version} Experimental Preview" in Path("index.html").read_text()
 with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temporary:
     root = Path(temporary).resolve()
     transport = root / "transport"
@@ -26,8 +29,22 @@ with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temp
         subprocess.run(["bash", "install.sh"], env=env, check=True)
         binary = binary_dir / "mgbrowser"
         version = subprocess.check_output([binary, "--version"], env=env, text=True).strip()
-        assert version == "mgbrowser 0.1.0", version
+        assert version == f"mgbrowser {expected_version}", version
+        # Reinstall while the old executable is running: replacing its inode
+        # must work without truncating a live binary (ETXTBSY).
+        old_inode = binary.stat().st_ino
+        with subprocess.Popen([binary, "--script-worker"], stdin=subprocess.PIPE, env=env) as worker:
+            try:
+                assert worker.poll() is None
+                subprocess.run(["bash", "install.sh"], env=env, check=True)
+                assert binary.stat().st_ino != old_inode
+                assert worker.poll() is None
+            finally:
+                worker.terminate()
+                worker.wait(timeout=3)
+        # Open old processes must restart after replacement; test the new path.
         subprocess.run([binary, "--script-worker-selftest"], env=env, check=True, timeout=20)
+        assert subprocess.check_output([binary, "--version"], text=True).strip() == version
         subprocess.run([binary, "--help"], env=dict(env, MGBROWSER_FONT="/missing-font"), check=True)
         data = home / ".local/share"
         desktop = data / "applications/mgbrowser.desktop"
@@ -45,4 +62,4 @@ with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temp
     env.update(MGBROWSER_TEST_ASSETS=str(bad), MGBROWSER_INSTALL_DIR=str(rejected))
     result = subprocess.run(["bash", "install.sh"], env=env)
     assert result.returncode != 0 and not rejected.exists()
-print("RELEASE_INSTALL_SMOKE_OK: default/custom paths, version, worker, desktop/icon, bad checksum")
+print("RELEASE_INSTALL_SMOKE_OK: default/custom paths, version, running-binary update, worker, desktop/icon, bad checksum")
