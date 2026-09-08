@@ -2,7 +2,7 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-Nullish-member diagnostic implementation and local gates are complete; exact-SHA Rust CI, Pages and HTTPS publication checks follow. Tool access is restored. The Google goal remains incomplete; the new evidence identifies an undefined method-call base but not its producer or a missing capability. See the daily log for evidence and the prospective, not-yet-adopted forEach follow-up.
+Nullish-member diagnostic implementation 0ca28d6 passed exact-SHA Rust CI and Pages; the full verified-HTTPS body matches the committed site. Tool access is restored; optional in-app website visual QA remains unavailable. The Google goal remains incomplete: the new evidence identifies an undefined method-call base but not its producer or a missing capability. See the daily log for evidence and the prospective, not-yet-adopted builtin/event follow-ups.
 
 Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
 

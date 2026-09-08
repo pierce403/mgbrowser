@@ -1394,3 +1394,8 @@ against the unchanged 4,194,304 cap, repeated by the next script. Exit 2 and the
 inspected blank search frame confirm no result, destination or new live stage.
 No website-source inspection, adaptation or retry occurred. Changing server
 responses are not a controlled performance comparison; the Google goal stays open.
+
+Implementation 0ca28d6 passed exact-SHA Rust CI 34178535480 with the same 848/749
+test totals and 19/19 journeys. Pages 34178535502 deployed the matching 8,576-byte
+HTTPS body, with approved apex certificate and HTTPS enforcement. The daily log
+records original remote evidence and the separate website visual-QA limitation.
