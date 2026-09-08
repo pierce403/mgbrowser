@@ -2,6 +2,10 @@
 
 ## Purpose and responsibilities
 
+v0.1.0 is shipped and publicly verified (tagged commit
+392867f5f059cc34162360b5a63c4f16b62d6fcc; evidence in the 2026-09-08 log).
+Release work is complete. Stop; do not resume deferred engineering without a new request.
+
 Release mode supersedes the historical Google goal below: ship v0.1.0 Experimental
 Preview with the engine frozen at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da.
 Only installation/launch blockers justify browser changes during release.

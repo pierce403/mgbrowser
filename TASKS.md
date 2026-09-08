@@ -4,7 +4,14 @@ This queue is ordered; planning entries do not imply implementation has begun.
 
 ## Release mode — supersedes the historical queue below
 
-1. **T-009 / F-012: Ship v0.1.0 Experimental Preview.** Freeze engine and
+**Completed 2026-09-08:** v0.1.0 Experimental Preview is publicly released at
+https://github.com/pierce403/mgbrowser/releases/tag/v0.1.0 from
+392867f5f059cc34162360b5a63c4f16b62d6fcc. Exact-commit Rust CI and Pages, tagged
+release workflow, public checksum installer, installed version/worker selftest
+and desktop/icons all passed. Stop here; deferred engineering is not automatically
+reactivated. This closeout changes documentation only, not the release tag/binary.
+
+1. **T-009 / F-012: Complete — shipped v0.1.0 Experimental Preview.** Freeze engine and
    compatibility at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da. Package Linux x86_64
    X11/XWayland binary, MIT/license inventory, installer, Mg identity and launcher.
    Get exact-commit Rust CI and Pages green, tag v0.1.0, publish the GitHub release,

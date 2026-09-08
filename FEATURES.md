@@ -4,7 +4,7 @@ Exact stability values: `planned`, `in-progress`, `stable`. Checked criteria req
 
 ## F-012 — v0.1 experimental preview
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -20,14 +20,17 @@ compatibility and incomplete whole-browser isolation are explicit limitations.
 
 ### Test Criteria
 
-- [x] Locked release tarball installs without Rust or sudo; packaged version and worker selftest pass locally.
-- [x] Installer verifies checksums, rejects corruption, creates default/custom paths and desktop/icon files locally.
-- [ ] Existing Rust CI, AST-array regressions and 26 native/26 CDP journeys remain green on the release commit.
-- [ ] Exact green commit is tagged v0.1.0; normal GitHub Release contains binary tarball and checksum.
-- [ ] Public site/installer/downloads resolve; exact advertised curl command installs a working v0.1.0.
+- [x] Locked release tarball installs without Rust or sudo; packaged version and worker selftest pass.
+- [x] Installer verifies checksums, rejects corruption, creates default/custom paths and desktop/icon files.
+- [x] Existing Rust CI, AST-array regressions and 26 native/26 CDP journeys remain green on the release commit.
+- [x] Exact green commit is tagged v0.1.0; normal GitHub Release contains binary tarball and checksum.
+- [x] Public site/installer/downloads resolve; exact advertised curl command installs a working v0.1.0.
 
-Release gates remain pending until publication is observed. Formal F-007 criteria
-and the unfinished Google first-result journey are unchanged.
+Verified 2026-09-08: v0.1.0 tags 392867f5f059cc34162360b5a63c4f16b62d6fcc.
+Rust CI34227154913, Pages34227154800 and release34227857264 succeeded. Fresh
+public install passed checksum/version/worker/desktop/icon checks. This stability
+describes preview distribution only. Formal F-007 criteria and the unfinished
+Google first-result journey are unchanged. Full evidence is in the dated log.
 
 ## F-001 — Project foundation and website
 
