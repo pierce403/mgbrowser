@@ -2,7 +2,7 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-Publication handoff: tool access was restored with user approval; site generation/check and formatting pass. The default-function-prototype increment is ready for commit/push and exact-SHA Rust CI, Pages and full HTTPS verification. See the daily log for evidence and the still-incomplete Google checkpoint.
+Publication handoff complete: default-function-prototype implementation 1f1cdb0 passed exact-SHA Rust CI and Pages; the full HTTPS body matches the committed site, with approved certificate, HTTPS enforcement and HTTP redirect. Tool access is restored. See the daily log for evidence and the still-incomplete Google checkpoint.
 
 Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
 
