@@ -2,6 +2,13 @@
 
 ## Purpose and responsibilities
 
+Release mode supersedes the historical Google goal below: ship v0.1.0 Experimental
+Preview with the engine frozen at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da.
+Only installation/launch blockers justify browser changes during release.
+Google search → first result remains incomplete and is acceptable for this preview.
+Do not resume compatibility, storage optimization or evaluator work until separately
+requested after release. Formal MVP gates remain unchanged.
+
 Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. A native Linux HTML-flow browser now exists. The active goal is Google homepage → search → first result → destination, and it remains incomplete because the verified Google response requires JavaScript.
 
 ## Start here

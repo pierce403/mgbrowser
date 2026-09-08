@@ -1658,6 +1658,17 @@ fn fit_head(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
 fn main() -> Result<(), Box<dyn Error>> {
     // Worker dispatch must precede fonts, display, networking and debug-server setup.
     match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => {
+            println!("mgbrowser {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "mgbrowser {} — Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
         Some("--script-worker") => script_worker::worker_entry(),
         Some("--script-session") => script_worker::session_entry(),
         Some("--script-session-selftest") => {
@@ -1672,7 +1683,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut app = App::new()?;
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let mut initial = "https://www.google.com/".to_string();
+    let mut initial = "https://example.com/".to_string();
     let mut debug_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
@@ -1725,7 +1736,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut cdp = debug_port.map(cdp_browser::BrowserCdp::bind).transpose()?;
     app.cdp_enabled = cdp.is_some();
-    let (conn, screen_num) = x11rb::connect(None)?;
+    let (conn, screen_num) = x11rb::connect(None).map_err(|error| {
+        format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
+    })?;
     let screen = &conn.setup().roots[screen_num];
     let depth = screen.root_depth;
     let format = conn
@@ -1773,6 +1786,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         b"mgbrowser\0mgbrowser\0",
     )?;
     let protocols = conn.intern_atom(false, b"WM_PROTOCOLS")?.reply()?.atom;
+    let icon_atom = conn.intern_atom(false, b"_NET_WM_ICON")?.reply()?.atom;
+    let icon = image::load_from_memory_with_format(
+        include_bytes!("../assets/mgbrowser-32.png"),
+        image::ImageFormat::Png,
+    )?
+    .into_rgba8();
+    let mut icon_data = vec![icon.width(), icon.height()];
+    icon_data.extend(icon.pixels().map(|pixel| {
+        (u32::from(pixel[3]) << 24)
+            | (u32::from(pixel[0]) << 16)
+            | (u32::from(pixel[1]) << 8)
+            | u32::from(pixel[2])
+    }));
+    conn.change_property32(
+        PropMode::REPLACE,
+        window,
+        icon_atom,
+        AtomEnum::CARDINAL,
+        &icon_data,
+    )?;
     let close = conn.intern_atom(false, b"WM_DELETE_WINDOW")?.reply()?.atom;
     conn.change_property32(
         PropMode::REPLACE,

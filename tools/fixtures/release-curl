@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Installer test transport: only the two exact public release asset URLs exist.
+set -euo pipefail
+url= output=
+while (($#)); do
+    case "$1" in
+        -o) output=$2; shift 2;;
+        --proto|--tlsv1.2) if [[ $1 == --proto ]]; then shift 2; else shift; fi;;
+        -fsSL) shift;;
+        https://github.com/pierce403/mgbrowser/releases/latest/download/mgbrowser-linux-x86_64.tar.gz*) url=$1; shift;;
+        *) exit 91;;
+    esac
+done
+name=${url##*/}
+[[ $name == mgbrowser-linux-x86_64.tar.gz || $name == mgbrowser-linux-x86_64.tar.gz.sha256 ]]
+cp "$MGBROWSER_TEST_ASSETS/$name" "$output"

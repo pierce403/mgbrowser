@@ -1,11 +1,50 @@
 # mgbrowser
 
+<img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
+
+## v0.1.0 Experimental Preview
+
+**Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
+checksum-verified binary without sudo or Rust:
+
+```sh
+curl -fsSL https://mgbrowser.org/install.sh | bash
+mgbrowser https://example.com/
+```
+
+[Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
+· [Website](https://mgbrowser.org) · [Inspect installer](install.sh)
+
+The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
+a user-level application launcher and Mg icon. Follow its PATH instruction if
+needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
+TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
+Project code/artwork is MIT; release archives include upstream license notices.
+
+### Known limitations
+
+- Modern-web compatibility is poor. Google search → first result is not working.
+- JavaScript is an incomplete original implementation, disabled by default;
+  use `--enable-scripts` to opt in. External scripts and general browser event-loop
+  behavior are incomplete.
+- Full CSS is not implemented. Page images are not generally downloaded/rendered yet.
+- Linux X11/XWayland is the supported GUI target. Cookies are memory-only.
+- The restricted JavaScript worker is **not a sandbox for the browser as a whole**.
+- Do not use this release for banking, sensitive authenticated browsing, or
+  arbitrary hostile websites.
+
+The preview is separate from the formal MVP, whose stronger gates remain open.
+Engine work is frozen at `4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da` for v0.1.
+See [preview details](docs/RELEASE-v0.1.0.md) for manual install and uninstall.
+
+## Engineering background (pre-MVP)
+
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.
 
 **Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. An opt-in original JavaScript interpreter creates usable controls and retains page state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete. There is no general autoresearch executor yet.
 
 ```sh
-cargo run --locked --bin mgbrowser -- https://www.google.com/
+cargo run --locked --bin mgbrowser -- https://example.com/
 ```
 
 Requires an X11/XWayland display and a DejaVu/Liberation font file, or `MGBROWSER_FONT`. See [running and testing](docs/RUNNING.md) for controls, limitations, and repeatable local interaction checks.
@@ -71,8 +110,8 @@ Bounded `Object.create` descriptors now support fresh data properties and genuin
 getters/setters with original receivers, typed keys and property flags. The
 [descriptor contract](docs/OBJECT_CREATE.md) and runnable `measure_object_create`
 example record independent semantic and actual-allocation evidence.
-All 1,193 debug tests and 1,080 selected release checks pass locally, along with
-25 native and 25 external CDP journeys, including a handler-required interaction
+The frozen engine's 1,228 debug tests and 1,115 selected release checks pass locally,
+along with 26 native and 26 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;

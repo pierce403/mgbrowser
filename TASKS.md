@@ -2,6 +2,19 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
+## Release mode — supersedes the historical queue below
+
+1. **T-009 / F-012: Ship v0.1.0 Experimental Preview.** Freeze engine and
+   compatibility at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da. Package Linux x86_64
+   X11/XWayland binary, MIT/license inventory, installer, Mg identity and launcher.
+   Get exact-commit Rust CI and Pages green, tag v0.1.0, publish the GitHub release,
+   verify public assets/checksum and the exact curl install command, then stop.
+2. **After v0.1 only:** Google/JavaScript/storage work, external scripts, broader
+   CDP, CSS/images, autoresearch evaluator and expanded corpus remain deferred.
+   Do not resume them as part of release work. Formal F-007 MVP gates are unchanged.
+
+The following is historical engineering context, not the active task ordering.
+
 Latest completed local increment: bounded Object.create descriptors under
 docs/OBJECT_CREATE.md. Fresh data/accessor properties, typed keys, flags and
 original receivers pass independent language/resource tests and a real-worker

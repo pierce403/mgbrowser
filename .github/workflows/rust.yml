@@ -30,6 +30,11 @@ jobs:
           timeout 15s target/debug/examples/measure_ast_storage
           timeout 5s target/debug/examples/measure_object_create
           timeout 20s target/debug/examples/measure_ast_arrays
+      - name: Check packaged preview installation
+        run: |
+          cargo +1.91.1 build --locked --release --bin mgbrowser
+          bash tools/package-release.sh
+          python3 tools/release-smoke.py tmp/release
       - name: Exercise a local search and result click in an X11 window
         run: |
           target/debug/examples/journey_server > tmp/fixture-server.log 2>&1 &

@@ -1,0 +1,57 @@
+name: Experimental preview release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain and fixture display
+        run: |
+          rustup toolchain install 1.91.1 --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y xvfb fonts-dejavu-core desktop-file-utils
+      - name: Build locked release binary
+        run: cargo +1.91.1 build --locked --release --bin mgbrowser
+      - name: Package and verify the user payload
+        env:
+          RUSTUP_TOOLCHAIN: 1.91.1
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
+          bash tools/package-release.sh
+          python3 tools/release-smoke.py tmp/release
+          cargo +1.91.1 build --locked --example journey_server
+          target/debug/examples/journey_server > tmp/release-fixture.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:7878/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-ast-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-payload
+          path: |
+            tmp/release/mgbrowser-linux-x86_64.tar.gz
+            tmp/release/mgbrowser-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+  publish:
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-payload
+          path: release-assets
+      - name: Publish normal GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --latest --title "mgbrowser $GITHUB_REF_NAME Experimental Preview" --notes-file docs/RELEASE-v0.1.0.md

@@ -2,6 +2,33 @@
 
 Exact stability values: `planned`, `in-progress`, `stable`. Checked criteria require recorded evidence. This file drives the public status section.
 
+## F-012 — v0.1 experimental preview
+
+Stability: in-progress
+
+### Dependencies
+
+Existing engine at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da, F-001 distribution.
+This preview does not require completing F-007, F-010 or the research evaluator.
+
+### Properties
+
+Linux x86_64 X11/XWayland technology preview, packaged with Rust 1.91.1 and the
+locked graph. Checksum-verified user-level installer, Mg identity and desktop
+launcher. MIT project license and bundled dependency notices. Poor modern-web
+compatibility and incomplete whole-browser isolation are explicit limitations.
+
+### Test Criteria
+
+- [x] Locked release tarball installs without Rust or sudo; packaged version and worker selftest pass locally.
+- [x] Installer verifies checksums, rejects corruption, creates default/custom paths and desktop/icon files locally.
+- [ ] Existing Rust CI, AST-array regressions and 26 native/26 CDP journeys remain green on the release commit.
+- [ ] Exact green commit is tagged v0.1.0; normal GitHub Release contains binary tarball and checksum.
+- [ ] Public site/installer/downloads resolve; exact advertised curl command installs a working v0.1.0.
+
+Release gates remain pending until publication is observed. Formal F-007 criteria
+and the unfinished Google first-result journey are unchanged.
+
 ## F-001 — Project foundation and website
 
 Stability: stable
