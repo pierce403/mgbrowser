@@ -2,8 +2,9 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-Active release follow-up: publish v0.1.1 for the HTTP warning and punctuation
-changes, refresh the installer/site, and verify public installation. Standing
+Completed release follow-up: v0.1.1 is published for the HTTP warning and
+punctuation changes; installer/site, clean install and v0.1.0 upgrade are verified.
+Release commit: 0c72c8b898f66a8e3e0ad20c8e73eaa4dc165676. Standing
 user policy: future user-facing features include a new binary release and public
 installer verification before handoff; docs-only changes do not need a release.
 No new browser compatibility iteration is included.
