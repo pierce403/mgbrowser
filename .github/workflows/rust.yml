@@ -222,9 +222,9 @@ jobs:
           [[ "$event_debugger_ready" == true ]]
           target/debug/examples/cdp_journey "ws://127.0.0.1:$event_port/devtools/page/page-1" http://127.0.0.1:7878/script-events tmp/event-journey/destination.png 2>&1 | tee tmp/event-journey/client.log
           EVENT_CDP
-          if rg '/event-trap' tmp/event-journey/server.log; then exit 1; fi
-          [[ $(rg -c '^200 OK /event-search$' tmp/event-journey/server.log) == 2 ]]
-          [[ $(rg -c '^200 OK /event-destination$' tmp/event-journey/server.log) == 2 ]]
+          if grep -F '/event-trap' tmp/event-journey/server.log; then exit 1; fi
+          [[ $(grep -cFx '200 OK /event-search' tmp/event-journey/server.log) == 2 ]]
+          [[ $(grep -cFx '200 OK /event-destination' tmp/event-journey/server.log) == 2 ]]
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4
