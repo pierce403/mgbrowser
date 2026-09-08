@@ -59,7 +59,7 @@ enum Frame {
     BinaryRight {
         minimum: u8,
         allow_in: bool,
-        op: String,
+        op: &'static str,
         left: E,
     },
     UnaryStart,
@@ -359,7 +359,7 @@ impl Machine {
                 let depth = left.depth.max(right.depth) + 1;
                 self.value = Some(parser.expr(
                     Expr::Assign {
-                        op: op.into(),
+                        op,
                         left: Box::new(left.value),
                         right: Box::new(right.value),
                     },
@@ -399,7 +399,6 @@ impl Machine {
                 if let Some((op, precedence)) = binary_operator(&parser.token().kind, allow_in)
                     && precedence >= minimum
                 {
-                    let op = op.to_owned();
                     let left = self.take();
                     parser.advance();
                     self.push(
@@ -466,13 +465,13 @@ impl Machine {
                         return Err(parser.fail("Invalid update target"));
                     }
                     Expr::Update {
-                        op: op.into(),
+                        op,
                         expr: Box::new(expression.value),
                         prefix: true,
                     }
                 } else {
                     Expr::Unary {
-                        op: op.into(),
+                        op,
                         expr: Box::new(expression.value),
                     }
                 };
@@ -490,7 +489,7 @@ impl Machine {
                     parser.advance();
                     self.value = Some(parser.expr(
                         Expr::Update {
-                            op: op.into(),
+                            op,
                             expr: Box::new(expression.value),
                             prefix: false,
                         },

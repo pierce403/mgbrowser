@@ -101,21 +101,22 @@ pub enum Expr {
         body: Rc<[Stmt]>,
     },
     Unary {
-        op: String,
+        // Grammar-selected tags never borrow source or retain a heap buffer.
+        op: &'static str,
         expr: Box<Expr>,
     },
     Binary {
-        op: String,
+        op: &'static str,
         left: Box<Expr>,
         right: Box<Expr>,
     },
     Assign {
-        op: String,
+        op: &'static str,
         left: Box<Expr>,
         right: Box<Expr>,
     },
     Update {
-        op: String,
+        op: &'static str,
         expr: Box<Expr>,
         prefix: bool,
     },

@@ -625,28 +625,29 @@ mod tests {
     #[test]
     fn authored_prechange_charge_and_fuel_checkpoints_are_unchanged() {
         // Frozen public baseline: tmp/diagnostic-resource-baseline.log. Exact
-        // authored sources, including punctuation, preserve source/AST charges.
+        // authored sources preserve source charges. Static operator ownership
+        // removes only the independently measured AST buffers subtracted below.
         // Later real reduceRight/core backlinks add 156 + 725 Bootstrap bytes.
         let cases = [
             (
                 "var rounds=0;for(var i=0;i<128;i++){try{null.length;}catch(e){rounds++;}}rounds;",
-                76_200,
+                76_200 - 53,
                 208,
-                3195,
+                3195 - 53,
                 46_798,
             ),
             (
                 "var prior=0;try{null.length;}finally{prior=7;}",
-                28_270,
+                28_270 - 17,
                 174,
-                1915,
+                1915 - 17,
                 182,
             ),
             (
                 "var rounds=0,ticks=0;for(var i=0;i<128;i++){try{null.length;}catch(e){rounds++;}}while(true){ticks++;}",
-                76_934,
+                76_934 - 71,
                 230,
-                3737,
+                3737 - 71,
                 46_968,
             ),
         ];
@@ -691,7 +692,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             runtime.allocation_report().accepted_bytes,
-            27_264 + 156 + 725
+            27_264 + 156 + 725 - 20
         );
         assert!(
             runtime
@@ -701,7 +702,7 @@ mod tests {
         );
         assert_eq!(
             runtime.allocation_report().accepted_bytes,
-            27_529 + 156 + 725
+            27_529 + 156 + 725 - 20
         );
         counters(&runtime);
     }

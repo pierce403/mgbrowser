@@ -1190,10 +1190,15 @@ fn assignable(expression: &Expr) -> bool {
     matches!(expression, Expr::Ident(_) | Expr::Member { .. })
 }
 
-fn binary_operator(kind: &Kind, allow_in: bool) -> Option<(&str, u8)> {
+fn binary_operator(kind: &Kind, allow_in: bool) -> Option<(&'static str, u8)> {
     let op = match kind {
         Kind::Punct(op) => *op,
-        Kind::Word(op) => op,
+        // Keyword tokens remain owned. Retained AST tags must not borrow them.
+        Kind::Word(op) => match op.as_str() {
+            "in" => "in",
+            "instanceof" => "instanceof",
+            _ => return None,
+        },
         _ => return None,
     };
     let precedence = match op {
@@ -1282,6 +1287,54 @@ mod tests {
     }
 
     #[test]
+    fn static_operator_tags_outlive_sources_tokens_and_cloned_trees() {
+        fn tag(value: &Expr) -> &'static str {
+            match value {
+                Expr::Unary { op, .. }
+                | Expr::Update { op, .. }
+                | Expr::Binary { op, .. }
+                | Expr::Assign { op, .. } => *op,
+                _ => panic!("expected operator"),
+            }
+        }
+
+        for (source, expected) in [
+            ("+ value", "+"),
+            ("typeof value", "typeof"),
+            ("void value", "void"),
+            ("delete value.key", "delete"),
+            ("++ value", "++"),
+            ("value --", "--"),
+            ("left in right", "in"),
+            ("left instanceof right", "instanceof"),
+            ("left >>> right", ">>>"),
+            ("left >>>= right", ">>>="),
+        ] {
+            let source = source.to_owned();
+            let value = expression(&source);
+            let cloned = value.clone();
+            let retained = tag(&value);
+            let reparsed = expression(&source);
+            drop(value);
+            drop(source);
+            assert_eq!(retained, expected);
+            assert!(std::ptr::eq(retained, tag(&cloned)));
+            assert!(std::ptr::eq(retained, tag(&reparsed)));
+            drop(cloned);
+            drop(reparsed);
+            assert_eq!(retained, expected);
+        }
+
+        for keyword in ["in", "instanceof"] {
+            let token = Kind::Word(keyword.to_owned());
+            let retained: &'static str = binary_operator(&token, true).unwrap().0;
+            assert_eq!(binary_operator(&token, false).is_some(), keyword != "in");
+            drop(token);
+            assert_eq!(retained, keyword);
+        }
+    }
+
+    #[test]
     fn precedence_assignment_and_sequences() {
         let value = expression("a = b = 1 + 2 * 3");
         let Expr::Assign { left, right, op } = value else {
@@ -1298,7 +1351,7 @@ mod tests {
         assert_eq!(op, "+");
         assert!(matches!(*right, Expr::Binary { op, .. } if op == "*"));
         assert!(
-            matches!(expression("a || b && c"), Expr::Binary { op, right, .. } if op == "||" && matches!(right.as_ref(), Expr::Binary { op, .. } if op == "&&"))
+            matches!(expression("a || b && c"), Expr::Binary { op, right, .. } if op == "||" && matches!(right.as_ref(), Expr::Binary { op, .. } if *op == "&&"))
         );
         assert!(
             matches!(expression("a ? b = 1 : c ? 2 : 3"), Expr::Conditional { alternate, .. } if matches!(*alternate, Expr::Conditional { .. }))
@@ -1337,9 +1390,9 @@ mod tests {
         assert_eq!(
             expression("/*before*/ .5 // middle\n + 0x10 + 1e2"),
             Expr::Binary {
-                op: "+".into(),
+                op: "+",
                 left: Box::new(Expr::Binary {
-                    op: "+".into(),
+                    op: "+",
                     left: Box::new(Expr::Number(0.5)),
                     right: Box::new(Expr::Number(16.0))
                 }),
@@ -1409,7 +1462,7 @@ mod tests {
                 name: Some("anonymous".into()),
                 params: vec!["a".into(), "bc".into()].into(),
                 body: vec![Stmt::Return(Some(Expr::Binary {
-                    op: "+".into(),
+                    op: "+",
                     left: Box::new(Expr::Ident("a".into())),
                     right: Box::new(Expr::Ident("bc".into())),
                 }))]
@@ -1832,7 +1885,7 @@ mod tests {
         let Program(body) = parse("a = b\n/hi/g.exec(c)").unwrap();
         assert_eq!(body.len(), 1);
         assert!(
-            matches!(&body[0], Stmt::Expr(Expr::Assign { right, .. }) if matches!(right.as_ref(), Expr::Binary { op, .. } if op == "/"))
+            matches!(&body[0], Stmt::Expr(Expr::Assign { right, .. }) if matches!(right.as_ref(), Expr::Binary { op, .. } if *op == "/"))
         );
         let Program(body) = parse("function f(){return\n/a/;}").unwrap();
         assert!(
@@ -2140,7 +2193,7 @@ mod tests {
         assert!(init.is_none());
         assert!(
             matches!(test.as_deref(), Some(Expr::Binary { op, left, right })
-            if op == "<" && **left == Expr::Ident("left".into()) && **right == Expr::Ident("right".into()))
+            if *op == "<" && **left == Expr::Ident("left".into()) && **right == Expr::Ident("right".into()))
         );
         assert!(
             matches!(update.as_deref(), Some(Expr::Call { callee, args })
@@ -2246,7 +2299,7 @@ mod tests {
         }
         let Program(body) = parse("for(var key=(needle in haystack) in object) ;").unwrap();
         assert!(matches!(&body[0], Stmt::ForIn { binding, .. }
-                if matches!(binding.as_ref(), ForInBinding::Var { init: Some(Expr::Binary { op, .. }), .. } if op == "in")));
+                if matches!(binding.as_ref(), ForInBinding::Var { init: Some(Expr::Binary { op, .. }), .. } if *op == "in")));
     }
 
     #[test]

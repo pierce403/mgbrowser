@@ -1,6 +1,8 @@
 //! Independent resource/privacy checks for nullish member-fault context.
 //! Authored sources only; no website input, alternate engine, changed limits,
 //! enlarged test stack or public diagnostic-state API.
+//! Historical exact checkpoints below subtract only independently measured
+//! removed operator buffers under docs/STATIC_OPERATORS.md; other phases stay.
 
 use mg_deps::js::runtime::{AllocationPhase, AllocationReport, Host, Runtime, Value};
 
@@ -395,8 +397,8 @@ fn repeated_caught_faults_preserve_the_frozen_exclusive_phase_totals() {
     );
     exact_report(
         &runtime,
-        76_200 + 156 + 725,
-        [25_999 + 156 + 725, 208, 3195, 0, 46_798, 0, 0],
+        76_200 + 156 + 725 - 53,
+        [25_999 + 156 + 725, 208, 3195 - 53, 0, 46_798, 0, 0],
     );
     let error = runtime
         .execute(
@@ -421,8 +423,8 @@ fn normal_finally_keeps_context_but_preserves_the_frozen_phase_totals() {
     assert_eq!(runtime.get_global("prior"), Value::Number(7.0));
     exact_report(
         &runtime,
-        28_270 + 156 + 725,
-        [25_999 + 156 + 725, 174, 1915, 0, 182, 0, 0],
+        28_270 + 156 + 725 - 17,
+        [25_999 + 156 + 725, 174, 1915 - 17, 0, 182, 0, 0],
     );
 }
 
@@ -435,8 +437,8 @@ fn fixed_caught_faults_do_not_move_the_frozen_fuel_exhaustion_checkpoint() {
     assert_eq!(runtime.get_global("ticks"), Value::Number(21_462.0));
     exact_report(
         &runtime,
-        76_934 + 156 + 725,
-        [25_999 + 156 + 725, 230, 3737, 0, 46_968, 0, 0],
+        76_934 + 156 + 725 - 71,
+        [25_999 + 156 + 725, 230, 3737 - 71, 0, 46_968, 0, 0],
     );
     let first = report(&runtime);
     latch(&mut runtime, &error, first);
@@ -450,8 +452,8 @@ fn public_empty_invoke_preserves_both_frozen_reports_and_the_265_byte_call() {
         .unwrap();
     exact_report(
         &runtime,
-        27_264 + 156 + 725,
-        [25_999 + 156 + 725, 156, 716, 128, 265, 0, 0],
+        27_264 + 156 + 725 - 20,
+        [25_999 + 156 + 725, 156, 716 - 20, 128, 265, 0, 0],
     );
     let before = report(&runtime);
     annotated(
@@ -463,8 +465,8 @@ fn public_empty_invoke_preserves_both_frozen_reports_and_the_265_byte_call() {
     );
     exact_report(
         &runtime,
-        27_529 + 156 + 725,
-        [25_999 + 156 + 725, 156, 716, 128, 530, 0, 0],
+        27_529 + 156 + 725 - 20,
+        [25_999 + 156 + 725, 156, 716 - 20, 128, 530, 0, 0],
     );
     assert_eq!(runtime_delta(before, report(&runtime)), 265);
 }

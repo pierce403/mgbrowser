@@ -711,11 +711,26 @@ No new CDP commands or Runtime evaluation are exposed.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
 ```
+
+For retained AST storage, build and explicitly run the standalone measurement
+example (ordinary example test harnesses do not run `main`):
+
+```sh
+cargo build --locked --example measure_ast_storage
+timeout 15s target/debug/examples/measure_ast_storage
+```
+
+Its fixed 23 authored cases measure retained allocator requests, clone ownership
+and final-drop cleanup in one thread. Twelve harmless cases also compare the
+runtime's AST allowance; diagnostic/producer sources are parse-only. This is
+requested storage, not RSS or a general autoresearch executor. CI runs this
+example separately after building it; the original pre-change probe is preserved
+with the hashes in the daily log. See [STATIC_OPERATORS.md](STATIC_OPERATORS.md).
 
 The unit/integration checks cover parser behavior, Rust font painting, verified
 local TLS handshakes and rejection cases, HTTP framing, redirects, cookie scope,
@@ -803,3 +818,35 @@ Start the owned fixture service and debugging browser as documented above; 9222
 is an example, while CI selects a fresh port. Require the real form fields, first
 authored result and separate destination, not merely a created control. This is
 local fixture verification, not a Google result or additional CDP command.
+
+## Static operator storage fixture
+
+The frozen `/script-static-operators` page generates 14,500 binary statements in
+a Function before creating every form control. The old worker rejected its AST
+before controls existed; static operator ownership completes it at 4,053,180
+accepted bytes under the same 4 MiB cap. No grammar or evaluator change is involved.
+
+```sh
+target/debug/mgbrowser http://127.0.0.1:7878/script-static-operators --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/static-operators-native
+target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-static-operators tmp/static-operators-cdp.png
+```
+
+Start the owned server/debugging browser as above; CI chooses a fresh debugger
+port. All four CI blocks pass locally with 24 native/24 external CDP destinations,
+including Unicode query/hidden fields, actual local first result, stale-node
+rejection, flattened session and 1100×683 destination PNG. The submit button is
+unnamed. The larger-body control still fails fatally before any form or later
+script. Root and a reviewer inspected fresh frames; owned services were reaped.
+
+Full debug/release totals are 1,145/1,032, excluding two repeated child summaries
+per profile. Earlier fixture allocations in this document are historical
+checkpoints, not promises of unchanged AST charges. The diagnostic worker now
+accepts 58,734 after removing exactly 420 operator-buffer bytes from AST/total;
+other phases remain fixed. See [STATIC_OPERATORS.md](STATIC_OPERATORS.md) for
+frozen sources, measured clone/storage controls and all unchanged limits.
+
+One post-change Google attempt still renders no result: homepage/real form work,
+but search HTTP 200 reports unsupported Object.create property descriptors first,
+then Ast378,301 rejected after 4,128,478 accepted against 4,194,304. Exit2 and an
+inspected blank frame; no first result/destination or new required live stage.
+No live source inspection/adaptation or retry. Publication is a separate gate.

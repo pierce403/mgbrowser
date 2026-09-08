@@ -44,6 +44,40 @@ fn readable(document: &Document) {
 }
 
 #[test]
+fn static_operator_storage_allows_the_frozen_real_form() {
+    let html = include_str!("fixtures/script/static-operators.html");
+    assert!(
+        mg_deps::document::parse_with_scripting(html, URL, true)
+            .forms
+            .is_empty()
+    );
+    let reply = execute(Request {
+        url: URL.into(),
+        html: html.into(),
+    });
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Static operators local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert_eq!(content(&doc, "#status"), "Static operators form ready");
+    assert!(
+        doc.items
+            .iter()
+            .any(|item| matches!(item, Item::Input { name, .. } if name == "q"))
+    );
+}
+
+#[test]
 fn core_intrinsics_create_the_frozen_real_form() {
     let reply = execute(Request {
         url: URL.into(),

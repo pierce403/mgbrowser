@@ -64,19 +64,21 @@ DOM collection snapshots. See the [callback contract](docs/ARRAY_CALLBACKS.md).
 Five core constructor links and genuine primitive prototype payloads now work,
 including direct/bound Number and Boolean construction. See the
 [core intrinsic contract](docs/CORE_INTRINSICS.md).
-All 1,104 debug tests and 991 selected release checks pass locally, along with
-23 native and 23 external CDP journeys, including a handler-required interaction
+Fixed parser operators now use static Rust strings, removing their real heap
+buffers without changing grammar or limits. The [storage contract](docs/STATIC_OPERATORS.md)
+and runnable `measure_ast_storage` example record controlled ownership evidence.
+All 1,145 debug tests and 1,032 selected release checks pass locally, along with
+24 native and 24 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
 
 The latest bounded Google attempt loads the homepage and submits its actual form
-through the retained session. Search still has no actionable results: runtime
-admission rejects 131 bytes after 4,194,282 accepted bytes against the existing
-4 MiB budget, and later scripts retain the fatal failure. The previous undefined
-binding diagnostic was not reported in this response; changing served inputs are
-not a controlled comparison or proof of its cause. No first
+through the retained session. Search still has no actionable results: first is
+unsupported `Object.create` property descriptors, then Ast 378,301 is rejected
+after 4,128,478 accepted bytes against the unchanged 4 MiB cap. The changed
+response is not a controlled benchmark or proof of an earlier error's cause. No first
 result or destination has been reached; further independently tested language,
 browser API and storage-ownership work is needed.
 

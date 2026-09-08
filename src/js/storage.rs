@@ -237,12 +237,12 @@ impl Storage {
                 }
             }
             Expr::Function { name, params, body } => self.function(name.as_ref(), params, body),
-            Expr::Unary { op, expr } | Expr::Update { op, expr, .. } => {
-                self.string(op);
+            Expr::Unary { expr, .. } | Expr::Update { expr, .. } => {
+                // Canonical operator tags are static; their real boxed children
+                // and any separately owned descendants still pay in full.
                 self.boxed_expression(expr);
             }
-            Expr::Binary { op, left, right } | Expr::Assign { op, left, right } => {
-                self.string(op);
+            Expr::Binary { left, right, .. } | Expr::Assign { left, right, .. } => {
                 self.boxed_expression(left);
                 self.boxed_expression(right);
             }
@@ -361,34 +361,32 @@ mod tests {
     #[test]
     fn expression_boxes_operators_and_argument_vectors_have_distinct_storage() {
         let slot = size_of::<Expr>() + ALLOCATION_OVERHEAD;
-        let operator = || String::from("+");
-        let operator_storage = operator().capacity() + ALLOCATION_OVERHEAD;
         for expression in [
             Expr::Unary {
-                op: operator(),
+                op: "+",
                 expr: boxed_number(),
             },
             Expr::Update {
-                op: operator(),
+                op: "++",
                 expr: boxed_number(),
                 prefix: true,
             },
         ] {
-            assert_eq!(expression_bytes(&expression), slot + operator_storage);
+            assert_eq!(expression_bytes(&expression), slot);
         }
         for expression in [
             Expr::Binary {
-                op: operator(),
+                op: "+",
                 left: boxed_number(),
                 right: boxed_number(),
             },
             Expr::Assign {
-                op: operator(),
+                op: "+=",
                 left: boxed_number(),
                 right: boxed_number(),
             },
         ] {
-            assert_eq!(expression_bytes(&expression), 2 * slot + operator_storage);
+            assert_eq!(expression_bytes(&expression), 2 * slot);
         }
         assert_eq!(
             expression_bytes(&Expr::Member {
@@ -426,6 +424,35 @@ mod tests {
         items.extend([number(), Expr::Null]);
         let expected = items.capacity() * size_of::<Expr>() + ALLOCATION_OVERHEAD;
         assert_eq!(expression_bytes(&Expr::Sequence(items)), expected);
+    }
+
+    #[test]
+    fn static_operator_spelling_does_not_discount_owned_descendants() {
+        let slot = size_of::<Expr>() + ALLOCATION_OVERHEAD;
+        for op in ["+", "typeof"] {
+            let mut name = String::with_capacity(73);
+            name.push('x');
+            let expected = slot + name.capacity() + ALLOCATION_OVERHEAD;
+            let expression = Expr::Unary {
+                op,
+                expr: Box::new(Expr::Ident(name)),
+            };
+            assert_eq!(expression_bytes(&expression), expected);
+        }
+        for op in ["+", "instanceof"] {
+            let mut units = Vec::with_capacity(31);
+            units.extend([0xd800, b'a' as u16]);
+            let mut name = String::with_capacity(43);
+            name.push('x');
+            let expected =
+                2 * slot + units.capacity() * 2 + name.capacity() + 2 * ALLOCATION_OVERHEAD;
+            let expression = Expr::Binary {
+                op,
+                left: Box::new(Expr::String(units)),
+                right: Box::new(Expr::Ident(name)),
+            };
+            assert_eq!(expression_bytes(&expression), expected);
+        }
     }
 
     #[test]

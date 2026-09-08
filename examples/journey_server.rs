@@ -45,6 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/core-intrinsics.html"),
             ),
+            "/script-static-operators" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/static-operators.html"),
+            ),
             "/script-array-callbacks" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/array-callbacks.html"),

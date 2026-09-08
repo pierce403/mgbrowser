@@ -4,6 +4,8 @@
 //! Pinned c05ba389 library SHA256
 //! 1f02536130675fc56fc9fbee08168fd21e5b5186c37bdb856e3db33c580745f0.
 //! One default-stack baseline passed in163ms; no candidate-derived totals.
+//! Static operator storage subtracts the independently counted removed buffers
+//! from historical AST/total pins only; docs/STATIC_OPERATORS.md records evidence.
 
 use mg_deps::js::runtime::{AllocationPhase, AllocationReport, Host, Runtime, Value};
 
@@ -127,8 +129,8 @@ fn present_property_catches_preserve_frozen_bootstrap_and_all_phases() {
     );
     exact(
         &caught(CAUGHT, 64),
-        72_972 + 156 + 725,
-        [25_999 + 156 + 725, 249, 4002, 0, 42_722, 0, 0],
+        72_972 + 156 + 725 - 70,
+        [25_999 + 156 + 725, 249, 4002 - 70, 0, 42_722, 0, 0],
     );
 }
 
@@ -136,8 +138,8 @@ fn present_property_catches_preserve_frozen_bootstrap_and_all_phases() {
 fn missing_property_catches_preserve_frozen_allocation_and_caught_values() {
     exact(
         &caught(MISSING, 64),
-        72_439 + 156 + 725,
-        [25_999 + 156 + 725, 233, 3619, 0, 42_588, 0, 0],
+        72_439 + 156 + 725 - 70,
+        [25_999 + 156 + 725, 233, 3619 - 70, 0, 42_588, 0, 0],
     );
 }
 
@@ -145,8 +147,8 @@ fn missing_property_catches_preserve_frozen_allocation_and_caught_values() {
 fn user_native_and_bound_calls_preserve_frozen_allocation_and_effects() {
     exact(
         &caught(CALLS, 48),
-        76_992 + 156 + 725,
-        [25_999 + 156 + 725, 373, 7282, 292, 43_046, 0, 0],
+        76_992 + 156 + 725 - 140,
+        [25_999 + 156 + 725, 373, 7282 - 140, 292, 43_046, 0, 0],
     );
 }
 
@@ -163,8 +165,8 @@ fn host_get_and_call_observation_do_not_repeat_callbacks_or_add_charges() {
     assert_eq!((host.gets, host.calls), (64, 32));
     exact(
         &runtime,
-        75_081 + 156 + 725,
-        [25_999 + 156 + 725, 284, 5242, 0, 43_556, 0, 0],
+        75_081 + 156 + 725 - 105,
+        [25_999 + 156 + 725, 284, 5242 - 105, 0, 43_556, 0, 0],
     );
 }
 
@@ -180,8 +182,8 @@ fn pending_finally_fault_preserves_exact_frozen_cost_and_earlier_effect() {
     assert_eq!((host.gets, host.calls), (0, 0));
     exact(
         &runtime,
-        28_789 + 156 + 725,
-        [25_999 + 156 + 725, 185, 2121, 0, 484, 0, 0],
+        28_789 + 156 + 725 - 17,
+        [25_999 + 156 + 725, 185, 2121 - 17, 0, 484, 0, 0],
     );
 }
 
@@ -194,8 +196,8 @@ fn observed_traversals_preserve_frozen_21120_tick_fuel_checkpoint_and_latch() {
     assert_eq!(runtime.get_global("ticks"), Value::Number(21_120.0));
     exact(
         &runtime,
-        54_724 + 156 + 725,
-        [25_999 + 156 + 725, 240, 3943, 0, 24_542, 0, 0],
+        54_724 + 156 + 725 - 71,
+        [25_999 + 156 + 725, 240, 3943 - 71, 0, 24_542, 0, 0],
     );
     let first = report(&runtime);
     latch(&mut runtime, &error, first);
@@ -222,8 +224,8 @@ fn inherited_configured_getter_keeps_one_call_and_exact_frozen_storage() {
     assert_eq!((host.gets, host.calls), (0, 0));
     exact(
         &runtime,
-        30_200 + 156 + 725,
-        [25_999 + 156 + 725, 358, 2281, 128, 1434, 0, 0],
+        30_200 + 156 + 725 - 18,
+        [25_999 + 156 + 725, 358, 2281 - 18, 128, 1434, 0, 0],
     );
 }
 

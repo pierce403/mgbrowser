@@ -266,6 +266,11 @@ expressions and the ForIn binding, reducing the x86_64 statement layout from
 144 to 80 bytes without adding language nodes or logical depth. Successful AST
 admission counts root/block/case vector capacity, expression/tuple capacity
 including holes, boxed children and separately owned String/UTF-16 buffers.
+Fixed grammar operator tags are canonical static Rust strings; unlike identifiers,
+property names, literals and regex data, they no longer own individual buffers.
+This changes the experimental public AST operator field type to `&'static str`,
+not the accepted language or evaluator. [STATIC_OPERATORS.md](STATIC_OPERATORS.md)
+records the frozen vocabulary, actual storage measurement and acceptance gates.
 Inline children already occupy their containing slots and contribute only owned
 descendant storage. Shared function slices pay their length-based payload and
 two-word reference-count control allowance once per parse, not per closure.

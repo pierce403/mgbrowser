@@ -64,6 +64,87 @@ fn run(args: &[&str], input: &[u8], timeout: Duration) -> (ExitStatus, String, S
 }
 
 #[test]
+fn restricted_child_static_operators_build_the_frozen_form() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/static-operators".into(),
+        html: include_str!("fixtures/script/static-operators.html").into(),
+    };
+    assert!(
+        mg_deps::document::parse_with_scripting(&request.html, &request.url, true)
+            .forms
+            .is_empty()
+    );
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("static operators fixture allocation: {report:?}");
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Static operators local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    for (name, value) in [("q", ""), ("source", "fixture")] {
+        let node = doc
+            .nodes
+            .iter()
+            .find(|node| node.tag == "input" && node.attr("name") == Some(name))
+            .unwrap();
+        assert_eq!(node.attr("value").unwrap_or(""), value);
+    }
+    assert!(
+        doc.nodes
+            .iter()
+            .any(|node| node.tag == "button" && node.attr("type") == Some("submit"))
+    );
+    assert!(reply.html.contains("Static operators form ready"));
+}
+
+#[test]
+fn restricted_child_larger_operator_body_still_fails_before_form_and_later_script() {
+    let html = include_str!("fixtures/script/static-operators.html")
+        .replace("Array(7251)", "Array(8251)")
+        + "<script>document.title='forbidden later script';</script>";
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/static-operators-limit".into(),
+        html,
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(
+        reply
+            .errors
+            .iter()
+            .all(|error| error.contains("JavaScript allocation budget exhausted"))
+    );
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    assert_eq!(
+        report.first_rejected.unwrap().phase,
+        mg_deps::js::runtime::AllocationPhase::Ast
+    );
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Static operators fixture fallback");
+    assert!(doc.forms.is_empty());
+}
+
+#[test]
 fn restricted_child_core_intrinsics_build_the_frozen_form() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/core-intrinsics".into(),
@@ -359,12 +440,16 @@ fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline
     assert!(report.first_rejected.is_none());
     // Frozen diagnostic baseline plus the separately measured event-host setup:
     // removeEventListener 178 + onclick accessor 306 + onsubmit accessor 310.
-    // reduceRight/core backlinks add 156 + 725 Bootstrap bytes; other phases stay fixed.
+    // reduceRight/core backlinks add 156 + 725 Bootstrap bytes. Static operator
+    // storage removes 24 buffers / 36 payload bytes: 420 from AST and total only.
     const EVENT_HOST_SETUP: u64 = 178 + 306 + 310;
-    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP + 156 + 725);
+    assert_eq!(
+        report.accepted_bytes,
+        57_479 + EVENT_HOST_SETUP + 156 + 725 - 420
+    );
     assert_eq!(report.phases.bootstrap, 25_999 + 156 + 725);
     assert_eq!(report.phases.source, 1_531);
-    assert_eq!(report.phases.ast, 23_299);
+    assert_eq!(report.phases.ast, 23_299 - 420);
     assert_eq!(report.phases.function_code, 128);
     assert_eq!(report.phases.runtime, 6_522 + EVENT_HOST_SETUP);
     assert_eq!(report.phases.regex_compile, 0);
