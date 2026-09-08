@@ -64,6 +64,72 @@ fn run(args: &[&str], input: &[u8], timeout: Duration) -> (ExitStatus, String, S
 }
 
 #[test]
+fn restricted_child_core_intrinsics_build_the_frozen_form() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/core-intrinsics".into(),
+        html: include_str!("fixtures/script/core-intrinsics.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("core intrinsic fixture allocation: {report:?}");
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4194304);
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Core intrinsic local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    for (tag, name, value) in [
+        ("input", "q", ""),
+        ("input", "source", "fixture"),
+        ("button", "submit", "search"),
+    ] {
+        let node = doc
+            .nodes
+            .iter()
+            .find(|node| node.tag == tag && node.attr("name") == Some(name))
+            .unwrap();
+        assert_eq!(node.attr("value").unwrap_or(""), value);
+    }
+}
+
+#[test]
+fn restricted_child_numeric_conversion_fuel_failure_is_fatal_and_latched() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/core-intrinsic-fatal".into(),
+        html: "<body><p id='state'>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{new Number({valueOf:function(){while(true){}}});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(
+        reply
+            .errors
+            .iter()
+            .all(|error| error.contains("JavaScript fuel exhausted"))
+    );
+    assert!(reply.navigation.is_none());
+    assert!(reply.html.contains("Prior effect"));
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert!(!doc.title.contains("effect"));
+    assert!(doc.forms.is_empty());
+    assert_eq!(reply.allocations.unwrap().limit_bytes, 4194304);
+}
+
+#[test]
 fn isolation_probes_really_run_and_owned_children_are_reaped() {
     let (status, stdout, stderr) = run(&["--script-worker-selftest"], &[], Duration::from_secs(15));
     assert!(status.success(), "selftest {status}: {stdout}\n{stderr}");
@@ -293,10 +359,10 @@ fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline
     assert!(report.first_rejected.is_none());
     // Frozen diagnostic baseline plus the separately measured event-host setup:
     // removeEventListener 178 + onclick accessor 306 + onsubmit accessor 310.
-    // Array.reduceRight adds 156 measured Bootstrap bytes; all other phases stay fixed.
+    // reduceRight/core backlinks add 156 + 725 Bootstrap bytes; other phases stay fixed.
     const EVENT_HOST_SETUP: u64 = 178 + 306 + 310;
-    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP + 156);
-    assert_eq!(report.phases.bootstrap, 25_999 + 156);
+    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP + 156 + 725);
+    assert_eq!(report.phases.bootstrap, 25_999 + 156 + 725);
     assert_eq!(report.phases.source, 1_531);
     assert_eq!(report.phases.ast, 23_299);
     assert_eq!(report.phases.function_code, 128);

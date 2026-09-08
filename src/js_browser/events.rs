@@ -730,7 +730,7 @@ mod tests {
             std::mem::size_of::<Runtime>()
         );
         let raw = Runtime::new().allocation_report();
-        assert_eq!(raw.phases.bootstrap, 25_999 + 156); // real reduceRight property
+        assert_eq!(raw.phases.bootstrap, 25_999 + 156 + 725); // real reduceRight property
         let mut empty = realm("");
         eprintln!("SESSION_EMPTY {:?}", empty.runtime.allocation_report());
         assert_eq!(

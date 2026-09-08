@@ -112,7 +112,7 @@ fn fresh_anonymous_functions_retain_real_metadata_without_copying_code_or_unused
         let mut runtime = Runtime::new();
         let initial = report(&runtime);
         // Real Function.bind adds 145 bytes; Array.reduceRight adds 156.
-        assert_eq!(initial.accepted_bytes, 25_854 + 145 + 156);
+        assert_eq!(initial.accepted_bytes, 25_854 + 145 + 156 + 725);
         assert_eq!(initial.phases.bootstrap, initial.accepted_bytes);
         let factory = runtime
             .execute(

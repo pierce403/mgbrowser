@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(added, 156);
         assert_eq!(
             runtime.allocation_report().phases.bootstrap,
-            (25_999 + added) as u64
+            (25_999 + added + 725) as u64
         );
         assert_eq!(size_of::<CallbackKind>(), 1);
         assert_eq!(size_of::<Fault>(), 40);

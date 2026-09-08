@@ -369,8 +369,8 @@ fn function_constructor_and_call_apply_preserve_default_and_instance_identity() 
 
 #[test]
 fn native_constructor_prototypes_and_readonly_attributes_remain_unchanged() {
-    // Object/Array constructor backlinks are absent in the current baseline.
-    // This storage change must preserve native behavior, not add those features.
+    // Backlinks were absent at the original storage baseline; core intrinsics
+    // now provides them. Keep native identity and attribute preservation checks.
     yes(r#"
         var array=Array.prototype,error=Error.prototype,symbol=Symbol.prototype;
         var arrayConstructor=array.constructor;

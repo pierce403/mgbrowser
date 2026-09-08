@@ -26,6 +26,8 @@ mod array;
 mod array_callbacks;
 #[path = "bound.rs"]
 mod bound;
+#[path = "core_intrinsics.rs"]
+mod core_intrinsics;
 #[path = "diagnostic.rs"]
 mod diagnostic;
 #[path = "error.rs"]
@@ -695,6 +697,9 @@ impl Runtime {
                 .into_values()
                 .expect("prepaid empty Array prototype"),
         );
+        runtime
+            .core_intrinsics_bootstrap()
+            .expect("fixed core intrinsic prototypes");
         for (id, prefix, methods) in [
             (1, "Object", &["toString", "valueOf", "hasOwnProperty"][..]),
             (
@@ -2594,6 +2599,19 @@ impl Runtime {
                 let value = args.into_iter().next().unwrap_or(Value::text(""));
                 let units = self.units(value, host)?;
                 return self.boxed(Value::String(units));
+            }
+            if name == "Number" {
+                // Argument evaluation has already completed. Consume the first
+                // owned operand, converting before allocating the instance.
+                let number = match args.into_iter().next() {
+                    Some(value) => self.number(value, host)?,
+                    None => 0.0,
+                };
+                return self.boxed(Value::Number(number));
+            }
+            if name == "Boolean" {
+                let boolean = args.first().is_some_and(Value::truthy);
+                return self.boxed(Value::Bool(boolean));
             }
             if name == "RegExp" {
                 return self.call(
@@ -6231,7 +6249,7 @@ mod tests {
         );
         assert!(!runtime.is_fatal());
         let after = runtime.allocation_report();
-        assert_eq!(before.phases.bootstrap, 25_999 + 156); // real reduceRight property
+        assert_eq!(before.phases.bootstrap, 25_999 + 156 + 725); // real reduceRight property
         assert_eq!(after.phases.bootstrap, before.phases.bootstrap);
         assert!(after.phases.runtime > before.phases.runtime);
         let property = runtime.objects[0]

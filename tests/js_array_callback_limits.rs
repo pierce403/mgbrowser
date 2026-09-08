@@ -200,7 +200,7 @@ fn latch(runtime: &mut Runtime, error: &str) {
 fn new_property_has_only_its_measured_bootstrap_allowance() {
     let r = report(&Runtime::new());
     // Old frozen language bootstrap25,999; real new property128 + key11 + value17.
-    assert_eq!(r.phases.bootstrap, 25_999 + 128 + 11 + 17);
+    assert_eq!(r.phases.bootstrap, 25_999 + 128 + 11 + 17 + 725);
     assert_eq!(r.accepted_bytes, r.phases.bootstrap);
     assert_eq!(
         [

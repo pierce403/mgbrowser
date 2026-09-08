@@ -104,7 +104,7 @@ fn bootstrap_and_public_unread_calls_keep_only_real_environment_and_binding_stor
     let mut runtime = Runtime::new();
     let initial = report(&runtime);
     // Real Function.bind adds 145 bytes; Array.reduceRight adds 156.
-    assert_eq!(initial.accepted_bytes, 25_854 + 145 + 156);
+    assert_eq!(initial.accepted_bytes, 25_854 + 145 + 156 + 725);
     assert_eq!(initial.phases.bootstrap, initial.accepted_bytes);
     let function = function(&mut runtime, "", "return 7;");
     let before = report(&runtime);

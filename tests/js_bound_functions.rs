@@ -345,24 +345,21 @@ fn primitive_target_prototype_keeps_constructor_fallback_and_instance_errors() {
 fn supported_native_constructors_delegate_without_becoming_user_wrappers() {
     yes(r#"
         var A=Array.bind({wrong:1},1,2),O=Object.bind(null),S=String.bind(null,'\uD800x'),
-            R=RegExp.bind(null,'a','g'),E=TypeError.bind(null,'message');
-        var a=new A(3),o=new O(),s=new S(),r=new R(),e=new E();
+            R=RegExp.bind(null,'a','g'),E=TypeError.bind(null,'message'),
+            N=Number.bind(null,'7'),B=Boolean.bind(null,false);
+        var a=new A(3),o=new O(),s=new S(),r=new R(),e=new E(),n=new N(),b=new B();
         Array.isArray(a) && a.join(',')==='1,2,3' && Object.getPrototypeOf(a)===Array.prototype &&
             Object.getPrototypeOf(o)===Object.prototype && s.valueOf()==='\uD800x' &&
             Object.getPrototypeOf(s)===String.prototype && r.source==='a' && r.global &&
-            Object.getPrototypeOf(e)===TypeError.prototype && e.message==='message';
+            Object.getPrototypeOf(e)===TypeError.prototype && e.message==='message' &&
+            n.valueOf()===7 && b.valueOf()===false && n instanceof N && b instanceof B &&
+            Object.getPrototypeOf(n)===Number.prototype && Object.getPrototypeOf(b)===Boolean.prototype;
     "#);
 }
 
 #[test]
 fn binding_does_not_grant_excluded_native_constructor_capabilities() {
-    for target in [
-        "parseInt",
-        "Math.abs",
-        "Array.prototype.slice",
-        "Number",
-        "Boolean",
-    ] {
+    for target in ["parseInt", "Math.abs", "Array.prototype.slice"] {
         yes(&format!(
             "var bound={target}.bind(null),caught=false;try{{new bound();}}catch(error){{caught=String(error).length>0;}}caught;"
         ));

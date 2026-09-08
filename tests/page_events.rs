@@ -55,6 +55,31 @@ fn click(realm: &mut PageRealm, target: usize) -> SessionReply {
 }
 
 #[test]
+fn captured_core_constructors_keep_intrinsic_identity_across_later_events() {
+    let (mut realm, init) = page(
+        r#"
+        var N=(0).constructor,B=false.constructor,original=N.prototype,count=new N();
+        Number=function(){throw 'replaced global must not run';};
+        document.getElementById('button').onclick=function(e){
+            e.preventDefault();count=new N(count.valueOf()+1);
+            document.getElementById('state').textContent=count.valueOf()+':'+new B().valueOf()+':'+
+                (Object.getPrototypeOf(count)===original&&original.constructor===N);
+        };
+    "#,
+    );
+    let button = node(&init, "#button");
+    for (revision, expected) in [(1, "1:false:true"), (2, "2:false:true")] {
+        let reply = click(&mut realm, button);
+        assert_eq!(reply.state, RealmState::Ready);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        assert_eq!(reply.revision, revision);
+        assert_eq!(text(&reply, "#state"), expected);
+        assert!(reply.navigation.is_none());
+        assert_eq!(reply.default_action, DefaultAction::None);
+    }
+}
+
+#[test]
 fn listener_receiver_normalization_keeps_window_target_in_later_dispatch() {
     let (mut realm, init) = page(
         r#"

@@ -55,6 +55,10 @@ implemented. The source is authoritative for individual builtin coverage.
 The seven-method callback family and borrowed methods on DOM collection snapshots
 are locally accepted under [ARRAY_CALLBACKS.md](ARRAY_CALLBACKS.md), including
 independent allocation/ordering tests and real worker/native/CDP form journeys.
+Five original core constructor backlinks, genuine String/Number/Boolean prototype
+payloads and direct/bound Number/Boolean construction now pass the independent
+local contract in [CORE_INTRINSICS.md](CORE_INTRINSICS.md). This does not add
+callable Function.prototype or imply Google compatibility.
 
 Known approximations remain: `arguments` is an unmapped snapshot rather than
 non-strict parameter aliasing; property descriptors and host coercion are partial;

@@ -44,6 +44,50 @@ fn readable(document: &Document) {
 }
 
 #[test]
+fn core_intrinsics_create_the_frozen_real_form() {
+    let reply = execute(Request {
+        url: URL.into(),
+        html: include_str!("fixtures/script/core-intrinsics.html").into(),
+    });
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Core intrinsic local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert!(
+        doc.items
+            .iter()
+            .any(|item| matches!(item, Item::Input { name, .. } if name == "q"))
+    );
+    assert!(content(&doc, "#status").contains("Recovered constructors and primitive prototypes"));
+}
+
+#[test]
+fn numeric_constructor_conversion_error_preserves_dom_effect_and_later_recovery() {
+    let reply = execute(Request {
+        url: URL.into(),
+        html: "<body><p id='state'>initial</p><script>var marker={};try{new Number({valueOf:function(){document.getElementById('state').textContent='before';throw marker;}});}catch(e){if(e!==marker)throw 'wrong error';document.getElementById('state').textContent+=' caught';}</script><script>document.getElementById('state').textContent+=' recovered '+new Boolean().valueOf();</script></body>".into(),
+    });
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 2);
+    assert_eq!(
+        content(&rendered(&reply), "#state"),
+        "before caught recovered false"
+    );
+    assert!(reply.navigation.is_none());
+}
+
+#[test]
 fn callback_family_and_borrowed_collections_create_the_frozen_real_form() {
     let reply = execute(Request {
         url: URL.into(),

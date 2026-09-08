@@ -626,7 +626,7 @@ mod tests {
     fn authored_prechange_charge_and_fuel_checkpoints_are_unchanged() {
         // Frozen public baseline: tmp/diagnostic-resource-baseline.log. Exact
         // authored sources, including punctuation, preserve source/AST charges.
-        // Only the later real reduceRight Bootstrap property adds 156 bytes.
+        // Later real reduceRight/core backlinks add 156 + 725 Bootstrap bytes.
         let cases = [
             (
                 "var rounds=0;for(var i=0;i<128;i++){try{null.length;}catch(e){rounds++;}}rounds;",
@@ -669,11 +669,11 @@ mod tests {
                 }
             }
             let report = runtime.allocation_report();
-            assert_eq!(report.accepted_bytes, *total + 156);
+            assert_eq!(report.accepted_bytes, *total + 156 + 725);
             assert_eq!(
                 report.phases,
                 AllocationTotals {
-                    bootstrap: 25_999 + 156,
+                    bootstrap: 25_999 + 156 + 725,
                     source: *source_bytes,
                     ast: *ast,
                     runtime: *runtime_bytes,
@@ -689,14 +689,20 @@ mod tests {
         let function = runtime
             .execute("(function(){null[void 0];});", &mut NoIo)
             .unwrap();
-        assert_eq!(runtime.allocation_report().accepted_bytes, 27_264 + 156);
+        assert_eq!(
+            runtime.allocation_report().accepted_bytes,
+            27_264 + 156 + 725
+        );
         assert!(
             runtime
                 .invoke(function, Value::Undefined, vec![], &mut NoIo)
                 .unwrap_err()
                 .ends_with("key=<undefined>] [producer kind=expression]")
         );
-        assert_eq!(runtime.allocation_report().accepted_bytes, 27_529 + 156);
+        assert_eq!(
+            runtime.allocation_report().accepted_bytes,
+            27_529 + 156 + 725
+        );
         counters(&runtime);
     }
 

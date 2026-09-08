@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><title>Core intrinsic fallback</title></head><body>
+<h1>Authored local core intrinsic fixture</h1>
+<p id="status">Readable fallback; no form exists until the intrinsic checks pass.</p>
+<script>
+var constructors=[Object,Array,String,Number,Boolean];
+constructors.forEach(function(C){
+  if(C.prototype.constructor!==C || !C.prototype.hasOwnProperty('constructor')){
+    throw 'Original constructor backlink required';
+  }
+});
+if(Object.getPrototypeOf(Object.prototype)!==null || !Array.isArray(Array.prototype))throw 'Intrinsic parents changed';
+if(String.prototype.valueOf()!=='' || String.prototype.length!==0)throw 'String prototype payload required';
+if(1/Number.prototype.valueOf()!==Infinity || Boolean.prototype.valueOf()!==false)throw 'Primitive prototype payload required';
+var Record=({}).constructor,List=[].constructor,Text=''.constructor,Count=(0).constructor,Flag=false.constructor;
+var Two=Count.bind({ignored:true},'2'),Enabled=Flag.bind(null,{});
+var count=new Two(),enabled=new Enabled();
+if(count.valueOf()!==2 || !(count instanceof Count) || !(count instanceof Two))throw 'Bound number construction required';
+if(enabled.valueOf()!==true || !(enabled instanceof Flag))throw 'Bound boolean construction required';
+if(new Count(undefined).valueOf()===new Count(undefined).valueOf())throw 'Explicit undefined must become NaN';
+if(new Flag().valueOf()!==false || 1/new Count(-0).valueOf()!==-Infinity)throw 'Primitive defaults changed';
+var names=new List('q','source'),attributes=new Record();
+attributes.method=new Text('get').valueOf();
+var form=document.createElement('form');form.action='/search';form.method=attributes.method;
+for(var i=0;i<count.valueOf();i++){
+  var input=document.createElement('input');input.name=names[i];input.type=i?'hidden':'text';
+  if(i)input.value='fixture';form.appendChild(input);
+}
+var submit=document.createElement('button');submit.type='submit';submit.name='submit';submit.value='search';submit.textContent='Search';form.appendChild(submit);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Recovered constructors and primitive prototypes created this real form.';
+document.title='Core intrinsic local fixture';
+</script></body></html>

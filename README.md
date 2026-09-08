@@ -61,18 +61,22 @@ changing the observed expression's evaluation or resource costs.
 Seven bounded Array callback methods now preserve sparse/inherited entries,
 mutation, callback identity and reductions; borrowed methods work on existing
 DOM collection snapshots. See the [callback contract](docs/ARRAY_CALLBACKS.md).
-All 1,041 debug tests and 928 selected release checks pass locally, along with
-22 native and 22 external CDP journeys, including a handler-required interaction
+Five core constructor links and genuine primitive prototype payloads now work,
+including direct/bound Number and Boolean construction. See the
+[core intrinsic contract](docs/CORE_INTRINSICS.md).
+All 1,104 debug tests and 991 selected release checks pass locally, along with
+23 native and 23 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
 
 The latest bounded Google attempt loads the homepage and submits its actual form
-through the retained session. Search still has no actionable results: a method
-call resolves through undefined read from a binding, then later source admission
-exceeds the existing 4 MiB budget. The diagnostic stops at that binding; it does
-not identify the underlying cause or missing capability. No first
+through the retained session. Search still has no actionable results: runtime
+admission rejects 131 bytes after 4,194,282 accepted bytes against the existing
+4 MiB budget, and later scripts retain the fatal failure. The previous undefined
+binding diagnostic was not reported in this response; changing served inputs are
+not a controlled comparison or proof of its cause. No first
 result or destination has been reached; further independently tested language,
 browser API and storage-ownership work is needed.
 
