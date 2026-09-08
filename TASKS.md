@@ -2,7 +2,12 @@
 
 This queue is ordered; planning entries do not imply implementation has begun.
 
-## Release mode — supersedes the historical queue below
+2026-09-08 follow-up: user authorizes project-text em-dash replacement with colons,
+plain HTTP with a red title/address strip, and Ctrl+L location access. Keep this
+small UI/navigation change separate from deferred compatibility work and the
+immutable v0.1.0 release.
+
+## Release mode : supersedes the historical queue below
 
 **Completed 2026-09-08:** v0.1.0 Experimental Preview is publicly released at
 https://github.com/pierce403/mgbrowser/releases/tag/v0.1.0 from
@@ -11,7 +16,7 @@ release workflow, public checksum installer, installed version/worker selftest
 and desktop/icons all passed. Stop here; deferred engineering is not automatically
 reactivated. This closeout changes documentation only, not the release tag/binary.
 
-1. **T-009 / F-012: Complete — shipped v0.1.0 Experimental Preview.** Freeze engine and
+1. **T-009 / F-012: Complete : shipped v0.1.0 Experimental Preview.** Freeze engine and
    compatibility at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da. Package Linux x86_64
    X11/XWayland binary, MIT/license inventory, installer, Mg identity and launcher.
    Get exact-commit Rust CI and Pages green, tag v0.1.0, publish the GitHub release,
@@ -46,7 +51,7 @@ The latest live Google attempt submits through that session but still yields no
 results. The full Google goal and remote Runtime/CDP compatibility remain open;
 exact publication evidence is recorded in the daily log.
 
-Latest steering — **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
+Latest steering : **T-008 / F-011:** Initial CDP automation subset implemented, published and verified locally and in GitHub CI. Use the external CDP client for browser checks. Full protocol support remains the long-term contract, expanding with actual Network, Runtime/Debugger, frames, CSS and other browser capabilities; no stub-success compatibility.
 
 1. **T-001 / F-001, F-002:** Publish foundation and verify GitHub Pages, exact deployed content, custom TLS, and HTTPS enforcement. Complete; evidence in the 2026-09-07 log.
 2. **T-007 / F-010, F-008:** Active user goal: open our browser, browse to Google, search, click the first result and attempt the destination. Bounded descriptors, static operator storage, core intrinsics and retained events are locally verified. Latest homepage HTTP 200 exposes its actual form and two later activations complete; search HTTP 200 still renders zero items/forms. Three scripts complete with two errors: Ast 377,733 is rejected after 4,135,770 accepted against 4,194,304, then the next script repeats the latched failure. No first result/destination or new required live stage completed. Changing responses are not a controlled comparison. Next: independently measure remaining AST/source ownership and specify any candidate before changing storage. Function.prototype callability, parent-brokered external scripts, broader events/timers and remote Runtime contexts need separate designs. Do not blindly raise limits, port challenge logic, substitute an existing engine or fabricate results.

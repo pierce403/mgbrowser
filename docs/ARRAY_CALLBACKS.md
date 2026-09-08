@@ -107,7 +107,7 @@ buffers; core primitive prototype payloads/constructor backlinks are absent;
 Function.prototype callability and generic indexOf behavior need their own designs.
 None is silently bundled into this family or asserted as Google's root cause.
 
-### Verified local result — 2026-09-07
+### Verified local result : 2026-09-07
 
 The frozen 35-group semantic suite produced 34 expected failures on c858a6f and
 passes unchanged on this implementation. All 19 independent resource groups,

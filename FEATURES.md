@@ -2,7 +2,7 @@
 
 Exact stability values: `planned`, `in-progress`, `stable`. Checked criteria require recorded evidence. This file drives the public status section.
 
-## F-012 — v0.1 experimental preview
+## F-012 : v0.1 experimental preview
 
 Stability: stable
 
@@ -32,7 +32,7 @@ public install passed checksum/version/worker/desktop/icon checks. This stabilit
 describes preview distribution only. Formal F-007 criteria and the unfinished
 Google first-result journey are unchanged. Full evidence is in the dated log.
 
-## F-001 — Project foundation and website
+## F-001 : Project foundation and website
 
 Stability: stable
 
@@ -49,7 +49,7 @@ Public source, readable MVP plan, and an HTTPS project site at mgbrowser.org. Ev
 
 Evidence: 2026-09-07 initial Pages run 34120255103 succeeded for aed2386; live HTTPS HTML matched byte-for-byte, certificate approved and HTTPS enforcement confirmed by API. See daily log for subsequent publication checks. Visual browser QA is not yet available.
 
-## F-002 — Agent continuity and reusable skills
+## F-002 : Agent continuity and reusable skills
 
 Stability: stable
 
@@ -64,7 +64,7 @@ Canonical AGENTS.md, measurable feature contracts, bounded task queue, daily log
 
 Evidence: 2026-09-07 both skills passed quick_validate.py; instruction alias targets checked; website sync passed locally and in CI. Portable catalog-based selection is configured; individual agent-client autodiscovery has not been tested.
 
-## F-003 — Local document rendering
+## F-003 : Local document rendering
 
 Stability: in-progress
 
@@ -84,7 +84,7 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 
 Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
 
-## F-004 — Static web navigation
+## F-004 : Static web navigation
 
 Stability: in-progress
 
@@ -96,6 +96,12 @@ F-003.
 
 HTTP(S), relative links, address bar, reload, back/forward, cancellation, scroll, and visible load/errors; invalid TLS never silently succeeds.
 
+Explicit http:// URLs are supported. Unencrypted loaded pages use a red title/address
+strip with an "HTTP: Not secure" label. The indication follows the committed
+response URL, including redirects, not unsubmitted location edits. Ctrl+L selects
+the address from the page or a form field; typing replaces it and Enter navigates.
+The desktop window manager controls the outer window-decoration color.
+
 TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEPENDENCIES.md. Native crypto fallback is prohibited.
 
 ### Test Criteria
@@ -106,7 +112,7 @@ TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEP
 
 Evidence: 15 transport tests passed for framing, verified TLS/rejection cases, redirects, request/body/time limits and in-memory cookie scope. A real local HTTP form submission/result click completed in the native window. Async navigation ignores stale results and caps requests at two, but lacks a transport cancellation API. Full manual keyboard/history acceptance remains open.
 
-## F-005 — Styled text and images
+## F-005 : Styled text and images
 
 Stability: in-progress
 
@@ -129,7 +135,7 @@ Font parsing, shaping and rasterization use Rust implementations without native 
 
 Evidence: native frames use rustybuzz/fontdue and show image placeholders/alt text. No page-image downloading or full CSS cascade yet. Current dependency guard passes; this does not satisfy the full fixture corpus.
 
-## F-006 — Reproducible autoresearch evaluator
+## F-006 : Reproducible autoresearch evaluator
 
 Stability: planned
 
@@ -147,7 +153,7 @@ A Rust evaluator executes bounded experiments with immutable evaluation inputs, 
 - [ ] Known wrong output, timeout, crash and evaluator-tampering candidates fail gates.
 - [ ] Reports contain the provenance and metrics specified in docs/AUTORESEARCH.md.
 
-## F-007 — Linux MVP release
+## F-007 : Linux MVP release
 
 Stability: planned
 
@@ -165,7 +171,7 @@ Installable experimental static browser with documented limitations and no claim
 - [ ] Dependency/native-code and license inventory is reviewed.
 - [ ] Release artifacts, provenance and known limitations are published.
 
-## F-008 — JavaScript and broader compatibility
+## F-008 : JavaScript and broader compatibility
 
 Stability: in-progress
 
@@ -294,7 +300,7 @@ Core-intrinsic follow-up: five real constructor backlinks and genuine String/Num
 
 Object.create descriptor follow-up: ordered descriptor conversion, typed-key snapshots, data flags and genuine getter/setter storage preserve original receivers, ordinary errors and cumulative limits. All 1,193 full-debug tests across 51 targets and 1,080 selected release tests across 40 targets pass locally, including 28 semantic, 10 resource and seven private storage groups. The public eight-case measure_object_create example requires descriptor support and checks actual requested allocation/copy/drop behavior; it is not an RSS measurement or general research executor. The unchanged authored worker completes one script with no errors or rejection at 75,451 accepted bytes: Bootstrap 26,880 + Source 1,861 + Ast 33,702 + FunctionCode 256 + Runtime 12,752. All 25 native/25 external CDP journeys pass locally; actual query, hidden source, unnamed submit, local result and destination frames were inspected. Retained checks record two searches, two destinations and zero traps. Existing caps, dependencies and worker authority remain unchanged. The subsequent Google attempt still has no results; exact remote publication is pending. See docs/OBJECT_CREATE.md and the daily log for scope and evidence.
 
-## F-009 — Experimental Rust dependency foundation
+## F-009 : Experimental Rust dependency foundation
 
 Stability: stable
 
@@ -311,7 +317,7 @@ Cargo configuration pins rustls-rustcrypto and explicitly selects Rust font/imag
 
 Evidence: local cargo test --locked passed all three initial smoke tests on 2026-09-07; GitHub Rust run 34121634459 reproduced formatting, dependency guard and smoke tests for 645d30b. docs/DEPENDENCIES.md records the build/dependency review. Stable refers to this dependency configuration contract, not production TLS readiness. Later handshake and font-rendering evidence is recorded under F-003/F-004 and the daily log.
 
-## F-010 — Google search to first destination
+## F-010 : Google search to first destination
 
 Stability: in-progress
 
@@ -377,7 +383,7 @@ Post-static-operator F-010 checkpoint: homepage HTTP 200 retains 26 items/one fo
 
 Post-Object.create F-010 checkpoint: homepage HTTP 200 retains 26 items/one form, five completed scripts/five errors and 2,383,102 accepted startup bytes without rejection. Two retained activations complete and the actual served form submits. Search HTTP 200 remains blank with zero items/forms, three completed scripts/two errors: first Ast 377,733 rejected after 4,135,770 accepted bytes against 4,194,304, then the repeated latch. The unsupported descriptor error is absent from this response; changing served inputs are not a controlled comparison or proof of cause. This single bounded attempt exits 2; its blank frame was inspected, with no result, destination or newly completed required stage. No live-source inspection, adaptation, retry or cap change occurred. Local descriptor acceptance is separate from the still-incomplete Google goal and pending remote publication.
 
-## F-011 — Chrome DevTools Protocol automation
+## F-011 : Chrome DevTools Protocol automation
 
 Stability: in-progress
 

@@ -878,8 +878,8 @@ dated log. The actual Google goal remains incomplete.
 
 ### Error-family prototypes and string conversion
 
-The six already-exposed constructors—Error, TypeError, RangeError, ReferenceError,
-SyntaxError and URIError—have distinct intrinsic prototype objects. Error.prototype
+The six already-exposed constructors:Error, TypeError, RangeError, ReferenceError,
+SyntaxError and URIError:have distinct intrinsic prototype objects. Error.prototype
 inherits Object.prototype; the other five inherit Error.prototype. Constructors
 retain Function.prototype as their parent under the ES5 policy, and their own
 prototype property is nonenumerable, nonwritable and nonconfigurable. Each family
@@ -958,8 +958,8 @@ Exact-SHA remote acceptance/publication is recorded in the daily log when verifi
 
 Array.prototype.concat now accepts a generic receiver, boxes primitives and
 rejects null/undefined. The receiver comes first, followed by arguments in order.
-Only genuine arrays spread, exactly one level. Other values—including functions,
-Errors, boxed values, arguments snapshots and opaque Host handles—are single
+Only genuine arrays spread, exactly one level. Other values:including functions,
+Errors, boxed values, arguments snapshots and opaque Host handles:are single
 elements. There is no element coercion, array-like length read, Host callback,
 constructor lookup, species or isConcatSpreadable protocol. The result is a fresh
 intrinsic Array independently of replaced globals or source constructor fields.
@@ -1438,7 +1438,7 @@ test totals and 19/19 journeys. Pages 34178535502 deployed the matching 8,576-by
 HTTPS body, with approved apex certificate and HTTPS enforcement. The daily log
 records original remote evidence and the separate website visual-QA limitation.
 
-## Retained interaction acceptance — 2026-09-07
+## Retained interaction acceptance : 2026-09-07
 
 The separately specified [page-session contract](PAGE_SESSIONS.md) now passes
 905 debug tests, 792 selected release checks and all four exact CI journey steps
@@ -1517,7 +1517,7 @@ script-created-form and retained-event journeys. Only then run one bounded live
 checkpoint, keeping the full Google goal open unless actual results and onward
 navigation are observed.
 
-Acceptance — 2026-09-07: 24 independent receiver cases (eight fail on the old
+Acceptance : 2026-09-07: 24 independent receiver cases (eight fail on the old
 build), 26 producer-semantic and nine resource groups pass, alongside 11 private
 diagnostic, 35 DOM, 18 page-event and 50 actual-worker groups. Seven frozen phase
 tuples, 21,120 remaining fuel ticks, Host/getter counts and old diagnostic resource

@@ -24,6 +24,7 @@ const TOP: i32 = 108;
 const BG: u32 = 0xfafbf8;
 const INK: u32 = 0x26342b;
 const LINK: u32 = 0x174ea6;
+const HTTP_CHROME: u32 = 0x9f202b;
 const MAX_EDIT_BYTES: usize = 8191;
 
 #[derive(Clone, Debug)]
@@ -1178,6 +1179,16 @@ impl App {
             action,
         });
     }
+    fn is_http_page(&self) -> bool {
+        url::Url::parse(&self.page_url).is_ok_and(|url| url.scheme() == "http")
+    }
+    fn visible_title(&self) -> String {
+        if self.is_http_page() {
+            format!("HTTP: Not secure | {}", self.document.title)
+        } else {
+            self.document.title.clone()
+        }
+    }
     fn paint(&mut self) -> Canvas {
         let mut c = Canvas::new(self.width, self.height, BG);
         self.hits.clear();
@@ -1317,7 +1328,14 @@ impl App {
         }
         self.content_height = y + self.scroll + row;
         // Paint browser chrome last so scrolled content cannot overpaint it.
-        c.rect(0, 0, self.width, TOP as u32, 0xeef1e9);
+        let http = self.is_http_page();
+        c.rect(
+            0,
+            0,
+            self.width,
+            TOP as u32,
+            if http { HTTP_CHROME } else { 0xeef1e9 },
+        );
         self.button(&mut c, 14, 14, 54, "Back", Action::Back);
         self.button(&mut c, 76, 14, 70, "Next", Action::Forward);
         self.button(&mut c, 154, 14, 76, "Reload", Action::Reload);
@@ -1335,14 +1353,29 @@ impl App {
             h: 39,
             action: Action::Address,
         });
-        c.text(&mut self.fonts, 18, 66, "mgbrowser", 19., 0x345c36);
+        c.text(
+            &mut self.fonts,
+            18,
+            66,
+            "mgbrowser",
+            19.,
+            if http { 0xffffff } else { 0x345c36 },
+        );
+        let visible_title = self.visible_title();
         let title = fit_head(
             &mut self.fonts,
-            &self.document.title,
+            &visible_title,
             16.,
             self.width as f32 - 185.,
         );
-        c.text(&mut self.fonts, 160, 68, &title, 16., INK);
+        c.text(
+            &mut self.fonts,
+            160,
+            68,
+            &title,
+            16.,
+            if http { 0xffffff } else { INK },
+        );
         c.rect(0, TOP - 1, self.width, 1, 0xc4cebd);
         c.rect(0, self.height as i32 - 29, self.width, 29, 0xeef1e9);
         let status = fit_head(&mut self.fonts, &self.status, 12., self.width as f32 - 20.);
@@ -1664,7 +1697,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "mgbrowser {} — Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
+                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
                 env!("CARGO_PKG_VERSION")
             );
             return Ok(());
@@ -1892,7 +1925,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             conn.flush()?;
-            let title = format!("{} - mgbrowser", app.document.title);
+            let title = format!("{} : mgbrowser", app.visible_title());
             conn.change_property8(
                 PropMode::REPLACE,
                 window,
@@ -1920,6 +1953,96 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn http_warning_follows_loaded_url_not_location_edits() {
+        let mut app = App::new().unwrap();
+        app.generation = 1;
+        for (url, expected_http) in [
+            ("http://example.test/", true),
+            ("https://example.test/", false),
+            ("http://example.test/redirect-destination", true),
+        ] {
+            app.tx
+                .send(Loaded {
+                    generation: 1,
+                    script: None,
+                    result: Ok(net::Response {
+                        url: url::Url::parse(url).unwrap(),
+                        status: 200,
+                        content_type: "text/html".into(),
+                        body: b"<title>Loaded page</title><p>Readable</p>".to_vec(),
+                    }),
+                })
+                .unwrap();
+            app.poll();
+            assert_eq!(app.is_http_page(), expected_http);
+            assert_eq!(
+                app.visible_title().starts_with("HTTP: Not secure"),
+                expected_http
+            );
+            // Editing a different scheme must not relabel the displayed content.
+            app.key(b'l' as u32, true, false, false);
+            app.type_text(if expected_http {
+                "https://typed-but-not-loaded.test/"
+            } else {
+                "http://typed-but-not-loaded.test/"
+            });
+            let canvas = app.paint();
+            assert_eq!(canvas.pixels[0] == HTTP_CHROME, expected_http);
+        }
+    }
+
+    #[test]
+    fn ctrl_l_selects_location_and_enter_loads_plain_http() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = format!("http://{}/location", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "location navigation did not arrive"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            line
+        });
+        let mut app = App::new().unwrap();
+        for (sym, focus) in [(b'l', Focus::Page), (b'L', Focus::Input(0))] {
+            app.address = "https://previous.test/".into();
+            app.focus = focus;
+            app.dirty = false;
+            app.key(u32::from(sym), true, sym == b'L', false);
+            assert!(app.focus == Focus::Address && app.select_all && app.dirty);
+            app.type_text(&address);
+            assert_eq!(app.address, address);
+        }
+        app.key(0xff0d, false, false, false);
+        assert_eq!(server.join().unwrap(), "GET /location HTTP/1.1\r\n");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.loading {
+            assert!(Instant::now() < deadline);
+            app.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.last_load_ok && app.is_http_page());
+    }
 
     #[test]
     fn visible_form_enter_encodes_real_request_and_hidden_fields() {

@@ -1223,7 +1223,7 @@ fn decode_entities(source: &str) -> String {
                 "copy" => Some('©'),
                 "reg" => Some('®'),
                 "trade" => Some('™'),
-                "mdash" => Some('—'),
+                "mdash" => Some('\u{2014}'),
                 "ndash" => Some('–'),
                 "hellip" => Some('…'),
                 "lsquo" => Some('‘'),
