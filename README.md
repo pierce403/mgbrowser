@@ -42,10 +42,13 @@ its real form under the same cap; observed snapshots still pay their full cost.
 Fresh user-function defaults now also materialize only on an actual prototype
 read; paid property metadata, unique identity and constructor backlinks remain
 intact. An authored 4,800-function page now creates its form under the same cap.
-All 721 debug tests and 623 selected release checks pass locally, alongside
-17 native and 17 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt reports a non-callable value, then a
-later source admission exceeds the unchanged 4 MiB cumulative allocation limit.
+Bound functions now preserve receiver/prefix ordering, target construction and
+instance checks, with restricted metadata and prepaid bounded forwarding. An
+authored bound callback creates a real form inside the restricted worker.
+All 788 debug tests and 690 selected release checks pass locally, alongside
+18 native and 18 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt reports property access on null or
+undefined, then a later source admission exceeds the unchanged 4 MiB allocation limit.
 There are still no actionable results or newly completed live stages. Next is
 independent language/builtin coverage and measured storage-ownership work.
 Authored script-created forms

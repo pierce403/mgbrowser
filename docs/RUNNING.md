@@ -394,12 +394,52 @@ live checkpoint below still fails; exact-SHA publication is recorded in the dail
 
 CI follow-up: the documentation closeout run exhausted the old shared 50-second
 deadline after 16 of 17 total CDP journeys, despite all component/release tests and
-native journeys passing. The 16 scripted CDP fixtures now run as two groups of
-eight, each with its own browser, log, cleanup and 50-second deadline. The original
-loop/fallback recovery still runs in the first browser before onward navigation.
-All fixture commands, screenshots and assertions remain; browser/worker resource
-limits and individual native journey deadlines are unchanged. This adjusts the
-aggregate test-harness schedule, not the engine's execution budget.
+native journeys passing. At that increment, the 16 scripted CDP fixtures were split
+into two groups of eight, each with its own browser, log, cleanup and 50-second
+deadline. The original loop/fallback recovery stayed in the first browser before
+onward navigation. All fixture commands, screenshots and assertions were retained;
+browser/worker resource limits and individual native journey deadlines were unchanged.
+This adjusted the aggregate test-harness schedule, not the engine's execution budget.
+
+`/script-bound-functions` is the frozen bound-callable fixture. Calls, receiver and
+prefix retention, rebinding, native targets, restricted inherited properties,
+ordinary name/prototype fields, construction/instance checks and Symbol identity
+must succeed before a bound DOMContentLoaded callback creates the actual query,
+hidden and submit controls. There is no static form:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-bound-functions \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/bound-functions-journey
+```
+
+The unchanged authored page passes the focused actual-worker check with one
+completed script, no errors or allocation rejection, and 104,479 accepted bytes:
+Bootstrap 25,999 + Source 2,556 + Ast 49,886 + FunctionCode 1,652 + Runtime 24,386.
+The old-worker baseline stopped at the first absent-bind TypeError, accepting
+84,032 bytes with no form and no allocation rejection. These executions complete
+different amounts of work; their totals are not a performance or process-memory
+benchmark. Focused checks pass all 32 DOM and 46 actual-worker groups, including
+bound Host methods/startup callbacks, Symbol conversion rejection, ordinary error
+recovery and fatal 65-wrapper latching before target/catch/finally/later effects.
+The same 4,194,304-byte realm cap and all other execution limits remain in force.
+Full regression passes 788 debug tests/33 summaries and 690 selected release
+checks/24 summaries. All three exact CI journey steps pass locally with 18 native
+and 18 external CDP destinations.
+The bound fixture submits its actual Unicode/hidden/submit controls, rejects stale
+nodes, clicks the first local result and verifies the flattened session and a
+1100×683 destination PNG. Main inspected native query and CDP destination frames;
+owned test processes exited and fixture/debugger ports were clear. These checks
+exercise application input handlers and public CDP, not physical input or Google.
+Exact-SHA remote CI, Pages and HTTPS publication verification remain separate and
+pending.
+
+CI now schedules scripted CDP fixtures in three batches of 8/8/1, each with its own
+browser, log, cleanup, 10-second readiness guard and 50-second deadline. The last
+batch covers bound functions. All previous commands/assertions remain, including
+the original loop/fallback recovery before onward navigation in the first browser.
+This adds bounded harness time for another fixture without changing any engine,
+worker or individual native journey limit; all three batches passed locally.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
@@ -467,6 +507,18 @@ completed live stage. The generic diagnostic does not identify a missing callabl
 Continue independent language/builtin coverage and measured storage ownership;
 this changing response is not a controlled benchmark or permission to adapt live
 source or raise limits.
+
+The single bounded post-bind checkpoint still submitted the actual Google form.
+Homepage HTTP 200/title Google retained 26 items/one form, three completed
+scripts/seven errors and no allocation rejection (2,429,821 accepted bytes).
+Search HTTP 200/title Google Search remained blank with zero items/forms and two
+completed scripts/three errors: first `TypeError: property access on null or undefined`,
+then a Source request of 26,794 rejected after 4,191,219 accepted bytes against the
+unchanged 4,194,304 cap, repeated by the next script. Exit 2/JOURNEY_INCOMPLETE;
+the blank 03-search.png was inspected. No result, destination or new live stage
+completed, and no live-source inspection, adaptation or retry occurred. These
+changing responses do not establish that bind caused the prior diagnostic or
+provide a controlled performance comparison. The full Google goal remains open.
 
 ## Browser automation
 
@@ -544,6 +596,9 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-function-prototypes tmp/cdp-function-prototypes-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-bound-functions tmp/cdp-bound-functions-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
@@ -551,14 +606,15 @@ destination response and PNG through our public CDP endpoint. The previously
 implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family, concat, empty-arguments and default-function-prototype
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
-page interpreter. Stop only the fixture/browser processes you started.
+page interpreter. The bound-function native/CDP journey also passes, as recorded
+above. Stop only the fixture/browser processes you started.
 
 ## Validation
 
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

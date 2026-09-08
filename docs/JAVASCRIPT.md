@@ -23,7 +23,7 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   Function-scoped declarations are hoisted. Tests exercise
   precedence, left-to-right side effects, short circuits, calls and exceptions.
 - Basic prototypes and selected Object, Array, String, Number, Boolean, Function,
-  Error and Math operations exist. Examples include `call`/`apply`,
+  Error and Math operations exist. Examples include `call`/`apply`/`bind`,
   `Object.create` without descriptors, `Object.keys`, array push/pop/slice/join/concat,
   string indexing/slicing, numeric conversion, and the four URI encoding/decoding
   functions. URI conversion preserves UTF-16/UTF-8 semantics and distinguishes
@@ -1181,3 +1181,107 @@ generic error does not identify a missing callable; changed served responses are
 not a controlled performance comparison. Next is independently authored language/
 builtin coverage and measured storage ownership, with no raised limits or live
 source inspection/adaptation/retry.
+
+### Bound functions
+
+The runtime implements original, bounded Function.prototype.bind using a private
+ordinary/bound function kind behind existing Value::Function and typed function
+identities.
+No wrapper source, synthetic AST, replacement runtime or new public Value kind.
+Binding validates the callable target before binding-specific reads, retains the
+unconverted receiver and ordered prefix arguments, and returns a fresh callable.
+Its parent is the intrinsic Function.prototype; that prototype's existing
+noncallability remains outside this increment. Bound eval calls are indirect.
+
+Calls prepend inner bindings before outer bindings and final call arguments;
+rebinding cannot replace the original bound receiver. The eventual ordinary
+target alone creates its lexical environment and arguments snapshot, preserving
+its callee identity and existing non-strict boxing. Construction delegates to the
+supported target constructor and ignores bound this and any bound.prototype.
+Instance checks delegate to the target's current prototype/instance policy,
+including target-prototype replacement after binding and primitive-left handling.
+Binding grants no new native or Host constructor/call authority. Existing native
+constructor exclusions and native instance-check approximations remain explicit.
+
+The initial bound function has own readonly, nonenumerable, nonconfigurable length
+and restricted caller/arguments metadata, but no own prototype or name. This is
+the ES5-shaped policy, not modern bound-name generation. Length is captured from
+the target's existing numeric length, reduced by prefix count and floored at zero;
+existing native arity approximations are unchanged. Reading or writing restricted
+caller/arguments throws TypeError, including inherited access; metadata-only
+presence/enumeration does not invoke the restriction. Deletion returns false.
+An explicitly assigned ordinary name/prototype remains writable, enumerable and
+deletable, without affecting call/construction/instance behavior. No general
+descriptor/accessor API is added. Ordinary function metadata and lazy defaults
+retain their existing semantics and charges.
+
+Resource contract: keep every current realm, worker, parser, call/entry and
+argument cap. Bound records share the existing function arena/count cap and pay
+for their actual fixed metadata, property bag and retained argument slots before
+publication. Owned incoming payloads may move only after slot admission; retained
+strings/native names copied for subsequent calls are charged, while object/Symbol
+identity is preserved. Do not retain uncharged spare capacity from public vectors.
+Measured Function 40/Code 56 plus control overhead fit the ordinary 128-byte allowance;
+Function 40/BoundData 88 plus control overhead fit the separate bound 160-byte allowance.
+The retained property bag pays 128 Runtime bytes and each exact prefix slot pays 64.
+Adding the real bind builtin increases Bootstrap by 145 bytes to 25,999 (property 128,
+key 4 and native name 13), without changing a limit or dropping existing charges.
+
+Nested bound forwarding uses bounded, fuel-metered traversal and a single ordered
+output list, without an unguarded recursive chain or repeated prefix concatenation.
+Conceptual bound calls/construction forwarding count against the existing 64-call
+and combined-entry limits, including reentry into user/Host code. Discovery checks
+wrapper/entry and aggregate argument bounds while walking the chain. For construction,
+the terminal target's constructor eligibility is checked after discovery and before
+output-slot admission, retained-payload copies, constructor prototype Get, or target
+body/Host effects. A discovery limit can therefore precede an error for a
+nonconstructible native target; this is the adopted bounded resource policy, not a
+claim about unbounded ES5 error ordering. Output slots are prepaid before copying
+only retained values actually forwarded. Instance delegation has a fuel-metered 64-bound-target
+traversal, separate from the existing prototype walk. Fatal failures retain earlier
+effects and admitted storage, publish no partial bound value, latch across later
+scripts/ingress, and unwind counters.
+
+Reference: [ES5.1 bind, call, construction and instance delegation](https://262.ecma-international.org/5.1/#sec-15.3.4.5).
+All 36 independent semantic, 16 independent resource and ten new private groups
+pass on default stacks. Tests cover admission/publication, retained buffer identity,
+copy slopes and failure ordering, conceptual entry cleanup, aggregate arguments,
+separate instance traversal, repeated fuel exhaustion and an owned mixed-recursion
+child. The three old Bootstrap pins changed only by the measured 145-byte builtin
+addition; no other old assertion or limit changed. Full validation passes 788 debug
+tests/33 summaries and 690 selected release tests/24 summaries, including 32 DOM and
+46 actual-worker groups, formatting, locked builds and the native-backend guard.
+
+The authored old-worker fixture was frozen before implementation and failed at
+absent bind with no form. The unchanged candidate fixture now completes one script
+and creates its actual controls at 104,479 accepted bytes, without errors or rejected
+allocation: Bootstrap 25,999 + Source 2,556 + Ast 49,886 + FunctionCode 1,652 + Runtime 24,386.
+It executes more work than the 84,032-byte negative baseline, so those totals are not
+a performance comparison. Restricted-property errors allow later-script recovery;
+fatal depth exhaustion preserves earlier DOM effects without target/handler/later
+effects or navigation. All three exact CI journey steps also pass locally with 18
+native and 18 external CDP destinations. The new fixture submits its real Unicode,
+hidden and submit fields, rejects stale nodes, clicks the first local result and
+verifies a 1100×683 destination PNG and flattened session. Native query and CDP
+destination frames were inspected; owned fixture processes exited and ports 7878
+and 9222 were clear. These are application-handler and external protocol checks,
+not physical keyboard input or Google compatibility.
+Bind was a source-confirmed missing feature, not a diagnosis of the generic live
+non-callable error; no website script source is an implementation input.
+
+Exactly one bounded post-bind Google checkpoint followed. Homepage HTTP 200/title
+Google retained 26 items/one form, three completed scripts/seven errors and no
+allocation rejection: 2,429,821 accepted bytes = Bootstrap 25,999 + Source 63,524 +
+Ast 1,861,598 + FunctionCode 39,063 + Runtime 436,733 + RegexCompile 2,816 + RegexResult 88.
+Actual served-form submission worked. Search HTTP 200/title Google Search remained
+blank with zero items/forms and two completed scripts/three errors. First was
+`TypeError: property access on null or undefined`; the next two repeated a Source
+request of 26,794 rejected after 4,191,219 accepted bytes against the unchanged
+4,194,304 cap. Search phases were Bootstrap 25,999 + Source 132,384 + Ast 2,438,297 +
+FunctionCode 25,376 + Runtime 1,567,991 + RegexCompile 1,152 + RegexResult 20.
+
+Exit 2/JOURNEY_INCOMPLETE; the blank 03-search.png was inspected. No actual result,
+destination or new live journey stage completed. No live-source inspection,
+adaptation or retry occurred; changing responses are not a controlled comparison
+or proof that bind caused the prior error. Local acceptance is verified, while
+exact-SHA remote CI, Pages and HTTPS publication verification remain pending.

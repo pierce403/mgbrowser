@@ -1,0 +1,35 @@
+<!doctype html><html><head><title>Bound function worker baseline</title></head><body>
+<p id="fallback">Authored local bound-function fixture fallback.</p>
+<script>
+var receiver={base:3};
+function add(a,b){return this.base+a+b;}
+var bound=add.bind(receiver,4);
+if(bound(5)!==12 || bound.length!==1 || bound.hasOwnProperty('prototype') || bound.hasOwnProperty('name'))throw 'Bound call or metadata failed';
+if(Object.getPrototypeOf(bound)!==Function.prototype || Object.keys(bound).length!==0)throw 'Bound identity failed';
+receiver.base=7;
+var rebound=bound.bind({base:100},6);
+if(rebound(99)!==17 || rebound.length!==0 || bound.call({base:100},5)!==16)throw 'Rebinding failed';
+if(String.prototype.slice.bind('prefix',3)()!=='fix' || parseInt.bind(null,'17',10)()!==17)throw 'Native binding failed';
+var readCaught=false,writeCaught=false,child=Object.create(bound);
+try{child.caller;}catch(error){readCaught=String(error).indexOf('TypeError')>=0;}
+try{child.arguments=7;}catch(error){writeCaught=String(error).indexOf('TypeError')>=0;}
+if(!readCaught || !writeCaught || delete bound.caller)throw 'Restricted fields failed';
+bound.name='local';bound.prototype={};
+if(bound.name!=='local' || !delete bound.name || !delete bound.prototype)throw 'Ordinary fields failed';
+function Item(value){this.value=value;}
+var Partial=Item.bind({ignored:true},'kept'),old=Item.prototype,first=new Partial();
+Partial.prototype={wrong:true};Item.prototype={mark:9};
+var second=new Partial();
+if(first.value!=='kept' || Object.getPrototypeOf(first)!==old || first instanceof Partial || !(second instanceof Partial) || !(second instanceof Item) || second.mark!==9 || second.wrong!==undefined)throw 'Bound construction failed';
+var symbol=Symbol('bound');function identity(value){return value;}
+if(identity.bind(null,symbol)()!==symbol)throw 'Bound Symbol identity failed';
+function build(){
+ document.title=this.label;
+ var form=document.createElement('form');form.action='/search';form.method='GET';
+ var q=document.createElement('input');q.name='q';q.type='text';form.appendChild(q);
+ var hidden=document.createElement('input');hidden.type='hidden';hidden.name='source';hidden.value='fixture';form.appendChild(hidden);
+ var submit=document.createElement('button');submit.type='submit';submit.name='submit';submit.value='search';submit.textContent='Search';form.appendChild(submit);
+ document.getElementById('fallback').textContent='Authored local bound-function form ready';document.body.appendChild(form);
+}
+document.addEventListener('DOMContentLoaded',build.bind({label:'Bound-function local fixture'}));
+</script></body></html>

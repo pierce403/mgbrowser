@@ -103,7 +103,8 @@ fn allocation_failure(runtime: &Runtime, error: &str, request: u64) -> Allocatio
 fn bootstrap_and_public_unread_calls_keep_only_real_environment_and_binding_storage() {
     let mut runtime = Runtime::new();
     let initial = report(&runtime);
-    assert_eq!(initial.accepted_bytes, 25_854);
+    // The real Function.bind bootstrap property adds 128 + 4 + 13 bytes.
+    assert_eq!(initial.accepted_bytes, 25_854 + 145);
     assert_eq!(initial.phases.bootstrap, initial.accepted_bytes);
     let function = function(&mut runtime, "", "return 7;");
     let before = report(&runtime);

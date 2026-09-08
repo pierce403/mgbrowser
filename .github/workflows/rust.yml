@@ -23,7 +23,7 @@ jobs:
       - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_dom --test script_worker
+        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_dom --test script_worker
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
@@ -103,6 +103,7 @@ jobs:
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-concat --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-concat
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-empty-arguments --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-empty-arguments
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-function-prototypes --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-function-prototypes
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bound-functions
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
           target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
@@ -169,6 +170,23 @@ jobs:
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-function-prototypes"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/function-prototypes-home.png > tmp/script-journey/function-prototypes-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-function-prototypes tmp/script-journey/cdp-function-prototypes-destination.png 2>&1 | tee tmp/script-journey/cdp-function-prototypes-client.log
           STORAGE_CDP
+          timeout 50s xvfb-run -a bash <<'BOUND_CDP'
+          set -euo pipefail
+          target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --remote-debugging-port=0 > tmp/script-journey/bound-browser.log 2>&1 &
+          script_browser_pid=$!
+          trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
+          debugger_ready=false
+          debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < debugger_deadline )); do
+            kill -0 "$script_browser_pid"
+            script_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/script-journey/bound-browser.log)
+            if [[ -n "$script_port" ]] && curl --fail --silent --max-time 1 "http://127.0.0.1:$script_port/json/version" > /dev/null; then debugger_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$debugger_ready" == true ]]
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-bound-functions"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/bound-functions-home.png > tmp/script-journey/bound-functions-home.json
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-bound-functions tmp/script-journey/cdp-bound-functions-destination.png 2>&1 | tee tmp/script-journey/cdp-bound-functions-client.log
+          BOUND_CDP
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4

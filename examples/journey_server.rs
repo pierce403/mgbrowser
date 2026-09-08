@@ -81,6 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/function-prototypes.html"),
             ),
+            "/script-bound-functions" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/bound-functions.html"),
+            ),
             "/search"
                 if fields.iter().any(|(k, v)| k == "q" && !v.is_empty())
                     && fields.iter().any(|(k, v)| k == "source" && v == "fixture") =>
@@ -134,6 +138,7 @@ mod tests {
             include_str!("../tests/fixtures/script/concat.html"),
             include_str!("../tests/fixtures/script/empty-arguments.html"),
             include_str!("../tests/fixtures/script/function-prototypes.html"),
+            include_str!("../tests/fixtures/script/bound-functions.html"),
         ] {
             let document = document::parse(source, "http://127.0.0.1:7878/script-home");
             assert!(document.forms.is_empty());

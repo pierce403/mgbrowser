@@ -188,6 +188,89 @@ fn restricted_child_function_defaults_create_form_after_frozen_storage_workload(
     );
 }
 
+fn bound_function_reply(html: &str) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-bound-function-worker-baseline".into(),
+        html: html.into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    (reply, document)
+}
+
+#[test]
+fn restricted_child_bound_functions_create_form_after_frozen_semantic_checks() {
+    let (reply, document) =
+        bound_function_reply(include_str!("fixtures/script/bound-functions.html"));
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("bound-functions fixture allocation: {report:?}");
+    assert!(report.first_rejected.is_none());
+    assert_eq!(document.title, "Bound-function local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(document.nodes.iter().any(|node| node.tag == "button"
+        && node.attr("type") == Some("submit")
+        && node.attr("name") == Some("submit")
+        && node.attr("value") == Some("search")));
+    assert!(
+        reply
+            .html
+            .contains("Authored local bound-function form ready")
+    );
+}
+
+#[test]
+fn restricted_child_bound_poison_error_keeps_function_available_to_later_script() {
+    let (reply, document) = bound_function_reply(
+        "<html><head><title>Bound fallback</title></head><body><p>Readable bound fallback</p><script>var bound=(function(){return 7;}).bind(null);bound.caller;document.title='Incorrect completion';location.href='/incorrect';</script><script>if(bound()!==7)throw 'Bound recovery failed';document.title='Bound function recovered';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+    assert!(reply.errors[0].contains("TypeError"));
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert_eq!(document.title, "Bound function recovered");
+    assert!(reply.html.contains("Readable bound fallback"));
+}
+
+#[test]
+fn restricted_child_bound_chain_limit_is_fatal_before_target_and_later_effects() {
+    let (reply, document) = bound_function_reply(
+        "<html><head><title>Bound chain fallback</title></head><body><p id=output>Readable bound chain fallback</p><script>function target(){document.title='Incorrect target';}var bound=target;for(var i=0;i<65;i++)bound=bound.bind(null);document.getElementById('output').setAttribute('data-bound','ready');try{bound();document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let diagnostic = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(
+        diagnostic.contains("JavaScript call depth exhausted"),
+        "{diagnostic}"
+    );
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, diagnostic);
+    assert_eq!(document.title, "Bound chain fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-bound"), Some("ready"));
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable bound chain fallback"));
+}
+
 #[test]
 fn restricted_child_default_prototype_ordinary_exception_allows_later_recovery() {
     let (reply, document) = function_prototype_reply(

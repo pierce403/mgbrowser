@@ -22,12 +22,15 @@ use std::rc::Rc;
 mod arguments;
 #[path = "array.rs"]
 mod array;
+#[path = "bound.rs"]
+mod bound;
 #[path = "error.rs"]
 mod error;
 #[path = "prototype.rs"]
 mod prototype;
 #[path = "symbol.rs"]
 mod symbol;
+use bound::BoundData;
 use error::ErrorKind;
 use prototype::KeyRef;
 pub use symbol::SymbolHandle;
@@ -511,12 +514,25 @@ struct Code {
     body: Rc<[Stmt]>,
 }
 struct Function {
-    code: Rc<Code>,
+    kind: FunctionKind,
     environment: usize,
     properties: usize,
     // The real own property is admitted immediately. Only its default object
     // and constructor backlink wait for an actual value read.
     pending_default_prototype: bool,
+}
+enum FunctionKind {
+    Ordinary(Rc<Code>),
+    Bound(Rc<BoundData>),
+}
+impl Function {
+    #[cfg(test)]
+    fn ordinary_code(&self) -> &Rc<Code> {
+        match &self.kind {
+            FunctionKind::Ordinary(code) => code,
+            FunctionKind::Bound(_) => panic!("ordinary function fixture expected"),
+        }
+    }
 }
 enum Reference {
     Binding(usize, String),
@@ -676,7 +692,7 @@ impl Runtime {
                     "reduce",
                 ][..],
             ),
-            (3, "Function", &["call", "apply", "toString"][..]),
+            (3, "Function", &["call", "apply", "bind", "toString"][..]),
             (
                 4,
                 "String",
@@ -1236,7 +1252,12 @@ impl Runtime {
             EnumerationOwner::Object(id) => self.enumeration_object_keys(id, owner, entries),
             EnumerationOwner::Function(id) => {
                 enumeration_add(&mut self.budget, entries, owner, "length", false)?;
-                enumeration_add(&mut self.budget, entries, owner, "name", false)?;
+                if matches!(self.functions[id].kind, FunctionKind::Bound(_)) {
+                    enumeration_add(&mut self.budget, entries, owner, "caller", false)?;
+                    enumeration_add(&mut self.budget, entries, owner, "arguments", false)?;
+                } else {
+                    enumeration_add(&mut self.budget, entries, owner, "name", false)?;
+                }
                 self.enumeration_object_keys(self.functions[id].properties, owner, entries)
             }
             EnumerationOwner::Native(native) => {
@@ -1434,11 +1455,11 @@ impl Runtime {
         let properties = self.object(Some(self.function_prototype), None)?;
         let id = self.functions.len();
         self.functions.push(Function {
-            code: Rc::new(Code {
+            kind: FunctionKind::Ordinary(Rc::new(Code {
                 name: name.cloned(),
                 params: Rc::clone(params),
                 body: Rc::clone(body),
-            }),
+            })),
             environment,
             properties,
             pending_default_prototype: false,
@@ -2362,6 +2383,24 @@ impl Runtime {
     ) -> Eval<Value> {
         let callee = self.expression(callee, environment, this, host)?;
         let args = self.arguments(args, environment, this, host)?;
+        self.construct_value(callee, args, host)
+    }
+
+    #[inline(never)]
+    fn construct_value(
+        &mut self,
+        callee: Value,
+        args: Vec<Value>,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        if let Value::Function(id) = &callee
+            && self
+                .functions
+                .get(*id)
+                .is_some_and(|function| matches!(function.kind, FunctionKind::Bound(_)))
+        {
+            return self.forward_bound(*id, args, true, host);
+        }
         if let Value::Native(name) = &callee {
             if name == "Symbol" {
                 return Err(exception("TypeError: Symbol is not a constructor"));
@@ -2524,14 +2563,16 @@ impl Runtime {
                 self.put_own(id, key, value, true)
             }
             Value::Function(id) => {
-                if matches!(key, "length" | "name") {
-                    return Ok(());
-                }
-                let object = self
+                let function = self
                     .functions
                     .get(id)
-                    .ok_or_else(|| exception("TypeError: unknown function"))?
-                    .properties;
+                    .ok_or_else(|| exception("TypeError: unknown function"))?;
+                if key == "length"
+                    || key == "name" && matches!(function.kind, FunctionKind::Ordinary(_))
+                {
+                    return Ok(());
+                }
+                let object = function.properties;
                 if self.readonly_property(PrototypeIdentity::Function(id), KeyRef::String(key))? {
                     return Ok(());
                 }
@@ -2563,8 +2604,18 @@ impl Runtime {
         }
     }
     fn delete(&mut self, object: Value, key: &str) -> Eval<Value> {
-        if matches!(&object, Value::Function(_)) && matches!(key, "name" | "length" | "prototype") {
-            return Ok(Value::Bool(false));
+        if let Value::Function(id) = &object {
+            let function = self
+                .functions
+                .get(*id)
+                .ok_or_else(|| exception("TypeError: unknown function"))?;
+            let protected = match function.kind {
+                FunctionKind::Ordinary(_) => matches!(key, "name" | "length" | "prototype"),
+                FunctionKind::Bound(_) => matches!(key, "length" | "caller" | "arguments"),
+            };
+            if protected {
+                return Ok(Value::Bool(false));
+            }
         }
         if let Value::Native(name) = &object {
             if let Some(id) = self.native_properties_id(name)? {
@@ -2760,6 +2811,7 @@ impl Runtime {
                         "TypeError: right side of instanceof is not callable",
                     ));
                 }
+                let right = self.bound_instance_target(right)?;
                 if left.primitive() {
                     return Ok(Value::Bool(false));
                 }
@@ -2952,7 +3004,10 @@ impl Runtime {
                     .functions
                     .get(id)
                     .ok_or_else(|| exception("TypeError: unknown function"))?;
-                let code = function.code.clone();
+                let code = match &function.kind {
+                    FunctionKind::Ordinary(code) => Rc::clone(code),
+                    FunctionKind::Bound(_) => return self.forward_bound(id, args, false, host),
+                };
                 let parent = function.environment;
                 let environment = self.environment(parent, true)?;
                 let this = if matches!(this, Value::Undefined | Value::Null) {
@@ -3079,6 +3134,7 @@ impl Runtime {
                 Ok(Value::String(output))
             }
             "Function" => self.dynamic_function(args, host),
+            "Function.bind" => self.bind_function(this, args, host),
             "RegExp" | "RegExp.new" => self.regexp_constructor(args, name == "RegExp.new", host),
             "RegExp.exec" | "RegExp.test" | "RegExp.toString" => {
                 self.regexp_method(name, this, first, host)
@@ -4985,9 +5041,15 @@ mod tests {
         assert_ne!(a, b);
         let first = &runtime.functions[a];
         let second = &runtime.functions[b];
-        assert!(!Rc::ptr_eq(&first.code, &second.code));
-        assert!(Rc::ptr_eq(&first.code.body, &second.code.body));
-        assert!(Rc::ptr_eq(&first.code.params, &second.code.params));
+        assert!(!Rc::ptr_eq(first.ordinary_code(), second.ordinary_code()));
+        assert!(Rc::ptr_eq(
+            &first.ordinary_code().body,
+            &second.ordinary_code().body
+        ));
+        assert!(Rc::ptr_eq(
+            &first.ordinary_code().params,
+            &second.ordinary_code().params
+        ));
         assert_ne!(first.environment, second.environment);
         assert_ne!(first.properties, second.properties);
         let before = runtime.allocation_report();

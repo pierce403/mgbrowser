@@ -175,11 +175,17 @@ impl Runtime {
         self.budget.step()?;
         let id = self.identity_storage(owner)?;
         if let KeyRef::String(key) = key {
-            if matches!(owner, PrototypeIdentity::Function(_)) && matches!(key, "name" | "length") {
-                return Ok(Some(PropertyDescriptor {
-                    enumerable: false,
-                    writable: false,
-                }));
+            if let PrototypeIdentity::Function(function) = owner {
+                let virtual_key = match &self.functions[function].kind {
+                    FunctionKind::Ordinary(_) => matches!(key, "name" | "length"),
+                    FunctionKind::Bound(_) => matches!(key, "length" | "caller" | "arguments"),
+                };
+                if virtual_key {
+                    return Ok(Some(PropertyDescriptor {
+                        enumerable: false,
+                        writable: false,
+                    }));
+                }
             }
             if let PrototypeIdentity::Native(native) = owner {
                 let names = native_virtual_names(&self.native_properties[native].0);
@@ -340,16 +346,28 @@ impl Runtime {
                         // original receiver. Metadata-only walks never get here.
                         self.materialize_function_prototype(function)?;
                     }
-                    if key == "length" {
-                        return Ok(Some(Value::Number(
-                            self.functions[function].code.params.len() as f64,
-                        )));
-                    }
-                    if key == "name" {
-                        let name = self.functions[function].code.name.as_deref().unwrap_or("");
-                        self.budget
-                            .allocate(name.encode_utf16().count().saturating_mul(2))?;
-                        return Ok(Some(Value::text(name)));
+                    match &self.functions[function].kind {
+                        FunctionKind::Ordinary(code) => {
+                            if key == "length" {
+                                return Ok(Some(Value::Number(code.params.len() as f64)));
+                            }
+                            if key == "name" {
+                                let name = code.name.as_deref().unwrap_or("");
+                                self.budget
+                                    .allocate(name.encode_utf16().count().saturating_mul(2))?;
+                                return Ok(Some(Value::text(name)));
+                            }
+                        }
+                        FunctionKind::Bound(bound) => {
+                            if key == "length" {
+                                return Ok(Some(Value::Number(bound.length)));
+                            }
+                            if matches!(key, "caller" | "arguments") {
+                                return Err(exception(
+                                    "TypeError: restricted bound function property",
+                                ));
+                            }
+                        }
                     }
                 }
                 PrototypeIdentity::Native(native) => {
@@ -416,6 +434,14 @@ impl Runtime {
                 return Ok(false);
             };
             if let Some(descriptor) = self.own_descriptor(owner, key)? {
+                if let (
+                    PrototypeIdentity::Function(function),
+                    KeyRef::String("caller" | "arguments"),
+                ) = (owner, key)
+                    && matches!(self.functions[function].kind, FunctionKind::Bound(_))
+                {
+                    return Err(exception("TypeError: restricted bound function property"));
+                }
                 return Ok(!descriptor.writable);
             }
             current = self.identity_parent(owner)?;
@@ -675,7 +701,8 @@ mod tests {
         assert!(size_of::<Object>() <= 128);
         assert!(size_of::<Property>() <= 128);
         let mut runtime = Runtime::new();
-        assert_eq!(runtime.allocation_report().phases.bootstrap, 25_854);
+        // The real Function.prototype.bind property/value adds 145 bytes.
+        assert_eq!(runtime.allocation_report().phases.bootstrap, 25_854 + 145);
         eprintln!(
             "FUNCTION_PROTOTYPE_LAYOUT Function={} Code={} Object={} Property={} Bootstrap={}",
             size_of::<Function>(),
@@ -703,8 +730,14 @@ mod tests {
             assert_eq!(runtime.objects.len(), objects + 1);
             assert_eq!(fuel - runtime.budget.fuel, 1); // original prototype put only
             assert!(runtime.functions[id].pending_default_prototype);
-            assert!(Rc::ptr_eq(&runtime.functions[id].code.params, &params));
-            assert!(Rc::ptr_eq(&runtime.functions[id].code.body, &body));
+            assert!(Rc::ptr_eq(
+                &runtime.functions[id].ordinary_code().params,
+                &params
+            ));
+            assert!(Rc::ptr_eq(
+                &runtime.functions[id].ordinary_code().body,
+                &body
+            ));
             let property = prototype_property(&runtime, id);
             assert_eq!(property.value, Value::Undefined);
             assert!(!property.enumerable && property.writable && !property.getter);
@@ -712,8 +745,8 @@ mod tests {
             assert!(property.configurable);
         }
         assert!(!Rc::ptr_eq(
-            &runtime.functions[0].code,
-            &runtime.functions[1].code
+            runtime.functions[0].ordinary_code(),
+            runtime.functions[1].ordinary_code()
         ));
         assert_ne!(
             runtime.functions[0].properties,
@@ -1178,7 +1211,7 @@ mod tests {
                 .allocate_in(AllocationPhase::FunctionCode, 128)
                 .unwrap();
             runtime.functions.push(Function {
-                code: Rc::clone(&runtime.functions[id].code),
+                kind: FunctionKind::Ordinary(Rc::clone(runtime.functions[id].ordinary_code())),
                 environment: 0,
                 properties: runtime.functions[id].properties,
                 pending_default_prototype: false,

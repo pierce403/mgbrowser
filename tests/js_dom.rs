@@ -860,6 +860,59 @@ fn inherited_function_default_and_constructed_instance_drive_actual_dom() {
 }
 
 #[test]
+fn bound_startup_callback_and_host_method_create_actual_dom() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        var make=document.createElement.bind(document,'p');
+        function ready(prefix){
+            var node=make();node.id='bound-output';node.textContent=prefix+this.text;document.body.appendChild(node);
+            document.title='Bound callback DOM ready';
+            location.href='/bound-callback-destination';
+        }
+        document.addEventListener('DOMContentLoaded',ready.bind({text:'café'},'Rust & '));
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/bound-callback-destination")
+    );
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Bound callback DOM ready");
+    assert_eq!(content(&document, "#bound-output"), "Rust & café");
+    readable(&document);
+}
+
+#[test]
+fn bound_symbol_result_keeps_dom_rejection_without_mutation_or_navigation() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        function identity(value){return value;}
+        var value=identity.bind(null,Symbol('bound'));
+        try{document.getElementById('output').textContent=value();location.href='/incorrect';}
+        catch(error){if(String(error)!=='TypeError: cannot convert Symbol to string')throw error;}
+        document.title='Bound value stays a Symbol';
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Bound value stays a Symbol");
+    assert_eq!(content(&document, "#output"), "Unchanged output");
+    readable(&document);
+}
+
+#[test]
 fn unread_prototype_replacement_keeps_symbol_dom_rejection_and_target() {
     let reply = page(
         "",
