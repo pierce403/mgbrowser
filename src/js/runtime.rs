@@ -24,6 +24,8 @@ mod arguments;
 mod array;
 #[path = "bound.rs"]
 mod bound;
+#[path = "diagnostic.rs"]
+mod diagnostic;
 #[path = "error.rs"]
 mod error;
 #[path = "prototype.rs"]
@@ -31,6 +33,7 @@ mod prototype;
 #[path = "symbol.rs"]
 mod symbol;
 use bound::BoundData;
+use diagnostic::{MemberContext, MemberOperation};
 use error::ErrorKind;
 use prototype::KeyRef;
 pub use symbol::SymbolHandle;
@@ -232,6 +235,10 @@ pub trait Host {
 #[derive(Debug)]
 enum Fault {
     Throw(Value),
+    Member {
+        value: Value,
+        context: MemberContext,
+    },
     Fatal(String),
 }
 type Eval<T> = Result<T, Fault>;
@@ -904,6 +911,7 @@ impl Runtime {
                 self.fatal = Some(message.clone());
                 Err(message)
             }
+            Err(Fault::Member { context, .. }) => Err(context.format()),
             Err(Fault::Throw(value)) => {
                 if let Value::Object(id) = &value
                     && let Some(kind) = self.objects.get(*id).and_then(|object| object.error)
@@ -1883,7 +1891,9 @@ impl Runtime {
                 self.budget.allocate(name.len())?;
                 Reference::Binding(self.lookup(environment, name).unwrap_or(0), name.clone())
             }
-            ForInBinding::Reference(expr) => self.reference(expr, environment, this, host)?,
+            ForInBinding::Reference(expr) => {
+                self.reference(expr, MemberOperation::ForInTarget, environment, this, host)?
+            }
         };
         let key = self.text(key)?;
         self.write_reference(reference, key, host)
@@ -1967,13 +1977,16 @@ impl Runtime {
         if matches!(result, Err(Fault::Fatal(_))) {
             return result;
         }
-        if let Err(Fault::Throw(value)) = result {
-            result = if let Some((name, catch)) = catch {
-                let environment = self.environment(environment, false)?;
-                self.define(environment, name, value)?;
-                self.statement(catch, &[], environment, this, host)
-            } else {
-                Err(Fault::Throw(value))
+        if let Some((name, catch)) = catch {
+            result = match result {
+                Err(Fault::Throw(value) | Fault::Member { value, .. }) => {
+                    // The binding gets only the original page-visible value.
+                    // A later explicit throw cannot inherit this fault's context.
+                    let environment = self.environment(environment, false)?;
+                    self.define(environment, name, value)?;
+                    self.statement(catch, &[], environment, this, host)
+                }
+                other => other,
             };
         }
         if matches!(result, Err(Fault::Fatal(_))) {
@@ -1991,6 +2004,7 @@ impl Runtime {
     fn reference(
         &mut self,
         expr: &Expr,
+        operation: MemberOperation,
         environment: usize,
         this: &Value,
         host: &mut impl Host,
@@ -2006,7 +2020,7 @@ impl Runtime {
                 // Evaluate the key expression, but reject an invalid base before
                 // ToPropertyKey can call user code on the resulting key value.
                 if matches!(object, Value::Null | Value::Undefined) {
-                    return Err(exception("TypeError: property access on null or undefined"));
+                    return Err(diagnostic::member_fault(operation, &object, &property));
                 }
                 let key = self.property_key(property, host)?;
                 Ok(Reference::Property(object, key))
@@ -2082,7 +2096,8 @@ impl Runtime {
                 self.function(name.as_ref(), params, body, environment, true)
             }
             Expr::Member { .. } => {
-                let reference = self.reference(expr, environment, this, host)?;
+                let reference =
+                    self.reference(expr, MemberOperation::Read, environment, this, host)?;
                 self.read_reference(&reference, host)
             }
             Expr::Unary { op, expr } => self.unary_expression(op, expr, environment, this, host),
@@ -2210,7 +2225,8 @@ impl Runtime {
         this: &Value,
         host: &mut impl Host,
     ) -> Eval<Value> {
-        let reference = self.reference(expr, environment, this, host)?;
+        let reference =
+            self.reference(expr, MemberOperation::UpdateTarget, environment, this, host)?;
         let old = self.read_reference(&reference, host)?;
         let old = self.number(old, host)?;
         let new = if op == "++" {
@@ -2260,7 +2276,13 @@ impl Runtime {
                     }
                 },
                 Expr::Member { .. } => {
-                    let reference = self.reference(expr, environment, this, host)?;
+                    let reference = self.reference(
+                        expr,
+                        MemberOperation::DeleteTarget,
+                        environment,
+                        this,
+                        host,
+                    )?;
                     if let Reference::Property(object, key) = reference {
                         self.delete_key(object, &key)
                     } else {
@@ -2304,7 +2326,12 @@ impl Runtime {
         this: &Value,
         host: &mut impl Host,
     ) -> Eval<Value> {
-        let reference = self.reference(left, environment, this, host)?;
+        let operation = if op == "=" {
+            MemberOperation::WriteTarget
+        } else {
+            MemberOperation::CompoundTarget
+        };
+        let reference = self.reference(left, operation, environment, this, host)?;
         let old = if op != "=" {
             Some(self.read_reference(&reference, host)?)
         } else {
@@ -2346,7 +2373,8 @@ impl Runtime {
     ) -> Eval<Value> {
         let eval_reference = matches!(callee, Expr::Ident(name) if name == "eval");
         let (callee, mut receiver) = if matches!(callee, Expr::Member { .. }) {
-            let reference = self.reference(callee, environment, this, host)?;
+            let reference =
+                self.reference(callee, MemberOperation::CallTarget, environment, this, host)?;
             let callee = self.read_reference(&reference, host)?;
             let receiver = if let Reference::Property(value, _) = reference {
                 value
@@ -4351,6 +4379,7 @@ fn fault_text(error: Fault) -> String {
     match error {
         Fault::Fatal(message) => message,
         Fault::Throw(value) => format!("Uncaught JavaScript exception: {}", value.as_text()),
+        Fault::Member { context, .. } => context.format(),
     }
 }
 fn array_index(key: &str) -> Option<usize> {

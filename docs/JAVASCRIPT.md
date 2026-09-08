@@ -1288,3 +1288,109 @@ exact-SHA Rust CI 34176183048 with the same 788/690 test totals and 18/18 journe
 Pages 34176182971 deployed matching full HTTPS HTML with the approved apex
 certificate, HTTPS enforcement and HTTP redirect. Publication does not complete
 the Google acceptance gate; the daily log preserves the evidence.
+
+### Nullish member diagnostics
+
+This implemented increment improves evidence for the live nullish-property failure rather
+than assuming an unrelated missing builtin caused it. Attach compact private
+context to the actual catchable fault created when member-reference resolution
+rejects a null/undefined base. Keep the original thrown Value and exact catch-visible
+string unchanged. No new browser capability, AST/source capture, public Value kind,
+worker schema, page-visible property or global last-error state is introduced.
+
+Context records the originating reference operation (read, assignment target,
+compound-assignment target, update target, delete target, call target or for-in
+target), distinguishes null from undefined, and categorizes the already-evaluated
+key. Base and key expressions still run exactly once in their existing order;
+reject before ToPropertyKey, as before. Diagnostics must not evaluate source,
+coerce a key, invoke a getter/Host/callback, or infer how the base became nullish.
+An inner failing operation keeps its own context rather than being relabeled by
+an outer operation. Direct internal nullish checks outside member-reference
+resolution remain unchanged and are not claimed as annotated by this increment.
+The host suffix is ` [member operation=OP base=BASE key=KEY]`. Operation labels
+are resolve-read, resolve-write-target, resolve-compound-target,
+resolve-update-target, resolve-delete-target, resolve-call-target and
+resolve-for-in-target. BASE is null or undefined. Recognized KEY names are plain;
+redacted categories use angle brackets (for example `<string>` or `<object>`).
+The complete annotated nullish diagnostic is bounded to 256 ASCII bytes at
+construction, below the existing worker limit, without affecting other diagnostics.
+
+Only a fixed public standard-property vocabulary may be named. Recognized keys:
+prototype, constructor, length, name, message, call, apply, bind, toString, valueOf,
+forEach, map, filter, some, every, reduce, push, pop, shift, unshift, slice, join,
+concat, indexOf, includes, reverse, appendChild, removeChild, insertBefore, remove,
+addEventListener, removeEventListener, querySelector, querySelectorAll,
+getElementById, getElementsByTagName, getElementsByClassName, createElement,
+createTextNode, setAttribute, getAttribute, hasAttribute, removeAttribute,
+textContent, innerHTML, innerText, style, classList, className, id, parentNode,
+parentElement, firstChild, lastChild, nextSibling, previousSibling, ownerDocument,
+documentElement, head, body, children, childNodes, forms, elements, document,
+navigator, location, href, search, cookie, userAgent, getComputedStyle, onload,
+onclick, submit, focus. Matching is bounded against this fixed ASCII list and
+does not copy a key buffer. Other strings are redacted to their category; number,
+boolean, null, undefined, Symbol, ordinary object, function, native and Host keys
+are categories only, without values, handles or Symbol descriptions. No URL,
+identifier, source fragment or arbitrary runtime string is captured.
+
+Render a short labeled suffix only when this annotated fault escapes to existing
+host diagnostic formatting. Catch consumes the unchanged Value and discards the
+annotation; an explicit later throw of that value starts an unannotated throw.
+Normal finally preserves the pending fault, while return or a replacement throw
+overrides it. Swallowed faults cannot taint later execute/invoke calls. Fatal
+errors/latching and genuine Error formatting remain unchanged. Reply.errors and
+the existing 512-character worker error/64-error/protocol limits remain intact.
+
+Use only fixed enum fields, without retained heap/source/key storage or new realm
+charges/fuel. Measure Fault/Result layout and keep existing default-stack depth
+guards valid; all existing realm, worker and dependency limits remain unchanged.
+Independent tests must preserve caught strings, evaluation/coercion order, Host
+calls, catch/finally propagation, redaction, output bounds, allocation reports and
+fatal behavior. Freeze an authored actual-worker baseline before production, then
+verify the same readable fallback and later-created real controls through worker,
+native and CDP paths. Such a fixture may already navigate successfully on the old
+runtime: the new acceptance is accurate diagnostics without semantic regression,
+not a new rendering capability. A subsequent bounded live checkpoint may identify
+only the immediate operation, not the original producer or missing capability.
+
+Independent acceptance passes 32 semantic and 15 resource groups, plus seven
+private runtime groups, 34 DOM and 49 actual-worker tests. These cover all seven
+operation labels, both nullish bases, the fixed vocabulary and redacted key
+categories, evaluation/coercion order, catch/rethrow/finally replacement, fatal
+latching, later-script recovery and no stale context across execute/invoke.
+The four-byte context grows Fault from 32 to 40 bytes on x86_64; measured
+Eval<Value>/Eval<Flow>/Eval<Reference> remain 40/64/56 bytes. Default-stack
+pending-fault/finally checks and existing depth guards pass unchanged.
+Frozen pre-change allocation reports, the 21,462-tick fuel checkpoint and the
+265-byte public-invoke delta match exactly. The unchanged two-script worker
+fixture already created its form before this change and still accepts exactly
+57,479 bytes; its uncaught error now identifies resolve-call-target, null and
+appendChild, while its caught error remains the original primitive string.
+
+Full local validation passes 848 debug tests across 35 summaries and 749 selected
+release tests across 26 summaries with Rust 1.91.1 and default thread stacks.
+The first all-targets run exposed a test-list mistake (two scripts in a list
+asserting one), corrected by a dedicated exact-two-script test without changing
+the fixture, production, old assertions or limits. The original failed log is
+retained alongside the successful rerun. Native/CDP and live checkpoints are
+recorded separately below and in the daily log.
+
+All three exact CI journey steps also pass locally: 19 native and 19 external
+CDP destinations, including the diagnostic fixture's actual Unicode query,
+hidden/submit fields, stale-node rejection, first local result click, flattened
+session and decoded 1100×683 destination PNG. Native query and CDP destination
+frames were inspected. The old fixture already navigated; this verifies preserved
+behavior with better host diagnostics. No dependencies, TLS, worker permissions,
+CDP commands, resource caps or thread-stack overrides changed.
+
+One bounded live checkpoint still submitted Google's actual form through verified
+TLS and ordinary cookies. Homepage HTTP 200/title Google retained 26 items/one
+form, three completed scripts/seven errors and no allocation rejection at
+2,428,666 accepted bytes. Search HTTP 200/title Google Search had zero items/forms,
+two completed scripts and three errors. The first now reports
+`[member operation=resolve-call-target base=undefined key=<string>]`; this names
+only the immediate resolution failure, not the undefined value's producer or a
+missing capability. Then Source 26,789 was rejected after 4,191,219 accepted bytes
+against the unchanged 4,194,304 cap, repeated by the next script. Exit 2 and the
+inspected blank search frame confirm no result, destination or new live stage.
+No website-source inspection, adaptation or retry occurred. Changing server
+responses are not a controlled performance comparison; the Google goal stays open.

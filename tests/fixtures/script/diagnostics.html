@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Nullish diagnostic fallback</title></head><body>
+<p id="status">Authored local diagnostic fixture fallback.</p>
+<script>
+document.getElementById('status').setAttribute('data-before-error','yes');
+var missing=null;
+missing.appendChild((document.title='Incorrect argument effect',document.createElement('p')));
+</script>
+<script>
+var keyEvaluations=0,coercions=0,caught='';
+var key={toString:function(){coercions++;return 'private-runtime-key';}};
+try{undefined[(keyEvaluations++,key)]=(document.title='Incorrect RHS effect',1);}
+catch(error){caught=error;}
+if(caught!=='TypeError: property access on null or undefined'||keyEvaluations!==1||coercions!==0)throw 'Diagnostic changed page semantics';
+if(document.title!=='Nullish diagnostic fallback')throw 'Unexpected evaluation effect';
+var form=document.createElement('form');form.method='get';form.action='/search';
+var query=document.createElement('input');query.name='q';form.appendChild(query);
+var source=document.createElement('input');source.type='hidden';source.name='source';source.value='fixture';form.appendChild(source);
+var button=document.createElement('button');button.type='submit';button.name='submit';button.value='search';button.textContent='Search';form.appendChild(button);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local diagnostic form ready';
+document.title='Nullish diagnostic local fixture';
+</script>
+</body></html>

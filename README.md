@@ -45,10 +45,13 @@ intact. An authored 4,800-function page now creates its form under the same cap.
 Bound functions now preserve receiver/prefix ordering, target construction and
 instance checks, with restricted metadata and prepaid bounded forwarding. An
 authored bound callback creates a real form inside the restricted worker.
-All 788 debug tests and 690 selected release checks pass locally, alongside
-18 native and 18 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt reports property access on null or
-undefined, then a later source admission exceeds the unchanged 4 MiB allocation limit.
+Nullish member failures now include bounded, redacted host-only context without
+changing caught exceptions, evaluation order or frozen allocation/fuel checkpoints.
+All 848 debug tests and 749 selected release checks pass locally, alongside
+19 native and 19 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt identifies a method-call target on
+undefined with a redacted string key, then a later source admission exceeds the
+unchanged 4 MiB allocation limit. This identifies the operation, not its cause.
 There are still no actionable results or newly completed live stages. Next is
 independent language/builtin coverage and measured storage-ownership work.
 Authored script-created forms

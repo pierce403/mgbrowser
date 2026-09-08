@@ -860,6 +860,59 @@ fn inherited_function_default_and_constructed_instance_drive_actual_dom() {
 }
 
 #[test]
+fn missing_dom_lookup_diagnostic_preserves_effects_and_skips_call_arguments() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        document.getElementById('output').textContent='Before missing lookup';
+        document.querySelector('#authored-private-selector').appendChild((document.title='Incorrect argument',document.createElement('p')));
+    "#,
+    );
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild]"
+        ]
+    );
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Initial title");
+    assert_eq!(content(&document, "#output"), "Before missing lookup");
+    readable(&document);
+}
+
+#[test]
+fn unknown_dom_property_detection_and_caught_fault_values_remain_unchanged() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        if(document.authoredMissingProperty!==undefined||document.getElementById('authored-absent')!==null)throw 'Missing values changed';
+        var caught='';try{document.authoredMissingProperty.textContent='incorrect';}catch(error){caught=error;}
+        if(caught!=='TypeError: property access on null or undefined')throw 'Caught value changed';
+        document.getElementById('output').textContent='Unchanged catch, Rust & café';
+        document.title='Diagnostic recovery ready';
+    "#,
+    );
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Diagnostic recovery ready");
+    assert_eq!(
+        content(&document, "#output"),
+        "Unchanged catch, Rust & café"
+    );
+    readable(&document);
+}
+
+#[test]
 fn bound_startup_callback_and_host_method_create_actual_dom() {
     let reply = page(
         "",

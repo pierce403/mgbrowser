@@ -188,6 +188,114 @@ fn restricted_child_function_defaults_create_form_after_frozen_storage_workload(
     );
 }
 
+fn diagnostic_reply(html: &str) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-diagnostic-worker-baseline".into(),
+        html: html.into(),
+    };
+    let (status, stdout, stderr) = run(
+        &["--script-worker"],
+        &serde_json::to_vec(&request).unwrap(),
+        Duration::from_secs(3),
+    );
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    (reply, document)
+}
+
+#[test]
+fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline() {
+    let (reply, document) = diagnostic_reply(include_str!("fixtures/script/diagnostics.html"));
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-call-target base=null key=appendChild]"
+        ]
+    );
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("diagnostic fixture allocation: {report:?}");
+    assert!(report.first_rejected.is_none());
+    // Frozen old-worker observation, before diagnostic production changes.
+    assert_eq!(report.accepted_bytes, 57_479);
+    assert_eq!(report.phases.bootstrap, 25_999);
+    assert_eq!(report.phases.source, 1_531);
+    assert_eq!(report.phases.ast, 23_299);
+    assert_eq!(report.phases.function_code, 128);
+    assert_eq!(report.phases.runtime, 6_522);
+    assert_eq!(report.phases.regex_compile, 0);
+    assert_eq!(report.phases.regex_result, 0);
+    assert_eq!(document.title, "Nullish diagnostic local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    for (tag, name, value) in [
+        ("input", "q", None),
+        ("input", "source", Some("fixture")),
+        ("button", "submit", Some("search")),
+    ] {
+        assert!(document.nodes.iter().any(|node| node.tag == tag
+            && node.attr("name") == Some(name)
+            && value.is_none_or(|value| node.attr("value") == Some(value))));
+    }
+    let status = document.query_selector(0, "#status").unwrap().unwrap();
+    assert_eq!(
+        document.nodes[status].attr("data-before-error"),
+        Some("yes")
+    );
+    assert!(reply.html.contains("Authored local diagnostic form ready"));
+}
+
+#[test]
+fn restricted_child_redacts_keys_and_does_not_taint_later_diagnostics() {
+    let (reply, document) = diagnostic_reply(
+        "<html><head><title>Diagnostic fallback</title></head><body><p>Readable diagnostics</p><script>null['https://example.test/authored-secret?token=private\\nforged'];</script><script>try{undefined[Symbol('private-symbol')];}catch(error){if(error!=='TypeError: property access on null or undefined')throw 'Caught value changed';}document.title='Later recovery';</script><script>throw 'authored later error';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: Uncaught JavaScript exception: TypeError: property access on null or undefined [member operation=resolve-read base=null key=<string>]",
+            "Inline script 3: Uncaught JavaScript exception: authored later error"
+        ]
+    );
+    assert!(reply.errors.iter().all(|error| error.is_ascii()
+        && error.len() <= 256
+        && !error.contains("private")
+        && !error.contains("https://")
+        && !error.contains("forged")));
+    assert_eq!(document.title, "Later recovery");
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert!(reply.html.contains("Readable diagnostics"));
+}
+
+#[test]
+fn restricted_child_fatal_finally_overrides_pending_member_context_and_latches() {
+    let (reply, document) = diagnostic_reply(
+        "<html><head><title>Fatal diagnostic fallback</title></head><body><p id=output>Readable fatal diagnostics</p><script>document.getElementById('output').setAttribute('data-before','yes');try{null.length;}finally{while(true){}}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: JavaScript fuel exhausted",
+            "Inline script 2: JavaScript fuel exhausted"
+        ]
+    );
+    assert_eq!(document.title, "Fatal diagnostic fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-before"), Some("yes"));
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert!(reply.html.contains("Readable fatal diagnostics"));
+}
+
 fn bound_function_reply(html: &str) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/local-bound-function-worker-baseline".into(),

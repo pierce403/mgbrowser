@@ -85,6 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/bound-functions.html"),
             ),
+            "/script-diagnostics" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/diagnostics.html"),
+            ),
             "/search"
                 if fields.iter().any(|(k, v)| k == "q" && !v.is_empty())
                     && fields.iter().any(|(k, v)| k == "source" && v == "fixture") =>
@@ -161,6 +165,36 @@ mod tests {
                 .collect();
             syntax::parse(&source)
                 .expect("local fixture must use the implemented classic-script syntax");
+        }
+    }
+
+    #[test]
+    fn diagnostic_fixture_parses_both_scripts_without_static_controls() {
+        let document = document::parse(
+            include_str!("../tests/fixtures/script/diagnostics.html"),
+            "http://127.0.0.1:7878/script-diagnostics",
+        );
+        assert!(document.forms.is_empty());
+        assert!(
+            !document
+                .nodes
+                .iter()
+                .any(|node| matches!(node.tag.as_str(), "form" | "input" | "button"))
+        );
+        let scripts: Vec<_> = document
+            .nodes
+            .iter()
+            .filter(|node| node.tag == "script")
+            .collect();
+        assert_eq!(scripts.len(), 2);
+        for script in scripts {
+            let source: String = script
+                .children
+                .iter()
+                .map(|id| document.nodes[*id].text.as_str())
+                .collect();
+            syntax::parse(&source)
+                .expect("each diagnostic fixture script must parse independently");
         }
     }
 }

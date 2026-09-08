@@ -63,7 +63,7 @@ so a first parser failure does not hide other missing capabilities in that respo
 `SCRIPT_ALLOCATION` contains a fixed JSON realm report with accepted bytes,
 exclusive charge-site totals and the first rejected allocation. Repeated script
 errors can be the same latched failure; they are not separate allocation attempts.
-Only the fixed `SCRIPT_ALLOCATION` report excludes source text and URLs; it adds
+The fixed `SCRIPT_ALLOCATION` report excludes source text and URLs; it adds
 no page API. `SCRIPT_DIAGNOSTIC` can contain page-supplied exception text or URLs:
 escaping is not redaction, so keep raw live logs in ignored `tmp/`.
 The report is cumulative logical accounting, not measured process memory.
@@ -434,12 +434,52 @@ exercise application input handlers and public CDP, not physical input or Google
 Exact-SHA remote CI, Pages and HTTPS publication verification remain separate and
 pending.
 
-CI now schedules scripted CDP fixtures in three batches of 8/8/1, each with its own
+`/script-diagnostics` is an authored two-script diagnostic/recovery fixture with
+no static controls. The first script preserves an earlier DOM effect, then fails
+to resolve `null.appendChild` before evaluating its call arguments. The second
+checks the unchanged caught exception string, evaluates an object key once
+without coercing it, skips the failed assignment's RHS, and creates the actual
+query, hidden and submit controls:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-diagnostics \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/diagnostics-journey
+```
+
+The frozen old-worker baseline and focused candidate worker check both complete
+one script, report one error, retain one form and accept exactly 57,479 bytes:
+Bootstrap 25,999 + Source 1,531 + Ast 23,299 + FunctionCode 128 + Runtime 6,522;
+both regex phases are zero, with no allocation rejection. Earlier effects,
+caught values, control creation and the same 4,194,304-byte cap are unchanged.
+The new acceptance is the escaping host-only suffix
+`[member operation=resolve-call-target base=null key=appendChild]`, not a new
+rendering capability or performance improvement.
+
+Only these annotated nullish-member failures receive the fixed, redacted context:
+an operation, null/undefined base kind and allowlisted standard key or category.
+The complete annotated runtime message is at most 256 ASCII bytes and does not
+retain arbitrary keys, URLs, Symbol descriptions or Host handles. Caught code
+still receives exactly `TypeError: property access on null or undefined`.
+Other `SCRIPT_DIAGNOSTIC` lines can contain page-supplied text or URLs; escaping
+does not redact them. Keep raw live logs in ignored `tmp/`. See
+[JAVASCRIPT.md](JAVASCRIPT.md) for the vocabulary and propagation contract.
+All 848 debug tests/35 summaries and 749 selected release checks/26 summaries
+pass. All three exact CI journey steps pass locally with 19 native and 19
+external CDP destinations. The diagnostic form submits its Unicode query and
+hidden/submit controls, rejects stale nodes, and reaches the local destination;
+the client verifies the flattened session and 1100×683 PNG. Native query and CDP
+destination frames were inspected, and owned test services were stopped. These
+checks prove preserved local behavior, not a new Google journey stage.
+
+CI now schedules scripted CDP fixtures in three batches of 8/8/2, each with its own
 browser, log, cleanup, 10-second readiness guard and 50-second deadline. The last
-batch covers bound functions. All previous commands/assertions remain, including
-the original loop/fallback recovery before onward navigation in the first browser.
+batch covers bound functions and diagnostics. All previous commands/assertions
+remain, including the original loop/fallback recovery before onward navigation
+in the first browser.
 This adds bounded harness time for another fixture without changing any engine,
-worker or individual native journey limit; all three batches passed locally.
+worker or individual native journey limit; all three updated batches passed
+locally. Remote publication is verified separately in the daily log.
 
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
@@ -520,6 +560,16 @@ completed, and no live-source inspection, adaptation or retry occurred. These
 changing responses do not establish that bind caused the prior diagnostic or
 provide a controlled performance comparison. The full Google goal remains open.
 
+The post-diagnostic checkpoint likewise submits the actual Google form but
+renders no results. Its first search error is now
+`[member operation=resolve-call-target base=undefined key=<string>]`; this identifies
+the immediate operation only, not the undefined value's producer or missing API.
+Homepage accepted 2,428,666 bytes with 26 items/one form and no rejection. Search
+accepted 4,191,219 before rejecting Source 26,789 under the unchanged 4,194,304 cap;
+it completed two scripts with three errors and zero items/forms. Exit 2 and an
+inspected blank search frame leave the result/first-link/destination gate open.
+There was no live-source inspection, adaptation or second attempt.
+
 ## Browser automation
 
 Enable the experimental Chrome DevTools Protocol subset explicitly:
@@ -599,6 +649,9 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-bound-functions tmp/cdp-bound-functions-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-diagnostics tmp/cdp-diagnostics-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
@@ -607,14 +660,15 @@ implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expres
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. The bound-function native/CDP journey also passes, as recorded
-above. Stop only the fixture/browser processes you started.
+above. The diagnostic fixture journey also passes. Stop only the
+fixture/browser processes you started.
 
 ## Validation
 
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
