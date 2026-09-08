@@ -151,7 +151,7 @@ fn bootstrap_and_bound_metadata_slots_are_admitted_without_synthetic_code() {
     for count in [0, 1, 2, 257, 9999] {
         let mut runtime = Runtime::new();
         let initial = report(&runtime);
-        assert_eq!(initial.phases.bootstrap, 25_854 + 145);
+        assert_eq!(initial.phases.bootstrap, 25_854 + 145 + 156); // reduceRight metadata
         assert_eq!(initial.accepted_bytes, initial.phases.bootstrap);
         let target = target(&mut runtime);
         let before = report(&runtime);

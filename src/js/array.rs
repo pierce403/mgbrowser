@@ -71,12 +71,12 @@ impl Runtime {
 
 // The unchanged 10,000-element cap bounds indices to four decimal digits. Keep a
 // fifth byte for a checked boundary, no heap key allocation or uncharged clone.
-struct IndexKey {
+pub(super) struct IndexKey {
     bytes: [u8; 5],
     start: usize,
 }
 impl IndexKey {
-    fn new(mut index: usize, budget: &mut Budget) -> Eval<Self> {
+    pub(super) fn new(mut index: usize, budget: &mut Budget) -> Eval<Self> {
         if index >= MAX_ARRAY || MAX_ARRAY > 100_000 {
             return Err(Fault::Fatal(
                 "JavaScript array index limit exhausted".into(),
@@ -97,7 +97,7 @@ impl IndexKey {
         }
         Ok(key)
     }
-    fn as_str(&self) -> &str {
+    pub(super) fn as_str(&self) -> &str {
         std::str::from_utf8(&self.bytes[self.start..]).expect("decimal ASCII index")
     }
 }

@@ -41,6 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 include_str!("../tests/fixtures/journey/home.html"),
             ),
             "/script-home" => ("200 OK", include_str!("../tests/fixtures/script/home.html")),
+            "/script-array-callbacks" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/array-callbacks.html"),
+            ),
             "/script-redirect" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/redirect.html"),

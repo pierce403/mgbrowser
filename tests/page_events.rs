@@ -82,6 +82,33 @@ fn listener_receiver_normalization_keeps_window_target_in_later_dispatch() {
 }
 
 #[test]
+fn borrowed_array_callbacks_keep_collection_identity_across_later_events() {
+    let (mut realm, init) = page(
+        r#"
+        var fields=document.querySelectorAll('input'),visits=0;
+        document.getElementById('link').onclick=function(event){
+            event.preventDefault();visits++;
+            var values=Array.prototype.map.call(fields,function(node,i,object){
+                if(object!==fields)throw 'lost snapshot identity';
+                return node.value+':'+visits;
+            });
+            document.getElementById('state').textContent=values.join(',');
+        };
+    "#,
+    );
+    let target = node(&init, "#link");
+    let first = click(&mut realm, target);
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
+    assert_eq!(first.outcome.click_canceled, Some(true));
+    assert_eq!(text(&first, "#state"), "original:1");
+    let second = click(&mut realm, target);
+    assert!(second.errors.is_empty(), "{:?}", second.errors);
+    assert_eq!(second.outcome.click_canceled, Some(true));
+    assert_eq!(second.default_action, DefaultAction::None);
+    assert_eq!(text(&second, "#state"), "original:2");
+}
+
+#[test]
 fn frozen_fixture_requires_real_later_handlers_and_retains_original_node_ids() {
     let (mut realm, init) = start(include_str!("fixtures/script/events.html"));
     let query = node(&init, "#query");

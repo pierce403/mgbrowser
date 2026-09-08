@@ -52,6 +52,9 @@ non-ASCII identifiers, `let`/`const`, arrows, classes, modules, templates,
 declarations. There is no garbage collector, Promise implementation, module loader or general event
 loop. Several Array methods are exposed but not
 implemented. The source is authoritative for individual builtin coverage.
+The seven-method callback family and borrowed methods on DOM collection snapshots
+are locally accepted under [ARRAY_CALLBACKS.md](ARRAY_CALLBACKS.md), including
+independent allocation/ordering tests and real worker/native/CDP form journeys.
 
 Known approximations remain: `arguments` is an unmapped snapshot rather than
 non-strict parameter aliasing; property descriptors and host coercion are partial;

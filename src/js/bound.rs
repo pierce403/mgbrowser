@@ -294,7 +294,7 @@ mod tests {
         assert!(size_of::<Object>() <= 128);
         assert_eq!(
             runtime.allocation_report().phases.bootstrap,
-            25_854 + 128 + "bind".len() as u64 + "Function.bind".len() as u64
+            25_854 + 128 + "bind".len() as u64 + "Function.bind".len() as u64 + 156
         );
         let property = runtime.objects[runtime.function_prototype]
             .properties

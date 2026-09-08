@@ -632,6 +632,25 @@ impl BrowserHost {
 }
 
 impl Host for BrowserHost {
+    fn has_indexed_property(&mut self, object: &str, index: usize) -> Result<bool, String> {
+        let suffix = object
+            .strip_prefix("collection:")
+            .ok_or("Indexed property inspection requires a DOM collection")?;
+        // Match only canonical handles issued by collection(); no new string,
+        // collection, node lookup or Get is needed to inspect a snapshot index.
+        if suffix.is_empty()
+            || (suffix.len() > 1 && suffix.starts_with('0'))
+            || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err("Invalid DOM collection handle".into());
+        }
+        let id = suffix
+            .parse::<usize>()
+            .map_err(|_| "Invalid DOM collection handle")?;
+        let snapshot = self.collections.get(id).ok_or("Stale DOM collection")?;
+        Ok(index < snapshot.len())
+    }
+
     fn string_assignment(&self, object: &str, key: &str) -> bool {
         if object == "location" {
             return key == "href";
@@ -1099,6 +1118,46 @@ mod tests {
         let allocations = reply.allocations.unwrap();
         assert!(allocations.is_valid());
         assert!(allocations.first_rejected.is_none());
+    }
+    #[test]
+    fn indexed_collection_presence_is_canonical_bounded_and_read_only() {
+        let (realm, reply) = initialize(Request {
+            url: "https://example.test/collection-presence".into(),
+            html: "<body><p>one</p><p>two</p><script>var entries=document.querySelectorAll('p');</script></body>".into(),
+        });
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        let mut realm = realm.unwrap();
+        assert_eq!(realm.host.collections.len(), 1);
+        let allocated = realm.host.allocated;
+        let report = realm.runtime.allocation_report();
+        for (index, expected) in [(0, true), (1, true), (2, false), (usize::MAX, false)] {
+            assert_eq!(
+                realm.host.has_indexed_property("collection:0", index),
+                Ok(expected)
+            );
+        }
+        for bad in [
+            "document",
+            "node:0",
+            "collection:",
+            "collection:+0",
+            "collection:00",
+            "collection:-1",
+            "collection:0x0",
+            "collection:1",
+            "collection:99999999999999999999999999999999999",
+        ] {
+            assert!(realm.host.has_indexed_property(bad, 0).is_err(), "{bad}");
+        }
+        assert_eq!(realm.host.allocated, allocated);
+        assert_eq!(realm.runtime.allocation_report(), report);
+        assert_eq!(realm.host.collections.len(), 1);
+        realm
+            .runtime
+            .execute("document.body.removeChild(entries[0]);", &mut realm.host)
+            .unwrap();
+        assert!(realm.host.has_indexed_property("collection:0", 0).unwrap());
+        assert!(realm.host.has_indexed_property("collection:0", 1).unwrap());
     }
     #[test]
     fn scripts_share_a_realm_and_load_callbacks_run() {

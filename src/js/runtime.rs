@@ -22,6 +22,8 @@ use std::rc::Rc;
 mod arguments;
 #[path = "array.rs"]
 mod array;
+#[path = "array_callbacks.rs"]
+mod array_callbacks;
 #[path = "bound.rs"]
 mod bound;
 #[path = "diagnostic.rs"]
@@ -221,6 +223,11 @@ impl Value {
 }
 
 pub trait Host {
+    /// Presence for borrowed indexed algorithms; undefined is not absence.
+    /// Hosts must opt in without invoking Get or changing iteration order.
+    fn has_indexed_property(&mut self, _object: &str, _index: usize) -> Result<bool, String> {
+        Err("Indexed property inspection is not implemented by this host".into())
+    }
     fn string_assignment(&self, _object: &str, _key: &str) -> bool {
         false
     }
@@ -694,9 +701,24 @@ impl Runtime {
                 2,
                 "Array",
                 &[
-                    "push", "pop", "shift", "unshift", "join", "toString", "slice", "concat",
-                    "indexOf", "includes", "reverse", "forEach", "map", "filter", "some", "every",
+                    "push",
+                    "pop",
+                    "shift",
+                    "unshift",
+                    "join",
+                    "toString",
+                    "slice",
+                    "concat",
+                    "indexOf",
+                    "includes",
+                    "reverse",
+                    "forEach",
+                    "map",
+                    "filter",
+                    "some",
+                    "every",
                     "reduce",
+                    "reduceRight",
                 ][..],
             ),
             (3, "Function", &["call", "apply", "bind", "toString"][..]),
@@ -3386,6 +3408,8 @@ impl Runtime {
             }
             "Array.isArray" => Ok(Value::Bool(self.is_array(&first))),
             "Array.concat" => self.array_concat(this, args, host),
+            "Array.forEach" | "Array.map" | "Array.filter" | "Array.some" | "Array.every"
+            | "Array.reduce" | "Array.reduceRight" => self.array_callback(name, this, args, host),
             "Function.call" => {
                 let receiver = if args.is_empty() {
                     Value::Undefined
@@ -5690,8 +5714,9 @@ mod tests {
         yes("var x=0;try{throw 3;}catch(e){x=e;}finally{x++;}x===4");
         yes("function f(){try{return 1;}finally{return 2;}}f()===2");
         yes("var caught=false;try{null.x;}catch(e){caught=true;}caught");
+        yes("var mapped=[].map(function(){});Array.isArray(mapped)&&mapped.length===0;");
         let error = Runtime::new()
-            .execute("[].map(function(){})", &mut TestHost::default())
+            .execute("[].unshift(1)", &mut TestHost::default())
             .unwrap_err();
         assert!(error.contains("Unsupported"));
     }
@@ -6206,7 +6231,7 @@ mod tests {
         );
         assert!(!runtime.is_fatal());
         let after = runtime.allocation_report();
-        assert_eq!(before.phases.bootstrap, 25_999);
+        assert_eq!(before.phases.bootstrap, 25_999 + 156); // real reduceRight property
         assert_eq!(after.phases.bootstrap, before.phases.bootstrap);
         assert!(after.phases.runtime > before.phases.runtime);
         let property = runtime.objects[0]

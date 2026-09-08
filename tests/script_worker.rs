@@ -104,6 +104,75 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 }
 
 #[test]
+fn restricted_child_callback_family_builds_the_frozen_dom_collection_form() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-array-callback-fixture".into(),
+        html: include_str!("fixtures/script/array-callbacks.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4194304);
+    println!("callback fixture allocation: {report:?}");
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Array callback local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert!(
+        doc.items
+            .iter()
+            .any(|item| matches!(item,mg_deps::document::Item::Input{name,..} if name=="q"))
+    );
+    assert!(doc.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(doc.nodes.iter().any(|node| node.tag == "button"
+        && node.attr("name") == Some("submit")
+        && node.attr("value") == Some("search")));
+    assert!(reply.html.contains("Verified q") && reply.html.contains("Verified source"));
+}
+
+#[test]
+fn restricted_child_callback_length_failure_is_fatal_before_indexed_effects() {
+    let request=mg_deps::js_browser::Request{
+        url:"https://example.test/local-array-callback-limit".into(),
+        html:"<body><p id=state>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{Array.prototype.forEach.call({0:7,length:10001},function(){document.title='callback effect';});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2);
+    assert!(
+        reply
+            .errors
+            .iter()
+            .all(|error| error.contains("JavaScript array limit exhausted"))
+    );
+    assert!(reply.navigation.is_none());
+    assert!(reply.html.contains("Prior effect"));
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert!(!doc.title.contains("effect"));
+    assert!(doc.forms.is_empty());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4194304);
+}
+
+#[test]
 fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/local-concat-worker-baseline".into(),
@@ -224,10 +293,10 @@ fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline
     assert!(report.first_rejected.is_none());
     // Frozen diagnostic baseline plus the separately measured event-host setup:
     // removeEventListener 178 + onclick accessor 306 + onsubmit accessor 310.
-    // The language Bootstrap and all source/AST/function/regex phases stay fixed.
+    // Array.reduceRight adds 156 measured Bootstrap bytes; all other phases stay fixed.
     const EVENT_HOST_SETUP: u64 = 178 + 306 + 310;
-    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP);
-    assert_eq!(report.phases.bootstrap, 25_999);
+    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP + 156);
+    assert_eq!(report.phases.bootstrap, 25_999 + 156);
     assert_eq!(report.phases.source, 1_531);
     assert_eq!(report.phases.ast, 23_299);
     assert_eq!(report.phases.function_code, 128);

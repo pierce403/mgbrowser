@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><title>Array callback fallback</title></head>
+<body><h1>Authored local array callback fixture</h1>
+<p id="state">Readable fallback; no form exists until real callbacks run.</p>
+<div id="labels"><span>q</span><span>source</span></div>
+<script>
+var sparse=[1,,3],mapped=sparse.map(function(v,i,o){
+  if(o!==sparse)throw 'Wrong callback object';return v+i;
+});
+if(mapped.length!==3 || 1 in mapped || mapped[2]!==5)throw 'Map contract';
+var selected=mapped.filter(function(v){return v>1;});
+if(selected.length!==1 || selected[0]!==5)throw 'Filter contract';
+if(!sparse.some(function(v){return v===3;}) || !sparse.every(function(v){return v>0;}))throw 'Predicate contract';
+if(sparse.reduce(function(a,v){return a+v;},0)!==4)throw 'Reduce contract';
+if(['a','b','c'].reduceRight(function(a,v){return a+v;},'')!=='cba')throw 'Right reduction contract';
+var labels=document.querySelectorAll('#labels span');
+var names=Array.prototype.map.call(labels,function(node,i,o){
+  if(o!==labels)throw 'Collection identity';return node.textContent;
+});
+if(names.join(',')!=='q,source')throw 'Collection map';
+var form=document.createElement('form');form.action='/search';form.method='get';
+names.forEach(function(name,i){
+  var input=document.createElement('input');input.name=name;
+  input.type=i===0?'text':'hidden';if(i===1)input.value='fixture';
+  form.appendChild(input);
+});
+var button=document.createElement('button');button.type='submit';
+button.name='submit';button.value='search';button.textContent='Search';
+form.appendChild(button);document.body.appendChild(form);
+Array.prototype.forEach.call(labels,function(node){node.textContent='Verified '+node.textContent;});
+document.title='Array callback local fixture';
+document.getElementById('state').textContent='All seven callbacks and borrowed DOM collection methods created this real form.';
+</script></body></html>

@@ -118,7 +118,7 @@ fn latch(runtime: &mut Runtime, error: &str, first: AllocationReport) {
 #[test]
 fn bootstrap_and_diagnostic_metadata_add_no_realm_storage() {
     let runtime = Runtime::new();
-    exact_report(&runtime, 25_999, [25_999, 0, 0, 0, 0, 0, 0]);
+    exact_report(&runtime, 25_999 + 156, [25_999 + 156, 0, 0, 0, 0, 0, 0]);
     assert_eq!(report(&runtime), report(&Runtime::new()));
 }
 
@@ -380,7 +380,8 @@ fn repeated_uncaught_diagnostics_do_not_accumulate_realm_context_or_taint_succes
 // published library: tmp/diagnostic-resource-baseline-probe.rs, source SHA256
 // 2b073c087d143aba56518f1f6828e0023dfcb9c5e59dfb4444cb77c46ef60333.
 // The original public-only probe passed once in91ms, including no heap-first
-// failure before the fuel checkpoint. No candidate-derived expectations.
+// failure before the fuel checkpoint. The later real reduceRight property adds
+// only 156 measured Bootstrap bytes; sources, other phases and fuel ticks remain.
 #[test]
 fn repeated_caught_faults_preserve_the_frozen_exclusive_phase_totals() {
     let mut runtime = Runtime::new();
@@ -388,7 +389,11 @@ fn repeated_caught_faults_preserve_the_frozen_exclusive_phase_totals() {
         runtime.execute(CAUGHT, &mut NoIo).unwrap(),
         Value::Number(128.0)
     );
-    exact_report(&runtime, 76_200, [25_999, 208, 3195, 0, 46_798, 0, 0]);
+    exact_report(
+        &runtime,
+        76_200 + 156,
+        [25_999 + 156, 208, 3195, 0, 46_798, 0, 0],
+    );
     let error = runtime
         .execute(
             "var saved;try{null.length;}catch(e){saved=e;}throw saved;",
@@ -410,7 +415,11 @@ fn normal_finally_keeps_context_but_preserves_the_frozen_phase_totals() {
         "expression",
     );
     assert_eq!(runtime.get_global("prior"), Value::Number(7.0));
-    exact_report(&runtime, 28_270, [25_999, 174, 1915, 0, 182, 0, 0]);
+    exact_report(
+        &runtime,
+        28_270 + 156,
+        [25_999 + 156, 174, 1915, 0, 182, 0, 0],
+    );
 }
 
 #[test]
@@ -420,7 +429,11 @@ fn fixed_caught_faults_do_not_move_the_frozen_fuel_exhaustion_checkpoint() {
     assert_eq!(error, "JavaScript fuel exhausted");
     assert_eq!(runtime.get_global("rounds"), Value::Number(128.0));
     assert_eq!(runtime.get_global("ticks"), Value::Number(21_462.0));
-    exact_report(&runtime, 76_934, [25_999, 230, 3737, 0, 46_968, 0, 0]);
+    exact_report(
+        &runtime,
+        76_934 + 156,
+        [25_999 + 156, 230, 3737, 0, 46_968, 0, 0],
+    );
     let first = report(&runtime);
     latch(&mut runtime, &error, first);
 }
@@ -431,7 +444,11 @@ fn public_empty_invoke_preserves_both_frozen_reports_and_the_265_byte_call() {
     let target = runtime
         .execute("(function(){null[void 0];});", &mut NoIo)
         .unwrap();
-    exact_report(&runtime, 27_264, [25_999, 156, 716, 128, 265, 0, 0]);
+    exact_report(
+        &runtime,
+        27_264 + 156,
+        [25_999 + 156, 156, 716, 128, 265, 0, 0],
+    );
     let before = report(&runtime);
     annotated(
         &invoke(&mut runtime, target, vec![]).unwrap_err(),
@@ -440,7 +457,11 @@ fn public_empty_invoke_preserves_both_frozen_reports_and_the_265_byte_call() {
         "<undefined>",
         "expression",
     );
-    exact_report(&runtime, 27_529, [25_999, 156, 716, 128, 530, 0, 0]);
+    exact_report(
+        &runtime,
+        27_529 + 156,
+        [25_999 + 156, 156, 716, 128, 530, 0, 0],
+    );
     assert_eq!(runtime_delta(before, report(&runtime)), 265);
 }
 

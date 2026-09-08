@@ -711,7 +711,7 @@ No new CDP commands or Runtime evaluation are exposed.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -750,5 +750,31 @@ The first error must retain its exact member block and append
 `[producer kind=missing-property key=length]`. The corrected second script creates
 the real form and the clients submit it, click the first local result and reach
 the fixture destination. This is not a Google result or a new CDP command.
-The preexisting `/script-diagnostics` fixture's exact allocation checkpoint stays
-58,273 bytes; its nullish local binding now appends `[producer kind=binding]`.
+At that increment the preexisting `/script-diagnostics` fixture's exact checkpoint
+stayed 58,273 bytes; its nullish local binding appends `[producer kind=binding]`.
+Array.reduceRight registration later adds exactly 156 Bootstrap bytes, making the
+current checkpoint 58,429; all non-Bootstrap phases remain unchanged.
+
+## Array callback and borrowed DOM collection fixture
+
+The independently authored `/script-array-callbacks` page requires all seven
+callback methods, then borrows Array.prototype methods on existing DOM collection
+snapshots to create a real form. On c858a6f its unchanged source retains readable
+fallback but creates no controls because Array.map is unsupported. It now creates
+one form with zero errors at 93,783 accepted bytes under the unchanged 4 MiB cap.
+See [ARRAY_CALLBACKS.md](ARRAY_CALLBACKS.md) for ordering, sparse/inherited values,
+mutation, Host presence and explicit limits; this does not add live collections.
+
+```sh
+cargo test --locked --test js_array_callbacks --test js_array_callback_limits --test js_dom --test page_events --test script_worker
+target/debug/mgbrowser http://127.0.0.1:7878/script-array-callbacks --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/array-callbacks-native
+target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-array-callbacks tmp/array-callbacks-cdp.png
+```
+
+Start the owned fixture server and debugging browser as documented above; 9222 is
+an example, while CI chooses a fresh port and keeps finite deadlines. Verify the
+Unicode query, hidden source and submit field, actual first local result and
+separate destination, not just a screenshot or created control. The current full
+local gate is 1,041 debug/928 selected release tests and 22 native/22 CDP journeys.
+Counts exclude the repeated default-stack child summary inside the resource suite.
+These fixtures prove local behavior only; the actual Google result gate remains open.

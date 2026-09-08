@@ -44,6 +44,74 @@ fn readable(document: &Document) {
 }
 
 #[test]
+fn callback_family_and_borrowed_collections_create_the_frozen_real_form() {
+    let reply = execute(Request {
+        url: URL.into(),
+        html: include_str!("fixtures/script/array-callbacks.html").into(),
+    });
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Array callback local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert!(
+        doc.items
+            .iter()
+            .any(|item| matches!(item, Item::Input{name,..} if name=="q"))
+    );
+    assert!(reply.html.contains("Verified q") && reply.html.contains("Verified source"));
+}
+
+#[test]
+fn borrowed_callbacks_preserve_collection_snapshots_and_detached_node_identity() {
+    let reply = page(
+        "",
+        "<div id=items><span class=entry>A</span><span class=entry>B</span></div>",
+        r#"
+        var entries=document.querySelectorAll('.entry'),seen='',original=entries[1];
+        Array.prototype.forEach.call(entries,function(node,i,object){
+            if(object!==entries)throw 'changed collection identity';
+            seen+=node.textContent;
+            if(i===0){
+                document.getElementById('items').removeChild(original);
+                var added=document.createElement('span');added.className='entry';
+                added.textContent='C';document.getElementById('items').appendChild(added);
+            }
+        });
+        var kept=Array.prototype.filter.call(entries,function(node){return node===original;});
+        var fresh=document.querySelectorAll('.entry');
+        document.getElementById('output').textContent=seen+'|'+entries.length+'|'+fresh.length+'|'+
+            kept[0].textContent+'|'+Array.prototype.map.call(fresh,function(node){return node.textContent;}).join('');
+    "#,
+    );
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(content(&rendered(&reply), "#output"), "AB|2|2|B|AC");
+    readable(&rendered(&reply));
+}
+
+#[test]
+fn collection_callback_error_preserves_earlier_effects_and_allows_a_later_script() {
+    let reply = execute(Request {
+        url: URL.into(),
+        html: "<body><p id=output>Old</p><span>A</span><span>B</span><script>var nodes=document.querySelectorAll('span');Array.prototype.forEach.call(nodes,function(node,i){document.getElementById('output').textContent=node.textContent;if(i===0)throw 'local callback stop';});document.title='must not run';</script><script>document.title='Later script ready';</script></body>".into(),
+    });
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.errors,
+        ["Inline script 1: Uncaught JavaScript exception: local callback stop"]
+    );
+    assert_eq!(content(&rendered(&reply), "#output"), "A");
+    assert_eq!(rendered(&reply).title, "Later script ready");
+}
+
+#[test]
 fn lookup_and_title_use_connected_nodes_only() {
     let reply = page(
         "",

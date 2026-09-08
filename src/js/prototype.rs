@@ -756,7 +756,10 @@ mod tests {
         assert!(size_of::<Property>() <= 128);
         let mut runtime = Runtime::new();
         // The real Function.prototype.bind property/value adds 145 bytes.
-        assert_eq!(runtime.allocation_report().phases.bootstrap, 25_854 + 145);
+        assert_eq!(
+            runtime.allocation_report().phases.bootstrap,
+            25_854 + 145 + 156
+        );
         eprintln!(
             "FUNCTION_PROTOTYPE_LAYOUT Function={} Code={} Object={} Property={} Bootstrap={}",
             size_of::<Function>(),

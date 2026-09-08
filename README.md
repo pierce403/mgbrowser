@@ -58,8 +58,11 @@ Non-member native calls now receive undefined correctly, while shared EventTarge
 listener methods apply their own nullish-to-Window rule. Host-only diagnostics
 also identify the immediate producer category without tracing private source or
 changing the observed expression's evaluation or resource costs.
-All 971 debug tests and 858 selected release checks pass locally, along with
-21 native and 21 external CDP journeys, including a handler-required interaction
+Seven bounded Array callback methods now preserve sparse/inherited entries,
+mutation, callback identity and reductions; borrowed methods work on existing
+DOM collection snapshots. See the [callback contract](docs/ARRAY_CALLBACKS.md).
+All 1,041 debug tests and 928 selected release checks pass locally, along with
+22 native and 22 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;
