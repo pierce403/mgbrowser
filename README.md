@@ -67,17 +67,21 @@ including direct/bound Number and Boolean construction. See the
 Fixed parser operators now use static Rust strings, removing their real heap
 buffers without changing grammar or limits. The [storage contract](docs/STATIC_OPERATORS.md)
 and runnable `measure_ast_storage` example record controlled ownership evidence.
-All 1,145 debug tests and 1,032 selected release checks pass locally, along with
-24 native and 24 external CDP journeys, including a handler-required interaction
+Bounded `Object.create` descriptors now support fresh data properties and genuine
+getters/setters with original receivers, typed keys and property flags. The
+[descriptor contract](docs/OBJECT_CREATE.md) and runnable `measure_object_create`
+example record independent semantic and actual-allocation evidence.
+All 1,193 debug tests and 1,080 selected release checks pass locally, along with
+25 native and 25 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
 
 The latest bounded Google attempt loads the homepage and submits its actual form
-through the retained session. Search still has no actionable results: first is
-unsupported `Object.create` property descriptors, then Ast 378,301 is rejected
-after 4,128,478 accepted bytes against the unchanged 4 MiB cap. The changed
+through the retained session. Search still has no actionable results: its first
+failure is Ast 377,733 rejected after 4,135,770 accepted bytes against the unchanged
+4 MiB cap. This response reports no unsupported descriptor error. The changed
 response is not a controlled benchmark or proof of an earlier error's cause. No first
 result or destination has been reached; further independently tested language,
 browser API and storage-ownership work is needed.
