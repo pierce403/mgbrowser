@@ -124,15 +124,16 @@ fn sparse_array_ast_admits_real_container_capacity_before_any_call() {
 }
 
 #[test]
-fn dense_and_sparse_capacity_transitions_receive_substantial_ast_credit() {
+fn dense_and_sparse_completed_capacity_transitions_pay_for_one_real_slot() {
     for holes in [false, true] {
         let (small_capacity, small_ast) = array_capacity_and_ast(4096, holes);
         let (large_capacity, large_ast) = array_capacity_and_ast(4097, holes);
-        assert!(large_capacity > small_capacity);
+        assert_eq!((small_capacity, large_capacity), (4096, 4097));
         let new_storage = (large_capacity - small_capacity) * std::mem::size_of::<Option<Expr>>();
-        assert!(new_storage >= 4096 * std::mem::size_of::<Option<Expr>>());
-        assert!(
-            large_ast - small_ast >= new_storage as u64,
+        assert_eq!(new_storage, std::mem::size_of::<Option<Expr>>());
+        assert_eq!(
+            large_ast - small_ast,
+            new_storage as u64,
             "holes={holes}: {small_ast}→{large_ast}, backing growth {new_storage}"
         );
     }
@@ -327,10 +328,28 @@ fn repeated_sparse_parse_eval_and_function_storage_fails_cumulatively() {
                 Err(error) => {
                     assert!(error.contains("allocation budget exhausted"), "{error}");
                     let first = report(&runtime);
-                    assert_eq!(first.first_rejected.unwrap().phase, AllocationPhase::Ast);
+                    let rejection = first.first_rejected.unwrap();
+                    assert_eq!(
+                        rejection.phase,
+                        if mode == 1 {
+                            AllocationPhase::Source
+                        } else {
+                            AllocationPhase::Ast
+                        }
+                    );
+                    if mode == 1 {
+                        // Seven compact trees fit; the eighth eval's real
+                        // UTF-8 source admission now precedes AST rejection.
+                        assert_eq!(rejection.requested_bytes, source.len() as u64);
+                        assert_eq!(first.phases.source, previous.phases.source);
+                        assert_eq!(
+                            first.phases.runtime - previous.phases.runtime,
+                            (2 * source.len() + 4) as u64
+                        );
+                    }
                     assert_eq!(first.phases.ast, previous.phases.ast);
                     assert_eq!(first.phases.function_code, previous.phases.function_code);
-                    assert!(successes >= 2);
+                    assert_eq!(successes, 7);
                     latched(&mut runtime, first, &error);
                     rejected = true;
                     break;
@@ -354,7 +373,9 @@ fn oversized_sparse_ast_rejects_before_prefix_hoisting_catch_or_finally() {
     let sparse = format!("[{}]", ",".repeat(10_000));
     let source = format!(
         "marker=1;function untouched(){{return [{}];}}try{{marker=2;}}catch(e){{caught=true;}}finally{{finalized=true;}}",
-        vec![sparse; 5].join(",")
+        // The original five-array source is preserved as a positive in
+        // js_ast_array_limits; eight real buffers still exceed the same cap.
+        vec![sparse; 8].join(",")
     );
     let error = runtime.execute(&source, &mut NoIo).unwrap_err();
     assert!(error.contains("allocation budget exhausted"), "{error}");

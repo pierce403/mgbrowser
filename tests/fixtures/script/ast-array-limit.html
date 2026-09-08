@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><title>Array AST capacity limit fallback</title></head><body>
+<p id="status">Array AST capacity limit fallback.</p>
+<script>
+var retained=Function('return['+Array(10000).join(',')+',,];');
+document.getElementById('status').textContent='Array AST compiled; limit pending';
+try{
+ retained();
+ document.getElementById('status').setAttribute('data-after','unexpected');
+}catch(error){
+ document.getElementById('status').setAttribute('data-caught','unexpected');
+}finally{
+ document.getElementById('status').setAttribute('data-finally','unexpected');
+}
+document.title='Unexpected array limit recovery';
+</script>
+<script>document.getElementById('status').setAttribute('data-later','unexpected');</script>
+</body></html>

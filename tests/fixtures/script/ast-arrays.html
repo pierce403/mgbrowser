@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><title>Array AST capacity fixture fallback</title></head><body>
+<p id="status">Array AST capacity fixture fallback.</p>
+<script>
+var retained=Function('i',Array(9).join('if(i--===0)return['+Array(6000).join(',')+',];'));
+var result=retained(3),order='';
+function mark(value){order+=value;return value;}
+var proof=[mark('a'),,mark('\ud83d\ude00'),function(){return result.length;}];
+if(result.length!==6000 || 0 in result || 5999 in result || proof.length!==4 || 1 in proof || order!=='a\ud83d\ude00' || proof[2].length!==2 || proof[3]()!==6000)throw 'Array AST proof failed';
+document.title='Array AST capacity local fixture';
+var form=document.createElement('form');form.method='GET';form.action='/search';
+var q=document.createElement('input');q.type='text';q.name='q';
+var source=document.createElement('input');source.type='hidden';source.name='source';source.value='fixture';
+var go=document.createElement('button');go.type='submit';go.textContent='Search';
+form.appendChild(q);form.appendChild(source);form.appendChild(go);document.body.appendChild(form);
+document.getElementById('status').textContent='Array AST capacity form ready';
+</script></body></html>

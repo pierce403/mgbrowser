@@ -112,6 +112,24 @@ enum Action {
 }
 
 impl<'a> Parser<'a> {
+    fn array_literal(&mut self, values: Vec<Option<Expr>>, depth: usize) -> Result<E, String> {
+        // Keep the existing node/depth rejection ahead of any finalization work.
+        self.node(depth)?;
+        // Only a completed literal loses builder slack. Consume the buffer,
+        // without cloning descendants; the public AST and capacity visitor stay
+        // unchanged. A shrink can reallocate, so parser-temporary/OS bounds still
+        // apply (docs/AST_ARRAYS.md), separately from retained realm accounting.
+        let values = if values.capacity() == values.len() {
+            values
+        } else {
+            values.into_boxed_slice().into_vec()
+        };
+        Ok(E {
+            value: Expr::Array(values),
+            depth,
+        })
+    }
+
     pub(super) fn expression_machine(&mut self, allow_in: bool, comma: bool) -> Result<E, String> {
         let nesting = self.nesting;
         let frames = self.expression_frames;
@@ -650,7 +668,7 @@ impl Machine {
                     values.push(None);
                 }
                 if parser.eat("]") {
-                    self.value = Some(parser.expr(Expr::Array(values), depth + 1)?);
+                    self.value = Some(parser.array_literal(values, depth + 1)?);
                 } else {
                     self.push(parser, Frame::ArrayNext { values, depth })?;
                     self.child(parser, true, false)?;
@@ -664,7 +682,7 @@ impl Machine {
                     self.push(parser, Frame::ArrayStart { values, depth })?;
                 } else {
                     parser.expect("]")?;
-                    self.value = Some(parser.expr(Expr::Array(values), depth + 1)?);
+                    self.value = Some(parser.array_literal(values, depth + 1)?);
                 }
             }
             Frame::ObjectStart { values, depth } => {
@@ -719,6 +737,208 @@ impl Machine {
 mod tests {
     use super::*;
     use crate::js::syntax::{MAX_NODES, is_limit_error};
+
+    #[test]
+    fn completed_array_moves_payloads_and_preserves_nested_storage() {
+        use std::{mem::size_of, rc::Rc};
+
+        assert_eq!(size_of::<Vec<Option<Expr>>>(), 3 * size_of::<usize>());
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!((size_of::<Expr>(), size_of::<Option<Expr>>()), (56, 56));
+
+        let mut text = Vec::with_capacity(17);
+        text.extend([0xd800, 0, 0xdc00]);
+        let text_storage = (text.as_ptr(), text.capacity());
+        let mut nested = Vec::with_capacity(19);
+        nested.extend([None, Some(Expr::Number(-0.0))]);
+        let nested_storage = (nested.as_ptr(), nested.capacity());
+        let params: Rc<[String]> = vec!["parameter".to_owned()].into();
+        let body: Rc<[crate::js::Stmt]> = vec![crate::js::Stmt::Return(None)].into();
+        let shared_storage = (params.as_ptr(), body.as_ptr());
+        let boxed = Box::new(Expr::Number(42.0));
+        let boxed_storage = &*boxed as *const Expr;
+        let mut values = Vec::with_capacity(16);
+        values.extend([
+            Some(Expr::String(text)),
+            Some(Expr::Array(nested)),
+            Some(Expr::Function {
+                name: None,
+                params,
+                body,
+            }),
+            Some(Expr::Unary {
+                op: "-",
+                expr: boxed,
+            }),
+            None,
+        ]);
+        let mut parser = Parser::new("", MAX_TOKENS);
+        let completed = parser.array_literal(values, 4).unwrap();
+        assert_eq!((completed.depth, parser.nodes), (4, 1));
+        let Expr::Array(values) = completed.value else {
+            panic!("array expected")
+        };
+        assert_eq!((values.len(), values.capacity()), (5, 5));
+        let Some(Expr::String(text)) = &values[0] else {
+            panic!("string expected")
+        };
+        assert_eq!((text.as_ptr(), text.capacity()), text_storage);
+        assert_eq!(text, &[0xd800, 0, 0xdc00]);
+        let Some(Expr::Array(nested)) = &values[1] else {
+            panic!("nested array expected")
+        };
+        assert_eq!((nested.as_ptr(), nested.capacity()), nested_storage);
+        assert!(nested[0].is_none());
+        let Some(Expr::Number(number)) = &nested[1] else {
+            panic!("number expected")
+        };
+        assert_eq!(number.to_bits(), (-0.0f64).to_bits());
+        let Some(Expr::Function { params, body, .. }) = &values[2] else {
+            panic!("function expected")
+        };
+        assert_eq!((params.as_ptr(), body.as_ptr()), shared_storage);
+        assert_eq!((Rc::strong_count(params), Rc::strong_count(body)), (1, 1));
+        let Some(Expr::Unary { expr, .. }) = &values[3] else {
+            panic!("unary expected")
+        };
+        assert_eq!(&**expr as *const Expr, boxed_storage);
+        assert!(values[4].is_none());
+
+        // Empty spare storage is released; already exact storage moves intact.
+        for (length, capacity) in [(0, 0), (0, 7), (3, 3)] {
+            let mut values = Vec::with_capacity(capacity);
+            values.resize_with(length, || None);
+            let before = values.as_ptr();
+            let completed = parser.array_literal(values, 1).unwrap();
+            let Expr::Array(values) = completed.value else {
+                panic!("array expected")
+            };
+            assert_eq!((values.len(), values.capacity()), (length, length));
+            if length == capacity {
+                assert_eq!(values.as_ptr(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn array_closing_paths_preserve_nodes_depth_and_pending_machine_state() {
+        for (source, length, nodes, depth) in [
+            ("[]", 0, 1, 1),
+            ("[,]", 1, 1, 1),
+            ("[1]", 1, 2, 2),
+            ("[1,]", 1, 2, 2),
+            ("[1,,]", 2, 2, 2),
+            ("[[1],,]", 2, 3, 3),
+        ] {
+            let mut parser = Parser::new(source, MAX_TOKENS);
+            parser.nodes = 11;
+            parser.nesting = 5;
+            parser.expression_frames = 19;
+            parser.expression_steps = 23;
+            let completed = parser.expression(true).unwrap();
+            let Expr::Array(values) = completed.value else {
+                panic!("{source}")
+            };
+            assert_eq!(
+                (values.len(), values.capacity()),
+                (length, length),
+                "{source}"
+            );
+            assert_eq!(
+                (completed.depth, parser.nodes),
+                (depth, 11 + nodes),
+                "{source}"
+            );
+            assert_eq!(
+                (parser.nesting, parser.expression_frames),
+                (5, 19),
+                "{source}"
+            );
+            assert!(parser.expression_steps > 23, "{source}");
+            assert!(parser.end(), "{source}");
+        }
+        for (source, admitted_children) in [("[1;]", 1), ("[1,;]", 1), ("[[1],;]", 2)] {
+            let mut parser = Parser::new(source, MAX_TOKENS);
+            parser.nodes = 11;
+            parser.nesting = 5;
+            parser.expression_frames = 19;
+            parser.expression_steps = 23;
+            let error = parser.expression(true).err().unwrap();
+            assert!(!is_limit_error(&error), "{source}: {error}");
+            assert_eq!(parser.nodes, 11 + admitted_children, "{source}");
+            assert_eq!(
+                (parser.nesting, parser.expression_frames),
+                (5, 19),
+                "{source}"
+            );
+            assert!(parser.expression_steps > 23, "{source}");
+        }
+    }
+
+    #[test]
+    fn array_finalization_retains_node_depth_admission_and_first_errors() {
+        // A cached lexical error does not supersede either structural guard;
+        // depth continues to win when both resource guards would reject.
+        for (nodes, depth, expected) in [
+            (
+                MAX_NODES - 1,
+                MAX_DEPTH + 1,
+                "AST depth limit exceeded at byte 0",
+            ),
+            (
+                MAX_NODES,
+                MAX_DEPTH + 1,
+                "AST depth limit exceeded at byte 0",
+            ),
+            (MAX_NODES, MAX_DEPTH, "AST node limit exceeded at byte 0"),
+        ] {
+            let mut parser = Parser::new("@", MAX_TOKENS);
+            parser.nodes = nodes;
+            let error = parser
+                .array_literal(Vec::with_capacity(7), depth)
+                .err()
+                .unwrap();
+            assert_eq!(error, expected);
+            assert!(is_limit_error(&error));
+            assert_eq!(parser.nodes, nodes);
+            assert_eq!(
+                (
+                    parser.nesting,
+                    parser.expression_frames,
+                    parser.expression_steps
+                ),
+                (0, 0, 0)
+            );
+        }
+        let mut parser = Parser::new("", MAX_TOKENS);
+        parser.nodes = MAX_NODES - 1;
+        let completed = parser
+            .array_literal(Vec::with_capacity(7), MAX_DEPTH)
+            .unwrap();
+        assert_eq!((completed.depth, parser.nodes), (MAX_DEPTH, MAX_NODES));
+        let Expr::Array(values) = completed.value else {
+            panic!("array expected")
+        };
+        assert_eq!((values.len(), values.capacity()), (0, 0));
+
+        // Both real closes encounter the invalid next token before attempting
+        // the array node. Rejection must still report that node, not the token.
+        for source in ["[1]@", "[1,]@"] {
+            let mut parser = Parser::new(source, MAX_TOKENS);
+            parser.nodes = MAX_NODES - 1;
+            parser.nesting = 5;
+            parser.expression_frames = 19;
+            parser.expression_steps = 23;
+            let error = parser.expression(true).err().unwrap();
+            assert_eq!(
+                error,
+                format!("AST node limit exceeded at byte {}", source.len() - 1)
+            );
+            assert_eq!(parser.nodes, MAX_NODES);
+            assert_eq!((parser.nesting, parser.expression_frames), (5, 19));
+            assert!(parser.expression_steps > 23);
+        }
+    }
 
     #[test]
     fn grouping_uses_logical_depth_without_retaining_ast_wrappers() {

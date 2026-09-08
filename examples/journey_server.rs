@@ -53,6 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/object-create.html"),
             ),
+            "/script-ast-arrays" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/ast-arrays.html"),
+            ),
             "/script-array-callbacks" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/array-callbacks.html"),

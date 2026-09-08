@@ -44,6 +44,52 @@ fn readable(document: &Document) {
 }
 
 #[test]
+fn completed_array_ast_storage_allows_the_frozen_real_form() {
+    let html = include_str!("fixtures/script/ast-arrays.html");
+    assert!(
+        document::parse_with_scripting(html, URL, true)
+            .forms
+            .is_empty()
+    );
+    let reply = execute(Request {
+        url: URL.into(),
+        html: html.into(),
+    });
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = rendered(&reply);
+    assert_eq!(doc.title, "Array AST capacity local fixture");
+    assert_eq!(content(&doc, "#status"), "Array AST capacity form ready");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert_eq!(doc.forms[0].method, "get");
+    assert_eq!(
+        doc.forms[0].fields,
+        [("source".to_owned(), "fixture".to_owned())]
+    );
+    assert!(doc.items.iter().any(|item| matches!(item,
+        Item::Input { form: 0, name, value, kind }
+            if name == "q" && value.is_empty() && kind == "text")));
+    assert!(doc.items.iter().any(|item| matches!(item,
+        Item::Submit { form: 0, name, value, label }
+            if name.is_empty() && value.is_empty() && label == "Search")));
+    let hidden = doc
+        .query_selector(0, "input[name=source]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(doc.nodes[hidden].attr("type"), Some("hidden"));
+    assert_eq!(doc.nodes[hidden].attr("value"), Some("fixture"));
+}
+
+#[test]
 fn object_create_descriptors_build_the_frozen_real_form() {
     let html = include_str!("fixtures/script/object-create.html");
     assert!(

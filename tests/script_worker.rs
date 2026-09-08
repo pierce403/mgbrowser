@@ -64,6 +64,107 @@ fn run(args: &[&str], input: &[u8], timeout: Duration) -> (ExitStatus, String, S
 }
 
 #[test]
+fn restricted_child_completed_array_ast_storage_builds_the_frozen_form() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-ast-arrays".into(),
+        html: include_str!("fixtures/script/ast-arrays.html").into(),
+    };
+    assert!(
+        mg_deps::document::parse_with_scripting(&request.html, &request.url, true)
+            .forms
+            .is_empty()
+    );
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("array AST fixture allocation: {report:?}");
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Array AST capacity local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    assert_eq!(doc.forms[0].method, "get");
+    assert_eq!(
+        doc.forms[0].fields,
+        [("source".to_owned(), "fixture".to_owned())]
+    );
+    assert!(doc.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { form: 0, name, value, kind }
+            if name == "q" && value.is_empty() && kind == "text")));
+    assert!(doc.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Submit { form: 0, name, value, label }
+            if name.is_empty() && value.is_empty() && label == "Search")));
+    let hidden = doc
+        .query_selector(0, "input[name=source]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(doc.nodes[hidden].attr("type"), Some("hidden"));
+    assert_eq!(doc.nodes[hidden].attr("value"), Some("fixture"));
+    let state = doc.query_selector(0, "#status").unwrap().unwrap();
+    let text: String = doc.nodes[state]
+        .children
+        .iter()
+        .map(|id| doc.nodes[*id].text.as_str())
+        .collect();
+    assert_eq!(text, "Array AST capacity form ready");
+}
+
+#[test]
+fn restricted_child_compiled_array_ast_preserves_the_runtime_length_limit() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/script-ast-array-limit".into(),
+        html: include_str!("fixtures/script/ast-array-limit.html").into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(
+        reply.errors,
+        [
+            "Inline script 1: JavaScript array limit exhausted",
+            "Inline script 2: JavaScript array limit exhausted",
+        ]
+    );
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("array AST runtime-limit allocation: {report:?}");
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Array AST capacity limit fallback");
+    assert!(doc.forms.is_empty());
+    assert!(
+        doc.nodes
+            .iter()
+            .all(|node| !matches!(node.tag.as_str(), "form" | "input" | "button"))
+    );
+    let state = doc.query_selector(0, "#status").unwrap().unwrap();
+    let text: String = doc.nodes[state]
+        .children
+        .iter()
+        .map(|id| doc.nodes[*id].text.as_str())
+        .collect();
+    // Compilation completed before execution reached the unchanged 10,000-slot cap.
+    assert_eq!(text, "Array AST compiled; limit pending");
+    for name in ["data-after", "data-caught", "data-finally", "data-later"] {
+        assert_eq!(doc.nodes[state].attr(name), None, "unexpected {name}");
+    }
+}
+
+#[test]
 fn restricted_child_object_create_descriptors_build_the_frozen_form() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/object-create".into(),
@@ -1361,9 +1462,19 @@ fn restricted_child_sparse_ast_capacity_stays_cumulative_and_fatal() {
     assert!(report.is_valid());
     assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
     let rejected = report.first_rejected.unwrap();
-    assert_eq!(rejected.phase, mg_deps::js::runtime::AllocationPhase::Ast);
-    assert!(rejected.requested_bytes >= 16_384 * 56);
-    assert!(report.phases.ast >= 2 * 16_384 * 56);
+    // Three compact 9,999-hole bodies now fit. The fourth builder's real
+    // 10,000-slot Runtime array rejects before another source/AST is created.
+    // Preserve this exact historical input and every fallback/latch assertion.
+    assert_eq!(
+        rejected.phase,
+        mg_deps::js::runtime::AllocationPhase::Runtime
+    );
+    assert_eq!(rejected.requested_bytes, 640_000);
+    assert_eq!(report.accepted_bytes, 3_848_422);
+    assert_eq!(report.phases.ast, 1_686_006);
+    assert_eq!(report.phases.source, 30_840);
+    assert_eq!(report.phases.function_code, 411);
+    assert_eq!(report.phases.runtime, 2_104_285);
     let first = reply.errors[0].split_once(": ").unwrap().1;
     assert!(first.contains("JavaScript allocation budget exhausted"));
     assert_eq!(reply.errors[1].split_once(": ").unwrap().1, first);
