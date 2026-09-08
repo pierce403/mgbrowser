@@ -830,6 +830,10 @@ impl Runtime {
     pub fn global_object(&self) -> Value {
         Value::Object(0)
     }
+    /// Host coordinators may stop later callbacks without inspecting error text.
+    pub fn is_fatal(&self) -> bool {
+        self.fatal.is_some()
+    }
     /// Host inspection returns a copy; it does not execute JS coercions/getters.
     pub fn get_global(&self, name: &str) -> Value {
         self.objects[0]
@@ -856,6 +860,61 @@ impl Runtime {
             .retain(|(existing, _, _)| existing != name);
         self.global_setters
             .push((name.into(), object.into(), key.into()));
+    }
+    /// Install an explicit host-backed global accessor. This does not expose a
+    /// general accessor-definition API to scripts or change ordinary globals.
+    pub fn set_global_accessor(&mut self, name: &str, object: &str, key: &str, getter: Value) {
+        if self.fatal.is_some() {
+            return;
+        }
+        if !getter.callable() {
+            self.fatal = Some("Host global getter must be callable".into());
+            return;
+        }
+        self.set_global_setter(name, object, key);
+        if self.fatal.is_some() {
+            return;
+        }
+        let result = self.put_own(0, name, getter, true);
+        if let Err(error) = result {
+            self.fatal = Some(fault_text(error));
+            return;
+        }
+        let property = self.objects[0]
+            .properties
+            .iter_mut()
+            .find(|p| p.key == name)
+            .unwrap();
+        property.getter = true;
+        property.writable = true; // The paired host setter handles writes.
+        property.configurable = false;
+    }
+    /// Invoke a retained callback without an uncharged clone in the host. The
+    /// callback's actual payload copy is admitted once, before copying it;
+    /// receiver/arguments retain the normal public-ingress policy.
+    pub fn invoke_retained(
+        &mut self,
+        callee: &Value,
+        this: Value,
+        args: Vec<Value>,
+        host: &mut impl Host,
+    ) -> Result<Value, String> {
+        if let Some(error) = &self.fatal {
+            return Err(error.clone());
+        }
+        let result = (|| {
+            self.admit(callee)?;
+            self.admit(&this)?;
+            for argument in &args {
+                self.admit(argument)?;
+            }
+            let callee = self.budget.copy(callee)?;
+            self.budget.allocate(
+                value_bytes(&this).saturating_add(args.iter().map(value_bytes).sum::<usize>()),
+            )?;
+            self.call(callee, this, args, None, host)
+        })();
+        self.finish(result)
     }
     pub fn invoke(
         &mut self,
@@ -1366,6 +1425,22 @@ impl Runtime {
         self.materialize_empty_arguments(environment, index)?;
         self.budget
             .copy(&self.environments[environment].bindings[index].value)
+    }
+    fn binding_value(
+        &mut self,
+        environment: usize,
+        name: &str,
+        host: &mut impl Host,
+    ) -> Eval<Value> {
+        if environment == 0
+            && self.objects[0]
+                .properties
+                .iter()
+                .any(|p| p.key == name && p.getter)
+        {
+            return self.get(&Value::Object(0), name, host);
+        }
+        self.binding(environment, name)
     }
     fn define(&mut self, environment: usize, name: &str, value: Value) -> Eval<()> {
         if environment == 0 {
@@ -2034,7 +2109,7 @@ impl Runtime {
                 if self.lookup(*environment, name).is_none() {
                     return Err(exception(format!("ReferenceError: {name} is not defined")));
                 }
-                self.binding(*environment, name)
+                self.binding_value(*environment, name, host)
             }
             Reference::Property(object, key) => self.get_key(object, key, host),
         }
@@ -2086,7 +2161,7 @@ impl Runtime {
                 self.regexp_object(regex)
             }
             Expr::Ident(name) => match self.lookup(environment, name) {
-                Some(environment) => self.binding(environment, name),
+                Some(environment) => self.binding_value(environment, name, host),
                 None => Err(exception(format!("ReferenceError: {name} is not defined"))),
             },
             Expr::This => self.copy(this),
@@ -5982,5 +6057,93 @@ mod tests {
             assert_eq!(runtime.budget.evaluation_entries, 0);
             assert_eq!(runtime.budget.calls, 0);
         }
+    }
+
+    #[test]
+    fn retained_host_invocation_preserves_normal_copy_costs_and_preflights_failures() {
+        let mut normal = Runtime::new();
+        let mut retained = Runtime::new();
+        let mut first = TestHost::default();
+        let mut second = TestHost::default();
+        let callback = Value::Native("Math.abs".into());
+        let a = normal
+            .invoke(
+                callback.clone(),
+                Value::Undefined,
+                vec![Value::Number(-42.)],
+                &mut first,
+            )
+            .unwrap();
+        let b = retained
+            .invoke_retained(
+                &callback,
+                Value::Undefined,
+                vec![Value::Number(-42.)],
+                &mut second,
+            )
+            .unwrap();
+        assert!(matches!((a, b), (Value::Number(42.), Value::Number(42.))));
+        assert_eq!(normal.allocation_report(), retained.allocation_report());
+        assert_eq!(normal.budget.fuel, retained.budget.fuel);
+        let remaining = MAX_HEAP - retained.budget.allocated - 3;
+        retained.budget.allocate(remaining).unwrap();
+        let before_fuel = retained.budget.fuel;
+        assert!(
+            retained
+                .invoke_retained(&callback, Value::Undefined, vec![], &mut second)
+                .is_err()
+        );
+        assert!(retained.is_fatal());
+        assert_eq!(
+            retained.budget.fuel, before_fuel,
+            "callback copy must reject before entering it"
+        );
+        assert_eq!(
+            retained
+                .allocation_report()
+                .first_rejected
+                .unwrap()
+                .requested_bytes,
+            8
+        );
+        let report = retained.allocation_report();
+        assert!(retained.execute("throw 'later'", &mut second).is_err());
+        assert_eq!(retained.allocation_report(), report);
+        assert_eq!(retained.budget.calls, 0);
+        assert_eq!(retained.budget.evaluation_entries, 0);
+    }
+
+    #[test]
+    fn host_accessor_registration_keeps_default_runtime_bootstrap_unchanged() {
+        let mut runtime = Runtime::new();
+        let mut host = TestHost::default();
+        let before = runtime.allocation_report();
+        runtime.set_global_accessor(
+            "setting",
+            "target",
+            "setting",
+            Value::Native("host.get.setting".into()),
+        );
+        assert!(!runtime.is_fatal());
+        let after = runtime.allocation_report();
+        assert_eq!(before.phases.bootstrap, 25_999);
+        assert_eq!(after.phases.bootstrap, before.phases.bootstrap);
+        assert!(after.phases.runtime > before.phases.runtime);
+        let property = runtime.objects[0]
+            .properties
+            .iter()
+            .find(|p| p.key == "setting")
+            .unwrap();
+        assert!(property.getter && property.writable && !property.configurable);
+        assert!(
+            runtime
+                .execute("function setting(){}", &mut host)
+                .unwrap_err()
+                .contains("conflicts with host global")
+        );
+        assert!(
+            !runtime.is_fatal(),
+            "ordinary declaration error must stay recoverable"
+        );
     }
 }

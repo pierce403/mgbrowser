@@ -47,14 +47,18 @@ form, title and startup status; no form controls are present outside its script.
 The worker executes a small non-strict language subset, including bounded
 `for-in`/`switch`, regular expressions and explicit-state expression parsing,
 plus startup DOM callbacks,
-then returns the changed document. It has no external script loading, persistent
-realm, general event loop/timers, fetch/XHR, or script cookie access. Most modern
+then retains the realm for bounded real later click/submit handlers. It has no
+external script loading, general event loop/timers, fetch/XHR, or script cookie access. Most modern
 sites will still fail. [JAVASCRIPT.md](JAVASCRIPT.md) records exact capabilities,
 limits and known semantic approximations.
 
 Every script document uses a fresh worker with an empty environment, closed
-inherited descriptors, Linux seccomp/resource limits and a two-second parent
-deadline. Unsupported isolation/platforms refuse execution. A worker failure or
+inherited descriptors, Linux seccomp/resource limits and a two-second TOTAL active
+parent budget across startup and later input, not a fresh deadline per click.
+Retained sessions additionally have a 300-second absolute lifetime, 64 transactions
+including initialization, and a 32 MiB combined wire budget. No automatic replay or
+restart renews these bounds; see [the full session contract](PAGE_SESSIONS.md).
+Unsupported isolation/platforms refuse execution. A worker failure or
 rejected document retains the original page, including `noscript`; a valid partial
 snapshot can still be applied while showing script errors. The status bar and
 stderr distinguish completed, partial, rejected and failed worker results.
@@ -570,6 +574,16 @@ it completed two scripts with three errors and zero items/forms. Exit 2 and an
 inspected blank search frame leave the result/first-link/destination gate open.
 There was no live-source inspection, adaptation or second attempt.
 
+The post-retained-event checkpoint completes two later activations on Google's
+actual homepage and submits its real form with verified TLS. Homepage HTTP 200
+has 26 items/one form, five completed scripts/five errors and 2,429,689 accepted
+bytes at startup; the retained activations raise that total to 2,432,977. Search
+HTTP 200 still has zero items/forms, two completed scripts/three errors: the same
+undefined method-call target, then Source 27,142 rejected after 4,192,013 accepted
+bytes against 4,194,304. Exit 2/JOURNEY_INCOMPLETE and an inspected blank frame:
+no result or destination. There was one bounded attempt, without source inspection
+or adaptation. This is an observed response, not a controlled performance comparison.
+
 ## Browser automation
 
 Enable the experimental Chrome DevTools Protocol subset explicitly:
@@ -665,10 +679,39 @@ fixture/browser processes you started.
 
 ## Validation
 
+For retained interaction, start `journey_server` and use the authored
+`/script-events` fixture. Its valid destination cannot be reached without actual
+later handlers and retained state:
+
+```sh
+target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts \
+  --smoke-events --exit-after-smoke --evidence-dir tmp/event-journey/native
+```
+
+The native application-handler driver enters Unicode text, activates a canceled
+anchor, cancels the first submit, edits the moved input, then submits proof on the
+second attempt and clicks the handler-updated result. It is not independent
+physical mouse/keyboard input. The external client runs the same acceptance through
+the public protocol against an owned browser with remote debugging enabled:
+
+```sh
+target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-events tmp/event-journey/destination.png
+cargo test --locked --test page_events --test page_projection --test script_session
+target/debug/mgbrowser --script-session-selftest
+```
+
+CI also requires zero `/event-trap` requests and exactly two successful event
+search/destination requests across native and CDP runs. Canceled updates emit
+DOM.documentUpdated and invalidate old CDP node IDs without a fake page load.
+Selftests cover real restricted children and manager cleanup; simulated elapsed
+validation charges test cumulative accounting, not two seconds of real CPU work.
+No new CDP commands or Runtime evaluation are exposed.
+
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies

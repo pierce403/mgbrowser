@@ -68,6 +68,19 @@ Keyboard modifiers support Ctrl=2 and Shift=8; Ctrl+A is the sole control shortc
 
 Text commands preflight the resulting editable value, which may hold at most 8191 UTF-8 bytes. A selected value is replaced rather than counted toward retained text. Invalid control characters and excess size return an error without modifying either text or selection. This limit applies to the resulting value, not a separate 16 KiB insertion allowance.
 
+With `--enable-scripts`, real activations now reach retained click/submit handlers
+under [the page-session contract](PAGE_SESSIONS.md). Input acknowledgment means the
+activation was queued, not that its asynchronous handler/default has finished.
+One pending activation is allowed; immediate admission failures (including busy,
+known expired or failed sessions) return -32000. A queued activation can still
+fail during worker framing, execution or reply validation; that closes the
+session without publishing a projection or allowing an unanswered default.
+There is no asynchronous Input-completion event in this subset. Editing can
+continue while a reply is pending; version acknowledgments
+cannot erase newer typing. An accepted event snapshot invalidates all CDP node IDs
+and emits only DOM.documentUpdated, not a page load. Requery before further DOM
+operations. This adds no commands, remote execution context or Runtime evaluation.
+
 Enabled Page sessions receive `frameStartedLoading`, `frameNavigated`, `domContentEventFired`, `loadEventFired`, and `frameStoppedLoading` as the corresponding navigation work occurs. Transport failures omit the two content/load completion events. DOM sessions receive `documentUpdated` when their node references become stale. Attach/detach events describe actual session changes. Navigation errors stay distinguishable from successful content delivery. Event timestamps use monotonic seconds; load events cannot establish that unsupported scripts or images completed.
 
 Unknown methods return `-32601`; invalid or unsupported parameters return `-32602`. Invalidated handles and unavailable page operations return a protocol error with a useful explanation. Commands with no return fields still reply with an empty `result` object. A response must contain either `result` or `error`, never both.
@@ -100,7 +113,7 @@ The full-protocol direction is staged around real browser capabilities:
 
 1. Freeze the advertised subset and add independent protocol/client fixtures. Validate every advertised method, optional parameter, result, event, and error path. Pin a reviewed upstream schema revision for future changes; tip-of-tree changes are not automatically adopted.
 2. Add real frame/target lifecycles, navigation history, cancellation, Network request/response/error events, resource bodies, and more accurate layout/DOM inspection as their browser implementations mature.
-3. Expand the project's own Rust JavaScript engine and web bindings to persistent realms, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Execution and isolation tests precede compatibility claims. The current per-document worker can project real mutations but cannot stand in for a retained Runtime context.
+3. Expand the project's own Rust JavaScript engine and web bindings, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Internal retained page realms now support bounded later activation, but expose no remote Runtime context. Execution and isolation tests precede compatibility claims.
 4. Connect actual style/compositing and platform features to CSS, DOMSnapshot, Accessibility, Emulation, storage, workers, profiling, tracing, and the remaining relevant domains. Maintain an explicit inventory of unsupported platform-specific features.
 5. Run pinned external clients and DevTools frontend versions against documented workflows. Claim compatibility per client/version/workflow only after observed success; retain the full protocol as the longer-term goal.
 

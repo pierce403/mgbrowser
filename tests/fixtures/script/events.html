@@ -1,0 +1,41 @@
+<!doctype html><html><head><title>Retained event fixture</title></head><body>
+<h1>Authored post-load event fixture</h1>
+<p id="state">ready</p>
+<a id="cancel" href="/event-trap">Cancel this link</a>
+<form id="search" action="/event-trap" method="get">
+<input id="query" name="q" type="text">
+<button id="submit" type="submit" name="submit" value="events">Search</button>
+</form>
+<div id="parking"></div>
+<script>
+var starts = 0;
+starts++;
+(function () {
+ var count = 0, clicked = false;
+ var form = document.getElementById('search');
+ var query = document.getElementById('query');
+ var state = document.getElementById('state');
+ document.getElementById('cancel').onclick = function (event) {
+  event.preventDefault();
+  if (query.value !== 'Rust & café') throw 'Typed value did not reach the realm';
+  clicked = true;
+  state.textContent = 'link canceled';
+ };
+ form.onsubmit = function (event) {
+  count++;
+  if (!clicked || starts !== 1) { event.preventDefault(); throw 'Retained state failed'; }
+  if (count === 1) {
+   event.preventDefault();
+   document.getElementById('parking').appendChild(query);
+   form.appendChild(query);
+   var proof = document.createElement('input');
+   proof.id = 'proof'; proof.type = 'hidden'; proof.name = 'proof';
+   proof.value = 'pending'; form.appendChild(proof);
+   state.textContent = 'first submit canceled';
+  } else if (count === 2 && query.value === 'Rust & café again') {
+   document.getElementById('proof').value = 'retained-1-2';
+   form.action = '/event-search';
+  } else { event.preventDefault(); throw 'Unexpected activation'; }
+ };
+})();
+</script></body></html>

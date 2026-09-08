@@ -4,10 +4,11 @@ mod script_worker;
 use mg_deps::{
     document::{self, Document, Item},
     net,
+    page_session::{ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply},
     paint::{Canvas, Fonts},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     sync::mpsc,
     thread,
@@ -33,7 +34,7 @@ enum Action {
     Reload,
     Input(usize),
     Submit(usize),
-    Link(String),
+    Link { node: usize, href: String },
 }
 #[derive(Clone)]
 struct Hit {
@@ -57,7 +58,18 @@ enum Focus {
 struct Loaded {
     generation: u64,
     result: Result<net::Response, String>,
-    script: Option<Result<mg_deps::js_browser::Reply, String>>,
+    script: Option<Result<ScriptLoad, String>>,
+}
+struct ScriptLoad {
+    session: Option<script_worker::Session>,
+    reply: SessionReply,
+}
+struct PendingEvent {
+    generation: u64,
+    session_id: u64,
+    sequence: u64,
+    revision: u64,
+    input: SessionInput,
 }
 struct App {
     session: net::Session,
@@ -75,8 +87,16 @@ struct App {
     cdp_enabled: bool,
     cdp_events: Vec<cdp_browser::Event>,
     scripts_enabled: bool,
+    child_pool: script_worker::ChildPool,
+    page_session: Option<script_worker::Session>,
+    page_revision: u64,
+    pending_event: Option<PendingEvent>,
+    script_blocked: bool,
+    edit_versions: HashMap<usize, u64>,
+    next_edit: u64,
     values: HashMap<usize, String>,
     hits: Vec<Hit>,
+    pointer_press: Option<(i32, i32)>,
     focus: Focus,
     select_all: bool,
     scroll: i32,
@@ -92,11 +112,28 @@ struct App {
     last_load_ok: bool,
     refresh_count: u8,
     smoke: Option<String>,
+    smoke_events: bool,
+    event_smoke_stage: u8,
     smoke_stage: u8,
     smoke_since: Instant,
     smoke_failed: bool,
     exit_after_smoke: bool,
     evidence_dir: String,
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Fence network jobs before they can create a late child. The pool
+        // retains ownership until every already-started child has been reaped.
+        self.child_pool.close();
+        if let Some(session) = self.page_session.take() {
+            session.cancel();
+            drop(session);
+        }
+        if let Err(error) = self.child_pool.wait_idle() {
+            eprintln!("SCRIPT_SHUTDOWN_ERROR {error:?}");
+        }
+    }
 }
 
 impl App {
@@ -122,7 +159,15 @@ impl App {
             cdp_enabled: false,
             cdp_events: Vec::new(),
             scripts_enabled: false,
+            child_pool: script_worker::ChildPool::new(),
+            page_session: None,
+            page_revision: 0,
+            pending_event: None,
+            script_blocked: false,
+            edit_versions: HashMap::new(),
+            next_edit: 0,
             hits: Vec::new(),
+            pointer_press: None,
             focus: Focus::Address,
             select_all: false,
             scroll: 0,
@@ -138,6 +183,8 @@ impl App {
             last_load_ok: false,
             refresh_count: 0,
             smoke: None,
+            smoke_events: false,
+            event_smoke_stage: 0,
             smoke_stage: 0,
             smoke_since: Instant::now(),
             smoke_failed: false,
@@ -166,6 +213,19 @@ impl App {
             return;
         }
         self.generation += 1;
+        if let Err(error) = self.child_pool.set_generation(self.generation) {
+            self.block_session(&format!("Script child ownership error: {error}"));
+            return;
+        }
+        let retired = self.page_session.take();
+        if let Some(session) = &retired {
+            session.cancel();
+        }
+        self.pending_event = None;
+        self.pointer_press = None;
+        if retired.is_some() {
+            self.script_blocked = true;
+        }
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::Started);
         }
@@ -189,12 +249,16 @@ impl App {
         let tx = self.tx.clone();
         let session = self.session.clone();
         let scripts_enabled = self.scripts_enabled;
+        let pool = self.child_pool.clone();
         eprintln!(
             "NAVIGATE {} {}",
             if body.is_some() { "POST" } else { "GET" },
             target
         );
         thread::spawn(move || {
+            // Join/reap a retired manager on this already bounded navigation job,
+            // not by blocking the window thread or creating per-event threads.
+            drop(retired);
             let result = session.submit(&target, body.as_deref());
             let script = if scripts_enabled {
                 result
@@ -204,9 +268,17 @@ impl App {
                         response.content_type.contains("html") || response.content_type.is_empty()
                     })
                     .map(|response| {
-                        script_worker::execute(mg_deps::js_browser::Request {
-                            url: response.url.to_string(),
-                            html: decode_text(&response.body, &response.content_type),
+                        script_worker::Session::start(
+                            mg_deps::js_browser::Request {
+                                url: response.url.to_string(),
+                                html: decode_text(&response.body, &response.content_type),
+                            },
+                            generation,
+                            pool,
+                        )
+                        .map(|(session, reply)| ScriptLoad {
+                            session: Some(session),
+                            reply,
                         })
                     })
             } else {
@@ -228,6 +300,10 @@ impl App {
             self.loading = false;
             self.scroll = 0;
             self.values.clear();
+            self.edit_versions.clear();
+            self.pending_event = None;
+            self.page_revision = 0;
+            self.script_blocked = loaded.script.is_some();
             self.focus = Focus::Page;
             self.select_all = false;
             self.last_load_ok = false;
@@ -246,76 +322,47 @@ impl App {
                     if !self.history.is_empty() {
                         self.history[self.history_at] = self.address.clone();
                     }
-                    let mut source = decode_text(&response.body, &response.content_type);
+                    let source = decode_text(&response.body, &response.content_type);
                     let mut scripting = false;
+                    let mut projected = None;
                     let script_status = match loaded.script {
-                        Some(Ok(reply))
-                            if reply.applied
-                                && reply.html.len() <= 2 * 1024 * 1024
-                                && reply.scripts_executed <= 32
-                                && reply.errors.len() <= 64
-                                && reply.errors.iter().all(|error| error.len() <= 4096)
-                                && reply
-                                    .allocations
-                                    .as_ref()
-                                    .is_none_or(|report| report.is_valid()) =>
-                        {
-                            if let Some(report) = &reply.allocations {
-                                // Fixed numeric diagnostic fields, not page source or URLs.
-                                if let Ok(json) = serde_json::to_string(report) {
-                                    eprintln!("SCRIPT_ALLOCATION {json}");
-                                }
-                            }
-                            source = reply.html;
-                            scripting = true;
-                            script_navigation = reply.navigation.and_then(|target| {
-                                if target.len() > 16_384 {
-                                    return None;
-                                }
-                                url::Url::parse(&target)
-                                    .ok()
-                                    .filter(|url| {
-                                        matches!(url.scheme(), "http" | "https")
-                                            && url.username().is_empty()
-                                            && url.password().is_none()
-                                    })
-                                    .map(|url| url.to_string())
-                            });
-                            if let Some(error) = reply.errors.first() {
-                                let error: String = error.chars().take(240).collect();
-                                eprintln!(
-                                    "SCRIPT_PARTIAL executed={} errors={} first={error:?}",
-                                    reply.scripts_executed,
-                                    reply.errors.len()
-                                );
-                                for (index, diagnostic) in reply.errors.iter().enumerate() {
-                                    eprintln!(
-                                        "SCRIPT_DIAGNOSTIC index={} message={:?}",
-                                        index + 1,
-                                        diagnostic
-                                    );
-                                }
-                                format!(
-                                    "JS: {} scripts, {} errors ({error})",
-                                    reply.scripts_executed,
-                                    reply.errors.len()
-                                )
+                        Some(Ok(mut startup)) => {
+                            let started = Instant::now();
+                            let validation = if startup.reply.revision != 0
+                                || !startup.reply.acknowledgements.is_empty()
+                                || startup.reply.default_action != DefaultAction::None
+                            {
+                                Err("Invalid initial script session reply".into())
                             } else {
-                                eprintln!("SCRIPT_COMPLETE executed={}", reply.scripts_executed);
-                                format!("JS: {} inline scripts", reply.scripts_executed)
+                                Self::project_reply(&mut startup.reply, &self.address, None)
+                            };
+                            let timed = startup
+                                .session
+                                .as_mut()
+                                .ok_or_else(|| "Missing script session ownership".to_string())
+                                .and_then(|session| session.charge_active(started.elapsed()));
+                            match validation.and_then(|document| timed.map(|_| document)) {
+                                Ok(document) => {
+                                    projected = Some(document);
+                                    scripting = true;
+                                    self.page_revision = startup.reply.revision;
+                                    self.script_blocked = startup.reply.state != RealmState::Ready;
+                                    if !self.script_blocked {
+                                        script_navigation = startup.reply.navigation.take();
+                                        self.page_session = startup.session.take();
+                                    } else if let Some(session) = &startup.session {
+                                        session.cancel();
+                                    }
+                                    Self::script_summary(&startup.reply)
+                                }
+                                Err(error) => {
+                                    if let Some(session) = &startup.session {
+                                        session.cancel();
+                                    }
+                                    eprintln!("SCRIPT_REJECTED {error:?}");
+                                    format!("JS rejected; original document retained: {error}")
+                                }
                             }
-                        }
-                        Some(Ok(reply)) => {
-                            let error: String = reply
-                                .errors
-                                .first()
-                                .map(String::as_str)
-                                .unwrap_or("Invalid or oversized document projection")
-                                .chars()
-                                .take(240)
-                                .collect();
-                            eprintln!("SCRIPT_REJECTED {error:?}");
-                            format!("JS rejected; original document retained: {error}")
                         }
                         Some(Err(error)) => {
                             eprintln!("SCRIPT_ERROR {error:?}");
@@ -323,7 +370,9 @@ impl App {
                         }
                         None => "JavaScript disabled".into(),
                     };
-                    self.document = if response.content_type.contains("html")
+                    self.document = if let Some(document) = projected {
+                        document
+                    } else if response.content_type.contains("html")
                         || response.content_type.is_empty()
                     {
                         document::parse_with_scripting(&source, &self.address, scripting)
@@ -389,14 +438,451 @@ impl App {
                 }
             }
         }
+        self.poll_page_session();
+    }
+    fn script_summary(reply: &SessionReply) -> String {
+        if let Some(report) = &reply.allocations {
+            if let Ok(json) = serde_json::to_string(report) {
+                eprintln!("SCRIPT_ALLOCATION {json}");
+            }
+        }
+        for (index, diagnostic) in reply.errors.iter().enumerate() {
+            eprintln!(
+                "SCRIPT_DIAGNOSTIC index={} message={diagnostic:?}",
+                index + 1
+            );
+        }
+        if let Some(error) = reply.errors.first() {
+            let error: String = error.chars().take(240).collect();
+            eprintln!(
+                "SCRIPT_PARTIAL executed={} errors={} first={error:?}",
+                reply.scripts_executed,
+                reply.errors.len()
+            );
+            format!(
+                "JS: {} scripts, {} errors ({error})",
+                reply.scripts_executed,
+                reply.errors.len()
+            )
+        } else {
+            eprintln!("SCRIPT_COMPLETE executed={}", reply.scripts_executed);
+            format!("JS: {} inline scripts", reply.scripts_executed)
+        }
+    }
+    fn checked_navigation(target: &str) -> Result<String, String> {
+        let url = url::Url::parse(target).map_err(|_| "Invalid script navigation URL")?;
+        if target.len() > 16_384
+            || !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err("Script navigation must be credential-free HTTP(S)".into());
+        }
+        Ok(url.into())
+    }
+    fn project_reply(
+        reply: &mut SessionReply,
+        url: &str,
+        previous: Option<&Document>,
+    ) -> Result<Document, String> {
+        if reply.errors.len() > 64
+            || reply.errors.iter().any(|error| error.len() > 4096)
+            || reply.scripts_executed > 32
+            || reply.acknowledgements.len() > 128
+            || reply
+                .allocations
+                .as_ref()
+                .is_none_or(|report| !report.is_valid())
+        {
+            return Err("Invalid script session report limits".into());
+        }
+        if let Some(target) = &reply.navigation {
+            Self::checked_navigation(target)?;
+        }
+        if (reply.state != RealmState::Ready
+            || reply.outcome.click_canceled == Some(true)
+            || reply.outcome.submit_canceled == Some(true))
+            && reply.default_action != DefaultAction::None
+        {
+            return Err("Invalid default action for canceled/closed event".into());
+        }
+        if reply.state != RealmState::Ready && reply.navigation.is_some() {
+            return Err("Closed script session proposed navigation".into());
+        }
+        let snapshot = reply
+            .snapshot
+            .take()
+            .ok_or("Script session has no accepted snapshot")?;
+        if previous.is_some_and(|old| {
+            snapshot.nodes.len() < old.nodes.len()
+                || old
+                    .nodes
+                    .iter()
+                    .zip(&snapshot.nodes)
+                    .any(|(a, b)| a.tag != b.tag)
+        }) {
+            return Err("Script snapshot reused or removed stable arena identities".into());
+        }
+        document::project_nodes(snapshot.nodes, url)
+    }
+    fn connected(document: &Document, mut node: usize) -> bool {
+        for _ in 0..=256 {
+            if node == 0 {
+                return true;
+            }
+            let Some(item) = document.nodes.get(node) else {
+                return false;
+            };
+            if item.parent == node {
+                return false;
+            }
+            node = item.parent;
+        }
+        false
+    }
+    fn input_item(&self, node: usize) -> Option<usize> {
+        self.document
+            .item_nodes
+            .iter()
+            .enumerate()
+            .find_map(|(i, &id)| {
+                (id == node && matches!(self.document.items[i], Item::Input { .. })).then_some(i)
+            })
+    }
+    fn block_session(&mut self, error: &str) {
+        if let Some(session) = &self.page_session {
+            session.cancel();
+        }
+        self.pending_event = None;
+        self.script_blocked = true;
+        self.status = format!("Page script session unavailable; activation canceled: {error}");
+        eprintln!("SCRIPT_SESSION_CLOSED {error:?}");
+        self.dirty = true;
+    }
+    // Ok(true) means queued; Ok(false) permits native-only activation. Immediate
+    // rejection must remain observable to CDP, never a successful dropped click.
+    fn dispatch_page(&mut self, kind: InputKind) -> Result<bool, String> {
+        if self.loading || self.script_blocked {
+            self.status =
+                "Page activation unavailable while loading or after script failure".into();
+            self.dirty = true;
+            return Err(self.status.clone());
+        }
+        if self.pending_event.is_some() {
+            self.status = "A page event is still running; activation not queued".into();
+            self.dirty = true;
+            return Err(self.status.clone());
+        }
+        if self.page_session.is_none() {
+            return Ok(false);
+        }
+        // Admit count and raw payload before cloning any edit. Framing performs
+        // the separate exact encoded-byte check (JSON escaping may expand it).
+        let mut selected = Vec::new();
+        let mut bytes = 0usize;
+        for (&node, &version) in &self.edit_versions {
+            if let Some(value) = self
+                .values
+                .get(&node)
+                .filter(|_| self.input_item(node).is_some())
+            {
+                bytes = bytes.saturating_add(value.len());
+                if selected.len() == 128 || bytes > 64 * 1024 {
+                    self.status = "Page event edit bound exceeded; activation canceled".into();
+                    self.dirty = true;
+                    return Err(self.status.clone());
+                }
+                selected.push((node, version, value));
+            }
+        }
+        if selected.iter().any(|(_, _, value)| value.len() > 8191) {
+            self.status = "Page event control value exceeds 8191 bytes".into();
+            self.dirty = true;
+            return Err(self.status.clone());
+        }
+        let mut edits: Vec<_> = selected
+            .into_iter()
+            .map(|(node, version, value)| ControlEdit {
+                node,
+                version,
+                value: value.clone(),
+            })
+            .collect();
+        edits.sort_by_key(|edit| edit.node);
+        let input = SessionInput { kind, edits };
+        let session = self.page_session.as_mut().unwrap();
+        match session.try_dispatch(input.clone(), self.page_revision) {
+            Ok(sequence) => {
+                self.pending_event = Some(PendingEvent {
+                    generation: self.generation,
+                    session_id: session.id(),
+                    sequence,
+                    revision: self.page_revision,
+                    input,
+                });
+                self.status = "Running page event".into();
+                self.dirty = true;
+            }
+            Err(error) => {
+                self.block_session(&error);
+                return Err(error);
+            }
+        }
+        Ok(true)
+    }
+    fn validate_default(
+        document: &Document,
+        input: &InputKind,
+        action: &DefaultAction,
+    ) -> Result<(), String> {
+        match action {
+            DefaultAction::None => Ok(()),
+            DefaultAction::FollowLink { node } => {
+                if !matches!(input, InputKind::Click { target } if target == node)
+                    || !Self::connected(document, *node)
+                    || !document
+                        .items
+                        .iter()
+                        .zip(&document.item_nodes)
+                        .any(|(item, id)| {
+                            id == node && matches!(item, Item::Text { href: Some(_), .. })
+                        })
+                {
+                    Err("Unrelated or stale link default".into())
+                } else {
+                    Ok(())
+                }
+            }
+            DefaultAction::SubmitForm { form, submitter } => {
+                let Some(index) = document.form_nodes.iter().position(|node| node == form) else {
+                    return Err("Unknown form default".into());
+                };
+                if !Self::connected(document, *form) {
+                    return Err("Detached form default".into());
+                }
+                if let Some(node) = submitter {
+                    if !document
+                        .items
+                        .iter()
+                        .zip(&document.item_nodes)
+                        .any(|(item, id)| {
+                            id == node
+                                && matches!(item, Item::Submit { form, .. } if *form == index)
+                        })
+                    {
+                        return Err("Unrelated submitter default".into());
+                    }
+                }
+                match input {
+                    InputKind::Click { target } if Some(*target) == *submitter => Ok(()),
+                    InputKind::Submit {
+                        form: original,
+                        submitter: original_button,
+                    } if original_button == submitter
+                        && (submitter.is_some() || original == form) =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err("Unrelated form default".into()),
+                }
+            }
+        }
+    }
+    fn poll_page_session(&mut self) {
+        if self.script_blocked {
+            return;
+        }
+        let update = self
+            .page_session
+            .as_mut()
+            .and_then(|session| session.try_recv());
+        let Some(update) = update else {
+            return;
+        };
+        let Some(session) = &self.page_session else {
+            return;
+        };
+        if update.generation != self.generation || update.session_id != session.id() {
+            self.block_session("Stale script completion identity");
+            return;
+        }
+        let mut reply = match update.reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.block_session(&error);
+                return;
+            }
+        };
+        let Some(pending) = self.pending_event.take() else {
+            self.block_session("Script session expired or sent an unsolicited completion");
+            return;
+        };
+        if pending.generation != self.generation
+            || pending.session_id != update.session_id
+            || update.sequence != Some(pending.sequence)
+            || self.page_revision != pending.revision
+            || reply.revision != pending.revision.checked_add(1).unwrap_or(u64::MAX)
+        {
+            self.block_session("Stale script event sequence/revision");
+            return;
+        }
+        let started = Instant::now();
+        let expected: Vec<_> = pending
+            .input
+            .edits
+            .iter()
+            .map(|edit| (edit.node, edit.version))
+            .collect();
+        let mut ack: Vec<_> = reply
+            .acknowledgements
+            .iter()
+            .map(|edit| (edit.node, edit.version))
+            .collect();
+        ack.sort_unstable();
+        let projection = if ack != expected {
+            Err("Invalid control-edit acknowledgement".into())
+        } else {
+            Self::project_reply(&mut reply, &self.page_url, Some(&self.document))
+        }
+        .and_then(|document| {
+            Self::validate_default(&document, &pending.input.kind, &reply.default_action)
+                .map(|_| document)
+        });
+        let timed = self
+            .page_session
+            .as_mut()
+            .unwrap()
+            .charge_active(started.elapsed());
+        let document = match projection.and_then(|document| timed.map(|_| document)) {
+            Ok(document) => document,
+            Err(error) => {
+                self.block_session(&error);
+                return;
+            }
+        };
+        if reply.state != RealmState::Ready {
+            // Later failed transactions are atomic from the parent's point of
+            // view. Diagnostics survive, but the previous accepted document,
+            // edit versions, focus, and CDP epoch remain unchanged.
+            let _ = Self::script_summary(&reply);
+            self.block_session("Realm became fatal or closed; previous page retained");
+            return;
+        }
+        self.acknowledge_projection(document, &ack);
+        self.page_revision = reply.revision;
+        self.dom_epoch += 1;
+        if self.cdp_enabled {
+            self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
+        }
+        let _ = Self::script_summary(&reply);
+        self.status = format!("Page event completed · {} diagnostics", reply.errors.len());
+        eprintln!(
+            "PAGE_EVENT_APPLIED sequence={} revision={} click_canceled={:?} submit_canceled={:?}",
+            pending.sequence,
+            reply.revision,
+            reply.outcome.click_canceled,
+            reply.outcome.submit_canceled
+        );
+        self.dirty = true;
+        if let Some(target) = reply.navigation {
+            if self.refresh_count < 4 {
+                self.refresh_count += 1;
+                self.navigate_inner(target, None, false, true);
+            } else {
+                self.block_session("Automatic navigation limit reached");
+            }
+            return;
+        }
+        match reply.default_action {
+            DefaultAction::None => {}
+            DefaultAction::FollowLink { node } => {
+                let target = self
+                    .document
+                    .items
+                    .iter()
+                    .zip(&self.document.item_nodes)
+                    .find_map(|(item, id)| {
+                        if *id == node {
+                            if let Item::Text {
+                                href: Some(href), ..
+                            } = item
+                            {
+                                Some(href.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(target) = target {
+                    match Self::checked_navigation(&target) {
+                        Ok(target) => self.navigate(target, None, true),
+                        Err(error) => self.block_session(&error),
+                    }
+                }
+            }
+            DefaultAction::SubmitForm { form, submitter } => {
+                self.submit_default(form, submitter, false)
+            }
+        }
+    }
+    fn acknowledge_projection(&mut self, document: Document, ack: &[(usize, u64)]) {
+        self.document = document;
+        for &(node, version) in ack {
+            if self.edit_versions.get(&node) == Some(&version) {
+                self.edit_versions.remove(&node);
+                self.values.remove(&node);
+            }
+        }
+        let editable: HashSet<_> = self
+            .document
+            .items
+            .iter()
+            .zip(&self.document.item_nodes)
+            .filter_map(|(item, &node)| matches!(item, Item::Input { .. }).then_some(node))
+            .collect();
+        self.values.retain(|node, _| editable.contains(node));
+        self.edit_versions.retain(|node, _| editable.contains(node));
+        if let Focus::Input(node) = self.focus {
+            if !editable.contains(&node) {
+                self.focus = Focus::Page;
+                self.select_all = false;
+            }
+        }
+        // Pointer-down coordinates belong to the old accepted layout.
+        self.pointer_press = None;
     }
     fn field_value(&self, i: usize, default: &str) -> String {
         self.values
-            .get(&i)
+            .get(self.document.item_nodes.get(i).unwrap_or(&usize::MAX))
             .cloned()
             .unwrap_or_else(|| default.into())
     }
-    fn submit(&mut self, form: usize, button: Option<usize>) {
+    fn submit(&mut self, form: usize, button: Option<usize>) -> Result<(), String> {
+        let Some(&form_node) = self.document.form_nodes.get(form) else {
+            return Ok(());
+        };
+        let submitter = button.and_then(|item| self.document.item_nodes.get(item).copied());
+        if !self.dispatch_page(InputKind::Submit {
+            form: form_node,
+            submitter,
+        })? {
+            self.submit_default(form_node, submitter, true);
+        }
+        Ok(())
+    }
+    fn submit_default(&mut self, form_node: usize, button_node: Option<usize>, use_edits: bool) {
+        let Some(form) = self
+            .document
+            .form_nodes
+            .iter()
+            .position(|node| *node == form_node)
+        else {
+            return;
+        };
+        let button =
+            button_node.and_then(|node| self.document.item_nodes.iter().position(|id| *id == node));
         let Some(form_data) = self.document.forms.get(form) else {
             return;
         };
@@ -410,7 +896,14 @@ impl App {
             } = item
             {
                 if *f == form && !name.is_empty() {
-                    fields.push((name.clone(), self.field_value(i, value)));
+                    fields.push((
+                        name.clone(),
+                        if use_edits {
+                            self.field_value(i, value)
+                        } else {
+                            value.clone()
+                        },
+                    ));
                 }
             }
         }
@@ -426,6 +919,10 @@ impl App {
             .finish();
         let action = form_data.action.clone();
         let method = form_data.method.clone();
+        if !use_edits && let Err(error) = Self::checked_navigation(&action) {
+            self.block_session(&error);
+            return;
+        }
         if method == "post" {
             self.navigate(action, Some(encoded), true)
         } else if let Ok(mut target) = url::Url::parse(&action) {
@@ -434,21 +931,35 @@ impl App {
         }
     }
     fn activate(&mut self, action: Action) {
+        let _ = self.activate_checked(action);
+    }
+    fn activate_checked(&mut self, action: Action) -> Result<(), String> {
         self.select_all = false;
         match action {
             Action::Address => {
                 self.focus = Focus::Address;
                 self.select_all = true;
             }
-            Action::Input(i) => {
-                self.focus = Focus::Input(i);
-            }
-            Action::Submit(i) => {
-                if let Some(Item::Submit { form, .. }) = self.document.items.get(i) {
-                    self.submit(*form, Some(i));
+            Action::Input(node) => {
+                if self.input_item(node).is_some() {
+                    self.focus = Focus::Input(node);
+                    self.dispatch_page(InputKind::Click { target: node })?;
                 }
             }
-            Action::Link(href) => self.navigate(href, None, true),
+            Action::Submit(node) => {
+                if !self.dispatch_page(InputKind::Click { target: node })? {
+                    if let Some(i) = self.document.item_nodes.iter().position(|id| *id == node) {
+                        if let Item::Submit { form, .. } = self.document.items[i] {
+                            self.submit_default(self.document.form_nodes[form], Some(node), true);
+                        }
+                    }
+                }
+            }
+            Action::Link { node, href } => {
+                if !self.dispatch_page(InputKind::Click { target: node })? {
+                    self.navigate(href, None, true);
+                }
+            }
             Action::Reload => self.navigate(self.address.clone(), None, false),
             Action::Back => {
                 if self.history_at > 0 && self.inflight < 2 {
@@ -464,30 +975,43 @@ impl App {
             }
         }
         self.dirty = true;
+        Ok(())
     }
     fn click(&mut self, x: i32, y: i32) {
+        let _ = self.click_checked(x, y);
+    }
+    fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
         if let Some(hit) = self.hits.iter().rev().find(|h| h.contains(x, y)) {
-            self.activate(hit.action.clone());
+            self.activate_checked(hit.action.clone())?;
         } else {
             self.focus = Focus::Page;
             self.dirty = true;
         }
+        Ok(())
     }
     fn type_text(&mut self, text: &str) {
-        let default = if let Focus::Input(i) = self.focus {
-            self.document.items.get(i).and_then(|item| {
-                if let Item::Input { value, .. } = item {
-                    Some(value.clone())
-                } else {
-                    None
-                }
-            })
+        if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
+            return;
+        }
+        let default = if let Focus::Input(node) = self.focus {
+            self.input_item(node)
+                .and_then(|i| self.document.items.get(i))
+                .and_then(|item| {
+                    if let Item::Input { value, .. } = item {
+                        Some(value.clone())
+                    } else {
+                        None
+                    }
+                })
         } else {
             None
         };
         let dest = match self.focus {
             Focus::Address => Some(&mut self.address),
-            Focus::Input(i) => Some(self.values.entry(i).or_insert(default.unwrap_or_default())),
+            Focus::Input(node) if default.is_some() => {
+                Some(self.values.entry(node).or_insert(default.unwrap()))
+            }
+            Focus::Input(_) => None,
             Focus::Page => None,
         };
         if let Some(dest) = dest {
@@ -499,9 +1023,31 @@ impl App {
                 dest.clear();
             }
             dest.push_str(text);
+            if let Focus::Input(node) = self.focus {
+                self.next_edit = self.next_edit.saturating_add(1);
+                self.edit_versions.insert(node, self.next_edit);
+            }
         }
         self.select_all = false;
         self.dirty = true;
+    }
+    fn enter_checked(&mut self) -> Result<(), String> {
+        match self.focus {
+            Focus::Address => self.navigate(self.address.clone(), None, true),
+            Focus::Input(node) => {
+                if let Some(i) = self.input_item(node) {
+                    if let Some(Item::Input { form, .. }) = self.document.items.get(i) {
+                        let form = *form;
+                        let button = self.document.items.iter().position(
+                            |item| matches!(item, Item::Submit {form:f, ..} if *f == form),
+                        );
+                        self.submit(form, button)?;
+                    }
+                }
+            }
+            Focus::Page => {}
+        }
+        Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
         if ctrl && (sym == b'l' as u32 || sym == b'L' as u32) {
@@ -522,20 +1068,9 @@ impl App {
             return;
         }
         match sym {
-            0xff0d => match self.focus {
-                Focus::Address => self.navigate(self.address.clone(), None, true),
-                Focus::Input(i) => {
-                    if let Some(Item::Input { form, .. }) = self.document.items.get(i) {
-                        let form = *form;
-                        let button =
-                            self.document.items.iter().position(
-                                |item| matches!(item,Item::Submit{form:f,..} if *f==form),
-                            );
-                        self.submit(form, button);
-                    }
-                }
-                Focus::Page => {}
-            },
+            0xff0d => {
+                let _ = self.enter_checked();
+            }
             0xff08 => {
                 if self.select_all {
                     self.type_text("");
@@ -544,12 +1079,20 @@ impl App {
                         Focus::Address => {
                             self.address.pop();
                         }
-                        Focus::Input(i) => {
+                        Focus::Input(node) => {
+                            if self.next_edit == u64::MAX {
+                                return;
+                            }
+                            let Some(i) = self.input_item(node) else {
+                                return;
+                            };
                             let default = match self.document.items.get(i) {
                                 Some(Item::Input { value, .. }) => value.clone(),
                                 _ => String::new(),
                             };
-                            self.values.entry(i).or_insert(default).pop();
+                            self.values.entry(node).or_insert(default).pop();
+                            self.next_edit = self.next_edit.saturating_add(1);
+                            self.edit_versions.insert(node, self.next_edit);
                         }
                         Focus::Page => {}
                     }
@@ -564,7 +1107,7 @@ impl App {
                     .enumerate()
                     .filter_map(|(i, item)| {
                         if matches!(item, Item::Input { .. }) {
-                            Some(i)
+                            Some(self.document.item_nodes[i])
                         } else {
                             None
                         }
@@ -646,6 +1189,7 @@ impl App {
         let mut row = 27;
         for i in 0..self.document.items.len() {
             let item = self.document.items[i].clone();
+            let node = self.document.item_nodes[i];
             match item {
                 Item::Break => {
                     if x > left {
@@ -686,7 +1230,10 @@ impl App {
                                     y,
                                     ww.max(1) as u32,
                                     row as u32,
-                                    Action::Link(url.clone()),
+                                    Action::Link {
+                                        node,
+                                        href: url.clone(),
+                                    },
                                 );
                             }
                         }
@@ -706,7 +1253,7 @@ impl App {
                             y,
                             w,
                             40,
-                            if self.focus == Focus::Input(i) {
+                            if self.focus == Focus::Input(node) {
                                 0x277453
                             } else {
                                 0x9ca79a
@@ -718,7 +1265,7 @@ impl App {
                             value = "•".repeat(value.chars().count());
                         }
                         let value = fit_tail(&mut self.fonts, &value, 17., w as f32 - 22.);
-                        if self.focus == Focus::Input(i) && self.select_all {
+                        if self.focus == Focus::Input(node) && self.select_all {
                             c.rect(
                                 x + 7,
                                 y + 7,
@@ -728,7 +1275,7 @@ impl App {
                             );
                         }
                         c.text(&mut self.fonts, x + 9, y + 8, &value, 17., INK);
-                        self.hit(x, y, w, 40, Action::Input(i));
+                        self.hit(x, y, w, 40, Action::Input(node));
                     }
                     y += 50;
                     row = 27;
@@ -744,7 +1291,7 @@ impl App {
                     if y + 38 > TOP && y < self.height as i32 - 30 {
                         c.rect(x, y, w, 36, 0xe0e8f3);
                         c.text(&mut self.fonts, x + 12, y + 7, &label, 16., LINK);
-                        self.hit(x, y, w, 36, Action::Submit(i));
+                        self.hit(x, y, w, 36, Action::Submit(node));
                     }
                     x += w as i32 + 12;
                     row = 46;
@@ -817,8 +1364,13 @@ impl App {
         c
     }
     fn smoke_step(&mut self, canvas: &Canvas) {
+        if self.smoke_events {
+            self.smoke_event_step(canvas);
+            return;
+        }
         if self.smoke.is_none()
             || self.loading
+            || self.pending_event.is_some()
             || self.smoke_since.elapsed() < Duration::from_millis(400)
         {
             return;
@@ -836,18 +1388,22 @@ impl App {
                 .iter()
                 .position(|item| matches!(item,Item::Input{name,..} if name=="q"))
             {
-                if let Some(hit) = self
-                    .hits
-                    .iter()
-                    .find(|h| matches!(h.action,Action::Input(j) if j==i))
-                    .cloned()
-                {
-                    self.click(hit.x + 4, hit.y + (hit.h / 2) as i32);
-                } else {
-                    let previous = self.scroll;
-                    self.scroll_by(400);
-                    if self.scroll == previous {
-                        self.fail_smoke("Search field has no visible click target");
+                let node = self.document.item_nodes[i];
+                if self.focus != Focus::Input(node) {
+                    if let Some(hit) = self
+                        .hits
+                        .iter()
+                        .find(|h| matches!(h.action,Action::Input(j) if j==node))
+                        .cloned()
+                    {
+                        self.click(hit.x + 4, hit.y + (hit.h / 2) as i32);
+                    } else {
+                        let previous = self.scroll;
+                        self.scroll_by(400);
+                        if self.scroll == previous {
+                            self.fail_smoke("Search field has no visible click target");
+                        }
+                        return;
                     }
                     return;
                 }
@@ -879,7 +1435,7 @@ impl App {
                 if let Some(hit) = self
                     .hits
                     .iter()
-                    .find(|h| matches!(&h.action,Action::Link(h) if h==&href))
+                    .find(|h| matches!(&h.action,Action::Link { href: h, .. } if h==&href))
                     .cloned()
                 {
                     self.click(hit.x + 1, hit.y + (hit.h / 2) as i32);
@@ -905,6 +1461,151 @@ impl App {
             self.smoke_stage = 3;
             self.smoke = None;
         }
+    }
+    fn smoke_event_step(&mut self, canvas: &Canvas) {
+        if self.smoke.is_none()
+            || self.loading
+            || self.pending_event.is_some()
+            || self.smoke_since.elapsed() < Duration::from_millis(400)
+        {
+            return;
+        }
+        if !self.last_load_ok || self.script_blocked {
+            self.fail_smoke("Event journey lost its loaded retained realm");
+            return;
+        }
+        let state_is = |document: &Document, expected: &str| {
+            let Some(node) = document.query_selector(0, "#state").ok().flatten() else {
+                return false;
+            };
+            let mut text = String::new();
+            let mut stack = vec![node];
+            while let Some(id) = stack.pop() {
+                text.push_str(&document.nodes[id].text);
+                stack.extend(document.nodes[id].children.iter().rev().copied());
+            }
+            text == expected
+        };
+        let hit_for = |app: &App, selector: &str| {
+            let node = app.document.query_selector(0, selector).ok().flatten()?;
+            app.hits
+                .iter()
+                .find(|hit| match hit.action {
+                    Action::Input(id) | Action::Submit(id) | Action::Link { node: id, .. } => {
+                        id == node
+                    }
+                    _ => false,
+                })
+                .cloned()
+        };
+        let _ = std::fs::create_dir_all(&self.evidence_dir);
+        match self.event_smoke_stage {
+            0 => {
+                let Some(query) = self.document.query_selector(0, "#query").ok().flatten() else {
+                    self.fail_smoke("Event journey has no real query control");
+                    return;
+                };
+                if self.focus != Focus::Input(query) {
+                    if let Some(hit) = hit_for(self, "#query") {
+                        self.click(hit.x + 4, hit.y + 4);
+                    } else {
+                        self.fail_smoke("Event query is not a visible native click target");
+                    }
+                    return;
+                }
+                self.select_all = true;
+                self.type_text("Rust & café");
+                let typed = self.paint();
+                let _ = typed.save_png(&format!("{}/01-event-query.png", self.evidence_dir));
+                if let Some(hit) = hit_for(self, "#cancel") {
+                    self.click(hit.x + 1, hit.y + 1);
+                } else {
+                    self.fail_smoke("Cancel link is not a visible native click target");
+                    return;
+                }
+                self.event_smoke_stage = 1;
+            }
+            1 => {
+                if !state_is(&self.document, "link canceled") {
+                    self.fail_smoke("Actual later link handler did not cancel and update state");
+                    return;
+                }
+                let _ = canvas.save_png(&format!("{}/02-link-canceled.png", self.evidence_dir));
+                self.key(0xff0d, false, false, false);
+                self.event_smoke_stage = 2;
+            }
+            2 => {
+                if !state_is(&self.document, "first submit canceled") {
+                    self.fail_smoke(
+                        "First actual submit handler did not cancel and retain closure state",
+                    );
+                    return;
+                }
+                let _ = canvas.save_png(&format!("{}/03-submit-canceled.png", self.evidence_dir));
+                let Some(query) = self.document.query_selector(0, "#query").ok().flatten() else {
+                    self.fail_smoke("Moved query control disappeared");
+                    return;
+                };
+                if self.focus != Focus::Input(query) {
+                    self.fail_smoke("Moving the query lost its stable focused identity");
+                    return;
+                }
+                self.select_all = true;
+                self.type_text("Rust & café again");
+                self.key(0xff0d, false, false, false);
+                self.event_smoke_stage = 3;
+            }
+            3 => {
+                let Ok(url) = url::Url::parse(&self.address) else {
+                    self.fail_smoke("Invalid event search URL");
+                    return;
+                };
+                let fields: HashMap<_, _> = url.query_pairs().collect();
+                if url.path() != "/event-search"
+                    || fields.get("q").map(|v| v.as_ref()) != Some("Rust & café again")
+                    || fields.get("proof").map(|v| v.as_ref()) != Some("retained-1-2")
+                    || fields.get("submit").map(|v| v.as_ref()) != Some("events")
+                {
+                    self.fail_smoke(
+                        "Post-handler form default did not send the real acknowledged fields",
+                    );
+                    return;
+                }
+                let _ = canvas.save_png(&format!("{}/04-event-results.png", self.evidence_dir));
+                if let Some(hit) = hit_for(self, "#result") {
+                    self.click(hit.x + 1, hit.y + 1);
+                } else {
+                    self.fail_smoke("Event result has no visible native click target");
+                    return;
+                }
+                self.event_smoke_stage = 4;
+            }
+            4 => {
+                let Ok(url) = url::Url::parse(&self.address) else {
+                    self.fail_smoke("Invalid event destination");
+                    return;
+                };
+                if url.path() != "/event-destination"
+                    || !url
+                        .query_pairs()
+                        .any(|(key, value)| key == "proof" && value == "clicked")
+                {
+                    self.fail_smoke(
+                        "Result click did not use its later handler's updated destination",
+                    );
+                    return;
+                }
+                let _ = canvas.save_png(&format!("{}/05-event-destination.png", self.evidence_dir));
+                eprintln!(
+                    "JOURNEY_EVENTS_COMPLETE {} title={:?}",
+                    self.address, self.document.title
+                );
+                self.smoke_stage = 3;
+                self.smoke = None;
+            }
+            _ => self.fail_smoke("Invalid event journey stage"),
+        }
+        self.smoke_since = Instant::now();
     }
     fn fail_smoke(&mut self, message: &str) {
         eprintln!("JOURNEY_INCOMPLETE {message}");
@@ -958,6 +1659,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Worker dispatch must precede fonts, display, networking and debug-server setup.
     match std::env::args().nth(1).as_deref() {
         Some("--script-worker") => script_worker::worker_entry(),
+        Some("--script-session") => script_worker::session_entry(),
+        Some("--script-session-selftest") => {
+            script_worker::session_selftest()?;
+            return Ok(());
+        }
         Some("--script-worker-selftest") => {
             script_worker::selftest()?;
             return Ok(());
@@ -992,6 +1698,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .clone(),
                 );
             }
+            "--smoke-events" => {
+                app.smoke_events = true;
+                app.smoke = Some("Rust & café".into());
+            }
             "--exit-after-smoke" => app.exit_after_smoke = true,
             "--evidence-dir" => {
                 i += 1;
@@ -1002,7 +1712,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY] [--exit-after-smoke] [--evidence-dir DIR]\nOwn JavaScript interpreter is experimental and opt-in; see docs/JAVASCRIPT.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nOwn JavaScript interpreter is experimental and opt-in; see docs/JAVASCRIPT.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
             }
@@ -1044,7 +1754,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             EventMask::EXPOSURE
                 | EventMask::STRUCTURE_NOTIFY
                 | EventMask::KEY_PRESS
-                | EventMask::BUTTON_PRESS,
+                | EventMask::BUTTON_PRESS
+                | EventMask::BUTTON_RELEASE,
         ),
     )?;
     conn.change_property8(
@@ -1089,11 +1800,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                     app.dirty = true;
                 }
                 Event::ButtonPress(e) => match e.detail {
-                    1 => app.click(e.event_x as i32, e.event_y as i32),
+                    1 => app.pointer_press = Some((e.event_x as i32, e.event_y as i32)),
                     4 => app.scroll_by(-100),
                     5 => app.scroll_by(100),
                     _ => {}
                 },
+                Event::ButtonRelease(e) if e.detail == 1 => {
+                    if let Some((x, y)) = app.pointer_press.take() {
+                        let release = (e.event_x as i32, e.event_y as i32);
+                        let press_hit = app.hits.iter().position(|hit| hit.contains(x, y));
+                        let release_hit = app
+                            .hits
+                            .iter()
+                            .position(|hit| hit.contains(release.0, release.1));
+                        if press_hit.is_some() && press_hit == release_hit {
+                            app.click(release.0, release.1);
+                        }
+                    }
+                }
                 Event::KeyPress(e) => {
                     let shift = e.state.contains(KeyButMask::SHIFT);
                     let ctrl = e.state.contains(KeyButMask::CONTROL);
@@ -1149,6 +1873,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         if app.exit_after_smoke && app.smoke_stage == 3 {
             if app.smoke_failed {
+                drop(app);
                 std::process::exit(2);
             }
             return Ok(());
@@ -1228,7 +1953,10 @@ mod tests {
             TOP - 10,
             40,
             20,
-            Action::Link("https://example.org/".into()),
+            Action::Link {
+                node: 0,
+                href: "https://example.org/".into(),
+            },
         );
         let hit = app.hits.last().unwrap();
         assert_eq!(hit.y, TOP);
@@ -1253,21 +1981,41 @@ mod tests {
         let mut invalid_report = mg_deps::js::runtime::Runtime::new().allocation_report();
         invalid_report.accepted_bytes += 1;
         for script in [
-            Ok(mg_deps::js_browser::Reply {
-                applied: false,
-                html: "<p>Do not apply</p>".into(),
-                navigation: Some("https://example.test/unwanted".into()),
-                errors: vec!["Rejected source".into()],
-                scripts_executed: 0,
-                allocations: None,
+            Ok(ScriptLoad {
+                session: None,
+                reply: SessionReply {
+                    revision: 0,
+                    snapshot: None,
+                    outcome: Default::default(),
+                    default_action: DefaultAction::None,
+                    state: RealmState::Closed,
+                    acknowledgements: vec![],
+                    navigation: Some("https://example.test/unwanted".into()),
+                    errors: vec!["Rejected source".into()],
+                    scripts_executed: 0,
+                    allocations: None,
+                },
             }),
-            Ok(mg_deps::js_browser::Reply {
-                applied: true,
-                html: "<p>Do not apply invalid diagnostics</p>".into(),
-                navigation: Some("https://example.test/unwanted".into()),
-                errors: vec![],
-                scripts_executed: 0,
-                allocations: Some(invalid_report),
+            Ok(ScriptLoad {
+                session: None,
+                reply: SessionReply {
+                    revision: 0,
+                    snapshot: Some(mg_deps::page_session::ArenaSnapshot {
+                        nodes: document::parse(
+                            "<p>Do not apply invalid diagnostics</p>",
+                            "https://example.test/",
+                        )
+                        .nodes,
+                    }),
+                    outcome: Default::default(),
+                    default_action: DefaultAction::None,
+                    state: RealmState::Ready,
+                    acknowledgements: vec![],
+                    navigation: Some("https://example.test/unwanted".into()),
+                    errors: vec![],
+                    scripts_executed: 0,
+                    allocations: Some(invalid_report),
+                },
             }),
             Err("Worker deadline".into()),
         ] {
@@ -1326,13 +2074,23 @@ mod tests {
         app.tx
             .send(Loaded {
                 generation: 1,
-                script: Some(Ok(mg_deps::js_browser::Reply {
-                    applied: true,
-                    html: "<title>Stale</title>".into(),
-                    navigation: Some("https://example.test/unwanted".into()),
-                    errors: vec![],
-                    scripts_executed: 1,
-                    allocations: None,
+                script: Some(Ok(ScriptLoad {
+                    session: None,
+                    reply: SessionReply {
+                        revision: 0,
+                        snapshot: Some(mg_deps::page_session::ArenaSnapshot {
+                            nodes: document::parse("<title>Stale</title>", "https://example.test/")
+                                .nodes,
+                        }),
+                        outcome: Default::default(),
+                        default_action: DefaultAction::None,
+                        state: RealmState::Ready,
+                        acknowledgements: vec![],
+                        navigation: Some("https://example.test/unwanted".into()),
+                        errors: vec![],
+                        scripts_executed: 1,
+                        allocations: None,
+                    },
                 })),
                 result: Ok(net::Response {
                     url: url::Url::parse("https://example.test/old").unwrap(),
@@ -1348,5 +2106,136 @@ mod tests {
         assert_eq!(app.document.title, "Current");
         assert!(app.loading);
         assert_eq!(app.inflight, 0);
+    }
+
+    #[test]
+    fn older_edit_ack_keeps_new_typing_but_default_uses_accepted_snapshot() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}/", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            line
+        });
+        let mut app = App::new().unwrap();
+        app.document = document::parse(
+            "<form action='/search'><input id='q' name='q' value='accepted version one'><button name='submit' value='yes'>Go</button></form>",
+            &address,
+        );
+        let node = app.document.query_selector(0, "#q").unwrap().unwrap();
+        app.values.insert(node, "newer version two".into());
+        app.edit_versions.insert(node, 2);
+        app.focus = Focus::Input(node);
+        app.acknowledge_projection(app.document.clone(), &[(node, 1)]);
+        let item = app.input_item(node).unwrap();
+        assert_eq!(app.field_value(item, "unused"), "newer version two");
+        assert_eq!(app.edit_versions.get(&node), Some(&2));
+        assert!(app.focus == Focus::Input(node));
+        let form = app.document.form_nodes[0];
+        let button = app.document.query_selector(0, "button").unwrap();
+        app.submit_default(form, button, false);
+        let line = server.join().unwrap();
+        let url = url::Url::parse(&format!(
+            "http://fixture{}",
+            line.split_whitespace().nth(1).unwrap()
+        ))
+        .unwrap();
+        let fields: HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(
+            fields.get("q").map(|v| v.as_ref()),
+            Some("accepted version one")
+        );
+        assert_eq!(fields.get("submit").map(|v| v.as_ref()), Some("yes"));
+    }
+
+    #[test]
+    fn post_click_submitter_can_move_forms_but_unrelated_defaults_are_rejected() {
+        let mut document = document::parse(
+            "<form id='a'><button id='go'>Go</button></form><form id='b'></form><a id='link' href='/ok'>Link</a>",
+            "https://fixture.test/",
+        );
+        let first = document.query_selector(0, "#a").unwrap().unwrap();
+        let second = document.query_selector(0, "#b").unwrap().unwrap();
+        let button = document.query_selector(0, "#go").unwrap().unwrap();
+        let link = document.query_selector(0, "#link").unwrap().unwrap();
+        document.nodes[first].children.retain(|id| *id != button);
+        document.nodes[second].children.push(button);
+        document.nodes[button].parent = second;
+        let projected = document::project_nodes(document.nodes, "https://fixture.test/").unwrap();
+        let input = InputKind::Submit {
+            form: first,
+            submitter: Some(button),
+        };
+        assert!(
+            App::validate_default(
+                &projected,
+                &input,
+                &DefaultAction::SubmitForm {
+                    form: second,
+                    submitter: Some(button)
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            App::validate_default(
+                &projected,
+                &input,
+                &DefaultAction::SubmitForm {
+                    form: first,
+                    submitter: Some(button)
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            App::validate_default(
+                &projected,
+                &input,
+                &DefaultAction::FollowLink { node: link }
+            )
+            .is_err()
+        );
+        assert!(
+            App::validate_default(
+                &projected,
+                &InputKind::Submit {
+                    form: first,
+                    submitter: None
+                },
+                &DefaultAction::SubmitForm {
+                    form: second,
+                    submitter: None
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn closed_script_realm_never_falls_through_to_native_activation() {
+        let mut app = App::new().unwrap();
+        app.document = document::parse(
+            "<a href='/trap'>Link</a><form action='/trap'><input name='q'><button>Go</button></form>",
+            "https://fixture.test/",
+        );
+        app.script_blocked = true;
+        let node = app.document.query_selector(0, "a").unwrap().unwrap();
+        app.activate(Action::Link {
+            node,
+            href: "https://fixture.test/trap".into(),
+        });
+        assert!(app.submit(0, None).is_err());
+        assert_eq!(app.generation, 0);
+        assert_eq!(app.inflight, 0);
+        assert!(!app.loading);
+        assert!(app.script_blocked);
     }
 }

@@ -4,7 +4,13 @@
 //! browser's renderer or network process. The child reads no page data until
 //! limits, descriptor closure and seccomp are installed successfully.
 
+#[path = "script_worker_session.rs"]
+mod retained;
+#[allow(unused_imports)] // Retained public integration types and legacy API.
+pub use retained::{ChildPool, Session, SessionUpdate, session_entry, session_selftest};
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unused_imports)]
 pub use linux::{execute, selftest, worker_entry};
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -33,9 +39,9 @@ mod linux {
         time::{Duration, Instant},
     };
 
-    const INPUT_LIMIT: usize = 2 * 1024 * 1024;
-    const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
-    const WALL_LIMIT: Duration = Duration::from_secs(2);
+    pub(super) const INPUT_LIMIT: usize = 2 * 1024 * 1024;
+    pub(super) const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+    pub(super) const WALL_LIMIT: Duration = Duration::from_secs(2);
     const MEMORY_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
     const SETUP_EXIT: i32 = 73;
     const REQUEST_EXIT: i32 = 74;
@@ -56,7 +62,7 @@ mod linux {
             Ok(())
         }
     }
-    fn encode(value: &impl Serialize, limit: usize) -> Result<Vec<u8>, String> {
+    pub(super) fn encode(value: &impl Serialize, limit: usize) -> Result<Vec<u8>, String> {
         let mut output = LimitedBuffer {
             bytes: Vec::new(),
             limit,
@@ -87,12 +93,12 @@ mod linux {
             .map_err(|e| format!("Invalid script-worker reply: {e}"))
     }
 
-    struct OwnedChild {
-        child: Child,
-        reaped: bool,
+    pub(super) struct OwnedChild {
+        pub(super) child: Child,
+        pub(super) reaped: bool,
     }
     impl OwnedChild {
-        fn stop(&mut self) {
+        pub(super) fn stop(&mut self) {
             if !self.reaped {
                 let _ = self.child.kill();
                 if self.child.wait().is_ok() {
@@ -130,7 +136,7 @@ mod linux {
         }
     }
 
-    fn nonblocking(fd: i32) -> io::Result<()> {
+    pub(super) fn nonblocking(fd: i32) -> io::Result<()> {
         // SAFETY: fd is a live, owned ChildStdin/ChildStdout descriptor. fcntl
         // touches its flags; no pointer or memory is passed to the kernel.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -382,7 +388,7 @@ mod linux {
         }
         Ok(())
     }
-    fn install_isolation() -> Result<(), String> {
+    pub(super) fn install_isolation() -> Result<(), String> {
         // close_range is required, not approximated by a guessed fd ceiling.
         // SAFETY: this entrypoint is a fresh, single-threaded child; descriptors
         // 0/1/2 are retained as the only intended communication endpoints.

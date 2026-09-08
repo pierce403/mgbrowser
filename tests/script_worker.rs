@@ -222,13 +222,16 @@ fn restricted_child_member_context_preserves_frozen_form_and_allocation_baseline
     let report = reply.allocations.unwrap();
     println!("diagnostic fixture allocation: {report:?}");
     assert!(report.first_rejected.is_none());
-    // Frozen old-worker observation, before diagnostic production changes.
-    assert_eq!(report.accepted_bytes, 57_479);
+    // Frozen diagnostic baseline plus the separately measured event-host setup:
+    // removeEventListener 178 + onclick accessor 306 + onsubmit accessor 310.
+    // The language Bootstrap and all source/AST/function/regex phases stay fixed.
+    const EVENT_HOST_SETUP: u64 = 178 + 306 + 310;
+    assert_eq!(report.accepted_bytes, 57_479 + EVENT_HOST_SETUP);
     assert_eq!(report.phases.bootstrap, 25_999);
     assert_eq!(report.phases.source, 1_531);
     assert_eq!(report.phases.ast, 23_299);
     assert_eq!(report.phases.function_code, 128);
-    assert_eq!(report.phases.runtime, 6_522);
+    assert_eq!(report.phases.runtime, 6_522 + EVENT_HOST_SETUP);
     assert_eq!(report.phases.regex_compile, 0);
     assert_eq!(report.phases.regex_result, 0);
     assert_eq!(document.title, "Nullish diagnostic local fixture");

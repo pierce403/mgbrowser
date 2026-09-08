@@ -132,7 +132,10 @@ The worker parses a complete HTML snapshot, then runs eligible classic inline
 scripts in source order in one shared realm for that document. This is not the
 HTML parser-blocking script model. External `src` scripts and modules report
 unsupported errors; inert data scripts are not executed. Dynamically inserted
-scripts do not execute. Realm state ends when the document snapshot is returned.
+scripts do not execute. The native browser retains that restricted realm for
+bounded later interaction; the legacy one-shot worker still drops it after its
+reply. [PAGE_SESSIONS.md](PAGE_SESSIONS.md) defines the new lifecycle and event
+contract, including explicit cumulative interaction budgets.
 
 The bridge reads and changes the actual retained DOM tree. It supports connected
 element lookup, the documented selector subset, create/append/remove operations,
@@ -147,8 +150,13 @@ update the page. Replacing script/style text is unsupported.
 `readyState` progressing through loading, interactive and complete. Registered
 callbacks run in registration order within each phase; `window.onload` follows
 the load listeners. This is a small startup callback mechanism, not DOM event
-propagation. Keyboard/mouse events, timers, persistent event handlers, fetch/XHR,
-storage and script cookie access are not implemented. Console methods currently
+propagation; their third registration argument remains ignored without coercion.
+Later native/CDP link and control clicks now deliver a bounded capture/target/bubble
+`click`, followed by `submit` when appropriate, to the retained realm. Function-valued
+`onclick`/`onsubmit`, boolean capture, removal, propagation stops and cancellation
+are supported. Object listener options, synthetic dispatch, content-attribute
+handler compilation, other keyboard/mouse/input events, timers, fetch/XHR,
+storage and script cookie access remain unsupported. Console methods currently
 discard their arguments rather than providing a DevTools console.
 
 `location.href`, `location.assign` and `location.replace` can propose
@@ -169,7 +177,9 @@ document or navigating the parent.
 ## Process boundary and limits
 
 For each document, the parent starts a fresh copy of the executable with an empty
-environment and bounded JSON pipes. Before reading page input, the worker closes
+environment and bounded JSON pipes. The retained mode uses strict length-prefixed
+messages and keeps only typed input/control edits after initialization, never
+replacement scripts or HTML. Before reading page input, the worker closes
 inherited descriptors above 2, installs resource limits and `no_new_privs`, and
 loads an x86_64 seccomp filter. After setup it denies new filesystem, network and
 process access, executable memory, and changes to the confinement controls.
@@ -193,8 +203,10 @@ The Rust `libc` crate supplies OS declarations, not an alternate runtime/backend
 | DOM bridge | 50,000 nodes; depth 256; 4 MiB cumulative logical allocation; 1,024 snapshot collections |
 | Serialized DOM / diagnostics | 2 MiB HTML; at most 64 reported errors |
 | Genuine Error host formatting | 4,096 UTF-16 units including prefix/truncation suffix; bounded data-only lookup, no callback execution |
-| Worker protocol | 2 MiB request JSON; 4 MiB response JSON |
-| Worker OS / parent deadline | 256 MiB address space; 1 CPU second; 2-second wall deadline including transfer/startup |
+| Worker protocol | 2 MiB request JSON; 4 MiB response JSON per frame; retained event envelopes at most 64 KiB |
+| Worker OS / parent deadline | 256 MiB address space; 1 CPU second; 2 seconds total active wall including transfer/startup and later transactions |
+| Retained session | 300-second absolute lifetime, 64 transactions including initialization, 32 MiB combined lifetime wire bytes including headers; no renewal/replay |
+| Later interaction storage | 32 cumulative listener registrations; 256 event records; 128 edits per event, 8191 UTF-8 bytes per field; same runtime/DOM budgets |
 
 Expression parsing now uses heap-backed continuations rather than recursive
 precedence-helper descent. Its shared structural guard counts recursive grammar
@@ -212,6 +224,15 @@ the per-parse limits but are not individually charged as cumulative heap usage.
 The OS address-space cap is independent. Evaluator fuel/allocation/depth exhaustion
 is uncatchable and latched for the realm. The parent bounds pipe traffic, kills
 and reaps timed-out/oversized workers, and reports an explicit error.
+The retained manager also bounds pending commands/completions to one and total
+owned script children to two per browser, including pending and retiring children.
+Idle time does not consume active wall time, but cannot renew the absolute lifetime.
+Navigation/shutdown permanently invalidate the relevant generation/pool and reap
+owned children. Later failed events cannot replace the last accepted projection or
+silently perform their unanswered default action. Toolbar navigation remains usable.
+The 32 MiB wire allowance is an explicit new interaction policy, not an increase
+to the evaluator heap/fuel or child privileges. New global event-host registration
+cost is 794 Runtime-phase bytes; raw language Bootstrap remains unchanged.
 
 Regex compile attempts charge a pattern-sized realm reservation, including
 syntax failures; successful compiled storage receives an additional charge when
@@ -1399,3 +1420,28 @@ Implementation 0ca28d6 passed exact-SHA Rust CI 34178535480 with the same 848/74
 test totals and 19/19 journeys. Pages 34178535502 deployed the matching 8,576-byte
 HTTPS body, with approved apex certificate and HTTPS enforcement. The daily log
 records original remote evidence and the separate website visual-QA limitation.
+
+## Retained interaction acceptance — 2026-09-07
+
+The separately specified [page-session contract](PAGE_SESSIONS.md) now passes
+905 debug tests, 792 selected release checks and all four exact CI journey steps
+locally: 20 native and 20 external CDP destinations. The new frozen fixture
+requires later handlers, two cancellations, a moved Unicode input, retained
+closure proof and a handler-updated result URL. The server sees zero trap requests.
+Native/CDP frames were inspected. Independent actual-process tests cover framing,
+stale identities, aggregate admission, terminal replies and owned-child cleanup.
+The old one-shot worker and its tests remain. The measured added browser-host
+setup costs 794 Runtime bytes; language-only allocation checkpoints and existing
+execution caps remain unchanged. Retained lifetime/transaction/wire policies are
+explicit new bounds, not claims of unchanged protocol capacity.
+
+One subsequent live Google attempt loaded HTTP 200/title Google with 26 items,
+one form, five completed scripts and five errors. Two later page activations
+completed in the same realm before the actual form submitted. Search HTTP 200
+still rendered zero items/forms, with two completed scripts and three errors:
+the same redacted undefined method-call base, then Source 27,142 rejected after
+4,192,013 accepted bytes against the 4,194,304 limit, repeated by the next script.
+The additional 794 accepted search bytes are the explicitly measured host setup;
+the served source/request size is not a controlled benchmark. Exit 2 and an
+inspected blank frame leave the first-result/destination goal incomplete. Raw
+live artifacts remain ignored; no website-source adaptation or retry occurred.

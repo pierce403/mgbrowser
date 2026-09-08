@@ -2,7 +2,7 @@
 
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.
 
-**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. An opt-in original JavaScript interpreter now creates usable page controls inside a restricted worker; local native/CDP journeys pass. Google’s homepage and form submission work, but its search scripts still exceed our supported subset and return no actionable results. The live Google goal remains incomplete. There is no general autoresearch executor yet.
+**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. An opt-in original JavaScript interpreter creates usable controls and retains page state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete. There is no general autoresearch executor yet.
 
 ```sh
 cargo run --locked --bin mgbrowser -- https://www.google.com/
@@ -47,16 +47,26 @@ instance checks, with restricted metadata and prepaid bounded forwarding. An
 authored bound callback creates a real form inside the restricted worker.
 Nullish member failures now include bounded, redacted host-only context without
 changing caught exceptions, evaluation order or frozen allocation/fuel checkpoints.
-All 848 debug tests and 749 selected release checks pass locally, alongside
-19 native and 19 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt identifies a method-call target on
-undefined with a redacted string key, then a later source admission exceeds the
-unchanged 4 MiB allocation limit. This identifies the operation, not its cause.
-There are still no actionable results or newly completed live stages. Next is
-independent language/builtin coverage and measured storage-ownership work.
-Authored script-created forms
+Retained page realms now dispatch real later click/submit handlers, preserving
+closures, cancellation, stable node identities and versioned edits without
+replaying startup. The parent validates post-handler projections and constructs
+actual form/link requests; busy or failed activation is not silently accepted.
+The existing cumulative fuel, 4 MiB allocation and process limits remain; retained
+interaction adds explicit lifetime, transaction and wire bounds. See the
+[page-session contract](docs/PAGE_SESSIONS.md).
+All 905 debug tests and 792 selected release checks pass locally, along with
+20 native and 20 external CDP journeys, including a handler-required interaction
+sequence that cancels a link and first submit before reaching its real destination.
+Authored forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
+
+The latest bounded Google attempt loads the homepage and submits its actual form
+through the retained session. Search still has no actionable results: a method
+call resolves through undefined, then later source admission exceeds the existing
+4 MiB budget. The diagnostic identifies the operation, not its cause. No first
+result or destination has been reached; further independently tested language,
+browser API and storage-ownership work is needed.
 
 - Website: https://mgbrowser.org
 - [MVP and architecture plan](docs/MVP.md)
@@ -65,6 +75,7 @@ this remains a small, opt-in language subset, not general web compatibility.
 - [Autoresearch design](docs/AUTORESEARCH.md)
 - [CDP automation and roadmap](docs/CDP.md)
 - [Original JavaScript subset and limits](docs/JAVASCRIPT.md)
+- [Retained page interaction](docs/PAGE_SESSIONS.md)
 - [Contributing](CONTRIBUTING.md)
 - [Agent instructions](AGENTS.md), [memory](MEMORY.md), and [skills](SKILLS.md)
 

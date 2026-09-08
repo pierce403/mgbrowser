@@ -23,7 +23,7 @@ jobs:
       - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker
+        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
@@ -190,6 +190,41 @@ jobs:
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-diagnostics"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/diagnostics-home.png > tmp/script-journey/diagnostics-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-diagnostics tmp/script-journey/cdp-diagnostics-destination.png 2>&1 | tee tmp/script-journey/cdp-diagnostics-client.log
           BOUND_CDP
+      - name: Exercise retained click and submit handlers over native input and CDP
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/event-journey
+          target/debug/examples/journey_server > tmp/event-journey/server.log 2>&1 &
+          event_fixture_pid=$!
+          trap 'kill "$event_fixture_pid" 2>/dev/null || true; wait "$event_fixture_pid" 2>/dev/null || true' EXIT
+          event_ready=false
+          event_deadline=$((SECONDS + 10))
+          while (( SECONDS < event_deadline )); do
+            kill -0 "$event_fixture_pid"
+            if curl --fail --silent --max-time 1 http://127.0.0.1:7878/script-events > /dev/null; then event_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$event_ready" == true ]]
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --smoke-events --exit-after-smoke --evidence-dir tmp/event-journey/native 2>&1 | tee tmp/event-journey/native.log
+          timeout 45s xvfb-run -a bash <<'EVENT_CDP'
+          set -euo pipefail
+          target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --remote-debugging-port=0 > tmp/event-journey/browser.log 2>&1 &
+          event_browser_pid=$!
+          trap 'kill "$event_browser_pid" 2>/dev/null || true; wait "$event_browser_pid" 2>/dev/null || true' EXIT
+          event_debugger_ready=false
+          event_debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < event_debugger_deadline )); do
+            kill -0 "$event_browser_pid"
+            event_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/event-journey/browser.log)
+            if [[ -n "$event_port" ]] && curl --fail --silent --max-time 1 "http://127.0.0.1:$event_port/json/version" > /dev/null; then event_debugger_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$event_debugger_ready" == true ]]
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$event_port/devtools/page/page-1" http://127.0.0.1:7878/script-events tmp/event-journey/destination.png 2>&1 | tee tmp/event-journey/client.log
+          EVENT_CDP
+          if rg '/event-trap' tmp/event-journey/server.log; then exit 1; fi
+          [[ $(rg -c '^200 OK /event-search$' tmp/event-journey/server.log) == 2 ]]
+          [[ $(rg -c '^200 OK /event-destination$' tmp/event-journey/server.log) == 2 ]]
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4
@@ -204,3 +239,4 @@ jobs:
             tmp/cdp-client.log
             tmp/cdp-version.json
             tmp/script-journey
+            tmp/event-journey

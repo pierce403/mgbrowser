@@ -4,6 +4,13 @@ use crate::{
     js::runtime::{AllocationReport, Host, Runtime, Value},
 };
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
+
+mod events;
+use crate::page_session::{
+    ArenaSnapshot, DefaultAction, EventOutcome, RealmState, SessionInput, SessionReply,
+};
+use events::{EventRecord, Listener, Target};
 
 pub const MAX_SOURCE: usize = 1024 * 1024;
 const MAX_DOM_BYTES: usize = 4 * 1024 * 1024;
@@ -33,13 +40,27 @@ struct BrowserHost {
     navigation: Option<String>,
     allocated: usize,
     collections: Vec<Vec<usize>>,
-    listeners: Vec<(String, Value, Value)>,
+    listeners: Vec<Listener>,
+    events: Vec<EventRecord>,
     ready: &'static str,
+}
+
+/// A single page's original interpreter and append-only DOM. It is owned only
+/// by its restricted child; no Runtime values cross the serialized protocol.
+pub struct PageRealm {
+    runtime: Runtime,
+    host: BrowserHost,
+    revision: u64,
+    closed: bool,
 }
 
 /// Called inside the restricted worker in the browser, or on owned local fixtures
 /// in unit tests. This function has no filesystem/network/process capabilities.
 pub fn execute(request: Request) -> Reply {
+    initialize(request).1
+}
+
+fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
     let mut reply = Reply {
         applied: false,
         html: request.html.clone(),
@@ -52,7 +73,7 @@ pub fn execute(request: Request) -> Reply {
         reply
             .errors
             .push("Script document exceeds the source/URL limit".into());
-        return reply;
+        return (None, reply);
     }
     let url = match url::Url::parse(&request.url) {
         Ok(url) if matches!(url.scheme(), "http" | "https") => url,
@@ -60,7 +81,7 @@ pub fn execute(request: Request) -> Reply {
             reply
                 .errors
                 .push("Script document requires an HTTP(S) origin".into());
-            return reply;
+            return (None, reply);
         }
     };
     let document = document::parse_with_scripting(&request.html, url.as_str(), true);
@@ -114,6 +135,7 @@ pub fn execute(request: Request) -> Reply {
         allocated: request.html.len(),
         collections: Vec::new(),
         listeners: Vec::new(),
+        events: Vec::new(),
         ready: "loading",
     };
     let mut runtime = Runtime::new();
@@ -130,6 +152,18 @@ pub fn execute(request: Request) -> Reply {
         "addEventListener",
         Value::Native("host.window.addEventListener".into()),
     );
+    runtime.set_global(
+        "removeEventListener",
+        Value::Native("host.window.removeEventListener".into()),
+    );
+    for name in ["onclick", "onsubmit"] {
+        runtime.set_global_accessor(
+            name,
+            "window",
+            name,
+            Value::Native(format!("host.window.get.{name}")),
+        );
+    }
     for (index, source) in scripts.iter().enumerate() {
         match runtime.execute(source, &mut host) {
             Ok(_) => reply.scripts_executed += 1,
@@ -149,15 +183,25 @@ pub fn execute(request: Request) -> Reply {
             if event == "load" {
                 host.ready = "complete";
             }
-            let callbacks: Vec<_> = host
-                .listeners
-                .iter()
-                .filter(|(name, _, _)| name == event)
-                .cloned()
-                .collect();
-            for (_, callback, target) in callbacks {
-                if let Err(error) = runtime.invoke(
-                    callback,
+            // Preserve the documented startup-only approximation: listeners
+            // are selected by event type, rather than an actual target path.
+            let mut callbacks = [None; 32];
+            let mut count = 0;
+            for (id, listener) in host.listeners.iter().enumerate() {
+                if listener.active && listener.kind.name() == event {
+                    callbacks[count] = Some(id);
+                    count += 1;
+                }
+            }
+            for id in callbacks[..count].iter().flatten() {
+                let listener = &host.listeners[*id];
+                if !listener.active {
+                    continue;
+                }
+                let callback = Rc::clone(&listener.callback);
+                let target = listener.target.value();
+                if let Err(error) = runtime.invoke_retained(
+                    &callback,
                     target,
                     vec![Value::Host(format!("event:{event}"))],
                     &mut host,
@@ -193,12 +237,49 @@ pub fn execute(request: Request) -> Reply {
         Ok(html) => {
             reply.html = html;
             reply.applied = true;
-            reply.navigation = host.navigation;
+            reply.navigation = host.navigation.take();
         }
         Err(error) => reply.errors.push(error),
     }
     reply.errors.truncate(64);
-    reply
+    let realm = reply.applied.then_some(PageRealm {
+        runtime,
+        host,
+        revision: 0,
+        closed: false,
+    });
+    (realm, reply)
+}
+
+impl PageRealm {
+    pub fn start(request: Request) -> (Option<Self>, SessionReply) {
+        let (realm, old) = initialize(request);
+        let state = match &realm {
+            Some(realm) if realm.runtime.is_fatal() => RealmState::Fatal,
+            Some(_) => RealmState::Ready,
+            None => RealmState::Closed,
+        };
+        let snapshot = realm.as_ref().map(|realm| ArenaSnapshot {
+            nodes: realm.host.document.nodes.clone(),
+        });
+        let reply = SessionReply {
+            revision: 0,
+            snapshot,
+            outcome: EventOutcome::default(),
+            default_action: DefaultAction::None,
+            navigation: if state == RealmState::Ready {
+                old.navigation
+            } else {
+                None
+            },
+            errors: old.errors,
+            scripts_executed: old.scripts_executed,
+            allocations: old.allocations,
+            state,
+            acknowledgements: Vec::new(),
+        };
+        (realm, reply)
+    }
 }
 
 fn bounded(value: &str, max: usize) -> String {
@@ -586,6 +667,8 @@ impl Host for BrowserHost {
             | "host.location.replace"
             | "host.window.addEventListener"
             | "host.dom.addEventListener"
+            | "host.window.removeEventListener"
+            | "host.dom.removeEventListener"
             | "host.collection.item"
             | "host.dom.getElementById"
             | "host.dom.querySelector"
@@ -600,6 +683,16 @@ impl Host for BrowserHost {
     }
 
     fn get(&mut self, object: &str, key: &str) -> Result<Value, String> {
+        if matches!(key, "onclick" | "onsubmit") {
+            let target = if object == "window" {
+                Target::Window
+            } else {
+                Target::Node(self.node(object)?)
+            };
+            return self
+                .event_property_get(target, key)
+                .unwrap_or(Ok(Value::Null));
+        }
         if object == "navigator" {
             return Ok(match key {
                 "userAgent" => Value::text(crate::net::USER_AGENT),
@@ -643,6 +736,9 @@ impl Host for BrowserHost {
             });
         }
         if let Some(event) = object.strip_prefix("event:") {
+            if let Ok(id) = event.parse::<usize>() {
+                return self.event_get(id, key);
+            }
             return Ok(match key {
                 "type" => Value::text(event),
                 "target" | "currentTarget" => Value::Host("document".into()),
@@ -712,7 +808,8 @@ impl Host for BrowserHost {
                 | "getElementsByTagName"
                 | "createElement"
                 | "createTextNode"
-                | "addEventListener" => return Ok(Value::Native(format!("host.dom.{key}"))),
+                | "addEventListener"
+                | "removeEventListener" => return Ok(Value::Native(format!("host.dom.{key}"))),
                 _ => {}
             }
         }
@@ -774,11 +871,22 @@ impl Host for BrowserHost {
             | "querySelector"
             | "querySelectorAll"
             | "getElementsByTagName"
-            | "addEventListener" => Value::Native(format!("host.dom.{key}")),
+            | "addEventListener"
+            | "removeEventListener"
+            | "dispatchEvent"
+            | "click" => Value::Native(format!("host.dom.{key}")),
             _ => Value::Undefined,
         })
     }
     fn set(&mut self, object: &str, key: &str, value: Value) -> Result<(), String> {
+        if matches!(key, "onclick" | "onsubmit") {
+            let target = if object == "window" {
+                Target::Window
+            } else {
+                Target::Node(self.node(object)?)
+            };
+            return self.event_property_set(target, key, value).map(|_| ());
+        }
         // Runtime has applied true ToString for declared string-valued setters.
         // This fallible final conversion also rejects a directly supplied Symbol.
         let text = value.as_dom_text()?;
@@ -843,6 +951,23 @@ impl Host for BrowserHost {
         }
     }
     fn call(&mut self, name: &str, this: Value, args: Vec<Value>) -> Result<Value, String> {
+        if matches!(
+            name,
+            "host.window.addEventListener"
+                | "host.dom.addEventListener"
+                | "host.window.removeEventListener"
+                | "host.dom.removeEventListener"
+        ) {
+            return self.listener_call(name, this, args);
+        }
+        if name.starts_with("host.event.") {
+            return self.event_call(name, this);
+        }
+        if let Some(key) = name.strip_prefix("host.window.get.") {
+            return self
+                .event_property_get(Target::Window, key)
+                .unwrap_or_else(|| Err("Unsupported window getter".into()));
+        }
         let first = args.first().cloned().unwrap_or(Value::Undefined);
         let text = if self.string_arguments(name).contains(&0) {
             first.as_dom_text()?
@@ -857,23 +982,6 @@ impl Host for BrowserHost {
         }
         if matches!(name, "host.location.assign" | "host.location.replace") {
             self.navigate(&text)?;
-            return Ok(Value::Undefined);
-        }
-        if name == "host.window.addEventListener" || name == "host.dom.addEventListener" {
-            if !matches!(text.as_str(), "DOMContentLoaded" | "load") {
-                return Err(format!("Event {text} is not implemented yet"));
-            }
-            let callback = args
-                .get(1)
-                .cloned()
-                .ok_or("addEventListener needs a callback")?;
-            if !matches!(callback, Value::Function(_) | Value::Native(_)) {
-                return Err("Listener must be a function".into());
-            }
-            if self.listeners.len() >= 32 {
-                return Err("Listener limit exceeded".into());
-            }
-            self.listeners.push((text, callback, this));
             return Ok(Value::Undefined);
         }
         let Value::Host(handle) = this else {

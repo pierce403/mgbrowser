@@ -346,6 +346,10 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
     client.wait_for_path(&fixture, fixture.path())?;
     println!("CDP homepage loaded");
 
+    if fixture.path() == "/script-events" {
+        return run_events(client, &fixture, evidence);
+    }
+
     let root = client.root()?;
     let input = client.query(root, "input[name=q]")?;
     client.command("DOM.focus", json!({"nodeId": input}))?;
@@ -431,6 +435,142 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
     client.close();
     remaining(deadline)?;
     println!("CDP_JOURNEY_OK");
+    Ok(())
+}
+
+/// Independent public-protocol acceptance: no Runtime calls or private App hooks.
+fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result<()> {
+    fn click(client: &mut Client, selector: &str) -> Result<u64> {
+        let root = client.root()?;
+        let node = client.query(root, selector)?;
+        let model = client.command("DOM.getBoxModel", json!({"nodeId": node}))?;
+        let (x, y) = center_of_box(&model)?;
+        // Discard already-observed notifications, not future socket messages.
+        client.events.clear();
+        client.event_bytes = 0;
+        for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+            client.command(
+                "Input.dispatchMouseEvent",
+                json!({
+                    "type": kind, "x": x, "y": y, "button": "left",
+                    "buttons": buttons, "clickCount": 1,
+                }),
+            )?;
+        }
+        Ok(node)
+    }
+    fn text_of(tree: &Value, id: u64) -> Option<String> {
+        fn text(tree: &Value, output: &mut String) {
+            if tree["nodeType"].as_u64() == Some(3) {
+                output.push_str(tree["nodeValue"].as_str().unwrap_or(""));
+            }
+            if let Some(children) = tree["children"].as_array() {
+                for child in children {
+                    text(child, output);
+                }
+            }
+        }
+        if tree["nodeId"].as_u64() == Some(id) {
+            let mut output = String::new();
+            text(tree, &mut output);
+            return Some(output);
+        }
+        tree["children"]
+            .as_array()?
+            .iter()
+            .find_map(|child| text_of(child, id))
+    }
+    fn canceled(client: &mut Client, fixture: &url::Url, old: u64, expected: &str) -> Result<()> {
+        client.await_event("DOM.documentUpdated")?;
+        if client.frame_url()? != *fixture {
+            return Err(failure("Canceled activation navigated"));
+        }
+        let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
+        let root = document
+            .pointer("/root/nodeId")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| failure("Missing event projection root"))?;
+        let state = client.query(root, "#state")?;
+        if text_of(&document["root"], state).as_deref() != Some(expected) {
+            return Err(failure(format!(
+                "Wrong post-handler state; expected {expected}"
+            )));
+        }
+        let stale = client.command_raw("DOM.getAttributes", json!({"nodeId": old}))?;
+        if stale.pointer("/error/code").and_then(Value::as_i64) != Some(-32000) {
+            return Err(failure(
+                "Event projection failed to invalidate old CDP nodes",
+            ));
+        }
+        if client.events.iter().any(|(event, _)| {
+            matches!(
+                event["method"].as_str(),
+                Some(
+                    "Page.frameStartedLoading"
+                        | "Page.frameNavigated"
+                        | "Page.domContentEventFired"
+                        | "Page.loadEventFired"
+                        | "Page.frameStoppedLoading"
+                )
+            )
+        }) {
+            return Err(failure(
+                "Canceled event fabricated page navigation notifications",
+            ));
+        }
+        println!("CDP_EVENTS_STATE {expected}; stale node rejected, no navigation");
+        Ok(())
+    }
+    let root = client.root()?;
+    let input = client.query(root, "#query")?;
+    client.command("DOM.focus", json!({"nodeId": input}))?;
+    client.command("Input.insertText", json!({"text": QUERY}))?;
+    let old = click(&mut client, "#cancel")?;
+    canceled(&mut client, fixture, old, "link canceled")?;
+    let old = click(&mut client, "#submit")?;
+    canceled(&mut client, fixture, old, "first submit canceled")?;
+    let root = client.root()?;
+    let input = client.query(root, "#query")?;
+    client.command("DOM.focus", json!({"nodeId": input}))?;
+    client.command(
+        "Input.dispatchKeyEvent",
+        json!({"type":"keyDown", "key":"a", "modifiers":2}),
+    )?;
+    client.command("Input.insertText", json!({"text":"Rust & café again"}))?;
+    click(&mut client, "#submit")?;
+    let search = client.wait_for_path(fixture, "/event-search")?;
+    let fields: Vec<_> = search.query_pairs().collect();
+    for (key, value) in [
+        ("q", "Rust & café again"),
+        ("proof", "retained-1-2"),
+        ("submit", "events"),
+    ] {
+        if fields
+            .iter()
+            .filter(|(k, v)| k == key && v == value)
+            .count()
+            != 1
+        {
+            return Err(failure(format!(
+                "Post-handler request lacks exact {key} field"
+            )));
+        }
+    }
+    click(&mut client, "#result")?;
+    let destination = client.wait_for_path(fixture, "/event-destination")?;
+    if destination.query_pairs().collect::<Vec<_>>() != [("proof".into(), "clicked".into())] {
+        return Err(failure(
+            "Result handler did not supply the actual clicked destination",
+        ));
+    }
+    let dimensions = save_screenshot(&mut client, evidence)?;
+    println!(
+        "CDP_EVENTS_DESTINATION {destination}; PNG {}x{}",
+        dimensions.0, dimensions.1
+    );
+    client.close();
+    remaining(client.deadline)?;
+    println!("CDP_EVENTS_OK");
     Ok(())
 }
 

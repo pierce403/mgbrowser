@@ -4,6 +4,7 @@
 //! It deliberately executes no script. DOM inspection supports a documented
 //! selector subset; this is separate from a future CSS cascade.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const MAX_SOURCE: usize = 8 * 1024 * 1024;
@@ -24,6 +25,8 @@ pub struct Document {
     /// The actual bounded parser arena. Node zero is the document root.
     pub nodes: Vec<Node>,
     pub forms: Vec<Form>,
+    /// Stable arena identities aligned with `forms`, independent of projection order.
+    pub form_nodes: Vec<usize>,
     pub base_url: String,
     /// A standard zero-delay HTML meta refresh. Navigation caps belong to the
     /// browser; scripts and non-HTTP refresh destinations are never executed.
@@ -65,7 +68,8 @@ pub struct Form {
     pub fields: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     pub tag: String,
     pub attributes: Vec<(String, String)>,
@@ -361,14 +365,125 @@ pub fn parse(html: &str, page_url: &str) -> Document {
 /// This remains the documented partial HTML tree builder, not full HTML parsing.
 pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Document {
     let nodes = build_tree(html);
-    let base_url = nodes
+    project_arena(nodes, page_url, scripting).0
+}
+
+/// Project a worker-owned full arena without reparsing HTML or renumbering nodes.
+/// Detached trees remain in the arena but cannot supply visible content/forms.
+pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, String> {
+    if nodes.is_empty() || nodes.len() > MAX_NODES {
+        return Err("Invalid script snapshot node count".into());
+    }
+    let root = &nodes[0];
+    if root.tag != "#document"
+        || root.parent != 0
+        || !root.text.is_empty()
+        || !root.attributes.is_empty()
+    {
+        return Err("Invalid script snapshot document root".into());
+    }
+    let mut incoming = vec![0u8; nodes.len()];
+    let mut bytes = 0usize;
+    for (id, node) in nodes.iter().enumerate() {
+        if node.parent >= nodes.len()
+            || node.children.len() > MAX_NODES
+            || node.attributes.len() > 256
+        {
+            return Err("Invalid script snapshot links/attributes".into());
+        }
+        if node.tag == "#document" && id != 0
+            || node.tag == "#text" && (!node.children.is_empty() || !node.attributes.is_empty())
+            || node.tag != "#text" && !node.text.is_empty()
+            || node.tag.is_empty()
+            || node.tag.len() > MAX_ATTRIBUTE
+            || !matches!(node.tag.as_str(), "#text" | "#document")
+                && !node
+                    .tag
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+        {
+            return Err("Invalid script snapshot node kind".into());
+        }
+        bytes = bytes
+            .saturating_add(node.tag.len())
+            .saturating_add(node.text.len());
+        for (index, (key, value)) in node.attributes.iter().enumerate() {
+            if key.is_empty()
+                || key.len() > 256
+                || value.len() > MAX_ATTRIBUTE
+                || key.bytes().any(|c| {
+                    c.is_ascii_control()
+                        || c.is_ascii_whitespace()
+                        || matches!(c, b'=' | b'/' | b'<' | b'>' | b'\'' | b'"')
+                })
+                || node.attributes[..index].iter().any(|(old, _)| old == key)
+            {
+                return Err("Invalid script snapshot attribute".into());
+            }
+            bytes = bytes.saturating_add(key.len()).saturating_add(value.len());
+        }
+        if bytes > MAX_OUTPUT {
+            return Err("Script snapshot text limit exceeded".into());
+        }
+        for &child in &node.children {
+            if child == 0
+                || child == id
+                || child >= nodes.len()
+                || nodes[child].parent != id
+                || incoming[child] != 0
+            {
+                return Err("Invalid script snapshot child identity".into());
+            }
+            incoming[child] = 1;
+        }
+    }
+    let mut pending = Vec::new();
+    for (id, node) in nodes.iter().enumerate() {
+        if node.parent == id {
+            if incoming[id] != 0 {
+                return Err("Invalid detached script snapshot root".into());
+            }
+            pending.push((id, 0usize));
+        } else if incoming[id] != 1 {
+            return Err("Missing script snapshot parent edge".into());
+        }
+    }
+    let mut visited = 0usize;
+    while let Some((id, depth)) = pending.pop() {
+        if depth > MAX_DEPTH || visited >= MAX_NODES {
+            return Err("Script snapshot depth limit exceeded".into());
+        }
+        visited += 1;
+        pending.extend(nodes[id].children.iter().map(|&child| (child, depth + 1)));
+    }
+    if visited != nodes.len() {
+        return Err("Cyclic script snapshot arena".into());
+    }
+    let (document, overflow) = project_arena(nodes, page_url, true);
+    if overflow {
+        Err("Script snapshot projection limit exceeded".into())
+    } else {
+        Ok(document)
+    }
+}
+
+fn project_arena(nodes: Vec<Node>, page_url: &str, scripting: bool) -> (Document, bool) {
+    let mut tree_order = Vec::new();
+    let mut pending = vec![0usize];
+    while let Some(id) = pending.pop() {
+        tree_order.push(id);
+        pending.extend(nodes[id].children.iter().rev().copied());
+    }
+    let base_url = tree_order
         .iter()
+        .map(|&id| &nodes[id])
         .filter(|node| node.tag == "base")
         .find_map(|node| resolve(page_url, node.attr("href")?))
         .unwrap_or_else(|| page_url.to_owned());
-    let title = nodes
+    let title = tree_order
         .iter()
-        .position(|node| node.tag == "title")
+        .copied()
+        .find(|&id| nodes[id].tag == "title")
         .map(|id| collapse(&descendant_text(&nodes, id)).trim().to_owned())
         .unwrap_or_default();
     let mut document = Document {
@@ -377,8 +492,10 @@ pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Docu
         item_nodes: Vec::new(),
         nodes: Vec::new(),
         forms: Vec::new(),
+        form_nodes: Vec::new(),
         base_url,
-        refresh: nodes.iter().find_map(|node| {
+        refresh: tree_order.iter().find_map(|&id| {
+            let node = &nodes[id];
             if node.tag != "meta" || !node.attr("http-equiv")?.eq_ignore_ascii_case("refresh") {
                 return None;
             }
@@ -396,7 +513,8 @@ pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Docu
     };
     let mut form_nodes = HashMap::new();
     let mut form_ids = HashMap::new();
-    for (id, node) in nodes.iter().enumerate() {
+    for &id in &tree_order {
+        let node = &nodes[id];
         if node.tag != "form" || document.forms.len() == MAX_FORMS {
             continue;
         }
@@ -419,6 +537,7 @@ pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Docu
             },
             fields: Vec::new(),
         });
+        document.form_nodes.push(id);
         form_nodes.insert(id, form);
         if let Some(name) = node.attr("id") {
             form_ids.entry(name).or_insert(form);
@@ -437,9 +556,10 @@ pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Docu
         output.document.items.pop();
         output.document.item_nodes.pop();
     }
+    let overflow = output.bytes > MAX_OUTPUT;
     let mut document = output.document;
     document.nodes = nodes;
-    document
+    (document, overflow)
 }
 
 fn resolve(base: &str, reference: &str) -> Option<String> {

@@ -1,0 +1,8 @@
+<!doctype html><html><head><title>Retained event results</title></head><body>
+<h1>Authored local event results</h1>
+<a id="result" href="/event-trap">First local event result</a>
+<script>
+document.getElementById('result').onclick = function () {
+ this.href = '/event-destination?proof=clicked';
+};
+</script></body></html>

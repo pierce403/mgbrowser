@@ -14,6 +14,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = url::Url::parse(&format!("http://127.0.0.1:7878{target}"))?;
         let fields: Vec<_> = url.query_pairs().collect();
         let (status, body) = match url.path() {
+            "/script-events" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/events.html"),
+            ),
+            "/event-search"
+                if fields
+                    .iter()
+                    .any(|(k, v)| k == "q" && v == "Rust & café again")
+                    && fields
+                        .iter()
+                        .any(|(k, v)| k == "proof" && v == "retained-1-2")
+                    && fields.iter().any(|(k, v)| k == "submit" && v == "events") =>
+            {
+                (
+                    "200 OK",
+                    include_str!("../tests/fixtures/script/event-results.html"),
+                )
+            }
+            "/event-destination" if fields.iter().any(|(k, v)| k == "proof" && v == "clicked") => (
+                "200 OK",
+                "<title>Event destination</title><h1>Retained event destination reached</h1>",
+            ),
             "/" => (
                 "200 OK",
                 include_str!("../tests/fixtures/journey/home.html"),

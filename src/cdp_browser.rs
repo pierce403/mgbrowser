@@ -18,6 +18,7 @@ pub struct LayoutBox {
 }
 
 pub enum Event {
+    DocumentUpdated,
     Started,
     Finished {
         generation: u64,
@@ -150,6 +151,16 @@ impl BrowserCdp {
     fn flush_events(&mut self, app: &mut App) {
         for event in std::mem::take(&mut app.cdp_events) {
             match event {
+                Event::DocumentUpdated => {
+                    for scope in self.scopes.values_mut() {
+                        scope.pressed = None;
+                    }
+                    for (route, scope) in &self.scopes {
+                        if scope.dom {
+                            self.event(route, "DOM.documentUpdated", json!({}));
+                        }
+                    }
+                }
                 Event::Started => {
                     for (route, scope) in &self.scopes {
                         if scope.page {
@@ -524,7 +535,7 @@ impl BrowserCdp {
                     })
                     .map(|(i, _)| i)
                     .ok_or_else(|| failed("Node is not a supported editable input"))?;
-                app.focus = Focus::Input(item);
+                app.focus = Focus::Input(app.document.item_nodes[item]);
                 app.select_all = false;
                 app.dirty = true;
                 Ok(json!({}))
@@ -606,7 +617,7 @@ impl BrowserCdp {
                     "mouseReleased" => {
                         if let Some((px, py)) = scope.pressed.take() {
                             if (px - x).abs() <= 5 && (py - y).abs() <= 5 {
-                                app.click(x, y + TOP);
+                                app.click_checked(x, y + TOP).map_err(failed)?;
                             }
                         }
                     }
@@ -717,6 +728,8 @@ fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
                 .ok_or_else(|| invalid("Invalid character key"))?
                 .to_string(),
         )?;
+    } else if sym == 0xff0d {
+        app.enter_checked().map_err(failed)?;
     } else {
         app.key(sym, ctrl, modifiers & 8 != 0, false);
     }
@@ -725,16 +738,19 @@ fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
 
 impl App {
     fn insert_cdp_text(&mut self, text: &str) -> Result<(), (i32, String)> {
-        let Focus::Input(i) = self.focus else {
+        let Focus::Input(node) = self.focus else {
             return Err(failed("No editable page input has focus"));
         };
-        let Some(Item::Input { value, .. }) = self.document.items.get(i) else {
+        let Some(i) = self.input_item(node) else {
             return Err(failed("Focused input is stale"));
+        };
+        let Item::Input { value, .. } = &self.document.items[i] else {
+            unreachable!()
         };
         let retained = if self.select_all {
             0
         } else {
-            self.values.get(&i).unwrap_or(value).len()
+            self.values.get(&node).unwrap_or(value).len()
         };
         if text.chars().any(char::is_control)
             || retained.saturating_add(text.len()) > super::MAX_EDIT_BYTES
@@ -980,9 +996,10 @@ mod tests {
         let (_, id) = input(&app);
         cdp.dispatch(&mut app, &r, false, "DOM.focus", &json!({"nodeId":id}))
             .unwrap();
-        let Focus::Input(i) = app.focus else {
+        let Focus::Input(node) = app.focus else {
             panic!("input focus")
         };
+        let i = app.input_item(node).unwrap();
         app.select_all = true;
         let oversized = "x".repeat(8192);
         for (method, params) in [
@@ -1035,6 +1052,142 @@ mod tests {
         assert_eq!(app.field_value(i, "old").len(), 8191);
         assert!(app.insert_cdp_text("y").is_err());
         assert_eq!(app.field_value(i, "old").len(), 8191);
+    }
+    #[test]
+    fn immediate_activation_rejection_is_a_protocol_error_not_dropped_success() {
+        use mg_deps::page_session::{InputKind, SessionInput};
+        for condition in ["pending", "closed", "loading"] {
+            let mut app = fixture();
+            let mut cdp = BrowserCdp::bind(0).unwrap();
+            let r = route();
+            let (node, id) = input(&app);
+            // Exercise the parent admission state without starting a worker in
+            // the unit-test executable. Actual session ownership is tested by
+            // the independent restricted-process tests.
+            match condition {
+                "pending" => {
+                    app.pending_event = Some(crate::PendingEvent {
+                        generation: app.generation,
+                        session_id: 7,
+                        sequence: 1,
+                        revision: app.page_revision,
+                        input: SessionInput {
+                            kind: InputKind::Click { target: node },
+                            edits: vec![],
+                        },
+                    })
+                }
+                "closed" => app.script_blocked = true,
+                "loading" => app.loading = true,
+                _ => unreachable!(),
+            }
+            cdp.dispatch(&mut app, &r, false, "DOM.focus", &json!({"nodeId":id}))
+                .unwrap();
+            app.select_all = true;
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.insertText",
+                &json!({"text":"newer café"}),
+            )
+            .unwrap();
+            let version = app.edit_versions[&node];
+            let epoch = app.dom_epoch;
+            app.refresh_layout();
+            let link = app
+                .hits
+                .iter()
+                .find(|hit| matches!(hit.action, crate::Action::Link { .. }))
+                .unwrap();
+            let x = link.x + 1;
+            let y = link.y + 1 - TOP;
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mousePressed","button":"left","x":x,"y":y}),
+            )
+            .unwrap();
+            let rejected = cdp
+                .dispatch(
+                    &mut app,
+                    &r,
+                    false,
+                    "Input.dispatchMouseEvent",
+                    &json!({"type":"mouseReleased","button":"left","x":x,"y":y}),
+                )
+                .unwrap_err();
+            assert_eq!(rejected.0, -32000, "{condition}: {rejected:?}");
+            assert!(cdp.scopes[&r].pressed.is_none());
+            assert_eq!(
+                cdp.dispatch(
+                    &mut app,
+                    &r,
+                    false,
+                    "Input.dispatchKeyEvent",
+                    &json!({"type":"keyDown","key":"Enter"})
+                )
+                .unwrap_err()
+                .0,
+                -32000,
+                "{condition}"
+            );
+            assert_eq!(app.generation, 0);
+            assert_eq!(app.inflight, 0);
+            assert_eq!(app.dom_epoch, epoch);
+            assert_eq!(app.edit_versions[&node], version);
+            assert_eq!(app.values[&node], "newer café");
+            assert_eq!(app.pending_event.is_some(), condition == "pending");
+
+            // Backpressure applies to activation, not subsequent typing or
+            // nonactivation mouse events. A release without a press is a no-op.
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.insertText",
+                &json!({"text":" again"}),
+            )
+            .unwrap();
+            assert!(app.edit_versions[&node] > version);
+            assert_eq!(app.values[&node], "newer café again");
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mouseReleased","button":"left","x":x,"y":y}),
+            )
+            .unwrap();
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mouseMoved","x":0,"y":0}),
+            )
+            .unwrap();
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mouseWheel","x":0,"y":0,"deltaY":1}),
+            )
+            .unwrap();
+            for kind in ["mousePressed", "mouseReleased"] {
+                cdp.dispatch(
+                    &mut app,
+                    &r,
+                    false,
+                    "Input.dispatchMouseEvent",
+                    &json!({"type":kind,"button":"left","x":1000,"y":600}),
+                )
+                .unwrap();
+            }
+        }
     }
     #[test]
     fn viewport_geometry_scroll_click_and_png_exclude_browser_chrome() {

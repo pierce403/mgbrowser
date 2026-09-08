@@ -193,7 +193,7 @@
     },
     {
       "domain": "DOM",
-      "description": "Inspection of mgbrowser's actual bounded HTML tree. Selectors are a declared subset. Node references are invalidated by document replacement; Runtime object handles are unsupported.",
+      "description": "Inspection of mgbrowser's actual bounded HTML tree. Selectors are a declared subset. Node references are invalidated by document replacement or accepted script-event projection; Runtime object handles are unsupported.",
       "types": [
         { "id": "NodeId", "type": "integer" },
         { "id": "BackendNodeId", "type": "integer" },
@@ -279,11 +279,11 @@
           "parameters": [ { "name": "nodeId", "$ref": "NodeId" } ]
         }
       ],
-      "events": [ { "name": "documentUpdated", "description": "Document replaced; discard previous nodeId references and request the new root." } ]
+      "events": [ { "name": "documentUpdated", "description": "Document replaced or script-event projection accepted; discard previous nodeId references and request the new root." } ]
     },
     {
       "domain": "Input",
-      "description": "Input for the existing page controls, using CSS viewport coordinates and fixed scale one. No touch, drag, IME composition, or JavaScript event dispatch.",
+      "description": "Input for the existing page controls, using CSS viewport coordinates and fixed scale one. With opt-in scripting, activation dispatches bounded retained click/submit handlers. No touch, drag, IME composition, synthetic script dispatch, or general keyboard/input event support.",
       "types": [ { "id": "MouseButton", "type": "string", "enum": [ "none", "left" ] } ],
       "commands": [
         {

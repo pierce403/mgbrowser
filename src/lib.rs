@@ -6,6 +6,7 @@ pub mod document;
 pub mod js;
 pub mod js_browser;
 pub mod net;
+pub mod page_session;
 pub mod paint;
 
 /// Build a research TLS client with the caller's trusted roots.
