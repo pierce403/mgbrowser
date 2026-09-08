@@ -139,6 +139,95 @@ fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
     assert!(reply.html.contains("Authored local concat form ready"));
 }
 
+fn function_prototype_reply(
+    html: &str,
+) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/local-function-prototype-worker-baseline".into(),
+        html: html.into(),
+    };
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(reply.applied);
+    let report = reply.allocations.unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let document = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    (reply, document)
+}
+
+#[test]
+fn restricted_child_function_defaults_create_form_after_frozen_storage_workload() {
+    let (reply, document) =
+        function_prototype_reply(include_str!("fixtures/script/function-prototypes.html"));
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("function-prototypes fixture allocation: {report:?}");
+    assert!(report.first_rejected.is_none());
+    assert_eq!(document.title, "Function-prototype local fixture");
+    assert_eq!(document.forms.len(), 1);
+    assert_eq!(document.forms[0].action, "https://example.test/search");
+    assert!(document.items.iter().any(|item| matches!(item,
+        mg_deps::document::Item::Input { name, .. } if name == "q")));
+    assert!(document.nodes.iter().any(|node| node.tag == "input"
+        && node.attr("type") == Some("hidden")
+        && node.attr("name") == Some("source")
+        && node.attr("value") == Some("fixture")));
+    assert!(document.nodes.iter().any(|node| node.tag == "button"
+        && node.attr("type") == Some("submit")
+        && node.attr("name") == Some("submit")
+        && node.attr("value") == Some("search")));
+    assert!(
+        reply
+            .html
+            .contains("Authored local function-prototype form ready")
+    );
+}
+
+#[test]
+fn restricted_child_default_prototype_ordinary_exception_allows_later_recovery() {
+    let (reply, document) = function_prototype_reply(
+        "<html><head><title>Prototype fallback</title></head><body><p id=output>Readable prototype fallback</p><script>function failing(){var f=function(){};if(f.prototype.constructor!==f)throw 'Default failed';throw TypeError('authored default prototype');}failing();document.title='Incorrect completion';location.href='/incorrect';</script><script>function recovering(){var f=function(){};if(f.prototype.constructor!==f)throw 'Recovery default failed';document.title='Prototype recovered';document.getElementById('output').textContent='Recovered after materialized prototype';}recovering();</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+    assert!(reply.errors[0].contains("TypeError: authored default prototype"));
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    assert_eq!(document.title, "Prototype recovered");
+    assert!(document.forms.is_empty());
+    assert!(
+        reply
+            .html
+            .contains("Recovered after materialized prototype")
+    );
+}
+
+#[test]
+fn restricted_child_observed_function_defaults_still_exhaust_and_latch() {
+    let (reply, document) = function_prototype_reply(
+        "<html><head><title>Observed prototype fallback</title></head><body><p id=output>Readable observed prototype fallback</p><script>function factory(){return function(){};}var first=factory();if(first.prototype.constructor!==first)throw 'First default failed';document.getElementById('output').setAttribute('data-prototype','ready');try{for(var index=0;index<4800;index++){var f=factory();if(f.prototype.constructor!==f)throw 'Default failed';}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>",
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert_eq!(reply.errors.len(), 2, "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("observed function-prototype rejection: {report:?}");
+    assert!(report.first_rejected.is_some());
+    let diagnostic = reply.errors[0].split_once(": ").unwrap().1;
+    assert!(diagnostic.contains("JavaScript allocation budget exhausted"));
+    assert_eq!(reply.errors[1].split_once(": ").unwrap().1, diagnostic);
+    assert_eq!(document.title, "Observed prototype fallback");
+    let output = document.query_selector(0, "#output").unwrap().unwrap();
+    assert_eq!(document.nodes[output].attr("data-prototype"), Some("ready"));
+    assert!(document.forms.is_empty());
+    assert!(reply.html.contains("Readable observed prototype fallback"));
+}
+
 fn empty_arguments_reply(html: &str) -> (mg_deps::js_browser::Reply, mg_deps::document::Document) {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/local-empty-arguments-worker-baseline".into(),

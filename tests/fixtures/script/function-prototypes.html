@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><title>Function prototype worker baseline</title></head><body>
+<p id="status">Authored local function-prototype fixture fallback.</p>
+<script>
+function factory(){return function(){return 7;};}
+var first;
+var last;
+for(var count=0;count<4800;count++){
+  last=factory();
+  if(count===0)first=last;
+}
+if(first===last || first()!==7 || last()!==7)throw 'Fresh function identity failed';
+if(Object.keys(first).length!==0 || Object.getOwnPropertyNames(first).join(',')!=='length,name,prototype' || !first.hasOwnProperty('prototype') || !('prototype' in first) || delete first.prototype)throw 'Function metadata failed';
+var original=first.prototype;
+var other=last.prototype;
+if(original===other || original.constructor!==first || other.constructor!==last || first.prototype!==original || Object.getPrototypeOf(original)!==Object.prototype)throw 'Default prototype identity failed';
+var inherited=Object.create(first);
+if(inherited.prototype!==original)throw 'Inherited prototype owner failed';
+var old=new first();
+var replacement={};
+first.prototype=replacement;
+var newer=new first();
+if(Object.getPrototypeOf(old)!==original || Object.getPrototypeOf(newer)!==replacement || old instanceof first || !(newer instanceof first) || original.constructor!==first)throw 'Replacement prototype lifetime failed';
+document.title='Function-prototype local fixture';
+var form=document.createElement('form');
+form.method='GET';
+form.action='/search';
+var q=document.createElement('input');
+q.type='text';
+q.name='q';
+var hidden=document.createElement('input');
+hidden.type='hidden';
+hidden.name='source';
+hidden.value='fixture';
+var go=document.createElement('button');
+go.type='submit';
+go.name='submit';
+go.value='search';
+go.textContent='Search';
+form.appendChild(q);
+form.appendChild(hidden);
+form.appendChild(go);
+document.body.appendChild(form);
+document.getElementById('status').textContent='Authored local function-prototype form ready';
+</script></body></html>

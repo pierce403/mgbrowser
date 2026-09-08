@@ -514,6 +514,9 @@ struct Function {
     code: Rc<Code>,
     environment: usize,
     properties: usize,
+    // The real own property is admitted immediately. Only its default object
+    // and constructor backlink wait for an actual value read.
+    pending_default_prototype: bool,
 }
 enum Reference {
     Binding(usize, String),
@@ -1429,7 +1432,6 @@ impl Runtime {
             environment
         };
         let properties = self.object(Some(self.function_prototype), None)?;
-        let prototype = self.object(Some(self.object_prototype), None)?;
         let id = self.functions.len();
         self.functions.push(Function {
             code: Rc::new(Code {
@@ -1439,9 +1441,10 @@ impl Runtime {
             }),
             environment,
             properties,
+            pending_default_prototype: false,
         });
-        self.put_own(properties, "prototype", Value::Object(prototype), false)?;
-        self.put_own(prototype, "constructor", Value::Function(id), false)?;
+        self.put_own(properties, "prototype", Value::Undefined, false)?;
+        self.functions[id].pending_default_prototype = true;
         if self_named && let Some(name) = name {
             self.define(environment, name, Value::Function(id))?;
         }
@@ -2532,7 +2535,13 @@ impl Runtime {
                 if self.readonly_property(PrototypeIdentity::Function(id), KeyRef::String(key))? {
                     return Ok(());
                 }
-                self.put_own(object, key, value, true)
+                self.put_own(object, key, value, true)?;
+                if key == "prototype" {
+                    // Readonly/no-op and failed paid writes return above. An
+                    // inherited child shadow takes the ordinary-object path.
+                    self.functions[id].pending_default_prototype = false;
+                }
+                Ok(())
             }
             Value::Native(name) => {
                 let virtual_key = native_virtual_names(&name).contains(&key);

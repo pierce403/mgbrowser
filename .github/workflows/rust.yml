@@ -23,7 +23,7 @@ jobs:
       - name: Run browser component and interaction tests
         run: cargo +1.91.1 test --locked --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_dom --test script_worker
+        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_dom --test script_worker
       - name: Build browser and local fixture server
         run: cargo +1.91.1 build --locked --bins --examples
       - name: Exercise a local search and result click in an X11 window
@@ -102,6 +102,7 @@ jobs:
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-errors --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-errors
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-concat --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-concat
           timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-empty-arguments --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-empty-arguments
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-function-prototypes --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-function-prototypes
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
           target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
@@ -148,6 +149,8 @@ jobs:
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-concat tmp/script-journey/cdp-concat-destination.png 2>&1 | tee tmp/script-journey/cdp-concat-client.log
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-empty-arguments"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/empty-arguments-home.png > tmp/script-journey/empty-arguments-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-empty-arguments tmp/script-journey/cdp-empty-arguments-destination.png 2>&1 | tee tmp/script-journey/cdp-empty-arguments-client.log
+          target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-function-prototypes"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/function-prototypes-home.png > tmp/script-journey/function-prototypes-home.json
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-function-prototypes tmp/script-journey/cdp-function-prototypes-destination.png 2>&1 | tee tmp/script-journey/cdp-function-prototypes-client.log
           SCRIPT_CDP
       - name: Preserve rendered local journey
         if: always()

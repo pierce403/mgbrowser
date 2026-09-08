@@ -830,6 +830,60 @@ fn replaced_empty_arguments_preserve_symbol_rejection_at_dom_boundary() {
 }
 
 #[test]
+fn inherited_function_default_and_constructed_instance_drive_actual_dom() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        function Message(){this.text='Rust & café';}
+        var child=Object.create(Message);
+        var prototype=child.prototype;
+        var value=new Message();
+        if(prototype.constructor!==Message || Object.getPrototypeOf(value)!==prototype || !(value instanceof Message))throw 'Prototype identity failed';
+        document.getElementById('output').textContent=value.text;
+        document.title='Function prototype DOM ready';
+        location.href='/function-prototype-destination';
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/function-prototype-destination")
+    );
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Function prototype DOM ready");
+    assert_eq!(content(&document, "#output"), "Rust & café");
+    readable(&document);
+}
+
+#[test]
+fn unread_prototype_replacement_keeps_symbol_dom_rejection_and_target() {
+    let reply = page(
+        "",
+        "",
+        r#"
+        function Unread(){}
+        Unread.prototype=Symbol('replacement');
+        try{document.getElementById('output').textContent=Unread.prototype;location.href='/incorrect';}
+        catch(error){if(String(error)!=='TypeError: cannot convert Symbol to string')throw error;}
+        document.title='Prototype replacement stays a value';
+    "#,
+    );
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    assert!(reply.allocations.unwrap().first_rejected.is_none());
+    let document = rendered(&reply);
+    assert_eq!(document.title, "Prototype replacement stays a value");
+    assert_eq!(content(&document, "#output"), "Unchanged output");
+    readable(&document);
+}
+
+#[test]
 fn concat_keeps_symbol_values_until_dom_conversion_rejects_without_mutation() {
     let reply = page(
         "",

@@ -39,11 +39,15 @@ and identity, with distinct Array/Arguments branding and prepaid result storage.
 Empty-only arguments snapshots now materialize on first read, preserving identity
 and scope while avoiding unused objects. An authored 8,500-call page now creates
 its real form under the same cap; observed snapshots still pay their full cost.
-All 659 debug tests and 561 selected release checks pass locally, alongside
-16 native and 16 external CDP journeys. Ingress, real-copy and resource limits
-remain intact. The latest Google attempt still stops at the unchanged 4 MiB
-cumulative allocation limit, with no actionable results or new completed live
-stage. Next is independently measured storage-ownership work.
+Fresh user-function defaults now also materialize only on an actual prototype
+read; paid property metadata, unique identity and constructor backlinks remain
+intact. An authored 4,800-function page now creates its form under the same cap.
+All 721 debug tests and 623 selected release checks pass locally, alongside
+17 native and 17 external CDP journeys. Ingress, real-copy and resource limits
+remain intact. The latest Google attempt reports a non-callable value, then a
+later source admission exceeds the unchanged 4 MiB cumulative allocation limit.
+There are still no actionable results or newly completed live stages. Next is
+independent language/builtin coverage and measured storage-ownership work.
 Authored script-created forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.

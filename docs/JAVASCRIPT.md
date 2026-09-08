@@ -1067,3 +1067,117 @@ completed live stage. These local results do not establish Google's actual call
 distribution; changing served responses are not a controlled benchmark. Further
 ownership work needs independent authored measurements, with no raised limits or
 live-source inspection/adaptation/retry.
+
+### Default user-function prototype storage
+
+The implemented bounded storage change defers only the fresh default prototype
+object and its constructor backlink for original user functions. Function code/name,
+captured environments, the actual 128-byte function property bag and its real
+137-byte nonenumerable writable prototype property remain admitted at creation.
+A private pending flag distinguishes the unpublished default; no public Value
+variant or generic property lazy-value mechanism is introduced. Native builtins,
+Function.prototype itself, existing descriptors/deletion approximations, shared
+code and the empty-arguments policy remain unchanged.
+
+The first actual prototype-value read creates a unique Object.prototype-linked
+object with an own nonenumerable constructor referencing the original function.
+Repeated/inherited reads resolve the same owning function's object, not a new
+object for each receiver. Names/keys, hasOwnProperty, in, unsuccessful deletion,
+and Object.getPrototypeOf(function) inspect existing metadata without forcing the
+default value. Successful own replacement cancels pending only after the normal
+paid write; readonly/no-op/failed writes and inherited child shadows do not.
+Previously observed defaults and their constructor identities survive replacement.
+Construction and instanceof use their existing actual Get and typed-prototype
+rules, including primitive-left instanceof short-circuit and constructor fallback.
+References: [function creation](https://262.ecma-international.org/5.1/#sec-13.2),
+[prototype property](https://262.ecma-international.org/5.1/#sec-15.3.5.2),
+and [instance checks](https://262.ecma-international.org/5.1/#sec-15.3.5.3).
+
+Materialization admits the existing 128-byte object and 139-byte constructor
+property before publishing any value; the existing constructor-write fuel step
+moves to this point. The original prototype-property write and its fuel stay at
+function creation. No synthetic step or cap replaces unperformed work. Failure
+timing intentionally moves to actual admission: prior effects and accepted orphan
+storage remain, pending state is not exposed as a partial value, and fatal
+latching bypasses handlers and later work. Object/function/heap/fuel/depth limits,
+payload ingress and real copies are unchanged. If construction succeeds but the
+subsequent ordinary read exhausts fuel, the complete object stays published;
+failure does not undo accepted work. No getter or inherited readonly constructor
+can intercept internal own-backlink creation. Public deletion of a function's
+prototype property still returns false, retaining the existing descriptor
+approximation rather than adding a general descriptor API.
+
+The private pending flag increases Function from 24 to 32 bytes on x86_64. Code
+remains 56 bytes, Object 112 and Property 64; the fixed metadata still fits its
+existing allowances. Bootstrap remains 25,854 bytes. A fresh anonymous function
+now pays 265 Runtime bytes for its real bag/property, plus the unchanged 128
+FunctionCode bytes (and any display name). The first pending-default value read
+adds 267 Runtime bytes exactly once. The authored otherwise-empty zero-argument
+factory pays 530 Runtime bytes including its separate 265-byte unread-call
+overhead; that is not a cost assertion for arbitrary factory bodies. This is not
+a collector, a resource refund, or permission to share
+default prototypes across different functions.
+
+The frozen authored six-case baseline isolates 532 Runtime bytes per fresh
+function beyond empty-call overhead; default object/backlink storage accounts
+for 267. Same-size creation costs for small and 1,000-statement bodies show that
+code is already shared. The frozen 1,982-byte authored worker fixture attempts
+4,800 fresh function creations before metadata, default/backlink identity,
+inherited-owner, new/instanceof and actual form-building checks. The old worker
+rejects Runtime 137 after 4,194,256 accepted bytes, with no controls and readable
+fallback. This is an independently authored workload, not website source.
+
+All 30 independent semantic groups pass on the pinned baseline and candidate;
+17 candidate resource groups verify creation, first-read, overwrite, copy and
+fatal admission costs under unchanged caps. Three initial new-test assumptions
+about Object.prototype.constructor and Array.prototype.constructor were corrected
+before candidate testing: those existing native backlinks are absent. User-function
+backlinks/attributes remain required, and native controls check unchanged behavior.
+This does not add native backlinks or claim full descriptor conformance. All ten
+new private groups and all 91 runtime groups pass on default stacks, including
+shared code versus fresh identity, metadata/computed keys, successful and failed
+overwrites, inherited owner/shadowing, poisoned constructor fields, retained old
+defaults/data cycles, exact fuel movement and object/function/heap preflight.
+Failed 128-byte object or 139-byte backlink admission leaves pending state intact;
+accepted orphan objects remain charged, with no partial value exposed.
+
+The unchanged tests/fixtures/script/function-prototypes.html now completes one
+script without errors and creates the real query, hidden source=fixture and
+submit controls at 3,232,783 accepted bytes: Bootstrap 25,854, Source 1,916,
+Ast 36,118, FunctionCode 614,535 and Runtime 2,554,360, regex zero. The old baseline
+stopped before those controls; these totals represent different completed work,
+not a controlled performance or RSS comparison. A separate worker control that
+reads each generated default still exhausts the same 4 MiB budget: Runtime 128
+is rejected after 4,194,238 accepted bytes. Its earlier ready marker survives,
+but catch/finally/later-script changes and navigation remain bypassed. Ordinary
+post-materialization errors still permit recovery.
+
+Focused integration passes 30 DOM and 43 actual-worker groups. Frozen local gates
+pass 721 debug tests (31 summaries) and 623 selected release checks (22 summaries),
+alongside formatting, the locked binary/example build and dependency guard on
+Rust 1.91.1. No previous assertion or cap was weakened. Evidence is in ignored
+tmp/function-prototype-private-focused.log, tmp/function-prototype-integration-tests.log,
+tmp/function-prototype-final-tests.log and tmp/function-prototype-final-release.log.
+All three exact CI journey steps also pass locally under unchanged deadlines,
+with 17 native and 17 external CDP destinations. The new fixture submits its
+actual Unicode query, hidden and submit fields; stale-node rejection, first local
+link, flattened session and 1100×683 destination PNG checks pass. Root inspected
+the native query/ready-form and external CDP destination frames. Owned servers
+exited and fixture/debugger ports were clear. These are application-handler and
+external protocol checks, not independent physical input. Exact-SHA publication
+is recorded separately in the daily log. These authored results do not establish
+Google's actual prototype-read distribution or complete its results/destination goal.
+
+One bounded post-change live attempt submitted Google's actual form through verified
+TLS and ordinary cookies. Homepage HTTP 200 retains 26 items/one form, three completed
+scripts/seven errors and no rejected allocation (2,428,284 accepted bytes). Search
+HTTP 200 still has no items/forms and two completed scripts/three errors: first
+`TypeError: value is not callable`, then Source 26,999 rejected after 4,187,629
+accepted bytes, repeated by the next script. Search phases are Bootstrap25,854,
+Source132,384, Ast2,438,297, FunctionCode25,216, Runtime1,564,706,
+RegexCompile1,152 and RegexResult20. Exit 2/JOURNEY_INCOMPLETE; the inspected search
+frame is blank, with no result/destination or newly completed live stage. The
+generic error does not identify a missing callable; changed served responses are
+not a controlled performance comparison. Next is independently authored language/
+builtin coverage and measured storage ownership, with no raised limits or live
+source inspection/adaptation/retry.

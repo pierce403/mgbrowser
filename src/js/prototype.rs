@@ -15,6 +15,35 @@ pub(super) struct PropertyDescriptor {
 }
 
 impl Runtime {
+    fn materialize_function_prototype(&mut self, function: usize) -> Eval<()> {
+        if !self.functions[function].pending_default_prototype {
+            return Ok(());
+        }
+        let properties = self.functions[function].properties;
+        let index = self.objects[properties]
+            .properties
+            .iter()
+            .position(|property| property.key == "prototype")
+            .ok_or_else(|| Fault::Fatal("Invalid pending JavaScript function prototype".into()))?;
+        let property = &self.objects[properties].properties[index];
+        if property.getter || !matches!(property.value, Value::Undefined) {
+            return Err(Fault::Fatal(
+                "Invalid pending JavaScript function prototype".into(),
+            ));
+        }
+        // These are the existing object/backlink admissions, including the
+        // original constructor put's fuel step. Neither inherits a setter nor
+        // invokes a getter. A failed admission keeps pending state and any paid
+        // orphan object; no partial value is published and no charge is refunded.
+        let prototype = self.object(Some(self.object_prototype), None)?;
+        self.put_own(prototype, "constructor", Value::Function(function), false)?;
+        // The retained property already paid for its slot/key at creation.
+        // Internal publication is not a second ordinary write or a fuel step.
+        self.objects[properties].properties[index].value = Value::Object(prototype);
+        self.functions[function].pending_default_prototype = false;
+        Ok(())
+    }
+
     pub(super) fn native_identity(&mut self, name: &str) -> Eval<usize> {
         for (index, (existing, _)) in self.native_properties.iter().enumerate() {
             if enumeration_equal(&mut self.budget, existing, name)? {
@@ -306,6 +335,11 @@ impl Runtime {
         if let KeyRef::String(key) = key {
             match owner {
                 PrototypeIdentity::Function(function) => {
+                    if key == "prototype" {
+                        // Resolve the owning function, not an inherited read's
+                        // original receiver. Metadata-only walks never get here.
+                        self.materialize_function_prototype(function)?;
+                    }
                     if key == "length" {
                         return Ok(Some(Value::Number(
                             self.functions[function].code.params.len() as f64,
@@ -604,5 +638,560 @@ mod tests {
     fn primitive_string_out_of_range_index_retains_its_existing_boundary() {
         assert_eq!(Runtime::new().execute(
             "String.prototype[99]='inherited';'a'[99]===undefined && Object('a')[99]==='inherited';", &mut NoIo).unwrap(), Value::Bool(true));
+    }
+
+    fn fresh_function(runtime: &mut Runtime) -> Eval<Value> {
+        // Fixed empty code is a private fixture, not a script/AST admission test.
+        runtime.function(None, &Rc::from([]), &Rc::from([]), 0, false)
+    }
+
+    fn pending_function() -> (Runtime, usize) {
+        let mut runtime = Runtime::new();
+        let Value::Function(id) = fresh_function(&mut runtime).unwrap() else {
+            panic!("function expected")
+        };
+        (runtime, id)
+    }
+
+    fn prototype_property(runtime: &Runtime, function: usize) -> &Property {
+        runtime.objects[runtime.functions[function].properties]
+            .properties
+            .iter()
+            .find(|property| property.key == "prototype")
+            .unwrap()
+    }
+
+    fn leave_bytes(runtime: &mut Runtime, bytes: usize) {
+        runtime
+            .budget
+            .allocate(MAX_HEAP - runtime.budget.allocated - bytes)
+            .unwrap();
+    }
+
+    #[test]
+    fn deferred_default_layout_and_creation_keep_paid_metadata_and_shared_code() {
+        use std::mem::size_of;
+        assert!(size_of::<Function>() + size_of::<Code>() + 4 * size_of::<usize>() <= 128);
+        assert!(size_of::<Object>() <= 128);
+        assert!(size_of::<Property>() <= 128);
+        let mut runtime = Runtime::new();
+        assert_eq!(runtime.allocation_report().phases.bootstrap, 25_854);
+        eprintln!(
+            "FUNCTION_PROTOTYPE_LAYOUT Function={} Code={} Object={} Property={} Bootstrap={}",
+            size_of::<Function>(),
+            size_of::<Code>(),
+            size_of::<Object>(),
+            size_of::<Property>(),
+            runtime.allocation_report().phases.bootstrap
+        );
+        let params: Rc<[String]> = Rc::from([]);
+        let body: Rc<[Stmt]> = Rc::from([]);
+        for _ in 0..2 {
+            let before = runtime.allocation_report();
+            let objects = runtime.objects.len();
+            let fuel = runtime.budget.fuel;
+            let Value::Function(id) = runtime.function(None, &params, &body, 0, false).unwrap()
+            else {
+                panic!("function expected")
+            };
+            let after = runtime.allocation_report();
+            assert_eq!(after.phases.runtime - before.phases.runtime, 265);
+            assert_eq!(
+                after.phases.function_code - before.phases.function_code,
+                128
+            );
+            assert_eq!(runtime.objects.len(), objects + 1);
+            assert_eq!(fuel - runtime.budget.fuel, 1); // original prototype put only
+            assert!(runtime.functions[id].pending_default_prototype);
+            assert!(Rc::ptr_eq(&runtime.functions[id].code.params, &params));
+            assert!(Rc::ptr_eq(&runtime.functions[id].code.body, &body));
+            let property = prototype_property(&runtime, id);
+            assert_eq!(property.value, Value::Undefined);
+            assert!(!property.enumerable && property.writable && !property.getter);
+            // Preserve the existing internal/public-deletion approximation.
+            assert!(property.configurable);
+        }
+        assert!(!Rc::ptr_eq(
+            &runtime.functions[0].code,
+            &runtime.functions[1].code
+        ));
+        assert_ne!(
+            runtime.functions[0].properties,
+            runtime.functions[1].properties
+        );
+    }
+
+    #[test]
+    fn deferred_default_creation_preflights_bag_and_property_before_pending_state() {
+        for (remaining, accepted, requested, orphan) in
+            [(255, 128, 128, false), (256, 256, 137, true)]
+        {
+            let mut runtime = Runtime::new();
+            leave_bytes(&mut runtime, remaining);
+            let before = runtime.allocation_report();
+            let objects = runtime.objects.len();
+            assert!(matches!(fresh_function(&mut runtime), Err(Fault::Fatal(_))));
+            let after = runtime.allocation_report();
+            assert_eq!(after.accepted_bytes - before.accepted_bytes, accepted);
+            assert_eq!(after.first_rejected.unwrap().requested_bytes, requested);
+            assert_eq!(runtime.objects.len(), objects + usize::from(orphan));
+            assert_eq!(runtime.functions.len(), usize::from(orphan));
+            if orphan {
+                assert!(!runtime.functions[0].pending_default_prototype);
+                assert!(runtime.objects.last().unwrap().properties.is_empty());
+            }
+        }
+        let mut runtime = Runtime::new();
+        runtime.budget.fuel = 0;
+        let before = runtime.allocation_report();
+        assert!(
+            matches!(fresh_function(&mut runtime), Err(Fault::Fatal(message)) if message == "JavaScript fuel exhausted")
+        );
+        assert_eq!(
+            runtime.allocation_report().accepted_bytes - before.accepted_bytes,
+            256
+        );
+        assert!(!runtime.functions[0].pending_default_prototype);
+        assert!(runtime.objects.last().unwrap().properties.is_empty());
+    }
+
+    #[test]
+    fn deferred_default_first_read_publishes_once_with_original_fuel_and_attributes() {
+        let (mut runtime, id) = pending_function();
+        let objects = runtime.objects.len();
+        let before = runtime.allocation_report();
+        let fuel = runtime.budget.fuel;
+        runtime.materialize_function_prototype(id).unwrap();
+        assert_eq!(
+            runtime.allocation_report().phases.runtime - before.phases.runtime,
+            267
+        );
+        assert_eq!(fuel - runtime.budget.fuel, 1); // original constructor put only
+        assert_eq!(runtime.objects.len(), objects + 1);
+        assert!(!runtime.functions[id].pending_default_prototype);
+        let property = prototype_property(&runtime, id);
+        assert!(
+            !property.enumerable && property.writable && property.configurable && !property.getter
+        );
+        let Value::Object(prototype) = property.value else {
+            panic!("default object expected")
+        };
+        assert_eq!(
+            runtime.objects[prototype].prototype,
+            Some(PrototypeIdentity::Object(runtime.object_prototype))
+        );
+        let backlink = &runtime.objects[prototype].properties[0];
+        assert_eq!(backlink.key, PropertyKey::String("constructor".into()));
+        assert_eq!(backlink.value, Value::Function(id));
+        assert!(!backlink.enumerable && backlink.writable && !backlink.getter);
+        let after = runtime.allocation_report();
+        let fuel = runtime.budget.fuel;
+        runtime.materialize_function_prototype(id).unwrap();
+        assert_eq!(runtime.budget.fuel, fuel);
+        assert_eq!(runtime.allocation_report(), after);
+        assert_eq!(
+            runtime
+                .get(&Value::Function(id), "prototype", &mut NoIo)
+                .unwrap(),
+            Value::Object(prototype)
+        );
+        assert_eq!(runtime.allocation_report(), after);
+    }
+
+    #[test]
+    fn deferred_default_metadata_and_computed_keys_keep_value_reads_distinct() {
+        let (mut runtime, id) = pending_function();
+        let owner = PrototypeIdentity::Function(id);
+        let value = Value::Function(id);
+        let objects = runtime.objects.len();
+        assert!(
+            runtime
+                .has_property(&value, KeyRef::String("prototype"), true)
+                .unwrap()
+        );
+        assert!(
+            runtime
+                .has_property(&value, KeyRef::String("prototype"), false)
+                .unwrap()
+        );
+        let descriptor = runtime
+            .own_descriptor(owner, KeyRef::String("prototype"))
+            .unwrap()
+            .unwrap();
+        assert!(!descriptor.enumerable && descriptor.writable);
+        assert_eq!(
+            runtime.delete(value.clone(), "prototype").unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            runtime.identity_parent(owner).unwrap(),
+            Some(PrototypeIdentity::Object(runtime.function_prototype))
+        );
+        let mut keys = Vec::new();
+        runtime
+            .enumeration_own_keys(owner, &value, &mut keys)
+            .unwrap();
+        assert_eq!(
+            keys.iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            ["length", "name", "prototype"]
+        );
+        assert!(keys.iter().all(|entry| !entry.enumerable));
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(runtime.objects.len(), objects);
+
+        runtime.set_global("f", value);
+        assert_eq!(
+            runtime
+                .execute(
+                    "var key=Symbol('prototype');f[key]=7;f[key]===7;",
+                    &mut NoIo
+                )
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(
+            runtime
+                .execute("f['proto'+'type'].constructor===f;", &mut NoIo)
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(!runtime.functions[id].pending_default_prototype);
+
+        let (mut runtime, id) = pending_function();
+        runtime.set_global("f", Value::Function(id));
+        assert_eq!(
+            runtime
+                .execute(
+                    "f['proto'+'type']=undefined;f.prototype===undefined;",
+                    &mut NoIo
+                )
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(!runtime.functions[id].pending_default_prototype);
+        assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+    }
+
+    #[test]
+    fn deferred_default_own_writes_cancel_only_after_successful_payload_admission() {
+        for value in [
+            Value::Undefined,
+            Value::Number(8.0),
+            Value::String(vec![0xd800, 120]),
+        ] {
+            let (mut runtime, id) = pending_function();
+            let before = runtime.allocation_report();
+            let objects = runtime.objects.len();
+            runtime
+                .set(Value::Function(id), "prototype", value.clone(), &mut NoIo)
+                .unwrap();
+            assert!(!runtime.functions[id].pending_default_prototype);
+            assert_eq!(prototype_property(&runtime, id).value, value);
+            assert_eq!(runtime.objects.len(), objects);
+            assert_eq!(
+                runtime.allocation_report().phases.runtime - before.phases.runtime,
+                value_bytes(&value) as u64
+            );
+            assert!(!prototype_property(&runtime, id).enumerable);
+        }
+        let (mut runtime, id) = pending_function();
+        let properties = runtime.functions[id].properties;
+        runtime.objects[properties].properties[0].writable = false;
+        let before = runtime.allocation_report();
+        runtime
+            .set(
+                Value::Function(id),
+                "prototype",
+                Value::text("ignored"),
+                &mut NoIo,
+            )
+            .unwrap();
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(runtime.allocation_report(), before);
+        assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+        // Internal first-read publication retains the readonly attribute.
+        runtime.materialize_function_prototype(id).unwrap();
+        assert!(!prototype_property(&runtime, id).writable);
+
+        let (mut runtime, id) = pending_function();
+        leave_bytes(&mut runtime, 1);
+        assert!(matches!(
+            runtime.set(
+                Value::Function(id),
+                "prototype",
+                Value::text("x"),
+                &mut NoIo
+            ),
+            Err(Fault::Fatal(_))
+        ));
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+        assert_eq!(
+            runtime
+                .allocation_report()
+                .first_rejected
+                .unwrap()
+                .requested_bytes,
+            2
+        );
+    }
+
+    #[test]
+    fn deferred_default_inherited_shadow_and_poisoned_constructor_preserve_owner() {
+        let (mut runtime, id) = pending_function();
+        let child = runtime
+            .object_with_prototype(Some(PrototypeIdentity::Function(id)), None)
+            .unwrap();
+        runtime
+            .set(
+                Value::Object(child),
+                "prototype",
+                Value::Number(9.0),
+                &mut NoIo,
+            )
+            .unwrap();
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(
+            runtime
+                .get(&Value::Object(child), "prototype", &mut NoIo)
+                .unwrap(),
+            Value::Number(9.0)
+        );
+        assert_eq!(
+            runtime.delete(Value::Object(child), "prototype").unwrap(),
+            Value::Bool(true)
+        );
+        assert!(runtime.functions[id].pending_default_prototype);
+        let root = runtime.object_prototype;
+        runtime
+            .put_own(
+                root,
+                "constructor",
+                Value::Native("host.must_not_run".into()),
+                false,
+            )
+            .unwrap();
+        let poison = runtime.objects[root]
+            .properties
+            .iter_mut()
+            .find(|property| property.key == "constructor")
+            .unwrap();
+        poison.getter = true;
+        poison.writable = false;
+        let Value::Object(prototype) = runtime
+            .get(&Value::Object(child), "prototype", &mut NoIo)
+            .unwrap()
+        else {
+            panic!("default object expected")
+        };
+        assert_eq!(
+            prototype_property(&runtime, id).value,
+            Value::Object(prototype)
+        );
+        assert_eq!(
+            runtime
+                .get(&Value::Object(prototype), "constructor", &mut NoIo)
+                .unwrap(),
+            Value::Function(id)
+        );
+        assert!(!runtime.objects[prototype].properties[0].getter);
+        assert!(runtime.objects[prototype].properties[0].writable);
+    }
+
+    #[test]
+    fn deferred_default_heap_failure_never_publishes_and_keeps_first_fatal() {
+        for (remaining, accepted, requested) in [(127, 0, 128), (128, 128, 139), (266, 128, 139)] {
+            let (mut runtime, id) = pending_function();
+            runtime.set_global("earlier", Value::Bool(true));
+            leave_bytes(&mut runtime, remaining);
+            let before = runtime.allocation_report();
+            let objects = runtime.objects.len();
+            let outcome = runtime.get(&Value::Function(id), "prototype", &mut NoIo);
+            let error = runtime.finish(outcome).unwrap_err();
+            let report = runtime.allocation_report();
+            assert!(report.is_valid());
+            assert_eq!(report.accepted_bytes - before.accepted_bytes, accepted);
+            assert_eq!(report.first_rejected.unwrap().requested_bytes, requested);
+            assert_eq!(
+                report.first_rejected.unwrap().phase,
+                AllocationPhase::Runtime
+            );
+            assert!(runtime.functions[id].pending_default_prototype);
+            assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+            assert_eq!(runtime.objects.len(), objects + usize::from(accepted != 0));
+            if accepted != 0 {
+                let orphan = runtime.objects.last().unwrap();
+                assert!(orphan.properties.is_empty());
+                assert_eq!(
+                    orphan.prototype,
+                    Some(PrototypeIdentity::Object(runtime.object_prototype))
+                );
+            }
+            assert_eq!(
+                runtime.execute("earlier=false;", &mut NoIo).unwrap_err(),
+                error
+            );
+            assert_eq!(
+                runtime
+                    .invoke(Value::Function(id), Value::Undefined, vec![], &mut NoIo)
+                    .unwrap_err(),
+                error
+            );
+            runtime.set_global("earlier", Value::Bool(false));
+            assert_eq!(runtime.get_global("earlier"), Value::Bool(true));
+            assert_eq!(runtime.allocation_report(), report);
+            assert_eq!(
+                (
+                    runtime.budget.calls,
+                    runtime.budget.active_expressions,
+                    runtime.budget.evaluation_entries
+                ),
+                (0, 0, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_default_fuel_failure_tracks_real_construction_and_completed_publication() {
+        let (mut runtime, id) = pending_function();
+        runtime.budget.fuel = 0;
+        let before = runtime.allocation_report();
+        let outcome = runtime.get(&Value::Function(id), "prototype", &mut NoIo);
+        assert_eq!(
+            runtime.finish(outcome).unwrap_err(),
+            "JavaScript fuel exhausted"
+        );
+        assert_eq!(runtime.allocation_report(), before); // read guard before allocation
+        assert!(runtime.functions[id].pending_default_prototype);
+
+        let (mut runtime, id) = pending_function();
+        runtime.budget.fuel = 0;
+        let before = runtime.allocation_report();
+        let outcome = runtime
+            .materialize_function_prototype(id)
+            .map(|()| Value::Undefined);
+        assert_eq!(
+            runtime.finish(outcome).unwrap_err(),
+            "JavaScript fuel exhausted"
+        );
+        assert_eq!(
+            runtime.allocation_report().phases.runtime - before.phases.runtime,
+            128
+        );
+        assert!(runtime.objects.last().unwrap().properties.is_empty());
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+
+        let (mut runtime, id) = pending_function();
+        runtime.budget.fuel = 2; // owner read + constructor put, but not the final own read
+        let outcome = runtime.identity_own_value(
+            PrototypeIdentity::Function(id),
+            KeyRef::String("prototype"),
+            &Value::Function(id),
+            &mut NoIo,
+        );
+        assert!(
+            matches!(outcome, Err(Fault::Fatal(message)) if message == "JavaScript fuel exhausted")
+        );
+        assert!(!runtime.functions[id].pending_default_prototype);
+        let Value::Object(prototype) = prototype_property(&runtime, id).value else {
+            panic!("complete default expected")
+        };
+        assert_eq!(
+            runtime.objects[prototype].properties[0].value,
+            Value::Function(id)
+        );
+    }
+
+    #[test]
+    fn deferred_default_observed_backlink_mutation_and_data_cycles_do_not_recreate_it() {
+        let (mut runtime, id) = pending_function();
+        runtime.materialize_function_prototype(id).unwrap();
+        let Value::Object(original) = prototype_property(&runtime, id).value else {
+            panic!("default expected")
+        };
+        assert_eq!(
+            runtime
+                .delete(Value::Object(original), "constructor")
+                .unwrap(),
+            Value::Bool(true)
+        );
+        runtime.materialize_function_prototype(id).unwrap();
+        assert!(runtime.objects[original].properties.is_empty());
+        runtime
+            .put_own(original, "constructor", Value::Number(9.0), true)
+            .unwrap();
+        runtime
+            .set(
+                Value::Function(id),
+                "prototype",
+                Value::Function(id),
+                &mut NoIo,
+            )
+            .unwrap();
+        runtime.set_global("f", Value::Function(id));
+        assert_eq!(
+            runtime
+                .execute(
+                    "var made=new f();Object.getPrototypeOf(made)===f && made instanceof f;",
+                    &mut NoIo
+                )
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            runtime.objects[original].properties[0].value,
+            Value::Number(9.0)
+        );
+        assert_eq!(prototype_property(&runtime, id).value, Value::Function(id));
+        assert!(!runtime.functions[id].pending_default_prototype);
+    }
+
+    #[test]
+    fn deferred_default_object_and_function_guards_remain_separate() {
+        let (mut runtime, id) = pending_function();
+        while runtime.objects.len() < MAX_OBJECTS {
+            runtime.object(None, None).unwrap();
+        }
+        let before = runtime.allocation_report();
+        let outcome = runtime.get(&Value::Function(id), "prototype", &mut NoIo);
+        assert!(
+            runtime
+                .finish(outcome)
+                .unwrap_err()
+                .contains("object limit")
+        );
+        assert_eq!(runtime.allocation_report(), before);
+        assert!(runtime.functions[id].pending_default_prototype);
+        assert_eq!(prototype_property(&runtime, id).value, Value::Undefined);
+
+        // Public calls normally reach the object cap before the function cap.
+        // Fill only unreachable private metadata rows, paying their allowance,
+        // to isolate the function guard without resetting any limit or budget.
+        let (mut runtime, id) = pending_function();
+        while runtime.functions.len() < MAX_OBJECTS {
+            runtime
+                .budget
+                .allocate_in(AllocationPhase::FunctionCode, 128)
+                .unwrap();
+            runtime.functions.push(Function {
+                code: Rc::clone(&runtime.functions[id].code),
+                environment: 0,
+                properties: runtime.functions[id].properties,
+                pending_default_prototype: false,
+            });
+        }
+        let before = runtime.allocation_report();
+        let objects = runtime.objects.len();
+        let outcome = fresh_function(&mut runtime);
+        assert_eq!(
+            runtime.finish(outcome).unwrap_err(),
+            "JavaScript function limit exhausted"
+        );
+        assert_eq!(runtime.allocation_report(), before);
+        assert_eq!(runtime.objects.len(), objects);
     }
 }

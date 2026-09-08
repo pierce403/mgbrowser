@@ -358,6 +358,40 @@ fixture/debugger ports were released. This verifies application handlers and the
 external CDP path, not physical keyboard input or Google acceptance. The separate
 post-change live checkpoint below still fails.
 
+`/script-function-prototypes` is the authored default-prototype storage fixture.
+It creates 4,800 fresh functions before checking metadata, unique defaults and
+constructor backlinks, inherited-owner reads, construction/instanceof and old
+prototype lifetime. It has no static form; only after those checks does it create
+the actual query, hidden and submit controls:
+
+```sh
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-function-prototypes \
+  --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke \
+  --evidence-dir tmp/function-prototypes-journey
+```
+
+The unchanged page passes its actual-worker check at 3,232,783 accepted bytes,
+one completed script and no errors. Its old-worker baseline rejected Runtime 137
+after 4,194,256 accepted bytes before any controls existed. Different completed
+work makes those totals unsuitable for an equal-work performance or RSS claim.
+Only the unused default object/backlink is deferred: the real own property and
+its metadata remain, actual first reads admit storage once, and observed defaults
+retain identity. An observed-default worker control still fails fatally at the
+same 4 MiB cap, preserving earlier effects and bypassing handlers/later work.
+Object.prototype.constructor and Array.prototype.constructor remain absent;
+this storage change adds neither native backlinks nor full descriptor support.
+
+All 721 debug tests and 623 selected release checks pass locally, including
+30 DOM and 43 actual-worker groups; formatting, locked builds and the dependency
+guard also pass. All three exact CI journey steps pass locally under unchanged
+deadlines, with 17 native and 17 external CDP destinations. The new fixture submits
+its actual Unicode query, hidden and submit fields, rejects stale nodes, clicks
+the first local link and verifies the flattened session and 1100×683 destination
+PNG. Root inspected the native query/ready-form and CDP destination frames; owned
+servers exited and ports 7878/9222 were clear. These are application-handler and
+external protocol checks, not physical input or Google acceptance. The post-change
+live checkpoint below still fails; exact-SHA publication is recorded in the daily log.
+
 For the live target, use the same command with `https://www.google.com/`,
 `--enable-scripts` and `--evidence-dir tmp/google-journey`. It uses the actual
 returned form controls, actual heading links, and ordinary session behavior. A JavaScript/interstitial
@@ -412,6 +446,18 @@ Runtime 128 rejected after 4,194,254 accepted bytes against the same 4,194,304
 limit. Exit 2, no result or destination; blank frame inspected. No new live
 journey stage completed. Continue independently measured storage/ownership work;
 this changing response is not a controlled benchmark or a reason to raise caps.
+
+The post-default-prototype checkpoint again submits the actual form with verified
+TLS and ordinary cookies. Homepage HTTP 200 has 26 items/one form, three completed
+scripts/seven errors and no rejected allocation (2,428,284 accepted bytes). Search
+HTTP 200 remains blank with zero items/forms and two completed scripts/three errors:
+first a non-callable-value TypeError, then Source 26,999 rejected after 4,187,629
+accepted bytes against the unchanged 4,194,304 limit, repeated by the next script.
+Exit 2/JOURNEY_INCOMPLETE; blank frame inspected, no result/destination or newly
+completed live stage. The generic diagnostic does not identify a missing callable.
+Continue independent language/builtin coverage and measured storage ownership;
+this changing response is not a controlled benchmark or permission to adapt live
+source or raise limits.
 
 ## Browser automation
 
@@ -486,11 +532,14 @@ cargo run --locked --example cdp_journey -- \
 cargo run --locked --example cdp_journey -- \
   ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-empty-arguments tmp/cdp-empty-arguments-journey.png
+cargo run --locked --example cdp_journey -- \
+  ws://127.0.0.1:9222/devtools/page/page-1 \
+  http://127.0.0.1:7878/script-function-prototypes tmp/cdp-function-prototypes-journey.png
 ```
 
 This checks the real DOM-created form, Unicode input, hidden field, result click,
 destination response and PNG through our public CDP endpoint. The previously
-implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family, concat and empty-arguments
+implemented script-home/loop recovery, dynamic, regex, iteration, grouped-expression, shared-code, prepaid-array, parameter-copy, source-ownership, compact-AST, Symbol, typed-prototype, Error-family, concat, empty-arguments and default-function-prototype
 journeys passed on 2026-09-07. It does not use
 `Runtime.evaluate`: CDP Runtime/Debugger are still unimplemented despite the new
 page interpreter. Stop only the fixture/browser processes you started.
@@ -500,7 +549,7 @@ page interpreter. Stop only the fixture/browser processes you started.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_dom --test script_worker
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_dom --test script_worker
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
