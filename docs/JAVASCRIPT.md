@@ -24,7 +24,7 @@ The language is a small, non-strict, ES5-like subset, not ECMAScript conformance
   precedence, left-to-right side effects, short circuits, calls and exceptions.
 - Basic prototypes and selected Object, Array, String, Number, Boolean, Function,
   Error and Math operations exist. Examples include `call`/`apply`/`bind`,
-  `Object.create` without descriptors, `Object.keys`, array push/pop/slice/join/concat,
+  bounded `Object.create` descriptors, `Object.keys`, array push/pop/slice/join/concat,
   string indexing/slicing, numeric conversion, and the four URI encoding/decoding
   functions. URI conversion preserves UTF-16/UTF-8 semantics and distinguishes
   complete-URI reserved separators from component data. This is not complete builtin
@@ -59,6 +59,11 @@ Five original core constructor backlinks, genuine String/Number/Boolean prototyp
 payloads and direct/bound Number/Boolean construction now pass the independent
 local contract in [CORE_INTRINSICS.md](CORE_INTRINSICS.md). This does not add
 callable Function.prototype or imply Google compatibility.
+`Object.create(proto, properties)` supports fresh ordinary data and accessor
+properties under [OBJECT_CREATE.md](OBJECT_CREATE.md): typed own-key snapshots,
+ordered inherited descriptor reads, flags and original getter/setter receivers.
+Definition and descriptor-reflection APIs remain otherwise unimplemented; this
+does not add object accessor syntax, Proxy or Host reflection authority.
 
 Known approximations remain: `arguments` is an unmapped snapshot rather than
 non-strict parameter aliasing; property descriptors and host coercion are partial;

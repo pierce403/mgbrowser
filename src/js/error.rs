@@ -148,7 +148,7 @@ impl Runtime {
                 return if property.getter {
                     DiagnosticField::Accessor
                 } else {
-                    DiagnosticField::Value(&property.value)
+                    DiagnosticField::Value(property.value.raw())
                 };
             }
             current = object.prototype;
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(runtime.allocation_report(), report);
         assert_eq!(runtime.budget.fuel, before_fuel);
         // Only the host boundary replaces invalid UTF-16. The original survives.
-        let Value::String(stored) = &runtime.objects[id].properties[0].value else {
+        let Value::String(stored) = runtime.objects[id].properties[0].value.raw() else {
             panic!()
         };
         assert_eq!(stored.len(), 100_000);

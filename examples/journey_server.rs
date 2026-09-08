@@ -49,6 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/static-operators.html"),
             ),
+            "/script-object-create" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/object-create.html"),
+            ),
             "/script-array-callbacks" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/array-callbacks.html"),

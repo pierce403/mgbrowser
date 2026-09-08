@@ -12,6 +12,21 @@ pub(super) enum KeyRef<'a> {
 pub(super) struct PropertyDescriptor {
     pub(super) enumerable: bool,
     pub(super) writable: bool,
+    pub(super) write: WriteAction,
+}
+
+impl PropertyDescriptor {
+    fn data(enumerable: bool, writable: bool) -> Self {
+        Self {
+            enumerable,
+            writable,
+            write: if writable {
+                WriteAction::Own
+            } else {
+                WriteAction::Ignore
+            },
+        }
+    }
 }
 
 impl Runtime {
@@ -26,7 +41,7 @@ impl Runtime {
             .position(|property| property.key == "prototype")
             .ok_or_else(|| Fault::Fatal("Invalid pending JavaScript function prototype".into()))?;
         let property = &self.objects[properties].properties[index];
-        if property.getter || !matches!(property.value, Value::Undefined) {
+        if property.getter || !matches!(property.value.raw(), Value::Undefined) {
             return Err(Fault::Fatal(
                 "Invalid pending JavaScript function prototype".into(),
             ));
@@ -39,7 +54,7 @@ impl Runtime {
         self.put_own(prototype, "constructor", Value::Function(function), false)?;
         // The retained property already paid for its slot/key at creation.
         // Internal publication is not a second ordinary write or a fuel step.
-        self.objects[properties].properties[index].value = Value::Object(prototype);
+        self.objects[properties].properties[index].value = Stored::Inline(Value::Object(prototype));
         self.functions[function].pending_default_prototype = false;
         Ok(())
     }
@@ -181,10 +196,7 @@ impl Runtime {
                     FunctionKind::Bound(_) => matches!(key, "length" | "caller" | "arguments"),
                 };
                 if virtual_key {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: false,
-                        writable: false,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(false, false)));
                 }
             }
             if let PrototypeIdentity::Native(native) = owner {
@@ -192,10 +204,7 @@ impl Runtime {
                 if matches!(key, "name" | "length")
                     || key == "prototype" && names.contains(&"prototype")
                 {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: false,
-                        writable: false,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(false, false)));
                 }
             }
             let object = &self.objects[id];
@@ -204,39 +213,24 @@ impl Runtime {
             if object.regexp.is_some()
                 && matches!(key, "source" | "global" | "ignoreCase" | "multiline")
             {
-                return Ok(Some(PropertyDescriptor {
-                    enumerable: false,
-                    writable: false,
-                }));
+                return Ok(Some(PropertyDescriptor::data(false, false)));
             }
             if let Some(Value::String(units)) = &object.boxed {
                 if key == "length" {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: false,
-                        writable: false,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(false, false)));
                 }
                 if array_index(key).is_some_and(|index| index < units.len()) {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: true,
-                        writable: false,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(true, false)));
                 }
             }
             if let Some(array) = &object.array {
                 if key == "length" {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: false,
-                        writable: true,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(false, true)));
                 }
                 if array_index(key)
                     .is_some_and(|index| array.get(index).is_some_and(Option::is_some))
                 {
-                    return Ok(Some(PropertyDescriptor {
-                        enumerable: true,
-                        writable: true,
-                    }));
+                    return Ok(Some(PropertyDescriptor::data(true, true)));
                 }
             }
         }
@@ -245,16 +239,14 @@ impl Runtime {
             return Ok(Some(PropertyDescriptor {
                 enumerable: property.enumerable,
                 writable: property.writable,
+                write: property.write_action(id, index, id == 0 && property.writable)?,
             }));
         }
         if let (PrototypeIdentity::Native(native), KeyRef::String(key)) = (owner, key) {
             if native_virtual_names(&self.native_properties[native].0).contains(&key)
                 && !self.native_identity_deleted(native, key)?
             {
-                return Ok(Some(PropertyDescriptor {
-                    enumerable: false,
-                    writable: true,
-                }));
+                return Ok(Some(PropertyDescriptor::data(false, true)));
             }
         }
         Ok(None)
@@ -417,7 +409,12 @@ impl Runtime {
         if let Some(index) = self.matching_property(id, key)? {
             let property = &self.objects[id].properties[index];
             let getter = property.getter;
-            let value = self.budget.copy(&property.value)?;
+            let stored = property.read_value()?;
+            if getter && !property.writable && matches!(stored, Value::Undefined) {
+                ProducerKind::PresentProperty.record(observation);
+                return Ok(Some(Value::Undefined));
+            }
+            let value = self.budget.copy(stored)?;
             if getter {
                 let receiver = self.copy(receiver)?;
                 let value = self.call(value, receiver, vec![], None, host)?;
@@ -477,15 +474,15 @@ impl Runtime {
         ))
     }
 
-    pub(super) fn readonly_property(
+    pub(super) fn property_write_action(
         &mut self,
         owner: PrototypeIdentity,
         key: KeyRef<'_>,
-    ) -> Eval<bool> {
+    ) -> Eval<WriteAction> {
         let mut current = Some(owner);
         for _ in 0..MAX_CALLS {
             let Some(owner) = current else {
-                return Ok(false);
+                return Ok(WriteAction::Own);
             };
             if let Some(descriptor) = self.own_descriptor(owner, key)? {
                 if let (
@@ -496,12 +493,15 @@ impl Runtime {
                 {
                     return Err(exception("TypeError: restricted bound function property"));
                 }
-                return Ok(!descriptor.writable);
+                return Ok(match descriptor.write {
+                    WriteAction::Own if !descriptor.writable => WriteAction::Ignore,
+                    action => action,
+                });
             }
             current = self.identity_parent(owner)?;
         }
         if current.is_none() && matches!(key, KeyRef::String(_)) {
-            Ok(false)
+            Ok(WriteAction::Own)
         } else {
             Err(Fault::Fatal(
                 "JavaScript prototype depth limit exhausted".into(),
@@ -863,7 +863,7 @@ mod tests {
         assert!(
             !property.enumerable && property.writable && property.configurable && !property.getter
         );
-        let Value::Object(prototype) = property.value else {
+        let Value::Object(prototype) = *property.value.raw() else {
             panic!("default object expected")
         };
         assert_eq!(
@@ -1187,7 +1187,7 @@ mod tests {
             matches!(outcome, Err(Fault::Fatal(message)) if message == "JavaScript fuel exhausted")
         );
         assert!(!runtime.functions[id].pending_default_prototype);
-        let Value::Object(prototype) = prototype_property(&runtime, id).value else {
+        let Value::Object(prototype) = *prototype_property(&runtime, id).value.raw() else {
             panic!("complete default expected")
         };
         assert_eq!(
@@ -1200,7 +1200,7 @@ mod tests {
     fn deferred_default_observed_backlink_mutation_and_data_cycles_do_not_recreate_it() {
         let (mut runtime, id) = pending_function();
         runtime.materialize_function_prototype(id).unwrap();
-        let Value::Object(original) = prototype_property(&runtime, id).value else {
+        let Value::Object(original) = *prototype_property(&runtime, id).value.raw() else {
             panic!("default expected")
         };
         assert_eq!(

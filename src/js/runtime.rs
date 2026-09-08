@@ -32,6 +32,8 @@ mod core_intrinsics;
 mod diagnostic;
 #[path = "error.rs"]
 mod error;
+#[path = "property.rs"]
+mod property;
 #[path = "prototype.rs"]
 mod prototype;
 #[path = "symbol.rs"]
@@ -39,6 +41,7 @@ mod symbol;
 use bound::BoundData;
 use diagnostic::{MemberContext, MemberOperation, Producer, ProducerKind};
 use error::ErrorKind;
+use property::{Stored, WriteAction};
 use prototype::KeyRef;
 pub use symbol::SymbolHandle;
 use symbol::{Hint, PropertyKey};
@@ -414,7 +417,7 @@ impl PrepaidArray {
 
 struct Property {
     key: PropertyKey,
-    value: Value,
+    value: Stored,
     enumerable: bool,
     writable: bool,
     configurable: bool,
@@ -867,7 +870,7 @@ impl Runtime {
             .properties
             .iter()
             .find(|p| p.key == name)
-            .map(|p| p.value.clone())
+            .map(|p| p.value.raw().clone())
             .unwrap_or(Value::Undefined)
     }
     /// Configure a non-configurable host-backed global setter without hardcoding
@@ -1012,8 +1015,8 @@ impl Runtime {
                             let message = object.properties.iter().find(|p| p.key == "message")?;
                             Some(format!(
                                 "{}: {}",
-                                name.value.as_text(),
-                                message.value.as_text()
+                                name.diagnostic_text(),
+                                message.diagnostic_text()
                             ))
                         })
                         .unwrap_or_else(|| value.as_text())
@@ -1226,13 +1229,13 @@ impl Runtime {
                 return Ok(());
             }
             self.budget.allocate(value_bytes(&value))?;
-            property.value = value;
+            property.value = Stored::Inline(value);
         } else {
             self.budget.allocate(value_bytes(&value))?;
             self.budget.allocate(128 + key.len())?;
             entry.properties.push(Property {
                 key: PropertyKey::String(key.into()),
-                value,
+                value: Stored::Inline(value),
                 enumerable,
                 writable: true,
                 configurable: true,
@@ -1274,7 +1277,7 @@ impl Runtime {
             .properties
             .iter()
             .find(|property| property.key == key)
-            .map(|property| self.budget.copy(&property.value))
+            .map(|property| self.budget.copy(property.read_value()?))
             .transpose()
     }
     fn enumeration_owner(&mut self, value: &Value) -> Eval<EnumerationOwner> {
@@ -2709,9 +2712,6 @@ impl Runtime {
         }
         self.read_property_observed(value, KeyRef::String(key), host, observation)
     }
-    fn inherited_readonly(&mut self, id: usize, key: &str) -> Eval<bool> {
-        self.readonly_property(PrototypeIdentity::Object(id), KeyRef::String(key))
-    }
     fn set(&mut self, object: Value, key: &str, value: Value, host: &mut impl Host) -> Eval<()> {
         self.budget.step()?;
         match object {
@@ -2724,8 +2724,20 @@ impl Runtime {
                 host.set(&object, key, value).map_err(exception)
             }
             Value::Object(id) => {
-                if self.inherited_readonly(id, key)? {
-                    return Ok(());
+                match self
+                    .property_write_action(PrototypeIdentity::Object(id), KeyRef::String(key))?
+                {
+                    WriteAction::Ignore => return Ok(()),
+                    WriteAction::Setter { object, index } => {
+                        return self.invoke_property_setter(
+                            object,
+                            index,
+                            &Value::Object(id),
+                            value,
+                            host,
+                        );
+                    }
+                    WriteAction::Own => {}
                 }
                 if id == 0
                     && let Some((_, object, property)) =
@@ -2796,8 +2808,20 @@ impl Runtime {
                     return Ok(());
                 }
                 let object = function.properties;
-                if self.readonly_property(PrototypeIdentity::Function(id), KeyRef::String(key))? {
-                    return Ok(());
+                match self
+                    .property_write_action(PrototypeIdentity::Function(id), KeyRef::String(key))?
+                {
+                    WriteAction::Ignore => return Ok(()),
+                    WriteAction::Setter { object, index } => {
+                        return self.invoke_property_setter(
+                            object,
+                            index,
+                            &Value::Function(id),
+                            value,
+                            host,
+                        );
+                    }
+                    WriteAction::Own => {}
                 }
                 self.put_own(object, key, value, true)?;
                 if key == "prototype" {
@@ -2814,8 +2838,20 @@ impl Runtime {
                 }
                 let enumerable = !virtual_key || self.native_property_deleted(&name, key)?;
                 let native = self.native_identity(&name)?;
-                if self.readonly_property(PrototypeIdentity::Native(native), KeyRef::String(key))? {
-                    return Ok(());
+                match self
+                    .property_write_action(PrototypeIdentity::Native(native), KeyRef::String(key))?
+                {
+                    WriteAction::Ignore => return Ok(()),
+                    WriteAction::Setter { object, index } => {
+                        return self.invoke_property_setter(
+                            object,
+                            index,
+                            &Value::Native(name),
+                            value,
+                            host,
+                        );
+                    }
+                    WriteAction::Own => {}
                 }
                 let object = self.native_properties[native].1;
                 self.put_own(object, key, value, enumerable)
@@ -3505,9 +3541,6 @@ impl Runtime {
                 if first.primitive() && !matches!(first, Value::Null) {
                     return Err(exception("TypeError: prototype must be an object or null"));
                 }
-                if args.len() > 1 && !matches!(args[1], Value::Undefined) {
-                    return Err(unsupported("Object.create property descriptors"));
-                }
                 let prototype = match first {
                     Value::Null => None,
                     Value::Object(_) | Value::Function(_) | Value::Native(_) => {
@@ -3516,7 +3549,13 @@ impl Runtime {
                     Value::Host(_) => return Err(unsupported("host prototype identities")),
                     _ => return Err(exception("TypeError: prototype must be an object or null")),
                 };
-                Ok(Value::Object(self.object_with_prototype(prototype, None)?))
+                let object = self.object_with_prototype(prototype, None)?;
+                match args.into_iter().nth(1) {
+                    Some(map) if !matches!(map, Value::Undefined) => {
+                        self.create_described_object(object, map, host)
+                    }
+                    _ => Ok(Value::Object(object)),
+                }
             }
             "Object.getPrototypeOf" => {
                 let owner = self.object_identity(&first)?;

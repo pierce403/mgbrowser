@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><title>Object.create descriptor fallback</title></head><body>
+<p id="status">Object.create descriptor fixture fallback.</p>
+<script>
+var token=Symbol('fixture field'),gets=0,sets=0;
+var descriptors={queryName:{value:'q',enumerable:true},locked:{value:'fixed'}};
+descriptors[token]={get:function(){gets++;return this.marker;},set:function(value){sets++;this.marker=value;},enumerable:true,configurable:true};
+var parent=Object.create(null,descriptors);
+var child=Object.create(parent);
+parent.locked='changed';
+if(parent.locked!=='fixed' || delete parent.locked || delete parent.queryName) throw 'Data descriptor defaults failed';
+child[token]='fixture';
+var sourceValue=child[token];
+if(gets!==1 || sets!==1 || sourceValue!=='fixture' || child.marker!=='fixture' || parent.marker!==undefined) throw 'Inherited accessor receiver failed';
+if(Object.getPrototypeOf(child)!==parent || Object.prototype.hasOwnProperty.call(child,token)) throw 'Accessor ownership failed';
+var symbols=Object.getOwnPropertySymbols(parent);
+if(symbols.length!==1 || symbols[0]!==token || Object.keys(parent).join(',')!=='queryName' || gets!==1 || sets!==1) throw 'Descriptor reflection failed';
+if(!(delete parent[token]) || parent[token]!==undefined) throw 'Configurable Symbol accessor failed';
+document.title='Object.create descriptor local fixture';
+var form=document.createElement('form');form.method='GET';form.action='/search';
+var q=document.createElement('input');q.type='text';q.name=parent.queryName;
+var source=document.createElement('input');source.type='hidden';source.name='source';source.value=sourceValue;
+var go=document.createElement('button');go.type='submit';go.textContent='Search';
+form.appendChild(q);form.appendChild(source);form.appendChild(go);document.body.appendChild(form);
+document.getElementById('status').textContent='Object.create descriptor form ready';
+</script></body></html>

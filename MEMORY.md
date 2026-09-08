@@ -9,6 +9,7 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/AUTORESEARCH.md`: proposed reproducible experiment contract.
 - `docs/CDP.md`: implemented automation subset, local client checks and full-protocol roadmap.
 - `docs/JAVASCRIPT.md`: original language subset, restricted worker boundary, limits and local-versus-live evidence.
+- `docs/OBJECT_CREATE.md`: adopted bounded descriptor/accessor contract; acceptance and old-baseline evidence in the latest daily log.
 - `memory/logs/`: dated work evidence; start with the latest relevant entry.
 - `memory/learnings.md`: observations awaiting promotion into guidance.
 - `memory/notes/decisions.md`: explicit user direction and unresolved choices.

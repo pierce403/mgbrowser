@@ -497,14 +497,14 @@ impl Runtime {
         if let Some(property) = object.properties.iter_mut().find(|p| p.key == key) {
             if property.writable {
                 self.budget.allocate(value_bytes(&value))?;
-                property.value = value;
+                property.value = Stored::Inline(value);
             }
         } else {
             self.budget.allocate(value_bytes(&value))?;
             self.budget.allocate(128)?;
             object.properties.push(Property {
                 key,
-                value,
+                value: Stored::Inline(value),
                 enumerable,
                 writable: true,
                 configurable: true,
@@ -671,8 +671,12 @@ impl Runtime {
             return Ok(());
         }
         let owner = self.object_identity(&object)?;
-        if self.readonly_property(owner, KeyRef::Symbol(symbol))? {
-            return Ok(());
+        match self.property_write_action(owner, KeyRef::Symbol(symbol))? {
+            WriteAction::Ignore => return Ok(()),
+            WriteAction::Setter { object: id, index } => {
+                return self.invoke_property_setter(id, index, &object, value, host);
+            }
+            WriteAction::Own => {}
         }
         let id = self.identity_storage(owner)?;
         self.put_symbol(id, symbol, value, true)
@@ -784,8 +788,13 @@ impl Runtime {
             .iter()
             .find(|p| p.key == key)
             .filter(|p| p.getter)
-            .map(|p| &p.value);
-        if let Some(getter) = getter {
+            .map(|p| (p.read_value(), p.writable));
+        if let Some((getter, legacy_writable)) = getter {
+            let getter = getter?;
+            if !legacy_writable && matches!(getter, Value::Undefined) {
+                ProducerKind::PresentProperty.record(observation);
+                return Ok(Some(Value::Undefined));
+            }
             let getter = self.budget.copy(getter)?;
             let receiver = self.copy(receiver)?;
             let value = self.call(getter, receiver, vec![], None, host)?;

@@ -64,6 +64,96 @@ fn run(args: &[&str], input: &[u8], timeout: Duration) -> (ExitStatus, String, S
 }
 
 #[test]
+fn restricted_child_object_create_descriptors_build_the_frozen_form() {
+    let request = mg_deps::js_browser::Request {
+        url: "https://example.test/object-create".into(),
+        html: include_str!("fixtures/script/object-create.html").into(),
+    };
+    assert!(
+        mg_deps::document::parse_with_scripting(&request.html, &request.url, true)
+            .forms
+            .is_empty()
+    );
+    let input = serde_json::to_vec(&request).unwrap();
+    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+    let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        reply.applied && reply.errors.is_empty(),
+        "{:?}",
+        reply.errors
+    );
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.navigation.is_none());
+    let report = reply.allocations.unwrap();
+    println!("object create fixture allocation: {report:?}");
+    assert!(report.is_valid() && report.first_rejected.is_none());
+    assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+    let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+    assert_eq!(doc.title, "Object.create descriptor local fixture");
+    assert_eq!(doc.forms.len(), 1);
+    assert_eq!(doc.forms[0].action, "https://example.test/search");
+    for (name, value) in [("q", ""), ("source", "fixture")] {
+        let node = doc
+            .nodes
+            .iter()
+            .find(|node| node.tag == "input" && node.attr("name") == Some(name))
+            .unwrap();
+        assert_eq!(node.attr("value").unwrap_or(""), value);
+    }
+    assert!(
+        doc.nodes
+            .iter()
+            .any(|node| node.tag == "button" && node.attr("type") == Some("submit"))
+    );
+    assert!(reply.html.contains("Object.create descriptor form ready"));
+}
+
+#[test]
+fn restricted_child_object_create_accessor_fuel_is_fatal_and_latched() {
+    for (descriptor, operation) in [
+        ("{get:function(){while(true){}}}", "o.x"),
+        ("{set:function(value){while(true){}}}", "o.x=9"),
+    ] {
+        let request = mg_deps::js_browser::Request {
+            url: "https://example.test/object-create-fuel".into(),
+            html: format!(
+                "<html><head><title>Descriptor fuel fallback</title></head><body><p id=state>Readable descriptor fallback</p><script>var o=Object.create(null,{{x:{descriptor}}});document.getElementById('state').setAttribute('data-ready','yes');try{{{operation};document.title='Forbidden completion';}}catch(error){{document.title='Forbidden catch';}}finally{{document.title='Forbidden finally';}}</script><script>document.title='Forbidden later';location.href='/forbidden';</script></body></html>"
+            ),
+        };
+        let input = serde_json::to_vec(&request).unwrap();
+        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
+        let reply: mg_deps::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
+        assert!(reply.applied);
+        assert_eq!(reply.scripts_executed, 0);
+        assert_eq!(reply.errors.len(), 2);
+        assert!(
+            reply
+                .errors
+                .iter()
+                .all(|e| e.contains("JavaScript fuel exhausted")),
+            "{:?}",
+            reply.errors
+        );
+        assert!(reply.navigation.is_none());
+        let report = reply.allocations.unwrap();
+        assert!(report.is_valid() && report.first_rejected.is_none());
+        assert_eq!(report.limit_bytes, 4 * 1024 * 1024);
+        let doc = mg_deps::document::parse_with_scripting(&reply.html, &request.url, true);
+        assert_eq!(doc.title, "Descriptor fuel fallback");
+        assert!(doc.forms.is_empty());
+        let state = doc
+            .nodes
+            .iter()
+            .find(|node| node.attr("id") == Some("state"))
+            .unwrap();
+        assert_eq!(state.attr("data-ready"), Some("yes"));
+        assert!(reply.html.contains("Readable descriptor fallback"));
+    }
+}
+
+#[test]
 fn restricted_child_static_operators_build_the_frozen_form() {
     let request = mg_deps::js_browser::Request {
         url: "https://example.test/static-operators".into(),

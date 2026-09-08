@@ -711,7 +711,7 @@ No new CDP commands or Runtime evaluation are exposed.
 ```sh
 cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -731,6 +731,25 @@ runtime's AST allowance; diagnostic/producer sources are parse-only. This is
 requested storage, not RSS or a general autoresearch executor. CI runs this
 example separately after building it; the original pre-change probe is preserved
 with the hashes in the daily log. See [STATIC_OPERATORS.md](STATIC_OPERATORS.md).
+
+For fresh-object descriptor storage, explicitly run the public eight-case guard:
+
+```sh
+cargo build --locked --example measure_object_create
+env -u RUST_MIN_STACK timeout 5s target/debug/examples/measure_object_create
+```
+
+The fixed authored sources prepare identical realms before each measurement
+window. The guard compares getter-only versus setter-pair storage, owned ASCII
+keys and UTF-16 value copies, and checks complete realm-drop cleanup. It requires
+successful descriptor support; the old unsupported behavior cannot pass. Actual
+requested allocation sizes and logical Runtime charges are reported separately,
+not as allocator usable sizes, peak memory or RSS. The measurement windows and
+comparison gates preserve the frozen probe; only its public header and mandatory
+support assertion differ, apart from formatting. CI runs this five-second guard
+alongside the unchanged AST guard after building examples. Ordinary example test
+harnesses do not run its `main`; this is not a general autoresearch executor.
+See [OBJECT_CREATE.md](OBJECT_CREATE.md) for the bounded contract.
 
 The unit/integration checks cover parser behavior, Rust font painting, verified
 local TLS handshakes and rejection cases, HTTP framing, redirects, cookie scope,
@@ -850,3 +869,46 @@ but search HTTP 200 reports unsupported Object.create property descriptors first
 then Ast378,301 rejected after 4,128,478 accepted against 4,194,304. Exit2 and an
 inspected blank frame; no first result/destination or new required live stage.
 No live source inspection/adaptation or retry. Publication is a separate gate.
+
+## Object.create descriptor fixture
+
+The frozen `/script-object-create` page requires descriptor defaults, typed
+Symbol accessors and inherited getter/setter receivers before it creates any
+controls. Its old worker completes no script and creates no form, reporting
+unsupported descriptors at 69,723 accepted bytes. The unchanged candidate fixture
+completes one script with no errors or rejected allocation at 75,451 bytes:
+Bootstrap 26,880 + Source 1,861 + Ast 33,702 + FunctionCode 256 + Runtime 12,752.
+These are different completed workloads, not a performance comparison. The
+existing 4 MiB allocation cap and all execution/worker limits remain unchanged.
+
+Start the owned fixture server and scripting-enabled debugging browser as above;
+9222 is an example unused port, while CI chooses a fresh debugger port:
+
+```sh
+cargo test --locked --test js_object_create --test js_object_create_limits --test js_dom --test script_worker
+target/debug/mgbrowser http://127.0.0.1:7878/script-object-create --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/object-create-native
+target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-object-create tmp/object-create-cdp.png
+```
+
+Both native application-handler and external CDP journeys submit the actual
+Unicode query and hidden `source=fixture` control using the unnamed submit button,
+click the first authored local result and reach the separate destination. Fresh
+query/destination frames were inspected. All four CI journey blocks pass locally:
+25 native and 25 external CDP journeys, including retained checks with exactly
+two searches, two destinations and zero trap requests. Full debug passes 1,193
+tests across 51 targets; selected release passes 1,080 across 40 targets, excluding
+repeated owned-child summaries. These are local gates; exact remote publication
+remains pending. See [OBJECT_CREATE.md](OBJECT_CREATE.md) for deliberate exclusions
+and the public allocation guard above for independently reproducible storage checks.
+
+One subsequent bounded Google attempt exits 2. Its HTTP 200 homepage has 26 items,
+one form, five completed scripts/five errors and 2,383,102 startup bytes without
+allocation rejection. Two retained activations complete and the actual form
+submits. Search returns HTTP 200 but zero items/forms, three completed scripts and
+two errors: first Ast 377,733 rejected after 4,135,770 accepted against the
+4,194,304-byte cap, then the same latched failure. Unsupported descriptors are not
+reported in this response, but changing inputs do not establish controlled
+causality. The inspected search frame is blank: no result, destination or new
+required live stage. There was no live-source inspection, adaptation, retry or
+cap change. The ignored original log is `tmp/google-object-create-journey.log`,
+SHA256 `007776cf479ee05eb13b673c61dcffacad0d560c5d2040188b454580971025e6`.
