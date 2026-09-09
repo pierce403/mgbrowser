@@ -123,6 +123,12 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 
 Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
 
+Local macOS evidence (2026-09-09): an arm64 source build with XQuartz 2.8.6
+loads the system Arial font and completes the static form/results/destination
+journey. The destination frame was inspected. A user-level app launcher loads
+example.com over verified HTTPS. This is experimental source installation, not
+a published macOS binary or macOS script-isolation implementation.
+
 ## F-004 : Static web navigation
 
 Stability: in-progress

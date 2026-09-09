@@ -1,4 +1,4 @@
-//! Linux/X11 host facilities. Engines do not depend on this crate.
+//! X11 host facilities. Engines do not depend on this crate.
 pub mod script_worker;
 
 use mg_chassis::{
@@ -92,6 +92,10 @@ pub fn load_fonts() -> Result<Fonts, String> {
         return load_font_path(std::path::Path::new(&path));
     }
     let paths = [
+        #[cfg(target_os = "macos")]
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        #[cfg(target_os = "macos")]
+        "/Library/Fonts/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
