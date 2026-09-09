@@ -29,13 +29,16 @@ V8/JSC, Blink/WebKit/Tauri drop-in APIs and ThermiteOS support remain future wor
 - [x] Chassis builds without chrome; public embedding tests compare page pixels and submit a real loopback form.
 - [x] Original language, DOM, transport and actual worker regressions pass in the workspace.
 - [x] Component dependency guard rejects upward edges and window dependencies in reusable libraries.
-- [ ] Native/CDP fixture journeys and exact-commit Rust/Pages checks pass for publication.
+- [x] Native/CDP fixture journeys and exact-commit Rust/Pages checks pass for publication.
 - [ ] v0.2.0 release assets and the fresh public installer are verified.
 
 Local 2026-09-09 evidence: workspace debug and selected release suites passed;
 independent no-chrome form navigation, default-disabled isolation, PNG and font
 checks passed. Native static form/result navigation passed and frames were
-inspected. Publication and full native/CDP results are recorded in the daily log.
+inspected. All 26 native/26 CDP journeys passed locally and in Rust run 34352084178 for
+a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Pages run 34352084185 passed for that
+commit, and public HTTPS index/installer bytes matched. The v0.2.0 binary release
+remains pending because this session has no authenticated tag-creation path.
 
 ## F-012 : v0.1 experimental preview
 

@@ -1,11 +1,18 @@
 # Work queue
 
-Current task: **T-010 / F-013, component extraction and v0.2.0**. User approved
+Current task: **T-010 / F-013, extraction complete; v0.2.0 publication pending**. User approved
 Butane (JS), Sparkle (HTML/rendering), Chassis (services/optional UX) and mg-browser
 (platform host), including push to main. Verify independent embedding, preserve
 worker isolation and native/CDP journeys, then finish the versioned release and
 public-installer gates. Drop-in compatibility and ThermiteOS implementation are
 future tasks, not part of this extraction.
+
+Source is published at a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Local component,
+package/installer and all 26 native/26 CDP journeys passed. Release tagging needs
+an authenticated git/tag-capable path: shell Git has no credentials, and the
+current connector exposes branch/file operations but no tag/release operation.
+Do not claim v0.2.0 is publicly installed until its release workflow and public
+smoke check pass. The site explicitly identifies the binary as pending.
 
 This queue is ordered; planning entries do not imply implementation has begun.
 

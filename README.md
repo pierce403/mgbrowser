@@ -4,6 +4,10 @@
 
 ## v0.2.0 Experimental Preview
 
+**Source available; binary release pending.** The four-component refactor is on
+main. The installer below currently delivers the published v0.1.1 preview.
+The v0.2.0 package and release notes are prepared; publication awaits its tag.
+
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
 
