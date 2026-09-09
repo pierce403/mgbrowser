@@ -26,3 +26,14 @@ Proposed, not yet user-confirmed: Linux first; static-document MVP before JavaSc
 2026-09-07 active goal: User requested a runnable browser that opens Google, submits a search, and follows its first result. Implemented the initial Linux window through x11rb's Rust X11 connection and software pixels; no Xlib/XCB/native toolkit renderer. Google live evidence now makes own JavaScript/DOM integration part of the immediate goal, instead of deferring all JavaScript until after a static MVP. License remains unresolved. The goal remains active and incomplete.
 
 2026-09-07 steering: User requested Chrome DevTools Protocol support to simplify browser automation, accepting a small initial subset but intending eventual full support. Implemented an opt-in loopback endpoint and actual browser command subset; docs/CDP.md records the staged expansion. This does not replace the Google goal or authorize another browser engine/JavaScript runtime.
+
+
+## 2026-09-09: reusable Mg components
+
+User selected mg-butane for the original JavaScript engine, mg-sparkle for HTML,
+DOM and rendering, mg-chassis for browser services plus optional UX, and mg-browser
+for platform integration/composition. Long-term replacement targets are V8/JSC
+and Blink/WebKit, with ThermiteOS as the intended Rust OS host. User authorized
+implementing the split and pushing main. Rust embedding comes first; drop-in
+adapters and ThermiteOS integration need later scoped work. No additional public
+service-component names are required now.

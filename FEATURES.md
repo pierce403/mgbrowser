@@ -6,6 +6,37 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-013 : Reusable Mg component boundaries
+
+Stability: in-progress
+
+### Dependencies
+
+The existing original interpreter, document pipeline, browser services and Linux host.
+
+### Properties
+
+Four workspace packages: mg-butane (JS), mg-sparkle (HTML/DOM/layout/paint),
+mg-chassis (services and optional chrome) and mg-browser (platform executable).
+Sparkle returns headless page surfaces with layout/hit geometry. Chassis accepts
+host font data and an isolated script runtime, preserving existing browser behavior.
+The production dependency direction is checked in CI. See docs/ARCHITECTURE.md.
+V8/JSC, Blink/WebKit/Tauri drop-in APIs and ThermiteOS support remain future work.
+
+### Test Criteria
+
+- [x] Independent Butane evaluation and Sparkle bitmap-render examples build and run.
+- [x] Chassis builds without chrome; public embedding tests compare page pixels and submit a real loopback form.
+- [x] Original language, DOM, transport and actual worker regressions pass in the workspace.
+- [x] Component dependency guard rejects upward edges and window dependencies in reusable libraries.
+- [ ] Native/CDP fixture journeys and exact-commit Rust/Pages checks pass for publication.
+- [ ] v0.2.0 release assets and the fresh public installer are verified.
+
+Local 2026-09-09 evidence: workspace debug and selected release suites passed;
+independent no-chrome form navigation, default-disabled isolation, PNG and font
+checks passed. Native static form/result navigation passed and frames were
+inspected. Publication and full native/CDP results are recorded in the daily log.
+
 ## F-012 : v0.1 experimental preview
 
 Stability: stable

@@ -7,9 +7,9 @@ results, browser impersonation, or Google-specific response rewriting is a subst
 ## Implemented research subset
 
 Scripting is disabled by default. `--enable-scripts` opts into the original Rust
-lexer, parser, tree-walking evaluator and DOM bridge in `src/js/` and
-`src/js_browser.rs`. The browser executes it only through the restricted
-Linux x86_64 worker in `src/script_worker.rs`. No existing parser, JavaScript
+lexer, parser, tree-walking evaluator and DOM bridge in `crates/mg-butane/src/` and
+`crates/mg-sparkle/src/js_browser.rs`. The browser executes it only through the restricted
+Linux x86_64 worker in `src/platform/script_worker.rs`. No existing parser, JavaScript
 runtime, browser engine, or external browser executes page code for us.
 
 The language is a small, non-strict, ES5-like subset, not ECMAScript conformance:
@@ -117,7 +117,7 @@ creates an ordinary enumerable property. Broader descriptor fidelity is partial.
 
 ## Regular expressions
 
-`src/js/regexp.rs` is our own compiler and matcher, not a regex dependency or
+`crates/mg-butane/src/regexp.rs` is our own compiler and matcher, not a regex dependency or
 another language engine. Supported patterns include literals, dot, character
 classes/ranges, builtin classes, anchors/boundaries, alternation, capturing and
 noncapturing groups, greedy/lazy quantifiers, backreferences and positive/negative
@@ -485,7 +485,7 @@ These local results do not complete the live Google journey.
 
 ### Bounded expression-state increment
 
-`src/js/syntax/expressions.rs` implements the expression grammar with explicit
+`crates/mg-butane/src/syntax/expressions.rs` implements the expression grammar with explicit
 continuation/operator state and one result register. Each pending operand is an
 already depth-checked AST. Storage grows on demand, with at most `12 × 128 = 1,536`
 live instructions shared across all expression machines in one Parser. This
@@ -514,7 +514,7 @@ On 2026-09-07, the final debug suite passed all 251 tests: 107 library, 15 binar
 16 control-flow, 12 DOM, 21 dynamic, 22 expression, 24 iteration, 18 regex,
 12 actual-worker and four example/client tests. The library includes all 30 parser
 groups, including shared-state cleanup and nested-function limits. The exact
-release command `cargo test --locked --release --lib --test js_expressions --test script_worker`
+release command `cargo test --locked --workspace --release --lib --test js_expressions --test script_worker`
 passed all 141 selected tests (107 library, 22 expression and 12 worker).
 Formatting, build and the native-dependency guard passed as well.
 

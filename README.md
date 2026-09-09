@@ -2,7 +2,7 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.1.1 Experimental Preview
+## v0.2.0 Experimental Preview
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -21,7 +21,7 @@ needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
 TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
 Current project source and original artwork use the [Apache License 2.0](LICENSE).
 Dependencies retain their own licenses. Published v0.1.0/v0.1.1 archives retain
-their original MIT license; future releases will include Apache-2.0 and NOTICE.
+their original MIT license; v0.2.0 includes Apache-2.0 and NOTICE.
 
 ### Known limitations
 
@@ -36,11 +36,26 @@ their original MIT license; future releases will include Apache-2.0 and NOTICE.
   arbitrary hostile websites.
 
 The preview is separate from the formal MVP, whose stronger gates remain open.
-Engine work is frozen at `4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da` for v0.1.
+v0.2.0 extracts the existing engines into reusable packages without expanding web compatibility.
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.1.1.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.2.0.md) for manual install and uninstall.
+
+## Components
+
+| Package | Role |
+| --- | --- |
+| `mg-browser` | Desktop executable and platform integration |
+| `mg-chassis` | Browser services and optional toolbar/UX |
+| `mg-butane` | Original JavaScript engine |
+| `mg-sparkle` | HTML, DOM, layout and software rendering |
+
+Butane runs independently of the browser. Sparkle renders documents to pixels
+without a window, and Chassis supports embedding with browser chrome disabled.
+See the [architecture, examples and compatibility roadmap](docs/ARCHITECTURE.md).
+V8/JavaScriptCore and Blink/WebKit replacement APIs, Tauri integration and the
+ThermiteOS port remain future work.
 
 ## Engineering background (pre-MVP)
 
@@ -115,7 +130,7 @@ Bounded `Object.create` descriptors now support fresh data properties and genuin
 getters/setters with original receivers, typed keys and property flags. The
 [descriptor contract](docs/OBJECT_CREATE.md) and runnable `measure_object_create`
 example record independent semantic and actual-allocation evidence.
-The frozen engine's 1,228 debug tests and 1,115 selected release checks pass locally,
+The pre-extraction engine baseline passed 1,228 debug tests and 1,115 selected release checks,
 along with 26 native and 26 external CDP journeys, including a handler-required interaction
 sequence that cancels a link and first submit before reaching its real destination.
 Authored forms
@@ -145,7 +160,7 @@ browser API and storage-ownership work is needed.
 
 Own the browser engine: HTML parsing, DOM, CSS cascade, layout, painting, navigation and JavaScript. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
 
-TLS uses the experimental rustls-rustcrypto provider. Fonts and PNG decoding use Rust implementations with native backends disabled. The current document view displays image placeholders/alt text; it does not yet download/render page images. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --all-targets` for component, worker and UI/CDP tests. Full CSS and broad JavaScript compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
+TLS uses the experimental rustls-rustcrypto provider. Fonts and PNG decoding use Rust implementations with native backends disabled. The current document view displays image placeholders/alt text; it does not yet download/render page images. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --all-targets` for component, worker and UI/CDP tests. Full CSS and broad JavaScript compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
 
 ## Website development
 

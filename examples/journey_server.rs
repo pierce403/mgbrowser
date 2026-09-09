@@ -165,7 +165,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use mg_deps::{document, js::syntax};
+    use mg_butane::syntax;
+    use mg_sparkle::document;
 
     #[test]
     fn script_fixtures_parse_without_a_static_search_form() {

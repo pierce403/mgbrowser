@@ -1,19 +1,50 @@
 [package]
-name = "mg-deps"
-version = "0.1.1"
-edition = "2024"
-rust-version = "1.91"
+name = "mg-browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = false
-description = "Experimental Rust-only browser dependency foundation"
-license = "Apache-2.0"
-repository = "https://github.com/pierce403/mgbrowser"
-homepage = "https://mgbrowser.org"
+description = "Mg browser executable and platform integration"
 
 [[bin]]
 name = "mgbrowser"
 path = "src/main.rs"
 
 [dependencies]
+mg-chassis = { workspace = true, features = ["chrome"] }
+mg-butane.workspace = true
+mg-sparkle.workspace = true
+x11rb.workspace = true
+image.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+tungstenite.workspace = true
+url.workspace = true
+
+[workspace]
+members = ["crates/mg-butane", "crates/mg-sparkle", "crates/mg-chassis"]
+default-members = [".", "crates/mg-butane", "crates/mg-sparkle", "crates/mg-chassis"]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+repository = "https://github.com/pierce403/mgbrowser"
+homepage = "https://mgbrowser.org"
+
+[workspace.dependencies]
+mg-butane = { path = "crates/mg-butane", version = "0.2.0" }
+mg-sparkle = { path = "crates/mg-sparkle", version = "0.2.0" }
+mg-chassis = { path = "crates/mg-chassis", version = "0.2.0", default-features = false }
 # Never enable rustls's default aws-lc-rs provider or ring.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", rev = "70f76c039e587192688af18a80d5d6435dedaf22", default-features = false, features = ["std", "tls12", "zeroize"] }

@@ -1,0 +1,31 @@
+[package]
+name = "mg-chassis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+description = "Embeddable browser services and optional browser chrome"
+
+[features]
+default = ["chrome"]
+chrome = []
+
+[dependencies]
+mg-sparkle.workspace = true
+rustls.workspace = true
+rustls-rustcrypto.workspace = true
+url.workspace = true
+webpki-roots.workspace = true
+flate2.workspace = true
+psl.workspace = true
+httpdate.workspace = true
+tungstenite.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+mg-butane.workspace = true

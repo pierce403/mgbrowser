@@ -34,6 +34,7 @@ fn main() {
     let output = Command::new("cargo")
         .args([
             "tree",
+            "--workspace",
             "--locked",
             "--edges",
             "normal,build",

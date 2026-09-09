@@ -10,6 +10,10 @@ The target is 100% Rust browser code, with our own HTML parser, DOM, CSS parser/
 
 Linux is the first implemented window target, with portable core code and macOS/Windows later. No schedule promises until the first rendering slice establishes throughput.
 
+The adopted four-package structure and ThermiteOS/embedding roadmap are in
+[ARCHITECTURE.md](ARCHITECTURE.md). Its current APIs are experimental; native
+engine/WebView drop-in adapters remain a future acceptance milestone.
+
 ## Current implementation and acceptance gap
 
 The transport, own HTML parser/retained DOM, software painter and native window are integrated. Networking includes verified HTTPS, HTTP/1.1 framing, GET/POST forms, redirects, response limits, and in-memory session cookies. Painting uses fontdue/rustybuzz, explicit font files, clipped software drawing, and PNG snapshots. Native handlers and the experimental public CDP subset complete the authored local form → result → destination journey. These are separately verified from public websites; see `RUNNING.md` and the dated log.

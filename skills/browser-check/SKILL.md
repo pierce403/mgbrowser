@@ -5,7 +5,9 @@ description: Validate mgbrowser transport, document, paint and native interactio
 
 # Browser check
 
-Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
+Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
+
+For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.
 
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 

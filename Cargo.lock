@@ -782,25 +782,60 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "mg-deps"
-version = "0.1.1"
+name = "mg-browser"
+version = "0.2.0"
 dependencies = [
  "base64",
- "flate2",
- "fontdue",
- "httpdate",
  "image",
  "libc",
- "psl",
- "rustls",
- "rustls-rustcrypto",
- "rustybuzz",
+ "mg-butane",
+ "mg-chassis",
+ "mg-sparkle",
  "serde",
  "serde_json",
  "tungstenite",
  "url",
- "webpki-roots",
  "x11rb",
+]
+
+[[package]]
+name = "mg-butane"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mg-chassis"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "httpdate",
+ "image",
+ "mg-butane",
+ "mg-sparkle",
+ "psl",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde_json",
+ "tungstenite",
+ "url",
+ "webpki-roots",
+]
+
+[[package]]
+name = "mg-sparkle"
+version = "0.2.0"
+dependencies = [
+ "fontdue",
+ "image",
+ "mg-butane",
+ "rustybuzz",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

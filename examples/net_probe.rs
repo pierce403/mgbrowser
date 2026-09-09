@@ -6,7 +6,7 @@ fn main() -> Result<(), String> {
     let url = arguments
         .next()
         .ok_or("usage: net_probe URL [output-file]")?;
-    let response = mg_deps::net::fetch(&url)?;
+    let response = mg_chassis::net::fetch(&url)?;
     println!(
         "URL: {}\nStatus: {}\nType: {}\nBytes: {}",
         response.url,

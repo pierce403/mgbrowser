@@ -22,7 +22,15 @@ The manifest sets allowed features; Cargo.lock pins the resolved versions. The G
 
 ## Integration status
 
-The mg-deps library now contains the transport and software painter used by the mgbrowser executable. `src/net.rs` implements HTTP(S) GET and URL-encoded POST, relative redirects, chunked responses, gzip/deflate decoding, and shared in-memory sessions. The public root store comes from webpki-roots; the explicit RustCrypto provider handles every TLS connection. `src/paint.rs` shapes and rasterizes a selected font file with Rust code, clips text/rectangles, caches glyphs, and writes PNG snapshots. Font loading checks explicit file paths or `MGBROWSER_FONT`; it does not invoke platform font-processing APIs.
+The workspace assigns language work to mg-butane, document/layout/painting to
+mg-sparkle, and HTTP/TLS/cookies/CDP to mg-chassis. The mg-browser host supplies
+X11 integration, platform font discovery and Linux process controls. See
+`ARCHITECTURE.md` for the API and dependency contract. Sparkle accepts font bytes;
+the Linux host selects explicit paths or `MGBROWSER_FONT`. Neither uses native
+font-processing APIs. The public root store comes from webpki-roots and the
+explicit RustCrypto provider handles every TLS connection. The original transport
+still implements HTTP(S) GET/POST, redirects, chunked responses, gzip/deflate and
+shared in-memory cookies.
 
 On 2026-09-07, transport tests passed, including local trusted, unknown-issuer, and hostname-mismatch TLS handshakes, redirect/form behavior, response limits, and cookie scoping. Both sides of the local TLS tests use RustCrypto. The public DER fixtures were generated using OpenSSL's command-line tooling; neither the browser nor its tests call or link OpenSSL. Painter tests cover clipping, coverage blending, and text measurement/painting; the dependency smoke test separately covers PNG round-trip. These component checks are distinct from the dated native/CDP journey evidence.
 
@@ -36,7 +44,7 @@ Sessions retain at most 128 cookies, 32 per registrable site, 4 KiB per cookie, 
 
 ## Audit upgrades before accepting them
 
-Review the actual target-specific normal/build dependency graph and enabled features, not just crate descriptions. Check build.rs and Cargo `links` declarations, native source files and compiler/FFI dependencies. Absence of a `-sys` name alone proves nothing. Maintain Cargo.lock and use `cargo test --locked`; review its diff on each upgrade. Ensure HTTP clients do not re-enable default rustls crypto features through Cargo feature unification.
+Review the actual target-specific normal/build dependency graph and enabled features, not just crate descriptions. Check build.rs and Cargo `links` declarations, native source files and compiler/FFI dependencies. Absence of a `-sys` name alone proves nothing. Maintain Cargo.lock and use `cargo test --locked --workspace`; review its diff on each upgrade. Ensure HTTP clients do not re-enable default rustls crypto features through Cargo feature unification.
 
 The Rust CI workflow runs `tools/check-dependencies.rs`, a regression guard rejecting known native backends and native build helpers in the active normal/build graph. It is a denylist, not proof about arbitrary new dependencies; source review remains necessary. Compile it with `rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies` and run `tmp/check-dependencies`.
 
@@ -51,3 +59,5 @@ The browser must eventually show a broken-image placeholder and available alt te
 ## Upstream research evidence
 
 Record provider revision, Rust version, OS/architecture and a minimal local reproducer for failures. Distinguish provider failures from our integration mistakes; preserve failing fixtures when lawful and free of secrets. Report normal interoperability and correctness bugs through a separately authorized upstream contribution. Handle potential security findings responsibly; do not automatically publish exploit details or run offensive testing against third parties. No external issue submission or autonomous testing is configured by this policy.
+
+`python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The external locked dependency versions are unchanged by the component split.

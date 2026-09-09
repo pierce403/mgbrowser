@@ -2,16 +2,11 @@
 
 ## Purpose and responsibilities
 
-v0.1.0 is shipped and publicly verified (tagged commit
-392867f5f059cc34162360b5a63c4f16b62d6fcc; evidence in the 2026-09-08 log).
-Release work is complete. Stop; do not resume deferred engineering without a new request.
-
-Release mode supersedes the historical Google goal below: ship v0.1.0 Experimental
-Preview with the engine frozen at 4b9a5f74b09f4e3092f26d5c61d6b8a04e22a4da.
-Only installation/launch blockers justify browser changes during release.
-Google search → first result remains incomplete and is acceptable for this preview.
-Do not resume compatibility, storage optimization or evaluator work until separately
-requested after release. Formal MVP gates remain unchanged.
+Current authorized task (2026-09-09): extract the original implementation into
+`mg-butane`, `mg-sparkle`, `mg-chassis` and the `mg-browser` platform host; preserve
+existing behavior, verify the embedding boundaries, and publish main with v0.2.0.
+See `docs/ARCHITECTURE.md`. This does not reopen unrelated language, Google or
+compatibility work. Prior v0.1.0/v0.1.1 tags and artifacts remain immutable.
 
 Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. A native Linux HTML-flow browser now exists. The active goal is Google homepage → search → first result → destination, and it remains incomplete because the verified Google response requires JavaScript.
 
@@ -21,6 +16,7 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
   Preserve third-party licenses. Published v0.1.0/v0.1.1 archives remain MIT;
   future release notes/packages must reflect Apache-2.0 and include LICENSE/NOTICE.
 
+- Read `docs/ARCHITECTURE.md` for the component dependency contract. Run `python3 tools/check-components.py` for boundary changes and `cargo test --locked -p mg-chassis --no-default-features --test embedding` for optional-UX changes.
 - Read `FEATURES.md`, `TASKS.md`, `MEMORY.md`, and `SKILLS.md`; search relevant notes before substantial work.
 - Check git status and preserve unrelated changes. `AGENTS.md` is canonical; harness aliases point here.
 - Read affected feature Properties, Dependencies, and Test Criteria before changes. Exact stability values are `planned`, `in-progress`, and `stable`. Only verified, complete behavior is stable.
@@ -57,13 +53,13 @@ tmp/site --check
 git diff --check
 ```
 
-The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked --all-targets` covers transport, parser, paint, original JS/DOM behavior, restricted workers and UI state; local X11/CDP journeys exercise real controls. A local fixture is not evidence that Google returns search results. The general autoresearch executor is not implemented. The original JavaScript subset is experimental and opt-in with `--enable-scripts`; read docs/JAVASCRIPT.md before changing execution or its boundary.
+The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked --workspace --all-targets` covers transport, parser, paint, original JS/DOM behavior, restricted workers and UI state; local X11/CDP journeys exercise real controls. A local fixture is not evidence that Google returns search results. The general autoresearch executor is not implemented. The original JavaScript subset is experimental and opt-in with `--enable-scripts`; read docs/JAVASCRIPT.md before changing execution or its boundary.
 
-`src/document.rs` owns HTML parsing, `src/net.rs` owns HTTP/TLS/session cookies, `src/paint.rs` owns Rust shaping/rasterization, and `src/main.rs` owns layout and window/input/navigation. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
+`crates/mg-sparkle/src/document.rs` owns HTML parsing, `crates/mg-chassis/src/net.rs` owns HTTP/TLS/session cookies, `crates/mg-sparkle/src/paint.rs` owns Rust shaping/rasterization, and `crates/mg-sparkle/src/render.rs` owns page layout. Chassis owns navigation and optional chrome; `src/main.rs` composes the window/event loop. Fonts and isolated script services enter Chassis through explicit host APIs. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
 
-`src/cdp.rs` owns loopback discovery/WebSocket transport; `src/cdp_browser.rs` binds the documented CDP subset to real browser behavior. Read docs/CDP.md and its schema before changing protocol commands. Use the external examples/cdp_journey.rs fixture client for CDP input/navigation verification. Protocol support is partial; never return success for an unimplemented behavior or claim general automation-client compatibility without a pinned client test.
+`crates/mg-chassis/src/cdp.rs` owns loopback discovery/WebSocket transport; `crates/mg-chassis/src/cdp_browser.rs` binds the documented CDP subset to real browser behavior. Read docs/CDP.md and its schema before changing protocol commands. Use the external examples/cdp_journey.rs fixture client for CDP input/navigation verification. Protocol support is partial; never return success for an unimplemented behavior or claim general automation-client compatibility without a pinned client test.
 
-`src/js/` owns the original language implementation; `src/js_browser.rs` exposes bounded DOM/navigation capabilities. `src/script_worker.rs` executes page scripts in a restricted Linux x86_64 child; unsupported isolation fails closed. Do not execute live scripts in the parent, weaken TLS, impersonate another browser, or port site challenge logic. Unsupported language/platform behavior is compatibility work, not permission for a substitute engine. Preserve readable fallback on source/projection rejection and keep proposed navigation parent-validated.
+`crates/mg-butane/src/` owns the original language implementation; `crates/mg-sparkle/src/js_browser.rs` exposes bounded DOM/navigation capabilities. `src/platform/script_worker.rs` executes page scripts in a restricted Linux x86_64 child; unsupported isolation fails closed. Do not execute live scripts in the parent, weaken TLS, impersonate another browser, or port site challenge logic. Unsupported language/platform behavior is compatibility work, not permission for a substitute engine. Preserve readable fallback on source/projection rejection and keep proposed navigation parent-validated.
 
 ## Collaboration
 

@@ -139,7 +139,7 @@ worker. JavaScript's `eval` does not imply support for CDP `Runtime.evaluate`.
 `lastIndex`, replacement and splitting create its usable form. Substitute that
 path in either journey command to exercise the matcher through a real worker and
 native/CDP input. Both paths passed on 2026-09-07, with rendered frames inspected.
-`cargo test --locked --test js_regexp` runs the independent regex semantics and
+`cargo test --locked --workspace --test js_regexp` runs the independent regex semantics and
 resource-limit cases without a display or external JavaScript engine.
 
 `/script-iteration` creates every control by enumerating own and inherited fields
@@ -154,7 +154,7 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-iteration \
 
 Its native and external CDP form/query/hidden-field/result/destination journeys
 passed on 2026-09-07; rendered frames were inspected. Use
-`cargo test --locked --test js_iteration` for independently authored iteration,
+`cargo test --locked --workspace --test js_iteration` for independently authored iteration,
 switch, mutation, scope and resource-limit cases. Enumeration has a bounded
 snapshot policy and does not support DOM host objects; see [JAVASCRIPT.md](JAVASCRIPT.md).
 
@@ -704,7 +704,7 @@ the public protocol against an owned browser with remote debugging enabled:
 ```sh
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-events tmp/event-journey/destination.png
-cargo test --locked --test page_events --test page_projection --test script_session
+cargo test --locked --workspace --test page_events --test page_projection --test script_session
 target/debug/mgbrowser --script-session-selftest
 ```
 
@@ -717,8 +717,8 @@ No new CDP commands or Runtime evaluation are exposed.
 
 ```sh
 cargo fmt --all -- --check
-cargo test --locked --all-targets
-cargo test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --workspace --all-targets
+cargo test --locked --workspace --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -765,8 +765,8 @@ restricted worker children. Consult FEATURES.md and the daily log for dated
 end-to-end evidence and remaining acceptance gates. Fixture success is not
 language conformance or public-site compatibility.
 
-For a focused expression-parser check, run `cargo test --locked --lib js::syntax`
-and `cargo test --locked --test js_expressions --test script_worker`. The release
+For a focused expression-parser check, run `cargo test --locked -p mg-butane --lib syntax`
+and `cargo test --locked --workspace --test js_expressions --test script_worker`. The release
 command above also exercises the library and real worker children; these tests
 do not increase the native thread-stack size. Passing language cases alone does
 not replace the native/CDP fixture journey or the bounded live-site gate.
@@ -780,7 +780,7 @@ script reported Call receiver contract failed. Candidate acceptance uses the
 unchanged source, actual restricted worker and the existing native/CDP clients:
 
 ```sh
-cargo test --locked --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test script_worker
+cargo test --locked --workspace --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test script_worker
 target/debug/mgbrowser http://127.0.0.1:7878/script-producers --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/producers-native
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-producers tmp/producers-cdp.png
 ```
@@ -810,7 +810,7 @@ See [ARRAY_CALLBACKS.md](ARRAY_CALLBACKS.md) for ordering, sparse/inherited valu
 mutation, Host presence and explicit limits; this does not add live collections.
 
 ```sh
-cargo test --locked --test js_array_callbacks --test js_array_callback_limits --test js_dom --test page_events --test script_worker
+cargo test --locked --workspace --test js_array_callbacks --test js_array_callback_limits --test js_dom --test page_events --test script_worker
 target/debug/mgbrowser http://127.0.0.1:7878/script-array-callbacks --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/array-callbacks-native
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-array-callbacks tmp/array-callbacks-cdp.png
 ```
@@ -835,7 +835,7 @@ accepted bytes under the unchanged 4 MiB cap. The precise language/resource
 contract and acceptance status are in [CORE_INTRINSICS.md](CORE_INTRINSICS.md).
 
 ```sh
-cargo test --locked --test js_core_intrinsics --test js_core_intrinsic_limits --test js_dom --test page_events --test script_worker
+cargo test --locked --workspace --test js_core_intrinsics --test js_core_intrinsic_limits --test js_dom --test page_events --test script_worker
 target/debug/mgbrowser http://127.0.0.1:7878/script-core-intrinsics --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/core-intrinsics-native
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-core-intrinsics tmp/core-intrinsics-cdp.png
 ```
@@ -892,7 +892,7 @@ Start the owned fixture server and scripting-enabled debugging browser as above;
 9222 is an example unused port, while CI chooses a fresh debugger port:
 
 ```sh
-cargo test --locked --test js_object_create --test js_object_create_limits --test js_dom --test script_worker
+cargo test --locked --workspace --test js_object_create --test js_object_create_limits --test js_dom --test script_worker
 target/debug/mgbrowser http://127.0.0.1:7878/script-object-create --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/object-create-native
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/script-object-create tmp/object-create-cdp.png
 ```

@@ -1,5 +1,12 @@
 # Work queue
 
+Current task: **T-010 / F-013, component extraction and v0.2.0**. User approved
+Butane (JS), Sparkle (HTML/rendering), Chassis (services/optional UX) and mg-browser
+(platform host), including push to main. Verify independent embedding, preserve
+worker isolation and native/CDP journeys, then finish the versioned release and
+public-installer gates. Drop-in compatibility and ThermiteOS implementation are
+future tasks, not part of this extraction.
+
 This queue is ordered; planning entries do not imply implementation has begun.
 
 Completed release follow-up: v0.1.1 is published for the HTTP warning and

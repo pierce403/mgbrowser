@@ -20,16 +20,22 @@ jobs:
           mkdir -p tmp
           rustc +1.91.1 --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
           tmp/check-dependencies
+          python3 tools/check-components.py
       - name: Run browser component and interaction tests
-        run: cargo +1.91.1 test --locked --all-targets
+        run: cargo +1.91.1 test --locked --workspace --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_ast_arrays --test js_ast_array_limits --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+        run: cargo +1.91.1 test --locked --workspace --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_ast_arrays --test js_ast_array_limits --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
       - name: Build browser and local fixture server
         run: |
-          cargo +1.91.1 build --locked --bins --examples
+          cargo +1.91.1 build --locked --workspace --bins --examples
           timeout 15s target/debug/examples/measure_ast_storage
           timeout 5s target/debug/examples/measure_object_create
           timeout 20s target/debug/examples/measure_ast_arrays
+      - name: Check standalone components without browser chrome
+        run: |
+          cargo +1.91.1 run --locked -p mg-butane --example eval -- "6 * 7;"
+          cargo +1.91.1 run --locked -p mg-sparkle --example render -- tests/fixtures/journey/home.html /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf tmp/sparkle.png
+          cargo +1.91.1 test --locked -p mg-chassis --no-default-features --test embedding
       - name: Check packaged preview installation
         run: |
           cargo +1.91.1 build --locked --release --bin mgbrowser

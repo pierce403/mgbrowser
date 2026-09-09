@@ -4,6 +4,8 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/ARCHITECTURE.md`: adopted Butane/Sparkle/Chassis/platform boundaries, optional chrome, embedding examples and future compatibility/ThermiteOS gates.
+
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.
 - `docs/AUTORESEARCH.md`: proposed reproducible experiment contract.

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.1.1 Experimental Preview</title>
+<title>mgbrowser: v0.2.0 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -16,7 +16,7 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.1.1 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.2.0 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
 <span id="copy-status" role="status"></span>
@@ -25,6 +25,7 @@
 <p class="warning"><strong>Modern-web compatibility is poor.</strong> This is a technology preview, not a daily browser. Do not use it for banking, sensitive authenticated browsing, or arbitrary hostile websites.</p>
 </section>
 <section class="detail grid"><div><p class="eyebrow">Try the browser we have</p><h2>Small. Original. Experimental.</h2><p>Own HTML parsing and rendering, text, links, forms and navigation. Verified HTTPS with experimental RustCrypto TLS. Rust font processing. An original, opt-in JavaScript implementation and a partial Chrome DevTools Protocol interface.</p><p>The installer checks SHA-256, installs to <code>~/.local/bin</code> without sudo, and adds an Mg desktop launcher. Start with <code>mgbrowser https://example.com/</code>.</p></div><div><p class="eyebrow">A few practical details</p><h2>Open a page.</h2><p>Run inside an X11 or XWayland desktop. A DejaVu or Liberation font is required; otherwise set <code>MGBROWSER_FONT</code> to a TrueType/OpenType font file. Follow the installer’s PATH instruction if shown.</p><p>Ctrl+L edits the address, Enter navigates, Tab moves between fields, Alt+Left goes back. Use <code>--help</code> for options. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/RUNNING.md">Developer guide ↗</a></p></div></section>
+<section class="detail"><p class="eyebrow">Reusable Rust components</p><h2>Butane. Sparkle. Chassis.</h2><p>Butane is our original JavaScript engine. Sparkle handles HTML, DOM, layout and painting. Chassis brings browser services and optional controls; mg-browser supplies the desktop and platform integration.</p><p>The libraries have standalone examples and support rendering without a window. V8/WebKit drop-in compatibility, Tauri integration and a ThermiteOS port remain future work. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/ARCHITECTURE.md">Architecture and embedding guide ↗</a></p></section>
 <section class="detail" id="limitations"><p class="eyebrow">Read before browsing</p><h2>Known limitations</h2><ul>
 <li>Modern-web compatibility is poor. The Google search → first result journey is not working.</li>
 <li>JavaScript is an incomplete original implementation. Scripting is disabled by default and requires <code>--enable-scripts</code>.</li>
@@ -37,8 +38,9 @@
 <section class="detail grid"><div><p class="eyebrow">Research after the release</p><h2>Leave a trail others can follow.</h2><p>Feature contracts, daily logs and reusable agent skills keep experiments reviewable. The proposed autoresearch evaluator, broader CSS/images and full CDP remain future work. This preview does not complete the formal Linux MVP gates.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/MVP.md">MVP plan</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/CONTRIBUTING.md">Contribute</a></p></div><div><p class="eyebrow">Built in the open</p><h2>Evidence over promises.</h2><p>The latest engine regression set includes 26 native and 26 external CDP fixture journeys. Those local forms and destinations prove a limited path, not broad web compatibility.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/FEATURES.md">Feature specification</a> · <a href="https://github.com/pierce403/mgbrowser/tree/main/memory/logs">Daily logs</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/SKILLS.md">Skills</a></p><p class="muted">Our collaboration workflow draws from <a href="https://recurse.bot">Recurse</a>.</p></div></section>
 <section class="detail" id="status"><h2>Project status</h2>
 <!-- project-status:start -->
-<p class="muted">Latest work log: <time datetime="2026-09-08">2026-09-08</time>. Status comes from the repository’s feature specification.</p>
+<p class="muted">Latest work log: <time datetime="2026-09-09">2026-09-09</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
+  <li><span>F-013 : Reusable Mg component boundaries</span><small>in-progress</small></li>
   <li><span>F-012 : v0.1 experimental preview</span><small>stable</small></li>
   <li><span>F-001 : Project foundation and website</span><small>stable</small></li>
   <li><span>F-002 : Agent continuity and reusable skills</span><small>stable</small></li>
@@ -55,7 +57,7 @@
 <!-- project-status:end -->
 </section>
 </main>
-<footer><span>Current source: <a href="https://github.com/pierce403/mgbrowser/blob/main/LICENSE">Apache-2.0</a> · Published v0.1.0/v0.1.1 binaries: MIT</span><a href="https://github.com/pierce403/mgbrowser">Source on GitHub ↗</a></footer>
+<footer><span>v0.2.0 and current source: <a href="https://github.com/pierce403/mgbrowser/blob/main/LICENSE">Apache-2.0</a> · Published v0.1.0/v0.1.1 binaries: MIT</span><a href="https://github.com/pierce403/mgbrowser">Source on GitHub ↗</a></footer>
 <script>
 const button = document.getElementById('copy');
 if (navigator.clipboard) {
