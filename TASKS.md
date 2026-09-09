@@ -1,6 +1,15 @@
 # Work queue
 
-Current task: **T-010 / F-013, extraction complete; v0.2.0 publication pending**. User approved
+Current user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
+See docs/HACKER_NEWS.md for the inspected live requirements, minimal sequence and
+unchecked acceptance gates. Implement CSS resources/cascade, table/inline layout,
+typography and small Rust-only image support for the homepage, then release and
+verify the public installer. Google/JS optimization remains deferred. Planning
+does not complete the formal MVP or the pending component-release obligation.
+The conversation tracker still needs the user to cancel its unfinished Google
+goal before the new goal can be activated there.
+
+Prior task: **T-010 / F-013, extraction complete; v0.2.0 publication pending**. User approved
 Butane (JS), Sparkle (HTML/rendering), Chassis (services/optional UX) and mg-browser
 (platform host), including push to main. Verify independent embedding, preserve
 worker isolation and native/CDP journeys, then finish the versioned release and

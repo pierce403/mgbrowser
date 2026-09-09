@@ -6,6 +6,29 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-014 : Hacker News desktop rendering
+
+Stability: planned
+
+### Dependencies
+
+F-003, F-004 and a bounded subset of F-005 using the F-013 component boundaries.
+
+### Properties
+
+Faithful real Hacker News homepage rendering at desktop widths with scripts off:
+external CSS, cascade, nested tables, compact inline typography, colors and actual
+small SVG assets. Generic engine primitives, not site-specific painting. Scope
+and implementation order: docs/HACKER_NEWS.md. Google and mobile fidelity deferred.
+
+### Test Criteria
+
+- [ ] Same-input/font desktop screenshots compared against a reference browser.
+- [ ] Header, all story rows, wrapping, footer and scroll-adjusted links match.
+- [ ] Fresh live homepage and ordinary navigation verified with scripts disabled.
+- [ ] Focused primitive regressions and existing CI/native/CDP checks pass unchanged.
+- [ ] Versioned release and fresh public installer verified with accurate site notes.
+
 ## F-013 : Reusable Mg component boundaries
 
 Stability: in-progress

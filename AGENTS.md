@@ -2,13 +2,17 @@
 
 ## Purpose and responsibilities
 
-Current authorized task (2026-09-09): extract the original implementation into
+Current authorized goal (2026-09-09): minimal Hacker News desktop rendering,
+scoped in `docs/HACKER_NEWS.md` and T-011 / F-014. Google optimization remains
+deferred. Ship any resulting feature through the standing release policy.
+
+Prior authorized task (2026-09-09): extract the original implementation into
 `mg-butane`, `mg-sparkle`, `mg-chassis` and the `mg-browser` platform host; preserve
 existing behavior, verify the embedding boundaries, and publish main with v0.2.0.
 See `docs/ARCHITECTURE.md`. This does not reopen unrelated language, Google or
 compatibility work. Prior v0.1.0/v0.1.1 tags and artifacts remain immutable.
 
-Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. A native Linux HTML-flow browser now exists. The active goal is Google homepage → search → first result → destination, and it remains incomplete because the verified Google response requires JavaScript.
+Build a browser from the ground up in Rust and a reproducible autoresearch harness that humans and agents can contribute to. Own implementation, evidence, feature specifications, and an accurate public project page within the task requested. A native Linux HTML-flow browser now exists. The historical Google homepage → search → first result → destination goal remains incomplete and deferred.
 
 ## Start here
 
