@@ -1,5 +1,9 @@
 # Decisions and open choices
 
+2026-09-08: User explicitly selects Apache License 2.0, superseding the earlier
+MIT fallback for current project-authored source/docs/artwork and future releases.
+Preserve dependency licenses and immutable v0.1.0/v0.1.1 MIT archives.
+
 2026-09-08 standing user policy: whenever features are added, roll a new release
 and update/verify the installer on the public site. Apply now as v0.1.1 for the
 HTTP warning update. Source-only publication is no longer sufficient for feature

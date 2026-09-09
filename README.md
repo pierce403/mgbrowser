@@ -19,7 +19,9 @@ The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and ad
 a user-level application launcher and Mg icon. Follow its PATH instruction if
 needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
 TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
-Project code/artwork is MIT; release archives include upstream license notices.
+Current project source and original artwork use the [Apache License 2.0](LICENSE).
+Dependencies retain their own licenses. Published v0.1.0/v0.1.1 archives retain
+their original MIT license; future releases will include Apache-2.0 and NOTICE.
 
 ### Known limitations
 

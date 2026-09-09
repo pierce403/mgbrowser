@@ -64,7 +64,9 @@ only the requested UI/distribution updates, without a compatibility iteration.
 The existing local regression set includes 26 native and 26 external CDP fixture
 journeys. Authored fixtures do not establish modern-site compatibility.
 
-Project code and original Mg artwork: MIT, copyright 2026 mgbrowser contributors.
+Published v0.1.1 code and original Mg artwork: MIT, copyright 2026 mgbrowser contributors.
+Subsequent main-branch source uses Apache-2.0 (see LICENSE and NOTICE); this does
+not modify the already-published v0.1.1 archive. Future releases use Apache-2.0.
 The archive includes LICENSE and THIRD_PARTY_LICENSES.txt with the locked
 dependency inventory and upstream notices. Fonts are read from the host, not bundled.
 

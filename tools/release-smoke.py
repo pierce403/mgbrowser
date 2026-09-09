@@ -47,6 +47,8 @@ with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temp
         assert subprocess.check_output([binary, "--version"], text=True).strip() == version
         subprocess.run([binary, "--help"], env=dict(env, MGBROWSER_FONT="/missing-font"), check=True)
         data = home / ".local/share"
+        assert (data / "mgbrowser/LICENSE").read_bytes() == Path("LICENSE").read_bytes()
+        assert (data / "mgbrowser/NOTICE").read_bytes() == Path("NOTICE").read_bytes()
         desktop = data / "applications/mgbrowser.desktop"
         assert f'Exec="{binary}" %u' in desktop.read_text()
         assert (data / "icons/hicolor/scalable/apps/mgbrowser.svg").stat().st_size > 0

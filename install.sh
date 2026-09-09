@@ -34,6 +34,10 @@ pending=
 install -m 644 "$payload/mgbrowser.svg" "$data_dir/icons/hicolor/scalable/apps/mgbrowser.svg"
 install -m 644 "$payload/mgbrowser-256.png" "$data_dir/icons/hicolor/256x256/apps/mgbrowser.png"
 install -m 644 "$payload/LICENSE" "$payload/README.md" "$payload/THIRD_PARTY_LICENSES.txt" "$data_dir/mgbrowser/"
+# Older MIT releases do not contain NOTICE; preserve their install compatibility.
+if [[ -f "$payload/NOTICE" ]]; then
+    install -m 644 "$payload/NOTICE" "$data_dir/mgbrowser/"
+fi
 printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=mgbrowser' \
     'Comment=Experimental Rust browser : limited web compatibility' \
     "Exec=\"$install_dir/mgbrowser\" %u" 'Icon=mgbrowser' 'Terminal=false' \

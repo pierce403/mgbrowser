@@ -6,4 +6,7 @@ Open an issue to coordinate larger work, then submit a focused PR linked to a fe
 
 Use `AGENTS.md` for the workflow and `docs/AUTORESEARCH.md` for experiment design. Keep evaluator/corpus changes separate from engine changes scored against them. Never include credentials or captured private browsing data.
 
-Project license selection is pending. Public visibility does not by itself grant a license; resolve licensing with the maintainer before contributing or reusing code.
+Project-authored code, documentation and original artwork use Apache-2.0;
+see LICENSE and NOTICE. Contributions follow that project license. Preserve the
+licenses and notices of any third-party material. The original published
+v0.1.0/v0.1.1 archives retain their MIT license.

@@ -19,7 +19,8 @@ This preview does not require completing F-007, F-010 or the research evaluator.
 
 Linux x86_64 X11/XWayland technology preview, packaged with Rust 1.91.1 and the
 locked graph. Checksum-verified user-level installer, Mg identity and desktop
-launcher. MIT project license and bundled dependency notices. Poor modern-web
+launcher. Original preview archives use MIT; current source uses Apache-2.0 with
+bundled dependency notices. Poor modern-web
 compatibility and incomplete whole-browser isolation are explicit limitations.
 
 ### Test Criteria

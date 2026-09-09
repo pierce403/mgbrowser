@@ -8,7 +8,7 @@ version=${version#mgbrowser }
 mkdir -p "$out/mgbrowser-linux-x86_64"
 payload="$out/mgbrowser-linux-x86_64"
 install -m 755 target/release/mgbrowser "$payload/mgbrowser"
-install -m 644 assets/mgbrowser.svg LICENSE "$payload/"
+install -m 644 assets/mgbrowser.svg LICENSE NOTICE "$payload/"
 install -m 644 "docs/RELEASE-v$version.md" "$payload/README.md"
 install -m 644 assets/mgbrowser-256.png "$payload/"
 python3 tools/license-inventory.py "$payload/THIRD_PARTY_LICENSES.txt"

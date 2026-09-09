@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.91"
 publish = false
 description = "Experimental Rust-only browser dependency foundation"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/pierce403/mgbrowser"
 homepage = "https://mgbrowser.org"
 

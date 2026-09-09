@@ -1,9 +1,13 @@
 # v0.1 dependency/license sanity check
 
-Repository history and memory/notes/decisions.md contained no adopted project
-license. The user's 2026-09-08 release instruction explicitly selects MIT in that
-case. LICENSE and Cargo metadata record that decision; original Mg artwork uses
-the same license. No font files are bundled.
+Current decision: the user's subsequent 2026-09-08 instruction selects Apache-2.0
+for project-authored code, documentation and original Mg artwork. LICENSE is the
+unmodified official Apache License 2.0 text; Cargo metadata and NOTICE identify
+the current license and copyright. No font files are bundled.
+
+The initial v0.1.0/v0.1.1 releases used the user's earlier MIT fallback. Their
+published tags/archives remain unchanged and retain that license. Current source
+and future release packages use Apache-2.0. Dependency licenses are unchanged.
 
 `tools/license-inventory.py` reads the locked Cargo metadata with the Linux x86_64
 platform filter and the active normal/build cargo tree, fails on missing declarations or missing license texts, and

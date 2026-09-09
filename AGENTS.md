@@ -17,6 +17,10 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
 
 ## Start here
 
+- Current project-authored code, documentation and original artwork use Apache-2.0.
+  Preserve third-party licenses. Published v0.1.0/v0.1.1 archives remain MIT;
+  future release notes/packages must reflect Apache-2.0 and include LICENSE/NOTICE.
+
 - Read `FEATURES.md`, `TASKS.md`, `MEMORY.md`, and `SKILLS.md`; search relevant notes before substantial work.
 - Check git status and preserve unrelated changes. `AGENTS.md` is canonical; harness aliases point here.
 - Read affected feature Properties, Dependencies, and Test Criteria before changes. Exact stability values are `planned`, `in-progress`, and `stable`. Only verified, complete behavior is stable.
