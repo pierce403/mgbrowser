@@ -1,4 +1,4 @@
-//! Linux window/event-loop composition for the Mg components.
+//! X11 window/event-loop composition for the Mg components.
 use mg_browser::platform::{self, script_worker};
 use mg_chassis::{Browser as App, BrowserCdp, JourneyOptions};
 use std::{error::Error, thread, time::Duration};
@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
+                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires X11/XWayland (XQuartz on macOS) and a readable font.\nScript isolation is available only on Linux x86_64.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
                 env!("CARGO_PKG_VERSION")
             );
             return Ok(());
@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut cdp = debug_port.map(BrowserCdp::bind).transpose()?;
     app.set_debugging(cdp.is_some());
     let (conn, screen_num) = x11rb::connect(None).map_err(|error| {
-        format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
+        format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set. On macOS, install/start XQuartz and use its terminal (Applications > Terminal).")
     })?;
     let screen = &conn.setup().roots[screen_num];
     let depth = screen.root_depth;

@@ -1,5 +1,33 @@
 # Running the research browser
 
+## Experimental macOS source install
+
+The published website installer provides Linux x86_64 binaries only. For a local
+macOS build, install Rust 1.91 or newer and [XQuartz](https://www.xquartz.org/).
+Complete XQuartz's installer and log out/back in so its display socket is available.
+From this repository, run `bash tools/install-macos.sh`, then open
+`~/Applications/mgbrowser.app`. The app starts XQuartz and opens example.com by
+default. It is built locally, unsigned, and does not change the default browser.
+The installer refuses to replace an existing app; move an old local build aside
+before reinstalling.
+
+For development, open XQuartz's Applications > Terminal and run the Cargo command
+below from the checkout. macOS font discovery tries the system Arial font; the
+`MGBROWSER_FONT` override is still supported. This uses the existing X11 window
+and Rust renderer, not a Cocoa browser engine. Script isolation is Linux x86_64
+only: macOS refuses page-script execution even with `--enable-scripts`.
+
+On macOS, run the existing portable regression suite with its font override:
+
+```sh
+MGBROWSER_FONT=/System/Library/Fonts/Supplemental/Arial.ttf cargo test --locked --workspace --all-targets
+```
+
+Linux-only worker tests are conditionally excluded on macOS. Passing this suite
+does not verify Linux isolation or general modern-web compatibility.
+
+## Linux development
+
 The current target is Linux with an X11 or XWayland display. The application uses
 Rust X11 protocol code and software-rendered pixels; it does not embed another
 browser, a native UI toolkit, or a native font renderer.

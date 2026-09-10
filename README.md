@@ -19,6 +19,10 @@ mgbrowser https://example.com/
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
 · [Website](https://mgbrowser.org) · [Inspect installer](install.sh)
 
+For an experimental **macOS source build with XQuartz**, see the
+[Mac installation instructions](docs/RUNNING.md#experimental-macos-source-install).
+Page-script isolation remains Linux x86_64 only.
+
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
 needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
