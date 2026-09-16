@@ -1,5 +1,9 @@
 //! External X11 menu/close regression against an owned browser window.
-use std::{error::Error, thread, time::Duration};
+use std::{
+    error::Error,
+    thread,
+    time::{Duration, Instant},
+};
 use x11rb::{connection::Connection, protocol::xproto::*};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -52,6 +56,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             .reply()?
             .data)
     };
+    if args.get(3).is_none() {
+        // LOADED is logged before the framebuffer upload. WM_NAME follows it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let title = conn
+                .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)?
+                .reply()?;
+            if String::from_utf8_lossy(&title.value).contains("Local browser journey fixture") {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err("Initial fixture paint did not complete".into());
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+    }
     let before = capture()?;
     if args.get(3).is_some_and(|mode| mode == "restart") {
         let rgb: Vec<_> = before
@@ -89,7 +109,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             + 248,
         380,
     )?;
-    assert_eq!(before, capture()?, "Close did not restore page");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let after = capture()?;
+        if before == after {
+            break;
+        }
+        if Instant::now() >= deadline {
+            assert_eq!(before, after, "Close did not restore page");
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
     println!("NATIVE_ABOUT_MENU_OK {path}");
     Ok(())
 }
