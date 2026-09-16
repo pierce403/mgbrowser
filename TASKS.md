@@ -1,12 +1,13 @@
 # Work queue
 
-2026-09-16 active: finish publishing **T-011 / F-014 as v0.3.0**. Standalone Rust
-Stylo, bounded same-origin CSS/images and generic table/inline layout are locally
-implemented and accepted at 1024/1280 desktop widths. Fresh HN navigation and all
-normal local CI gates pass, including the unchanged language/resource gates and
-26 native/26 external CDP journeys. Remaining: exact-commit remote CI/Pages,
-immutable release tag/assets, fresh public installer and update verification.
-Do not expand compatibility or resume the Google loop while closing this release.
+2026-09-16 complete: **T-011 / F-014 shipped as v0.3.0**, release commit
+e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Rust Stylo, bounded same-origin CSS/images
+and generic table/inline layout are accepted at 1024/1280 desktop widths. All
+normal CI gates, including the language/resource assertions and 26 native/26 CDP
+journeys, passed locally and remotely. Exact-commit Pages/release, public checksum,
+fresh install/reinstall, worker, desktop/icons, real v0.2.1 self-update and fresh
+public-binary HN navigation passed. Stop this request here. No further feature
+work or Google/JavaScript optimization is authorized by this completed task.
 
 2026-09-16 completed: **T-012 / F-015**, diagnosed HN styling, added verified
 automatic self-updates and About compile identity, published v0.2.1. Diagnosis:
@@ -17,12 +18,9 @@ Release commit 830c6ca4ede1ccd5c23d3b73ebfd89aca06729ef: exact-SHA Rust CI,
 Pages, tagged release, public install and native public updater upgrade all passed.
 See the 2026-09-16 log. Stop this request here; HN engine work remains planned.
 
-Current user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
-See docs/HACKER_NEWS.md for the inspected live requirements, minimal sequence and
-unchecked acceptance gates. Implement CSS resources/cascade, table/inline layout,
-typography and small Rust-only image support for the homepage, then release and
-verify the public installer. Google/JS optimization remains deferred. Planning
-does not complete the formal MVP or the pending component-release obligation.
+Completed user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
+See docs/HACKER_NEWS.md for the bounded scope and completed acceptance evidence.
+Google/JS optimization remains deferred. This does not complete the formal MVP.
 The conversation tracker still needs the user to cancel its unfinished Google
 goal before the new goal can be activated there.
 

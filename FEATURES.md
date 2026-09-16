@@ -40,12 +40,13 @@ not independent release signing or whole-browser security.
 
 ## F-014 : Hacker News desktop rendering
 
-Stability: in-progress
+Stability: stable
 
-2026-09-16: standalone Rust Stylo, bounded same-origin CSS/images and generic
-tree/table layout implemented locally. Same-input desktop/full-page comparison
-accepted with small raster/rounding differences. Live navigation and local CI passed; remote/release gates remain
-pending; the previously published v0.2.1 has no stylesheet support.
+Verified 2026-09-16: v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9.
+Standalone Rust Stylo, bounded same-origin CSS/images and generic tree/table
+layout passed same-input desktop/full-page comparison, fresh live navigation,
+local and remote CI, release and public installation. Small raster/rounding
+differences and the narrow compatibility exclusions remain in docs/HACKER_NEWS.md.
 
 ### Dependencies
 
@@ -64,7 +65,13 @@ and implementation order: docs/HACKER_NEWS.md. Google and mobile fidelity deferr
 - [x] Header, all story rows, wrapping, footer and scroll-adjusted links match.
 - [x] Fresh live homepage and ordinary navigation verified with scripts disabled.
 - [x] Focused primitive regressions and existing CI/native/CDP checks pass unchanged.
-- [ ] Versioned release and fresh public installer verified with accurate site notes.
+- [x] Versioned release and fresh public installer verified with accurate site notes.
+
+Rust run 35105612390, Pages 35105612387 and release 35107029602 passed on the
+exact tagged commit. Public checksum/install/reinstall, worker selftest,
+desktop/icons, latest links and actual v0.2.1 self-update passed. The freshly
+installed public binary repeated the real HN scroll/More/comments/story/back and
+Ctrl+L journey. This does not complete F-005's broader corpus or F-007's MVP.
 
 ## F-013 : Reusable Mg component boundaries
 

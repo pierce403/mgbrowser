@@ -1,7 +1,7 @@
 # Hacker News desktop rendering goal
 
-Adopted 2026-09-09. Implementation authorized 2026-09-16. Status: implemented
-locally; desktop/live/local-CI acceptance passed, remote CI/release pending.
+Adopted 2026-09-09. Implemented and accepted 2026-09-16. Status: shipped in
+v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9.
 
 Goal: render the real https://news.ycombinator.com/ homepage recognizably and
 faithfully at desktop content widths of 1024 and 1280 pixels, with scripting
@@ -113,9 +113,21 @@ overlap or lost footer. Raw page content and screenshots remain in ignored tmp/.
 - [x] Small authored regression cases cover the implemented CSS/table/image
   primitives, resource bounds/failure fallback and scroll-adjusted hit geometry.
   Preserve and rerun existing CI/resource assertions and native/CDP journeys.
-- [ ] Exact-commit CI/Pages, versioned binary release and fresh installation with
+- [x] Exact-commit CI/Pages, versioned binary release and fresh installation with
   the public curl command pass; packaged version, worker selftest and desktop/icon
   installation verified. Site/release notes describe the narrow compatibility gain.
+
+Release receipts: [v0.3.0](https://github.com/pierce403/mgbrowser/releases/tag/v0.3.0),
+[Rust CI](https://github.com/pierce403/mgbrowser/actions/runs/35105612390),
+[Pages](https://github.com/pierce403/mgbrowser/actions/runs/35105612387) and
+[tagged release workflow](https://github.com/pierce403/mgbrowser/actions/runs/35107029602).
+Published archive SHA-256:
+`c31e669a84deb566ab7df520f26d1c528117031fe82161b508f421e76c84f97b`.
+The exact public curl command installed/reinstalled 0.3.0, passed the worker
+selftest, installed desktop/icons/licenses and resolved current download links.
+A verified public v0.2.1 executable updated itself to 0.3.0 and passed a no-op
+recheck. The fresh public binary repeated the complete live HN journey below.
+Build identity: commit e3ac7a7b873e, Wed, 16 Sep 2026 14:15:09 GMT.
 
 Live acceptance on 2026-09-16: release-built native Mg under Xvfb, scripts off,
 1024x768 content. External X11 events exercised Ctrl+L and Alt+Left; the existing

@@ -2,14 +2,17 @@
 
 ## Purpose and responsibilities
 
-Completed request (2026-09-16): T-012 / F-015 self-updates and About build identity
-shipped in v0.2.1, including the component extraction. CSS loading/cascade/table
-layout are still absent, so HN remains planned, not fixed by this release. See
-docs/UPDATES.md and the daily log. Do not create a separate v0.2.0 afterward.
+Completed request (2026-09-16): T-011 / F-014 minimal Hacker News desktop rendering
+shipped in v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Standalone Rust
+Stylo computes CSS; Mg owns generic table/inline layout and bounded same-origin
+resources. Same-input desktop comparison, live links/hotkeys, exact-commit CI,
+Pages, release assets, fresh public install and v0.2.1 self-update passed. See
+`docs/HACKER_NEWS.md` and the daily log. This scoped request is complete: do not
+resume Google/JavaScript optimization or broaden compatibility without a new task.
 
-Current authorized goal (2026-09-09): minimal Hacker News desktop rendering,
-scoped in `docs/HACKER_NEWS.md` and T-011 / F-014. Google optimization remains
-deferred. Ship any resulting feature through the standing release policy.
+Prior completed request (2026-09-16): T-012 / F-015 self-updates and About build
+identity shipped in v0.2.1, including the component extraction. That release did
+not include HN styling. See docs/UPDATES.md. Do not create a separate v0.2.0 afterward.
 
 Prior authorized task (2026-09-09): extract the original implementation into
 `mg-butane`, `mg-sparkle`, `mg-chassis` and the `mg-browser` platform host; preserve
@@ -35,8 +38,9 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
   Servo-origin components, are welcome after dependency/features/license/test
   review. Do not limit reuse to utilities or assume upstream reputation proves
   compatibility. No C/C++ implementation backends, including transitive/static
-  bindings. This does not itself adopt Stylo or replace Butane/the browser engine;
-  follow the scoped decision and OS-interface boundary in `docs/DEPENDENCIES.md`.
+  bindings. The scoped HN task adopted Stylo without replacing Butane or embedding
+  Servo's browser. Follow the pinned review and OS-interface boundary in
+  `docs/DEPENDENCIES.md`; upstream capabilities do not imply Mg layout support.
 
 ## Work and closeout
 

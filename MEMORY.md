@@ -8,6 +8,8 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.
+- `docs/HACKER_NEWS.md`: v0.3.0's accepted desktop scope, standalone Rust Stylo,
+  bounded resources, visual/live evidence and explicit compatibility exclusions.
 - `docs/AUTORESEARCH.md`: proposed reproducible experiment contract.
 - `docs/CDP.md`: implemented automation subset, local client checks and full-protocol roadmap.
 - `docs/JAVASCRIPT.md`: original language subset, restricted worker boundary, limits and local-versus-live evidence.
