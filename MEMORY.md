@@ -5,6 +5,9 @@ summary: Compact map of mgbrowser project decisions and evidence.
 # Project memory
 
 - `docs/ARCHITECTURE.md`: adopted Butane/Sparkle/Chassis/platform boundaries, optional chrome, embedding examples and future compatibility/ThermiteOS gates.
+- `JSPLAN.md`: proposed Butane engine strategy, Rust reuse evaluation, V8 techniques,
+  academic sources and modern framework/embedding gates (F-016 / T-013); no engine
+  adoption or new compatibility is implied by the plan.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

@@ -1,5 +1,13 @@
 # Decisions and open choices
 
+2026-09-16: User requests deep Butane/JavaScript planning in JSPLAN.md, aiming for
+eventual V8 drop-in use, modern Vue/React, useful V8/academic techniques, pragmatic
+compatibility scope and reuse of pure-Rust work. JSPLAN.md recommends a Boa-first
+evaluation with Nova comparison, followed by application and embedding gates.
+This is a research recommendation, not an adopted engine replacement or permission
+to implement all milestones in the planning task. Current isolation and dependency
+policy remain in force; the new work is tracked as T-013 / planned F-016.
+
 2026-09-16: User explicitly accepts existing Rust implementation crates, including
 Servo-origin components, provided they do not bind to C/C++ implementations.
 This relaxes the earlier utility-only/from-scratch wording, not the Rust-only

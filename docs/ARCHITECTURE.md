@@ -92,6 +92,11 @@ embedders. **This release does not implement those drop-in APIs or ABIs.** Tauri
 existing WebView integrations cannot select Sparkle today. The original limited
 language, HTML-flow model and browser compatibility remain as documented.
 
+[JSPLAN.md](../JSPLAN.md) develops the proposed Butane path: evaluate Boa and Nova
+against the existing host/resource boundary, establish modern React/Vue tests,
+then pursue measured optimization and a pinned V8 embedding adapter. Its research
+recommendations do not replace the adopted contracts above or install an engine.
+
 Further work needs separately scoped acceptance gates:
 
 1. Expand and stabilize Rust embedding contracts: runtime lifecycle and handles,

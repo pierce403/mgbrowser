@@ -76,6 +76,11 @@ See the [architecture, examples and compatibility roadmap](docs/ARCHITECTURE.md)
 V8/JavaScriptCore and Blink/WebKit replacement APIs, Tauri integration and the
 ThermiteOS port remain future work.
 
+See [JSPLAN.md](JSPLAN.md) for the proposed Butane roadmap: a Boa-first Rust
+engine evaluation, modern React/Vue acceptance tests, V8-inspired optimizations,
+academic references and separately gated embedding compatibility. This is a
+research plan; no engine replacement or framework support has shipped from it.
+
 ## Engineering background (pre-MVP)
 
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.

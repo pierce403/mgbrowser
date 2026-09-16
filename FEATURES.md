@@ -6,6 +6,41 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-016 : Modern Butane JavaScript and embedding compatibility
+
+Stability: planned
+
+### Dependencies
+
+F-013 component boundaries; F-008/F-010 language and worker contracts;
+F-003/F-004/F-005 browser integration; F-011 for supported automation evidence.
+
+### Properties
+
+[JSPLAN.md](JSPLAN.md) specifies a proposed Boa-first pure-Rust reuse evaluation,
+modern language and React/Vue application gates, V8-inspired performance work,
+academic experiments and a separately tested V8 embedding adapter. Preserve
+explicit host capabilities and restricted execution. Language, browser behavior,
+API compatibility, binary ABI and performance claims require distinct evidence.
+No replacement engine, JIT, Test262 score or framework compatibility is implemented
+by publication of the plan. See T-013 for ordered future increments.
+
+### Test Criteria
+
+- [ ] Pinned Test262 baseline and explicit capability/skip/failure denominators.
+- [ ] Recorded engine choice after dependency, license, host/rooting, budget and
+  restricted-worker evaluation, without a fallback engine executing page code.
+- [ ] Modern language, reclaimable memory and explicit bounded application profile.
+- [ ] External scripts/modules, scheduling and DOM integration pass selected WPT
+  and cancellation/origin/resource tests.
+- [ ] Pinned unmodified React/Vue app corpus passes real interaction and long-session
+  assertions with reproducible reference comparisons.
+- [ ] Performance changes show controlled compile/startup/runtime/memory/latency
+  evidence; any JIT has separate executable-memory and GC/deoptimization gates.
+- [ ] A named pinned external consumer passes the documented V8 source API subset;
+  broad binary compatibility is not inferred from this result.
+- [ ] Shipped user-facing increments satisfy versioned release/installer policy.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable

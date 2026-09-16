@@ -1,5 +1,26 @@
 # Work queue
 
+2026-09-16 current request: **T-013 / F-016, Butane research and JSPLAN.md**.
+The deliverable is the researched [JSPLAN.md](JSPLAN.md), with repository-specific
+gaps, Rust reuse candidates, V8 techniques, academic work and acceptance gates.
+This request is documentation only. Engine adoption and implementation remain
+planned; the completed HN task below does not reactivate unrelated work.
+
+Proposed implementation order from JSPLAN.md, each as a bounded contribution:
+
+1. **P0/P1:** Freeze baselines and run a narrow Boa integration probe; compare
+   Nova where relevant and record the engine/dependency/resource decision.
+2. **P2:** Adopt the selected modern language/GC foundation or justify original VM
+   construction with concrete blockers. Preserve/review the resource contract.
+3. **P3/P4:** Script/module loading, jobs/tasks and DOM integration, then pinned
+   React/Vue applications with real input and long-session acceptance.
+4. **P5/P6:** Measured interpreter optimizations, then optional baseline JIT with
+   an explicit executable-memory/isolation design and evidence it pays off.
+5. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
+   architectures, tooling and Wasm as separately scoped work.
+
+No implementation stage is complete merely because the plan is written.
+
 2026-09-16 complete: **T-011 / F-014 shipped as v0.3.0**, release commit
 e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Rust Stylo, bounded same-origin CSS/images
 and generic table/inline layout are accepted at 1024/1280 desktop widths. All
