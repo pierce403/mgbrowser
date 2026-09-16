@@ -1,6 +1,10 @@
 //! Linux window/event-loop composition for the Mg components.
 use mg_browser::platform::{self, script_worker};
-use mg_browser::{COMPILED, REVISION, settings::Settings, updater};
+use mg_browser::{
+    COMPILED, REVISION,
+    settings::{Preferences, Settings},
+    updater,
+};
 use mg_chassis::{Browser as App, BrowserCdp, ColorScheme, JourneyOptions};
 use std::{error::Error, thread, time::Duration};
 use x11rb::{
@@ -9,6 +13,33 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 const BG: u32 = 0xfafbf8;
+
+fn scaled_dimension(logical: u32, percent: u16) -> u32 {
+    ((u64::from(logical) * u64::from(percent.clamp(75, 300)) + 50) / 100).min(u64::from(u32::MAX))
+        as u32
+}
+
+fn logical_coordinate(physical: i16, percent: u16) -> i32 {
+    // Floor, rather than truncate, so a negative coordinate stays outside.
+    (i32::from(physical) * 100).div_euclid(i32::from(percent.clamp(75, 300)))
+}
+
+fn set_size_hints<C: Connection>(
+    conn: &C,
+    window: Window,
+    percent: u16,
+) -> Result<(), Box<dyn Error>> {
+    x11rb::properties::WmSizeHints {
+        min_size: Some((
+            scaled_dimension(360, percent) as i32,
+            scaled_dimension(240, percent) as i32,
+        )),
+        max_size: Some((4800, 3600)),
+        ..Default::default()
+    }
+    .set_normal_hints(conn, window)?;
+    Ok(())
+}
 #[global_allocator]
 static ALLOCATOR: platform::worker_memory::WorkerAllocator =
     platform::worker_memory::WorkerAllocator;
@@ -32,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Menu > Settings: System, Light or Dark appearance (saved automatically).\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
+                "Menu > Settings: theme and browser size (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
                 "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
@@ -134,7 +165,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     app.configure_journey(journey);
     let settings = Settings::user();
     match settings.load() {
-        Ok(preference) => app.set_theme_preference(preference),
+        Ok(preferences) => {
+            app.set_theme_preference(preferences.theme);
+            app.set_scale_preference(preferences.scale);
+        }
         Err(error) => {
             eprintln!("SETTINGS: {error}");
             app.set_settings_status(error);
@@ -157,6 +191,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
     })?;
     let screen = &conn.setup().roots[screen_num];
+    let system_scale = platform::scaling::read_scale(&conn, screen_num).unwrap_or(100);
+    app.set_system_scale(system_scale);
+    let mut applied_scale = app.effective_scale_percent();
+    let mut surface_width = scaled_dimension(app.width(), applied_scale)
+        .min(
+            u32::from(screen.width_in_pixels)
+                .saturating_sub(80)
+                .max(360),
+        )
+        .min(4800);
+    let mut surface_height = scaled_dimension(app.height(), applied_scale)
+        .min(
+            u32::from(screen.height_in_pixels)
+                .saturating_sub(80)
+                .max(240),
+        )
+        .min(3600);
+    app.resize_surface(surface_width, surface_height);
+    let mut next_scale_check = std::time::Instant::now() + Duration::from_secs(2);
+    eprintln!("DISPLAY_SCALE system={system_scale}% effective={applied_scale}%");
     let depth = screen.root_depth;
     let format = conn
         .setup()
@@ -175,8 +229,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         screen.root,
         40,
         40,
-        app.width() as u16,
-        app.height() as u16,
+        surface_width as u16,
+        surface_height as u16,
         0,
         WindowClass::INPUT_OUTPUT,
         0,
@@ -188,6 +242,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 | EventMask::BUTTON_RELEASE,
         ),
     )?;
+    set_size_hints(&conn, window, applied_scale)?;
     conn.change_property8(
         PropMode::REPLACE,
         window,
@@ -252,16 +307,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             match event {
                 Event::Expose(_) => app.request_redraw(),
                 Event::ConfigureNotify(e) => {
-                    app.resize(e.width as u32, e.height as u32);
+                    surface_width = u32::from(e.width).clamp(1, 4800);
+                    surface_height = u32::from(e.height).clamp(1, 3600);
+                    app.resize_surface(surface_width, surface_height);
                 }
                 Event::ButtonPress(e) => match e.detail {
-                    1 => app.pointer_down(e.event_x as i32, e.event_y as i32),
+                    1 => app.pointer_down(
+                        logical_coordinate(e.event_x, app.effective_scale_percent()),
+                        logical_coordinate(e.event_y, app.effective_scale_percent()),
+                    ),
                     4 => app.scroll_by(-100),
                     5 => app.scroll_by(100),
                     _ => {}
                 },
                 Event::ButtonRelease(e) if e.detail == 1 => {
-                    app.pointer_up(e.event_x as i32, e.event_y as i32);
+                    app.pointer_up(
+                        logical_coordinate(e.event_x, app.effective_scale_percent()),
+                        logical_coordinate(e.event_y, app.effective_scale_percent()),
+                    );
                 }
                 Event::KeyPress(e) => {
                     let shift = e.state.contains(KeyButMask::SHIFT);
@@ -286,14 +349,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         while let Ok(theme) = system_themes.try_recv() {
             app.set_system_theme(theme);
         }
-        if let Some(preference) = app.take_theme_change() {
-            match settings.save(preference) {
-                Ok(()) => app.set_settings_status("Appearance saved".into()),
+        if std::time::Instant::now() >= next_scale_check {
+            app.set_system_scale(platform::scaling::read_scale(&conn, screen_num).unwrap_or(100));
+            next_scale_check = std::time::Instant::now() + Duration::from_secs(2);
+        }
+        let theme_changed = app.take_theme_change().is_some();
+        let scale_changed = app.take_scale_change().is_some();
+        if theme_changed || scale_changed {
+            match settings.save(Preferences {
+                theme: app.theme_preference(),
+                scale: app.scale_preference(),
+            }) {
+                Ok(()) => app.set_settings_status("Settings saved".into()),
                 Err(error) => {
                     eprintln!("SETTINGS: {error}");
                     app.set_settings_status(format!("Session only: {error}"));
                 }
             }
+        }
+        let scale = app.effective_scale_percent();
+        if scale != applied_scale {
+            app.resize_surface(surface_width, surface_height);
+            set_size_hints(&conn, window, scale)?;
+            // A fractional scale can leave a one-pixel edge after rounding.
+            conn.clear_area(false, window, 0, 0, 0, 0)?;
+            applied_scale = scale;
+            eprintln!("DISPLAY_SCALE effective={scale}%");
         }
         let theme = app.effective_theme();
         if window_theme != Some(theme) {
@@ -337,21 +418,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         if app.is_dirty() {
             let canvas = app.paint();
             // Split uploads below the core X11 request-size limit.
-            let rows = (200_000 / (app.width() as usize * 4)).max(1);
-            for (chunk, pixels) in canvas
-                .pixels
-                .chunks(rows * app.width() as usize)
-                .enumerate()
-            {
-                let data: Vec<_> = pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
+            let width = canvas.width.min(surface_width);
+            let height = canvas.height.min(surface_height);
+            let rows = (200_000 / (width as usize * 4)).max(1);
+            for first_row in (0..height as usize).step_by(rows) {
+                let end_row = (first_row + rows).min(height as usize);
+                let mut data = Vec::with_capacity((end_row - first_row) * width as usize * 4);
+                for row in first_row..end_row {
+                    let start = row * canvas.width as usize;
+                    data.extend(
+                        canvas.pixels[start..start + width as usize]
+                            .iter()
+                            .flat_map(|p| p.to_le_bytes()),
+                    );
+                }
                 conn.put_image(
                     ImageFormat::Z_PIXMAP,
                     window,
                     gc,
-                    app.width() as u16,
-                    (pixels.len() / app.width() as usize) as u16,
+                    width as u16,
+                    (end_row - first_row) as u16,
                     0,
-                    (chunk * rows) as i16,
+                    first_row as i16,
                     0,
                     depth,
                     &data,
@@ -378,5 +466,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(16));
+    }
+}
+
+#[cfg(test)]
+mod display_coordinate_tests {
+    use super::*;
+
+    #[test]
+    fn native_coordinates_and_sizes_follow_the_same_scale() {
+        for percent in [75, 100, 125, 150, 175, 200, 250, 300] {
+            assert_eq!(scaled_dimension(400, percent), 4 * u32::from(percent));
+            assert_eq!(logical_coordinate((4 * percent) as i16, percent), 400);
+            assert_eq!(
+                logical_coordinate(-1, percent),
+                -1 - i32::from(percent == 75)
+            );
+        }
+        assert_eq!(logical_coordinate(501, 200), 250);
+        assert_eq!(scaled_dimension(u32::MAX, 300), u32::MAX);
     }
 }

@@ -174,10 +174,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.5.0 | Apache-2.0 |
-| mg-butane | 0.5.0 | Apache-2.0 |
-| mg-chassis | 0.5.0 | Apache-2.0 |
-| mg-sparkle | 0.5.0 | Apache-2.0 |
+| mg-browser | 0.6.0 | Apache-2.0 |
+| mg-butane | 0.6.0 | Apache-2.0 |
+| mg-chassis | 0.6.0 | Apache-2.0 |
+| mg-sparkle | 0.6.0 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |

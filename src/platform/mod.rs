@@ -1,5 +1,6 @@
 //! Linux/X11 host facilities. Engines do not depend on this crate.
 pub mod appearance;
+pub mod scaling;
 pub mod script_worker;
 pub mod worker_memory;
 

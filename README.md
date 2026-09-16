@@ -2,7 +2,13 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.5.0 Experimental Preview
+## v0.6.0 Experimental Preview
+
+The browser now follows your desktop's display size, so controls and websites
+are readable on high-DPI screens. **Menu > Settings > Size** offers System or
+saved manual sizes from 75% to 300%. **Ctrl+plus/minus** changes size;
+**Ctrl+0** restores System. Text is rasterized at the correct physical size,
+not enlarged from a finished screenshot. [Sizing details](docs/APPEARANCE.md).
 
 Browser controls now follow your desktop's light/dark preference. Open
 **Menu > Settings** to choose **System**, **Light** or **Dark**; changes apply
@@ -15,7 +21,7 @@ own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
 backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
 
 The size-optimized, symbol-stripped release stays within older builds' unchanged
-8 MiB updater limit. This release changes browser appearance, not web compatibility.
+8 MiB updater limit. This release changes browser sizing, not web compatibility.
 
 The installer selects the latest published release. Exact release and public-
 installation receipts are recorded in the [dated work log](memory/logs/2026-09-16.md).
@@ -49,6 +55,9 @@ See [updater behavior and trust](docs/UPDATES.md).
 
 ### Known limitations
 
+- System size reads screen-global X11 desktop DPI, with 100% fallback. This is
+  whole-browser sizing, not per-site page zoom or per-monitor Wayland scaling.
+  Images retain their existing decoded resolution and limits.
 - Hacker News desktop rendering is the narrow target. Mobile layouts, general
   destination compatibility and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
@@ -75,7 +84,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.5.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.6.0.md) for manual install and uninstall.
 
 ## Components
 

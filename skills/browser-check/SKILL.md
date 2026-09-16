@@ -44,6 +44,20 @@ persistence, live portal changes/fallback, HTTP red warning, unchanged page pixe
 and native decoration hints. Inspect light/dark frames; an X11 property is only a
 hint and does not prove that every window manager changes its outer decoration.
 
+For whole-browser sizing, also run host DPI/parser/settings migration tests,
+Sparkle scaled paint/layout and Chassis scale/CDP regressions. Build scale_smoke,
+theme_smoke, cdp_journey and journey_server, then run
+`bash tools/scale-smoke.sh PATH_TO_PACKAGED_BINARY`. Its owned 4K Xvfb and
+temporary XDG roots exercise System Xresources/XSETTINGS priority and live
+changes, native 100/125/200% form navigation, fractional/2x external CDP,
+Settings/shortcuts, theme preservation, restart, scroll and resize. Never modify
+the real desktop DPI to test this. Keep logical layout/input distinct from
+physical glyph rasterization, uploads and screenshots; check compact dialogs
+and stale presses after reflow. Preserve 1x and resource assertions. Native
+acceptance must wait for completed paints, not just the earlier LOADED log or
+window geometry. Inspect actual screenshots; repeat with the public-installed
+binary after release. Screen-global X11 DPI is not per-monitor Wayland scaling.
+
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis

@@ -10,26 +10,70 @@ const GLYPH_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const GLYPH_CACHE_ENTRIES: usize = 4096;
 
 pub struct Canvas {
+    /// Physical output pixels. All painting coordinates remain logical pixels.
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u32>,
+    scale: f32,
 }
 
 impl Canvas {
     pub fn new(width: u32, height: u32, bg: u32) -> Self {
+        Self::new_scaled(width, height, bg, 1.0)
+    }
+
+    /// Rasterize logical geometry into a physical surface without bitmap scaling.
+    /// The host owns the allocation budget, as with `new`. Positive finite scale
+    /// is bounded to 0.75..=3; invalid scale falls back to 1. Dimensions and pixel
+    /// count are checked before allocation rather than wrapping on overflow.
+    pub fn new_scaled(logical_width: u32, logical_height: u32, bg: u32, scale: f32) -> Self {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale.clamp(0.75, 3.0)
+        } else {
+            1.0
+        };
+        let dimension = |logical: u32| {
+            let physical = (f64::from(logical) * f64::from(scale)).round();
+            assert!(physical <= f64::from(u32::MAX), "Canvas dimension overflow");
+            physical as u32
+        };
+        let width = dimension(logical_width);
+        let height = dimension(logical_height);
+        let len = (width as usize)
+            .checked_mul(height as usize)
+            .filter(|len| *len <= isize::MAX as usize / std::mem::size_of::<u32>())
+            .expect("Canvas allocation size overflow");
         Self {
             width,
             height,
-            pixels: vec![bg & 0x00ff_ffff; width as usize * height as usize],
+            pixels: vec![bg & 0x00ff_ffff; len],
+            scale,
         }
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// Map a logical edge consistently for adjacent rectangles and composition.
+    pub fn physical_edge(&self, logical: i64) -> i64 {
+        (logical as f64 * f64::from(self.scale)).round() as i64
     }
 
     /// Fill the intersection with the canvas, including negative coordinates.
     pub fn rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: u32) {
-        let left = i64::from(x).clamp(0, i64::from(self.width)) as usize;
-        let top = i64::from(y).clamp(0, i64::from(self.height)) as usize;
-        let right = (i64::from(x) + i64::from(w)).clamp(0, i64::from(self.width)) as usize;
-        let bottom = (i64::from(y) + i64::from(h)).clamp(0, i64::from(self.height)) as usize;
+        let left = self
+            .physical_edge(i64::from(x))
+            .clamp(0, i64::from(self.width)) as usize;
+        let top = self
+            .physical_edge(i64::from(y))
+            .clamp(0, i64::from(self.height)) as usize;
+        let right = self
+            .physical_edge(i64::from(x) + i64::from(w))
+            .clamp(0, i64::from(self.width)) as usize;
+        let bottom = self
+            .physical_edge(i64::from(y) + i64::from(h))
+            .clamp(0, i64::from(self.height)) as usize;
         let color = color & 0x00ff_ffff;
         for row in top..bottom {
             let start = row * self.width as usize;
@@ -47,10 +91,13 @@ impl Canvas {
         let baseline = y as f32 + ascent;
         let mut pen = x as f32;
         for glyph in fonts.shape(text, size) {
-            let cached = fonts.glyph(glyph.id, size);
+            // Shape and advance in logical units, but rasterize the outline at
+            // the actual output resolution. Do not enlarge a 1x glyph bitmap.
+            let cached = fonts.glyph(glyph.id, size * self.scale);
             let metrics = cached.0;
-            let left = (pen + glyph.x_offset).round() as i64 + i64::from(metrics.xmin);
-            let top = (baseline - glyph.y_offset).round() as i64
+            let left =
+                ((pen + glyph.x_offset) * self.scale).round() as i64 + i64::from(metrics.xmin);
+            let top = ((baseline - glyph.y_offset) * self.scale).round() as i64
                 - i64::from(metrics.ymin)
                 - metrics.height as i64;
             let from_x = left.max(0).min(i64::from(self.width));
@@ -183,8 +230,8 @@ impl Fonts {
             .ceil() as i32
     }
 
-    /// Pixel-aligned normal CSS line metrics. Round ascent and descent at the
-    /// device-pixel boundary separately, retaining a stable shared baseline.
+    /// Logical-pixel-aligned normal CSS line metrics. Round ascent and descent
+    /// separately, retaining a stable baseline independent of output scale.
     pub fn css_line_height(&self, size: f32) -> f32 {
         let size = font_size(size);
         self.font
@@ -259,6 +306,117 @@ mod tests {
         assert_eq!(blend(0x123456, 0xaabbcc, 0), 0x123456);
         assert_eq!(blend(0x123456, 0xaabbcc, 255), 0xaabbcc);
         assert_eq!(blend(0xffffff, 0, 128), 0x7f7f7f);
+    }
+
+    #[test]
+    fn scaled_canvas_dimensions_edges_and_negative_clipping() {
+        for scale in [1.0, 1.25, 2.0] {
+            let mut canvas = Canvas::new_scaled(8, 4, 0xffffff, scale);
+            assert_eq!(canvas.scale(), scale);
+            assert_eq!(canvas.width, (8.0 * scale).round() as u32);
+            assert_eq!(canvas.height, (4.0 * scale).round() as u32);
+            assert_eq!(canvas.pixels.len(), (canvas.width * canvas.height) as usize);
+            canvas.rect(-1, -1, 3, 3, 0x123456);
+            let end = canvas.physical_edge(2) as usize;
+            for y in 0..canvas.height as usize {
+                for x in 0..canvas.width as usize {
+                    assert_eq!(
+                        canvas.pixels[y * canvas.width as usize + x],
+                        if x < end && y < end {
+                            0x123456
+                        } else {
+                            0xffffff
+                        }
+                    );
+                }
+            }
+            // Adjacent logical rectangles share a physical edge at fractional
+            // scale instead of accumulating rounded-width gaps or overlap.
+            canvas.rect(2, 0, 3, 4, 0xabcdef);
+            canvas.rect(5, 0, 3, 4, 0x987654);
+            let edge = canvas.physical_edge(5) as usize;
+            assert_eq!(canvas.pixels[edge - 1], 0xabcdef);
+            assert_eq!(canvas.pixels[edge], 0x987654);
+            let before = canvas.pixels.clone();
+            canvas.rect(i32::MAX, i32::MAX, u32::MAX, u32::MAX, 0);
+            canvas.rect(i32::MIN, i32::MIN, 10, 10, 0);
+            assert_eq!(canvas.pixels, before);
+        }
+    }
+
+    #[test]
+    fn scaled_canvas_bounds_invalid_scale_and_checks_dimension_overflow() {
+        for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -2.0] {
+            let canvas = Canvas::new_scaled(8, 4, 0, scale);
+            assert_eq!((canvas.width, canvas.height, canvas.scale()), (8, 4, 1.0));
+        }
+        assert_eq!(Canvas::new_scaled(8, 4, 0, f32::MAX).scale(), 3.0);
+        assert_eq!(Canvas::new_scaled(8, 4, 0, f32::MIN_POSITIVE).scale(), 0.75);
+        assert!(std::panic::catch_unwind(|| Canvas::new_scaled(u32::MAX, 0, 0, 3.0)).is_err());
+        assert!(std::panic::catch_unwind(|| Canvas::new(u32::MAX, u32::MAX, 0)).is_err());
+    }
+
+    #[test]
+    fn scaled_text_rasterizes_outlines_and_retains_logical_measurement() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let text = "Mg browser";
+        let measured = fonts.width(text, 17.0);
+        let mut original = Canvas::new(180, 40, 0xffffff);
+        original.text(&mut fonts, 4, 2, text, 17.0, 0);
+        for scale in [1.0, 1.25, 2.0] {
+            let mut canvas = Canvas::new_scaled(180, 40, 0xffffff, scale);
+            canvas.text(&mut fonts, 4, 2, text, 17.0, 0);
+            assert_eq!(fonts.width(text, 17.0), measured);
+            assert!(
+                fonts
+                    .cache
+                    .keys()
+                    .any(|(_, bits)| *bits == (17.0 * scale).to_bits())
+            );
+            assert!(fonts.cached_bytes <= GLYPH_CACHE_BYTES);
+            assert!(fonts.cache.len() <= GLYPH_CACHE_ENTRIES);
+            if scale == 1.0 {
+                assert_eq!(canvas.pixels, original.pixels);
+            } else if scale == 2.0 {
+                // A nearest-neighbor enlargement of the old whole frame has
+                // identical pixels in every 2x2 block. Outline rasterization
+                // produces actual additional edge coverage within those blocks.
+                assert!((0..canvas.height as usize).step_by(2).any(|y| {
+                    (0..canvas.width as usize).step_by(2).any(|x| {
+                        let i = y * canvas.width as usize + x;
+                        let first = canvas.pixels[i];
+                        canvas.pixels[i + 1] != first
+                            || canvas.pixels[i + canvas.width as usize] != first
+                            || canvas.pixels[i + canvas.width as usize + 1] != first
+                    })
+                }));
+            }
+            let before = canvas.pixels.clone();
+            canvas.text(&mut fonts, i32::MIN, i32::MIN, text, 17.0, 0);
+            canvas.text(&mut fonts, i32::MAX, i32::MAX, text, 17.0, 0);
+            assert_eq!(canvas.pixels, before);
+            canvas.text(&mut fonts, -8, -8, text, 32.0, 0);
+        }
+        // The largest allowed logical font at the largest output scale remains
+        // a 768px raster request, without expanding the retained cache budget.
+        let mut maximum = Canvas::new_scaled(8, 8, 0xffffff, 3.0);
+        let alphabet: String = (b'!'..=b'~').map(char::from).collect();
+        maximum.text(&mut fonts, 0, 0, &alphabet, 256.0, 0);
+        assert!(
+            fonts
+                .cache
+                .keys()
+                .any(|(_, bits)| *bits == 768.0f32.to_bits())
+        );
+        assert!(fonts.cached_bytes <= GLYPH_CACHE_BYTES);
+        assert!(fonts.cache.len() <= GLYPH_CACHE_ENTRIES);
     }
 
     #[test]

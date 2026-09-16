@@ -120,12 +120,24 @@ struct Table {
     columns: usize,
 }
 
-pub(crate) fn render(
+#[cfg(test)]
+fn render(
     document: &Document,
     fonts: &mut Fonts,
     viewport: Viewport,
     controls: &Controls<'_>,
     styles: Vec<ComputedStyle>,
+) -> Option<Frame> {
+    render_scaled(document, fonts, viewport, controls, styles, 1.0)
+}
+
+pub(crate) fn render_scaled(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    controls: &Controls<'_>,
+    styles: Vec<ComputedStyle>,
+    scale: f32,
 ) -> Option<Frame> {
     // Reject this path as a whole rather than silently dropping long text.
     if styles.len() != document.nodes.len()
@@ -180,7 +192,7 @@ pub(crate) fn render(
     {
         return None;
     }
-    let mut canvas = Canvas::new(viewport.width, viewport.height, background.rgb);
+    let mut canvas = Canvas::new_scaled(viewport.width, viewport.height, background.rgb, scale);
     let mut decoded = HashMap::new();
     let mut decoded_bytes = 0usize;
     for op in &layout.scene.paints {
@@ -365,15 +377,18 @@ fn paint_rect(canvas: &mut Canvas, r: Rect, color: Color, scroll: i32) {
             color.rgb,
         );
     } else {
-        let left = r.x.round().max(0.0).min(canvas.width as f32) as usize;
-        let top = (r.y.round() - scroll as f32)
-            .max(0.0)
-            .min(canvas.height as f32) as usize;
-        let right = (r.x + r.w).ceil().max(0.0).min(canvas.width as f32) as usize;
-        let bottom = (r.y + r.h - scroll as f32)
-            .ceil()
-            .max(0.0)
-            .min(canvas.height as f32) as usize;
+        let left = canvas
+            .physical_edge(r.x.round() as i64)
+            .clamp(0, i64::from(canvas.width)) as usize;
+        let top = canvas
+            .physical_edge((r.y.round() - scroll as f32) as i64)
+            .clamp(0, i64::from(canvas.height)) as usize;
+        let right = canvas
+            .physical_edge((r.x + r.w).ceil() as i64)
+            .clamp(0, i64::from(canvas.width)) as usize;
+        let bottom = canvas
+            .physical_edge((r.y + r.h - scroll as f32).ceil() as i64)
+            .clamp(0, i64::from(canvas.height)) as usize;
         for y in top..bottom {
             for x in left..right {
                 let pixel = &mut canvas.pixels[y * canvas.width as usize + x];
@@ -1545,6 +1560,39 @@ mod tests {
         assert!(!image_cache_admits(1024, 1024, 12 * 1024 * 1024 + 1, 127));
         assert!(!image_cache_admits(1, 1, 0, 128));
         assert!(!image_cache_admits(1, 1, usize::MAX, 0));
+    }
+
+    #[test]
+    fn scaled_translucent_rect_keeps_opaque_edges_and_scroll_alignment() {
+        for scale in [1.0, 1.25, 2.0] {
+            let mut alpha = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            let mut opaque = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            let rect = Rect {
+                x: -1.0,
+                y: 3.0,
+                w: 4.0,
+                h: 3.0,
+            };
+            paint_rect(&mut alpha, rect, Color { rgb: 0, alpha: 0.5 }, 2);
+            paint_rect(
+                &mut opaque,
+                rect,
+                Color {
+                    rgb: 0x808080,
+                    alpha: 1.0,
+                },
+                2,
+            );
+            assert_eq!(alpha.pixels, opaque.pixels);
+            assert_eq!(
+                alpha.pixels[alpha.physical_edge(1) as usize * alpha.width as usize],
+                0x808080
+            );
+            assert_eq!(
+                alpha.pixels[alpha.physical_edge(4) as usize * alpha.width as usize],
+                0xffffff
+            );
+        }
     }
 
     #[test]

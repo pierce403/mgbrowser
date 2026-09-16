@@ -59,6 +59,18 @@ pub fn render(
     viewport: Viewport,
     controls: &Controls<'_>,
 ) -> Frame {
+    render_scaled(document, fonts, viewport, controls, 1.0)
+}
+
+/// Render at an output scale while keeping layout, hits and scrolling in logical
+/// pixels. Font outlines are rasterized at physical resolution by the Canvas.
+pub fn render_scaled(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    controls: &Controls<'_>,
+    scale: f32,
+) -> Frame {
     let styled = !document.stylesheets.is_empty()
         || !document.resources.is_empty()
         || document.nodes.iter().any(|node| node.has("style"));
@@ -69,7 +81,9 @@ pub fn render(
             (viewport.width as f32, viewport.height as f32),
         ) {
             Ok(styles) => {
-                match crate::styled_layout::render(document, fonts, viewport, controls, styles) {
+                match crate::styled_layout::render_scaled(
+                    document, fonts, viewport, controls, styles, scale,
+                ) {
                     Some(frame) => return frame,
                     None => eprintln!("Styled layout limit reached; using readable-flow fallback"),
                 }
@@ -88,6 +102,7 @@ pub fn render(
         select_all: controls.select_all,
         hits: Vec::new(),
         boxes: Vec::new(),
+        scale,
     }
     .paint()
 }
@@ -102,10 +117,11 @@ struct Renderer<'a> {
     select_all: bool,
     hits: Vec<Hit>,
     boxes: Vec<LayoutBox>,
+    scale: f32,
 }
 impl Renderer<'_> {
     fn paint(mut self) -> Frame {
-        let mut c = Canvas::new(self.width, self.height, BG);
+        let mut c = Canvas::new_scaled(self.width, self.height, BG, self.scale);
         let left = 32;
         let right = self.width as i32 - 38;
         let mut x = left;
@@ -292,4 +308,56 @@ pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> 
         }
     }
     chars[..low].iter().rev().collect()
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn scaled_styled_and_fallback_frames_keep_logical_layout_and_hits() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for style in ["", " style='font-size:17px;width:210px'"] {
+            let doc = crate::document::parse(
+                &format!(
+                    "<body{style}><p><a href='/next'>A longer link that wraps across several lines</a></p><form><input name=q value=test><button>Go</button></form></body>"
+                ),
+                "https://example.test/",
+            );
+            let viewport = Viewport {
+                width: 320,
+                height: 240,
+                scroll: 8,
+            };
+            let controls = Controls::default();
+            let original = render(&doc, &mut fonts, viewport, &controls);
+            assert!(!original.hits.is_empty());
+            assert!(!original.boxes.is_empty());
+            for scale in [1.0, 1.25, 2.0] {
+                let frame = render_scaled(&doc, &mut fonts, viewport, &controls, scale);
+                assert_eq!(frame.canvas.width, (320.0 * scale).round() as u32);
+                assert_eq!(frame.canvas.height, (240.0 * scale).round() as u32);
+                assert_eq!(frame.content_height, original.content_height);
+                assert_eq!(frame.boxes, original.boxes);
+                let hit_geometry = |frame: &Frame| {
+                    frame
+                        .hits
+                        .iter()
+                        .map(|hit| (hit.x, hit.y, hit.w, hit.h, hit.action.clone()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(hit_geometry(&frame), hit_geometry(&original));
+                if scale == 1.0 {
+                    assert_eq!(frame.canvas.pixels, original.canvas.pixels);
+                }
+            }
+        }
+    }
 }

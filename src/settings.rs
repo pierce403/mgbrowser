@@ -1,5 +1,5 @@
-//! User-level appearance preference. Desktop discovery stays in the platform host.
-use mg_chassis::ThemePreference;
+//! User-level appearance preferences. Desktop discovery stays in the platform host.
+use mg_chassis::{ScalePreference, ThemePreference};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -10,6 +10,13 @@ use std::{
 
 const MAX_SETTINGS: u64 = 4096;
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+
+/// Preferences are saved together so changing scale never resets the theme.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Preferences {
+    pub theme: ThemePreference,
+    pub scale: ScalePreference,
+}
 
 pub struct Settings {
     path: Option<PathBuf>,
@@ -32,7 +39,7 @@ impl Settings {
         }
     }
 
-    pub fn load(&self) -> Result<ThemePreference, String> {
+    pub fn load(&self) -> Result<Preferences, String> {
         let Some(path) = &self.path else {
             return Err("No absolute HOME or XDG_CONFIG_HOME; appearance cannot be saved".into());
         };
@@ -43,7 +50,7 @@ impl Settings {
         {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(ThemePreference::System);
+                return Ok(Preferences::default());
             }
             Err(error) => return Err(format!("Cannot read appearance settings: {error}")),
         };
@@ -60,7 +67,12 @@ impl Settings {
         parse(&bytes)
     }
 
-    pub fn save(&self, preference: ThemePreference) -> Result<(), String> {
+    pub fn save(&self, preferences: Preferences) -> Result<(), String> {
+        if !preferences.scale.is_valid() {
+            return Err(
+                "Invalid appearance scale; expected System or a supported percentage".into(),
+            );
+        }
         let path = self.path.as_ref().ok_or(
             "No absolute HOME or XDG_CONFIG_HOME; appearance applies to this session only",
         )?;
@@ -83,12 +95,16 @@ impl Settings {
             .open(&temporary)
             .map_err(|e| format!("Cannot save appearance settings: {e}"))?;
         let result = (|| {
-            let name = match preference {
+            let name = match preferences.theme {
                 ThemePreference::System => "system",
                 ThemePreference::Light => "light",
                 ThemePreference::Dark => "dark",
             };
-            writeln!(file, "{{\"theme\":\"{name}\"}}")?;
+            let scale = match preferences.scale {
+                ScalePreference::System => "\"system\"".into(),
+                ScalePreference::Percent(value) => value.to_string(),
+            };
+            writeln!(file, "{{\"theme\":\"{name}\",\"scale\":{scale}}}")?;
             file.sync_all()?;
             fs::rename(&temporary, path)
         })();
@@ -103,15 +119,50 @@ impl Settings {
     }
 }
 
-fn parse(bytes: &[u8]) -> Result<ThemePreference, String> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|_| "Invalid appearance settings JSON; using System")?;
-    match value.get("theme").and_then(|v| v.as_str()) {
-        Some("system") => Ok(ThemePreference::System),
-        Some("light") => Ok(ThemePreference::Light),
-        Some("dark") => Ok(ThemePreference::Dark),
-        _ => Err("Invalid appearance theme; expected system, light or dark".into()),
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPreferences {
+    theme: String,
+    #[serde(default)]
+    scale: StoredScale,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredScale {
+    Name(String),
+    Percent(u16),
+}
+
+impl Default for StoredScale {
+    fn default() -> Self {
+        Self::Name("system".into())
     }
+}
+
+fn parse(bytes: &[u8]) -> Result<Preferences, String> {
+    if bytes.len() as u64 > MAX_SETTINGS {
+        return Err("Appearance settings exceed 4 KiB; using System".into());
+    }
+    let value: StoredPreferences = serde_json::from_slice(bytes)
+        .map_err(|_| "Invalid appearance settings JSON; using System")?;
+    let theme = match value.theme.as_str() {
+        "system" => ThemePreference::System,
+        "light" => ThemePreference::Light,
+        "dark" => ThemePreference::Dark,
+        _ => return Err("Invalid appearance theme; expected system, light or dark".into()),
+    };
+    let scale = match value.scale {
+        StoredScale::Name(name) if name == "system" => ScalePreference::System,
+        StoredScale::Percent(value) if ScalePreference::Percent(value).is_valid() => {
+            ScalePreference::Percent(value)
+        }
+        _ => return Err(
+            "Invalid appearance scale; expected system or 75, 100, 125, 150, 175, 200, 250, 300"
+                .into(),
+        ),
+    };
+    Ok(Preferences { theme, scale })
 }
 
 #[cfg(test)]
@@ -142,22 +193,34 @@ mod tests {
         );
         let settings = Settings::from_roots(None, None);
         assert!(settings.load().is_err());
-        assert!(settings.save(ThemePreference::Dark).is_err());
+        assert!(settings.save(Preferences::default()).is_err());
     }
 
     #[test]
     fn default_roundtrip_restart_and_invalid_file() {
         let root = scratch();
         let settings = Settings::from_roots(Some(root.clone()), None);
-        assert_eq!(settings.load().unwrap(), ThemePreference::System);
-        for preference in [
+        assert_eq!(settings.load().unwrap(), Preferences::default());
+        for theme in [
             ThemePreference::Dark,
             ThemePreference::Light,
             ThemePreference::System,
         ] {
+            for scale in [75, 100, 125, 150, 175, 200, 250, 300] {
+                let preference = Preferences {
+                    theme,
+                    scale: ScalePreference::Percent(scale),
+                };
+                settings.save(preference).unwrap();
+                let restarted = Settings::from_roots(Some(root.clone()), None);
+                assert_eq!(restarted.load().unwrap(), preference);
+            }
+            let preference = Preferences {
+                theme,
+                scale: ScalePreference::System,
+            };
             settings.save(preference).unwrap();
-            let restarted = Settings::from_roots(Some(root.clone()), None);
-            assert_eq!(restarted.load().unwrap(), preference);
+            assert_eq!(settings.load().unwrap(), preference);
         }
         fs::write(settings.path().unwrap(), b"invalid").unwrap();
         assert!(settings.load().is_err());
@@ -174,9 +237,54 @@ mod tests {
             "{}",
             "{\"theme\":4}",
             "{\"theme\":\"unknown\"}",
+            "{\"theme\":\"dark\",\"theme\":\"light\"}",
+            "{\"theme\":\"dark\",\"unknown\":true}",
+            "{\"theme\":\"dark\",\"scale\":null}",
+            "{\"theme\":\"dark\",\"scale\":true}",
+            "{\"theme\":\"dark\",\"scale\":\"200\"}",
+            "{\"theme\":\"dark\",\"scale\":200.0}",
+            "{\"theme\":\"dark\",\"scale\":-100}",
+            "{\"theme\":\"dark\",\"scale\":124}",
+            "{\"theme\":\"dark\",\"scale\":301}",
+            "{\"theme\":\"dark\",\"scale\":99999999999999999999999}",
+            "{\"theme\":\"dark\",\"scale\":100,\"scale\":200}",
         ] {
             assert!(parse(input.as_bytes()).is_err());
         }
+    }
+
+    #[test]
+    fn old_theme_only_settings_migrate_without_resetting_theme() {
+        assert_eq!(
+            parse(br#"{"theme":"dark"}"#).unwrap(),
+            Preferences {
+                theme: ThemePreference::Dark,
+                scale: ScalePreference::System,
+            }
+        );
+        let root = scratch();
+        let settings = Settings::from_roots(Some(root.clone()), None);
+        fs::create_dir_all(root.join("mgbrowser")).unwrap();
+        fs::write(settings.path().unwrap(), br#"{"theme":"dark"}"#).unwrap();
+        let mut preferences = settings.load().unwrap();
+        preferences.scale = ScalePreference::Percent(200);
+        settings.save(preferences).unwrap();
+        assert_eq!(settings.load().unwrap(), preferences);
+        assert_eq!(preferences.theme, ThemePreference::Dark);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(settings.path().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let previous = fs::read(settings.path().unwrap()).unwrap();
+        preferences.scale = ScalePreference::Percent(201);
+        assert!(settings.save(preferences).is_err());
+        assert_eq!(fs::read(settings.path().unwrap()).unwrap(), previous);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -185,13 +293,13 @@ mod tests {
         let obstruction = root.join("not-a-directory");
         fs::write(&obstruction, b"keep").unwrap();
         let settings = Settings::from_roots(Some(obstruction.clone()), None);
-        assert!(settings.save(ThemePreference::Dark).is_err());
+        assert!(settings.save(Preferences::default()).is_err());
         assert_eq!(fs::read(&obstruction).unwrap(), b"keep");
         let settings = Settings::from_roots(Some(root.clone()), None);
         fs::create_dir_all(root.join("mgbrowser")).unwrap();
         std::os::unix::fs::symlink(&obstruction, settings.path().unwrap()).unwrap();
         assert!(settings.load().is_err());
-        assert!(settings.save(ThemePreference::Dark).is_err());
+        assert!(settings.save(Preferences::default()).is_err());
         assert_eq!(fs::read(&obstruction).unwrap(), b"keep");
         fs::remove_dir_all(root).unwrap();
     }

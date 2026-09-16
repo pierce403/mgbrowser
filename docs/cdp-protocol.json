@@ -82,7 +82,7 @@
     },
     {
       "domain": "Page",
-      "description": "Single-frame navigation and software-rendered viewport inspection. Browser toolbar and status strip are excluded; scale is fixed at one.",
+      "description": "Single-frame navigation and software-rendered viewport inspection. Browser toolbar and status strip are excluded. CSS geometry stays logical; screenshots use the selected physical display scale.",
       "dependencies": [ "DOM" ],
       "types": [
         { "id": "FrameId", "type": "string" },
@@ -156,7 +156,7 @@
         { "name": "getFrameTree", "returns": [ { "name": "frameTree", "$ref": "FrameTree" } ] },
         {
           "name": "getLayoutMetrics",
-          "description": "Page viewport geometry at scale one. Deprecated device-pixel fields equal CSS-pixel fields in this implementation.",
+          "description": "Logical CSS viewport geometry and deprecated device-pixel fields scaled to the current display size. Visual scale/zoom remain one; separate pinch/page-only zoom is not implemented.",
           "returns": [
             { "name": "layoutViewport", "$ref": "LayoutViewport", "deprecated": true },
             { "name": "visualViewport", "$ref": "VisualViewport", "deprecated": true },
@@ -168,7 +168,7 @@
         },
         {
           "name": "captureScreenshot",
-          "description": "Return a base64 PNG of the current page viewport. format defaults to png; other codecs, clip, and captureBeyondViewport=true are unsupported. Both fromSurface values use the same software raster. No scaling or full-page capture. Encoded output is limited to 7 MiB.",
+          "description": "Return a base64 PNG of the current page viewport at physical display resolution. format defaults to png; other codecs, clip, and captureBeyondViewport=true are unsupported. Both fromSurface values use the same software raster. No requested rescaling or full-page capture. Encoded output is limited to 7 MiB.",
           "parameters": [
             { "name": "format", "type": "string", "enum": [ "png" ], "optional": true },
             { "name": "fromSurface", "type": "boolean", "optional": true, "experimental": true },
@@ -283,7 +283,7 @@
     },
     {
       "domain": "Input",
-      "description": "Input for the existing page controls, using CSS viewport coordinates and fixed scale one. With opt-in scripting, activation dispatches bounded retained click/submit handlers. No touch, drag, IME composition, synthetic script dispatch, or general keyboard/input event support.",
+      "description": "Input for the existing page controls, using logical CSS viewport coordinates independent of display size. A scale or viewport resize cancels pending presses. With opt-in scripting, activation dispatches bounded retained click/submit handlers. No touch, drag, IME composition, synthetic script dispatch, or general keyboard/input event support.",
       "types": [ { "id": "MouseButton", "type": "string", "enum": [ "none", "left" ] } ],
       "commands": [
         {

@@ -38,6 +38,12 @@ is saved automatically and applies without restarting; web pages keep their own
 colors and plain HTTP keeps its red warning. See [appearance](APPEARANCE.md) for
 desktop support, XDG configuration and window-manager limitations.
 
+Size in the same Settings panel defaults to the desktop DPI. It scales controls
+and websites together, with sharp physical text rasterization. Ctrl+plus/minus
+steps through 75..300%; Ctrl+0 restores System. Manual size is saved across
+restarts. System uses screen-global X11 DPI with 100% fallback, not per-monitor
+Wayland scaling or independent page zoom. See [sizing details](APPEARANCE.md).
+
 ## What it renders
 
 HTML uses our bounded tokenizer/tree builder. Styled documents use Rust Stylo for

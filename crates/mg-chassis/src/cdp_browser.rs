@@ -30,7 +30,7 @@ struct Route {
 struct Scope {
     page: bool,
     dom: bool,
-    pressed: Option<(i32, i32)>,
+    pressed: Option<(i32, i32, u64)>,
 }
 struct Pending {
     route: Route,
@@ -607,10 +607,13 @@ impl BrowserCdp {
                 }
                 app.refresh_layout();
                 match kind {
-                    "mousePressed" => scope.pressed = Some((x, y)),
+                    "mousePressed" => scope.pressed = Some((x, y, app.geometry_revision)),
                     "mouseReleased" => {
-                        if let Some((px, py)) = scope.pressed.take() {
-                            if (px - x).abs() <= 5 && (py - y).abs() <= 5 {
+                        if let Some((px, py, geometry)) = scope.pressed.take() {
+                            if geometry == app.geometry_revision
+                                && (px - x).abs() <= 5
+                                && (py - y).abs() <= 5
+                            {
                                 app.click_checked(x, y + app.page_top()).map_err(failed)?;
                             }
                         }
@@ -818,7 +821,14 @@ impl App {
         let layout = json!({"pageX":0,"pageY":self.scroll,"clientWidth":self.width,"clientHeight":self.viewport_height()});
         let visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":self.scroll,"clientWidth":self.width,"clientHeight":self.viewport_height(),"scale":1,"zoom":1});
         let content = json!({"x":0,"y":0,"width":self.width,"height":(self.content_height-self.page_top()).max(self.viewport_height() as i32)});
-        json!({"layoutViewport":layout,"visualViewport":visual,"contentSize":content,"cssLayoutViewport":layout,"cssVisualViewport":visual,"cssContentSize":content})
+        let physical =
+            |value: i64| (value as f64 * f64::from(self.effective_scale())).round() as i64;
+        let height = physical(i64::from(self.page_top()) + i64::from(self.viewport_height()))
+            - physical(i64::from(self.page_top()));
+        let device_layout = json!({"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(self.width)),"clientHeight":height});
+        let device_visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(self.width)),"clientHeight":height,"scale":1,"zoom":1});
+        let device_content = json!({"x":0,"y":0,"width":physical(i64::from(self.width)),"height":physical(i64::from((self.content_height-self.page_top()).max(self.viewport_height() as i32)))});
+        json!({"layoutViewport":device_layout,"visualViewport":device_visual,"contentSize":device_content,"cssLayoutViewport":layout,"cssVisualViewport":visual,"cssContentSize":content})
     }
     fn box_model(&self, node: usize) -> Reply {
         if self.boxes.len() >= 100_000 {
@@ -867,15 +877,19 @@ impl App {
     fn screenshot(&mut self) -> Result<String, (i32, String)> {
         let canvas = self.paint();
         self.dirty = true; // Inspection must not consume a pending native-window redraw.
-        let height = self.viewport_height();
+        let top = canvas.physical_edge(i64::from(self.page_top())) as u32;
+        let bottom = canvas
+            .physical_edge(i64::from(self.page_top()) + i64::from(self.viewport_height()))
+            as u32;
+        let height = bottom.min(canvas.height).saturating_sub(top);
         let pixels: Vec<u8> = canvas
             .pixels
             .iter()
-            .skip(self.page_top() as usize * self.width as usize)
-            .take(height as usize * self.width as usize)
+            .skip(top as usize * canvas.width as usize)
+            .take(height as usize * canvas.width as usize)
             .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])
             .collect();
-        let image = image::RgbImage::from_raw(self.width, height, pixels)
+        let image = image::RgbImage::from_raw(canvas.width, height, pixels)
             .ok_or_else(|| failed("Invalid screenshot surface"))?;
         let mut output = Cursor::new(Vec::new());
         image
@@ -941,6 +955,93 @@ mod tests {
             .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])
             .collect();
         assert_eq!(decoded.into_raw(), expected);
+    }
+
+    #[test]
+    fn scaled_cdp_keeps_css_input_and_captures_physical_page_pixels() {
+        let mut app = fixture();
+        app.resize(640, 480);
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        let r = route();
+        let (node, _) = input(&app);
+        app.refresh_layout();
+        let baseline = app.box_model(node).unwrap();
+        for percent in [75, 100, 125, 127, 167, 200, 300] {
+            app.set_system_scale(percent);
+            let surface = app.paint();
+            let model = app.box_model(node).unwrap();
+            assert_eq!(model, baseline, "CSS geometry at {percent}%");
+            let metrics = app.metrics();
+            assert_eq!(metrics["cssLayoutViewport"]["clientWidth"], 640);
+            assert_eq!(metrics["cssLayoutViewport"]["clientHeight"], 343);
+            assert_eq!(metrics["layoutViewport"]["clientWidth"], surface.width);
+            let top = surface.physical_edge(108) as usize;
+            let bottom = surface.physical_edge(451) as usize;
+            assert_eq!(metrics["layoutViewport"]["clientHeight"], bottom - top);
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(app.screenshot().unwrap())
+                .unwrap();
+            let decoded = image::load_from_memory(&png).unwrap().into_rgb8();
+            assert_eq!(decoded.dimensions(), (surface.width, (bottom - top) as u32));
+            let expected: Vec<_> = surface.pixels
+                [top * surface.width as usize..bottom * surface.width as usize]
+                .iter()
+                .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])
+                .collect();
+            assert_eq!(decoded.into_raw(), expected, "physical crop at {percent}%");
+            let quad = model["model"]["content"].as_array().unwrap();
+            let x = quad[0].as_i64().unwrap() + 3;
+            let y = quad[1].as_i64().unwrap() + 3;
+            for kind in ["mousePressed", "mouseReleased"] {
+                cdp.dispatch(
+                    &mut app,
+                    &r,
+                    false,
+                    "Input.dispatchMouseEvent",
+                    &json!({"type":kind,"button":"left","x":x,"y":y}),
+                )
+                .unwrap();
+            }
+            assert!(app.focus == Focus::Input(node));
+        }
+    }
+
+    #[test]
+    fn cdp_press_cannot_survive_scale_or_resize_reflow() {
+        let mut app = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        let r = route();
+        let (node, _) = input(&app);
+        for resize in [false, true] {
+            app.focus = Focus::Page;
+            app.refresh_layout();
+            let model = app.box_model(node).unwrap();
+            let x = model["model"]["content"][0].as_i64().unwrap() + 3;
+            let y = model["model"]["content"][1].as_i64().unwrap() + 3;
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mousePressed","button":"left","x":x,"y":y}),
+            )
+            .unwrap();
+            if resize {
+                app.resize(640, 480);
+            } else {
+                app.set_system_scale(200);
+            }
+            cdp.dispatch(
+                &mut app,
+                &r,
+                false,
+                "Input.dispatchMouseEvent",
+                &json!({"type":"mouseReleased","button":"left","x":x,"y":y}),
+            )
+            .unwrap();
+            assert!(app.focus == Focus::Page);
+            assert!(cdp.scopes[&r].pressed.is_none());
+        }
     }
     #[test]
     fn actual_dom_attributes_selectors_and_stale_nodes() {

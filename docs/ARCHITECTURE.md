@@ -1,7 +1,7 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.5.0). The desktop executable remains
+four packages, all versioned together (currently 0.6.0). The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 
@@ -34,6 +34,16 @@ Chassis's chrome accepts `ThemePreference` and a host-supplied `ColorScheme`.
 Theme selection does not recolor Sparkle's page pixels. The desktop host alone
 owns XDG preference persistence, Rust D-Bus portal discovery and the X11 window
 decoration hint. Embedders need no session bus or configuration directory.
+
+Display sizing likewise belongs to the host: XSETTINGS/Xresources provide the
+screen-global DPI and Chassis receives System/manual size preferences. Layout,
+hit regions, scrolling and CSS/CDP input stay in logical pixels; Sparkle's
+`render_scaled` and `Canvas::new_scaled` rasterize into physical pixels. Existing
+`render`/`Canvas::new` default to 1x. The native host converts mouse coordinates
+and resizes with `Browser::resize_surface`; the original logical `resize` API
+keeps its previous bounds. Native device surfaces are bounded to 4800x3600
+(internal rounding may add up to three pixels per edge), independently of
+unchanged worker, page-image and encoded-screenshot budgets.
 
 ## Embedding contracts
 

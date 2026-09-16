@@ -6,6 +6,33 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-018 : Desktop-aware browser size
+
+Stability: in-progress
+
+### Dependencies
+
+F-013 host/render boundaries, F-017 Settings and F-012/F-015 release distribution.
+
+### Properties
+
+System size follows the desktop's effective X11 DPI, with 100% fallback.
+Settings offers saved manual sizes from 75% to 300%. Ctrl+plus/minus steps size;
+Ctrl+0 restores System. Controls and websites scale together. Text rasterizes
+at physical resolution, while layout, scroll and input stay in logical pixels.
+No toolkit bindings or page-engine/JavaScript compatibility additions.
+Discovery is screen-global, not per-monitor Wayland scaling; this does not
+implement independent page zoom. Existing image decode/cache limits remain.
+
+### Test Criteria
+
+- [x] Bounded desktop DPI discovery, correct priority/fallback and legacy settings migration.
+- [x] Sharp physical text, scaled rectangles/images and unchanged 1x rendering.
+- [x] Logical native/CDP input and physical screenshots remain aligned at fractional/2x scales.
+- [ ] Native System/manual controls, shortcuts, resize, scroll and restart persistence pass.
+- [ ] Existing component/resource/worker/native/CDP gates pass without weakened assertions.
+- [ ] Exact-commit CI/Pages, versioned release and fresh public install/upgrade verified.
+
 ## F-017 : System, light and dark browser appearance
 
 Stability: stable

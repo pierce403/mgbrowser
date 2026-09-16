@@ -60,9 +60,22 @@ The page implementation uses one top-level frame, real navigation, the actual pa
 
 `getBoxModel` returns the union of a node's own or descendant flow boxes. Its content, padding, border, and margin quads are currently equal. The bounds must intersect the viewport but are not clipped to it; wholly offscreen and non-rendered nodes return errors. Geometry collection is capped at 100,000 rectangles; reaching that cap makes box-model queries return an explicit error without a partial model. A query also stops with an explicit error after four million traversal steps. This geometry is useful for existing flow content and does not imply a full CSS box model.
 
-Page coordinates exclude the native toolbar and status strip. At current scale one, a protocol point `(x, y)` maps to native canvas `(x, y + 108)`; the page height is the window height minus 108 toolbar pixels and 29 status pixels. Screenshots crop that same viewport and encode PNG, with a 7 MiB limit on the encoded output. Other image formats, `clip`, and `captureBeyondViewport: true` return errors. Either `fromSurface` value uses the existing software raster. The CSS layout/visual viewport fields report scroll offset and visible dimensions; legacy device-pixel fields have equal values at this scale. [Page reference](https://chromedevtools.github.io/devtools-protocol/tot/Page/).
+Page coordinates exclude the native toolbar and status strip and remain logical
+CSS pixels regardless of display size. At scale `s`, a protocol point `(x, y)`
+maps to native canvas `(x*s, (y+108)*s)` with integer raster rounding. The logical
+page height excludes 108 toolbar and 29 status pixels. Screenshots crop that
+viewport in **physical** pixels and encode PNG, with the unchanged 7 MiB encoded
+output limit. CSS layout/visual viewport fields stay logical; deprecated device-
+pixel fields scale with the output. Visual `scale` and `zoom` remain 1: there is
+no separate pinch or page-only zoom. Other image formats, `clip` and
+`captureBeyondViewport: true` return errors. Either `fromSurface` value uses the
+same software raster. [Page reference](https://chromedevtools.github.io/devtools-protocol/tot/Page/).
 
 Input acts on page controls. Use `DOM.focus` before `Input.insertText`, or a visible box and a mouse press/release. Mouse coordinates must be inside the viewport. Press/release require `button: "left"`; a release within five pixels of that session's press activates once. Only single clicks, unmodified mouse events, and vertical wheel scrolling are supported. Mouse movement does not implement hover or dragging. Coordinates and event parameters follow the [Input reference](https://chromedevtools.github.io/devtools-protocol/tot/Input/).
+
+A scale or viewport-size change cancels a pending mouse press; release cannot
+activate a different target after reflow. This does not fabricate document events
+or invalidate DOM IDs. Native size shortcuts are not added to CDP's key subset.
 
 Keyboard modifiers support Ctrl=2 and Shift=8; Ctrl+A is the sole control shortcut. Named keys are Enter, Backspace, Tab, PageUp/Down, ArrowUp/Down, Shift, and Control. Windows virtual-key fallback covers Enter=13, Backspace=8, and Tab=9. The `code`, `nativeVirtualKeyCode`, `unmodifiedText`, and `autoRepeat` fields are accepted as validated metadata and do not supply alternative key translation. Use printable `char` text or `insertText` for Unicode input into focused controls. Key release does not edit, and printable raw key-down leaves insertion to a following character event. No clipboard, IME composition, or command-array editing support is provided.
 

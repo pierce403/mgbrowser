@@ -12,7 +12,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use x11rb::{connection::Connection, protocol::xproto::*, rust_connection::RustConnection};
+use x11rb::{
+    connection::Connection, protocol::xproto::*, rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -163,9 +166,10 @@ impl Browser {
 
     fn settings_origin(&self) -> (i16, i16, i16) {
         let width = self.width.saturating_sub(40).min(600);
+        let height = if self.height < 320 { 236 } else { 308 };
         (
             ((self.width - width) / 2) as i16,
-            self.height.saturating_sub(236).min(125) as i16,
+            self.height.saturating_sub(height).min(125) as i16,
             ((width - 48) / 3) as i16,
         )
     }
@@ -177,12 +181,15 @@ impl Browser {
 
     fn select(&self, index: i16) -> Result<()> {
         let (x, y, width) = self.settings_origin();
-        self.click(x + 16 + index * (width + 8) + width / 2, y + 90)
+        self.click(
+            x + 16 + index * (width + 8) + width / 2,
+            y + if self.height < 320 { 74 } else { 90 },
+        )
     }
 
     fn close_settings(&self) -> Result<()> {
         let (x, y, _) = self.settings_origin();
-        self.click(x + 50, y + 200)
+        self.click(x + 50, y + if self.height < 320 { 202 } else { 268 })
     }
 
     fn capture(&self) -> Result<Vec<u8>> {
@@ -344,6 +351,17 @@ fn main() -> Result<()> {
     if std::env::var("MGBROWSER_THEME_PRIVATE_SESSION").as_deref() != Ok("1") {
         return Err("Use tools/theme-smoke.sh: this fixture requires its own D-Bus session".into());
     }
+    // This example runs only on the script's owned Xvfb. Keep the existing 1x
+    // page-pixel comparisons independent of the host desktop's display size.
+    let (display, screen) = x11rb::connect(None)?;
+    display.change_property8(
+        PropMode::REPLACE,
+        display.setup().roots[screen].root,
+        AtomEnum::RESOURCE_MANAGER,
+        AtomEnum::STRING,
+        b"Xft.dpi: 96\n",
+    )?;
+    display.flush()?;
     let payload = PathBuf::from(args.get(1).ok_or("browser payload required")?);
     let scratch = PathBuf::from(args.get(2).ok_or("scratch directory required")?);
     let scheme = Arc::new(AtomicU32::new(1));

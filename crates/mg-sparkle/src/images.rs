@@ -196,24 +196,41 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
     })
 }
 
-/// Blend an image onto the supplied surface, clipping in wide signed arithmetic.
+/// Blend a logical-size image onto the scaled surface, clipping in wide signed
+/// arithmetic. Sampling writes directly into the destination: display scaling
+/// never expands the bounded decoded-image allocation or cache budget.
 pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
-    if (image.width as usize)
-        .checked_mul(image.height as usize)
-        .and_then(|n| n.checked_mul(4))
-        != Some(image.pixels.len())
+    if image.width == 0
+        || image.height == 0
+        || (image.width as usize)
+            .checked_mul(image.height as usize)
+            .and_then(|n| n.checked_mul(4))
+            != Some(image.pixels.len())
     {
         return;
     }
-    let left = i64::from(x).clamp(0, i64::from(canvas.width));
-    let right = (i64::from(x) + i64::from(image.width)).clamp(0, i64::from(canvas.width));
-    let top = i64::from(y).clamp(0, i64::from(canvas.height));
-    let bottom = (i64::from(y) + i64::from(image.height)).clamp(0, i64::from(canvas.height));
+    let left = canvas
+        .physical_edge(i64::from(x))
+        .clamp(0, i64::from(canvas.width));
+    let right = canvas
+        .physical_edge(i64::from(x) + i64::from(image.width))
+        .clamp(0, i64::from(canvas.width));
+    let top = canvas
+        .physical_edge(i64::from(y))
+        .clamp(0, i64::from(canvas.height));
+    let bottom = canvas
+        .physical_edge(i64::from(y) + i64::from(image.height))
+        .clamp(0, i64::from(canvas.height));
+    let scale = f64::from(canvas.scale());
     for sy in top..bottom {
+        let source_y = ((sy as f64 + 0.5) / scale - f64::from(y))
+            .floor()
+            .clamp(0.0, f64::from(image.height - 1)) as usize;
         for sx in left..right {
-            let source = (((sy - i64::from(y)) as usize * image.width as usize)
-                + (sx - i64::from(x)) as usize)
-                * 4;
+            let source_x = ((sx as f64 + 0.5) / scale - f64::from(x))
+                .floor()
+                .clamp(0.0, f64::from(image.width - 1)) as usize;
+            let source = (source_y * image.width as usize + source_x) * 4;
             let rgba = &image.pixels[source..source + 4];
             let alpha = u32::from(rgba[3]);
             let target = &mut canvas.pixels[sy as usize * canvas.width as usize + sx as usize];
@@ -232,6 +249,41 @@ pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
 mod tests {
     use super::*;
     const SHAPE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10"><path d="M0 0H20V10H0Z" fill="#ff6600"/></svg>"##;
+
+    #[test]
+    fn scaled_blit_alpha_and_clipping_match_logical_rectangle_edges() {
+        let image = RasterImage {
+            width: 4,
+            height: 3,
+            pixels: [0, 0, 0, 128].repeat(12),
+        };
+        let source_bytes = image.pixels.len();
+        for scale in [1.0, 1.25, 2.0] {
+            let mut canvas = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            blit(&mut canvas, &image, -1, 1);
+            let mut expected = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            expected.rect(-1, 1, 4, 3, 0x7f7f7f);
+            assert_eq!(canvas.pixels, expected.pixels);
+            let before = canvas.pixels.clone();
+            blit(&mut canvas, &image, i32::MIN, i32::MIN);
+            blit(&mut canvas, &image, i32::MAX, i32::MAX);
+            assert_eq!(canvas.pixels, before);
+            assert_eq!(image.pixels.len(), source_bytes);
+        }
+        let image = RasterImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 255, 0, 0, 0, 0],
+        };
+        let mut canvas = Canvas::new_scaled(4, 2, 0xffffff, 2.0);
+        blit(&mut canvas, &image, 1, 0);
+        assert_eq!(
+            &canvas.pixels[..8],
+            &[
+                0xffffff, 0xffffff, 0xff0000, 0xff0000, 0xffffff, 0xffffff, 0xffffff, 0xffffff
+            ]
+        );
+    }
 
     #[test]
     fn svg_paths_viewbox_and_aspect_ratio() {

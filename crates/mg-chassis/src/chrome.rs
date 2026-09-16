@@ -130,64 +130,98 @@ impl Browser {
         self.button(c, self.width as i32 - 100, 62, 86, menu, Action::Menu);
         if self.menu_open {
             let x = self.width as i32 - 234;
-            c.rect(x - 8, 102, 228, 166, palette.border);
-            self.dialog_button(c, (x, 108), 212, "About mgbrowser", Action::About, 0);
-            self.dialog_button(c, (x, 148), 212, "Check for updates", Action::Update, 1);
-            self.dialog_button(c, (x, 188), 212, "Settings", Action::Settings, 2);
-            self.dialog_button(c, (x, 228), 212, "Close", Action::CloseMenu, 3);
+            let y = 102.min(self.height.saturating_sub(170) as i32);
+            c.rect(x - 8, y, 228, 166, palette.border);
+            self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
+            self.dialog_button(c, (x, y + 46), 212, "Check for updates", Action::Update, 1);
+            self.dialog_button(c, (x, y + 86), 212, "Settings", Action::Settings, 2);
+            self.dialog_button(c, (x, y + 126), 212, "Close", Action::CloseMenu, 3);
         }
         if self.about_open {
             let w = self.width.saturating_sub(40).min(700);
             let x = (self.width - w) as i32 / 2;
-            c.rect(x, 125, w, 300, palette.border);
-            c.rect(x + 2, 127, w - 4, 296, palette.panel);
+            let compact = self.height < 450;
+            let h = if compact { 232 } else { 300 };
+            let y = 125.min(self.height.saturating_sub(h + 4) as i32);
+            let line_size = if compact { 14. } else { 16. };
+            c.rect(x, y, w, h, palette.border);
+            c.rect(x + 2, y + 2, w - 4, h - 4, palette.panel);
             for (i, line) in self.about_lines.iter().enumerate() {
-                let text = fit_head(&mut self.fonts, line, 16., w as f32 - 32.);
+                let text = fit_head(&mut self.fonts, line, line_size, w as f32 - 32.);
                 c.text(
                     &mut self.fonts,
                     x + 16,
-                    145 + i as i32 * 30,
+                    y + if compact {
+                        12 + i as i32 * 22
+                    } else {
+                        20 + i as i32 * 30
+                    },
                     &text,
-                    16.,
+                    line_size,
                     palette.ink,
                 );
             }
             let status = fit_head(&mut self.fonts, &self.update_status, 13., w as f32 - 32.);
-            c.text(&mut self.fonts, x + 16, 288, &status, 13., palette.ink);
             c.text(
                 &mut self.fonts,
                 x + 16,
-                320,
-                "Updates take effect after restart. Escape closes.",
+                y + if compact { 110 } else { 163 },
+                &status,
+                13.,
+                palette.ink,
+            );
+            let note = if compact {
+                "Restart after updating. Escape closes."
+            } else {
+                "Updates take effect after restart. Escape closes."
+            };
+            let note = fit_head(&mut self.fonts, note, 13., w as f32 - 32.);
+            c.text(
+                &mut self.fonts,
+                x + 16,
+                y + if compact { 134 } else { 195 },
+                &note,
                 13.,
                 palette.muted,
             );
             self.dialog_button(
                 c,
-                (x + 16, 367),
+                (x + 16, y + if compact { 180 } else { 242 }),
                 190,
                 "Check for updates",
                 Action::Update,
                 0,
             );
-            self.dialog_button(c, (x + 218, 367), 70, "Close", Action::CloseMenu, 1);
+            self.dialog_button(
+                c,
+                (x + 218, y + if compact { 180 } else { 242 }),
+                70,
+                "Close",
+                Action::CloseMenu,
+                1,
+            );
         }
         if self.settings_open {
             let w = self.width.saturating_sub(40).min(600);
             let x = (self.width - w) as i32 / 2;
-            let y = 125.min(self.height.saturating_sub(236) as i32);
-            c.rect(x, y, w, 232, palette.border);
-            c.rect(x + 2, y + 2, w - 4, 228, palette.panel);
+            let compact = self.height < 320;
+            let h = if compact { 232 } else { 304 };
+            let y = 125.min(self.height.saturating_sub(h + 4) as i32);
+            let theme_y = if compact { 60 } else { 76 };
+            let size_y = if compact { 121 } else { 148 };
+            let close_y = if compact { 188 } else { 254 };
+            c.rect(x, y, w, h, palette.border);
+            c.rect(x + 2, y + 2, w - 4, h - 4, palette.panel);
             c.text(
                 &mut self.fonts,
                 x + 16,
-                y + 14,
+                y + if compact { 8 } else { 14 },
                 "Settings: appearance",
                 19.,
                 palette.ink,
             );
             let current = format!(
-                "Selected: {:?}  /  Using: {:?}",
+                "Theme: {:?}  /  Using: {:?}",
                 self.theme_preference,
                 self.effective_theme()
             );
@@ -195,7 +229,7 @@ impl Browser {
             c.text(
                 &mut self.fonts,
                 x + 16,
-                y + 46,
+                y + if compact { 36 } else { 46 },
                 &current,
                 14.,
                 palette.muted,
@@ -210,37 +244,83 @@ impl Browser {
             .enumerate()
             {
                 let bx = x + 16 + index as i32 * (bw as i32 + 8);
-                self.dialog_button(c, (bx, y + 76), bw, label, Action::Theme(preference), index);
+                self.dialog_button(
+                    c,
+                    (bx, y + theme_y),
+                    bw,
+                    label,
+                    Action::Theme(preference),
+                    index,
+                );
                 if self.theme_preference == preference {
-                    c.rect(bx + 4, y + 105, bw - 8, 3, palette.accent);
+                    c.rect(bx + 4, y + theme_y + 29, bw - 8, 3, palette.accent);
                 }
             }
-            for (index, line) in [
-                "System follows your desktop preference.",
-                "Browser controls only; pages keep their colors.",
-                &self.settings_status,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let text = fit_head(&mut self.fonts, line, 13., w as f32 - 32.);
+            c.text(
+                &mut self.fonts,
+                x + 16,
+                y + size_y - 22,
+                "Size: browser controls and pages",
+                13.,
+                palette.muted,
+            );
+            self.dialog_button(
+                c,
+                (x + 16, y + size_y),
+                90,
+                "System",
+                Action::Scale(ScalePreference::System),
+                3,
+            );
+            if self.scale_preference == ScalePreference::System {
+                c.rect(x + 20, y + size_y + 29, 82, 3, palette.accent);
+            }
+            self.dialog_button(c, (x + 114, y + size_y), 34, "-", Action::ScaleDown, 4);
+            c.rect(x + 156, y + size_y, 84, 34, palette.field);
+            let size_label = format!("{}%", self.effective_scale_percent());
+            c.text(
+                &mut self.fonts,
+                x + 169,
+                y + size_y + 7,
+                &size_label,
+                15.,
+                palette.ink,
+            );
+            self.dialog_button(c, (x + 248, y + size_y), 34, "+", Action::ScaleUp, 5);
+            if !compact {
                 c.text(
                     &mut self.fonts,
                     x + 16,
-                    y + 122 + index as i32 * 20,
-                    &text,
+                    y + 194,
+                    "System follows desktop size and theme.",
                     13.,
                     palette.muted,
                 );
             }
-            self.dialog_button(c, (x + 16, y + 186), 80, "Close", Action::CloseMenu, 3);
+            let status = fit_head(&mut self.fonts, &self.settings_status, 13., w as f32 - 32.);
+            c.text(
+                &mut self.fonts,
+                x + 16,
+                y + if compact { 164 } else { 218 },
+                &status,
+                13.,
+                palette.muted,
+            );
+            self.dialog_button(c, (x + 16, y + close_y), 80, "Close", Action::CloseMenu, 6);
             let hint = fit_head(
                 &mut self.fonts,
                 "Tab / arrows, Enter. Esc closes.",
                 12.,
                 w as f32 - 132.,
             );
-            c.text(&mut self.fonts, x + 112, y + 197, &hint, 12., palette.muted);
+            c.text(
+                &mut self.fonts,
+                x + 112,
+                y + close_y + 11,
+                &hint,
+                12.,
+                palette.muted,
+            );
         }
     }
 }

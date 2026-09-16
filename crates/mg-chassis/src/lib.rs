@@ -5,6 +5,7 @@ mod cdp_browser;
 mod chrome;
 pub mod net;
 pub mod resources;
+mod scale;
 pub mod scripts;
 mod theme;
 pub use cdp_browser::BrowserCdp;
@@ -13,6 +14,7 @@ use mg_sparkle::{
     page_session::{ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply},
     paint::{Canvas, Fonts},
 };
+pub use scale::ScalePreference;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -37,6 +39,9 @@ enum Action {
     About,
     Settings,
     Theme(ThemePreference),
+    Scale(ScalePreference),
+    ScaleDown,
+    ScaleUp,
     Update,
     CloseMenu,
     Address,
@@ -91,6 +96,11 @@ pub struct Browser {
     theme_preference: ThemePreference,
     system_theme: ColorScheme,
     theme_change: Option<ThemePreference>,
+    scale_preference: ScalePreference,
+    system_scale: u16,
+    scale_change: Option<ScalePreference>,
+    pub(crate) geometry_revision: u64,
+    scroll_reflow_pending: bool,
     settings_status: String,
     about_lines: Vec<String>,
     update_status: String,
@@ -163,6 +173,50 @@ impl Drop for Browser {
 }
 
 impl Browser {
+    /// Apply a host-loaded whole-browser size without requesting persistence.
+    /// Invalid explicit percentages fall back to System.
+    pub fn set_scale_preference(&mut self, preference: ScalePreference) {
+        let preference = preference.validated();
+        if self.scale_preference != preference {
+            self.scale_preference = preference;
+            self.invalidate_scaled_geometry();
+        }
+    }
+    pub fn scale_preference(&self) -> ScalePreference {
+        self.scale_preference
+    }
+    /// Host desktop size in percent. System values are bounded to 75..=300.
+    pub fn set_system_scale(&mut self, percent: u16) {
+        let percent = percent.clamp(75, 300);
+        if self.system_scale != percent {
+            self.system_scale = percent;
+            if self.scale_preference == ScalePreference::System {
+                self.invalidate_scaled_geometry();
+            }
+        }
+    }
+    pub fn effective_scale_percent(&self) -> u16 {
+        self.scale_preference.resolve(self.system_scale)
+    }
+    pub fn effective_scale(&self) -> f32 {
+        f32::from(self.effective_scale_percent()) / 100.
+    }
+    /// An explicit user selection, including reselection after a failed save.
+    pub fn take_scale_change(&mut self) -> Option<ScalePreference> {
+        self.scale_change.take()
+    }
+    fn invalidate_scaled_geometry(&mut self) {
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        self.scroll_reflow_pending = true;
+        self.hits.clear();
+        self.boxes.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    fn choose_scale(&mut self, preference: ScalePreference) {
+        self.set_scale_preference(preference);
+        self.scale_change = Some(self.scale_preference);
+    }
     /// Apply a host-loaded preference without generating a persistence request.
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
@@ -199,6 +253,9 @@ impl Browser {
                 Action::Theme(ThemePreference::System),
                 Action::Theme(ThemePreference::Light),
                 Action::Theme(ThemePreference::Dark),
+                Action::Scale(ScalePreference::System),
+                Action::ScaleDown,
+                Action::ScaleUp,
                 Action::CloseMenu,
             ]
         } else if self.about_open {
@@ -218,6 +275,7 @@ impl Browser {
             Action::About | Action::Settings => self.menu_open,
             Action::Update => self.menu_open || self.about_open,
             Action::Theme(_) => self.settings_open,
+            Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
             _ => false,
         }
     }
@@ -266,6 +324,11 @@ impl Browser {
             theme_preference: ThemePreference::System,
             system_theme: ColorScheme::Light,
             theme_change: None,
+            scale_preference: ScalePreference::System,
+            system_scale: 100,
+            scale_change: None,
+            geometry_revision: 0,
+            scroll_reflow_pending: false,
             settings_status: String::new(),
             about_lines: vec!["mgbrowser : build details not supplied by host".into()],
             update_status: "Updates have not been checked".into(),
@@ -1153,6 +1216,22 @@ impl Browser {
                     ThemePreference::Dark => 2,
                 };
             }
+            Action::Scale(preference) => {
+                self.choose_scale(preference);
+                if self.settings_open {
+                    self.modal_focus = 3;
+                }
+            }
+            Action::ScaleDown | Action::ScaleUp => {
+                let increase = matches!(action, Action::ScaleUp);
+                self.choose_scale(ScalePreference::Percent(scale::next_step(
+                    self.effective_scale_percent(),
+                    increase,
+                )));
+                if self.settings_open {
+                    self.modal_focus = if increase { 5 } else { 4 };
+                }
+            }
             Action::Update => {
                 self.update_requested = true;
                 self.about_open = true;
@@ -1291,6 +1370,18 @@ impl Browser {
         Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
+        if ctrl && !alt {
+            let scale_action = match sym {
+                0x2b | 0x3d => Some(Action::ScaleUp),
+                0x2d => Some(Action::ScaleDown),
+                0x30 => Some(Action::Scale(ScalePreference::System)),
+                _ => None,
+            };
+            if let Some(action) = scale_action {
+                self.activate(action);
+                return;
+            }
+        }
         if self.modal_open() {
             self.modal_key(sym, shift);
             return;
@@ -1427,7 +1518,12 @@ impl Browser {
         }
     }
     pub fn paint(&mut self) -> Canvas {
+        let reflow = std::mem::take(&mut self.scroll_reflow_pending);
+        self.paint_with_scroll_clamp(reflow)
+    }
+    fn paint_with_scroll_clamp(&mut self, clamp_scroll: bool) -> Canvas {
         let top = self.page_top();
+        let scale = self.effective_scale();
         let controls = mg_sparkle::render::Controls {
             values: Some(&self.values),
             focused_input: if let Focus::Input(node) = self.focus {
@@ -1442,8 +1538,19 @@ impl Browser {
             height: self.viewport_height(),
             scroll: self.scroll,
         };
-        let frame =
-            mg_sparkle::render::render(&self.document, &mut self.fonts, viewport, &controls);
+        let frame = mg_sparkle::render::render_scaled(
+            &self.document,
+            &mut self.fonts,
+            viewport,
+            &controls,
+            scale,
+        );
+        self.content_height = frame.content_height + top;
+        let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
+        if clamp_scroll && self.scroll > max_scroll {
+            self.scroll = max_scroll;
+            return self.paint_with_scroll_clamp(false);
+        }
         self.boxes = frame
             .boxes
             .into_iter()
@@ -1467,15 +1574,32 @@ impl Browser {
                 },
             })
             .collect();
-        self.content_height = frame.content_height + top;
         if !self.chrome {
             self.dirty = false;
             return frame.canvas;
         }
-        let mut canvas = Canvas::new(self.width, self.height, BG);
-        let offset = top as usize * self.width as usize;
-        canvas.pixels[offset..offset + frame.canvas.pixels.len()]
-            .copy_from_slice(&frame.canvas.pixels);
+        let mut canvas = Canvas::new_scaled(self.width, self.height, BG, scale);
+        let physical_top = canvas.physical_edge(i64::from(top)) as u32;
+        let physical_bottom = canvas
+            .physical_edge(i64::from(top) + i64::from(self.viewport_height()))
+            .min(i64::from(canvas.height)) as u32;
+        let page_rows = physical_bottom.saturating_sub(physical_top);
+        let rows = frame.canvas.height.min(page_rows);
+        let offset = physical_top as usize * canvas.width as usize;
+        let length = rows as usize * canvas.width as usize;
+        canvas.pixels[offset..offset + length].copy_from_slice(&frame.canvas.pixels[..length]);
+        // Independent rounding of the page height and its translated bottom
+        // edge can differ by one physical row. Extend only that terminal row,
+        // without stretching text or allocating a second resampled surface.
+        if rows > 0 {
+            let last = offset + (rows as usize - 1) * canvas.width as usize;
+            for row in rows..page_rows {
+                canvas.pixels.copy_within(
+                    last..last + canvas.width as usize,
+                    offset + row as usize * canvas.width as usize,
+                );
+            }
+        }
         #[cfg(feature = "chrome")]
         if self.chrome {
             self.paint_chrome(&mut canvas);
@@ -2524,8 +2648,33 @@ impl Browser {
         self.dirty = true;
     }
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width.clamp(360, 2400);
-        self.height = height.clamp(240, 1800);
+        let width = width.clamp(360, 2400);
+        let height = height.clamp(240, 1800);
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.invalidate_scaled_geometry();
+        }
+        self.dirty = true;
+    }
+    /// Resize a native host's surface using device pixels, bounded to 4800x3600.
+    /// Layout/input remain logical; upward rounding covers the physical window.
+    /// A host should enforce 360x240 logical minimum-size window hints and clip
+    /// the final device-pixel canvas to the actual window when rounding differs.
+    pub fn resize_surface(&mut self, physical_width: u32, physical_height: u32) {
+        let percent = u64::from(self.effective_scale_percent());
+        let logical = |physical: u32, maximum: u32, minimum: u32| {
+            ((u64::from(physical.clamp(1, maximum)) * 100).div_ceil(percent) as u32).max(minimum)
+        };
+        let width = logical(physical_width, 4800, 360);
+        let height = logical(physical_height, 3600, 240);
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.invalidate_scaled_geometry();
+        }
+        // Different physical extents can round to the same logical viewport.
+        // Redraw for the host's new clip even when layout geometry is unchanged.
         self.dirty = true;
     }
     /// Scripts remain opt-in and require a host-provided isolated runtime.
@@ -2649,5 +2798,326 @@ mod theme_embedding_tests {
         app.handle_key(Key::Tab, false, false, false);
         app.type_text("usable");
         assert!(app.values.values().any(|value| value == "usable"));
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_fractional_page_composition_covers_the_exact_footer_boundary() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.document = document::parse(
+            "<body style='background:#123456;margin:0'></body>",
+            "https://example.test/",
+        );
+        for percent in [75, 80, 83, 100, 101, 103, 125, 127, 167, 200, 300] {
+            app.set_system_scale(percent);
+            let canvas = app.paint();
+            let top = canvas.physical_edge(i64::from(app.page_top())) as usize;
+            let bottom = canvas.physical_edge(i64::from(app.height - app.page_footer())) as usize;
+            let width = canvas.width as usize;
+            assert!(
+                canvas.pixels[top * width..bottom * width]
+                    .iter()
+                    .all(|pixel| *pixel == 0x123456),
+                "page surface has no blank seam at {percent}%"
+            );
+            assert!(
+                canvas.pixels[bottom * width..(bottom + 1) * width]
+                    .iter()
+                    .all(|pixel| *pixel == app.effective_theme().palette().background),
+                "page must not overwrite the footer at {percent}%"
+            );
+        }
+    }
+
+    #[test]
+    fn scale_host_changes_are_bounded_and_never_request_persistence() {
+        let mut app = test_app();
+        assert_eq!(app.scale_preference(), ScalePreference::System);
+        assert_eq!(app.effective_scale_percent(), 100);
+        app.set_system_scale(200);
+        assert_eq!(app.effective_scale(), 2.);
+        app.set_scale_preference(ScalePreference::Percent(125));
+        app.set_system_scale(133);
+        assert_eq!(app.effective_scale_percent(), 125);
+        app.set_scale_preference(ScalePreference::Percent(999));
+        assert_eq!(app.scale_preference(), ScalePreference::System);
+        assert_eq!(app.effective_scale_percent(), 133);
+        app.set_system_scale(0);
+        assert_eq!(app.effective_scale_percent(), 75);
+        app.set_system_scale(u16::MAX);
+        assert_eq!(app.effective_scale_percent(), 300);
+        assert_eq!(app.take_scale_change(), None);
+    }
+
+    #[test]
+    fn scale_geometry_revision_changes_only_when_logical_mapping_changes() {
+        let mut app = test_app();
+        assert_eq!(app.geometry_revision, 0);
+        app.set_scale_preference(ScalePreference::Percent(125));
+        assert_eq!(app.geometry_revision, 1);
+        app.set_system_scale(200);
+        assert_eq!(app.geometry_revision, 1);
+        app.resize(640, 480);
+        assert_eq!(app.geometry_revision, 2);
+        app.resize(640, 480);
+        assert_eq!(app.geometry_revision, 2);
+        app.resize_surface(640, 480);
+        assert_eq!(app.geometry_revision, 3);
+        app.set_scale_preference(ScalePreference::System);
+        app.geometry_revision = u64::MAX;
+        app.set_system_scale(201);
+        assert_eq!(app.geometry_revision, 0);
+    }
+
+    #[test]
+    fn scale_shortcuts_step_reset_and_retry_without_editing_the_page() {
+        let mut app = test_app();
+        app.set_system_scale(133);
+        app.document = document::parse("<form><input name=q></form>", "https://example.test/");
+        app.handle_key(Key::Tab, false, false, false);
+        for (key, expected) in [('=', 150), ('+', 175), ('-', 150)] {
+            app.handle_key(Key::Character(key), true, key == '+', false);
+            assert_eq!(app.effective_scale_percent(), expected);
+            assert_eq!(
+                app.take_scale_change(),
+                Some(ScalePreference::Percent(expected))
+            );
+            assert_eq!(app.take_scale_change(), None);
+        }
+        assert!(app.values.is_empty());
+        app.handle_key(Key::Character('0'), true, false, false);
+        assert_eq!(app.effective_scale_percent(), 133);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.set_settings_status("Session only: Cannot save settings".into());
+        app.handle_key(Key::Character('0'), true, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+    }
+
+    #[test]
+    fn scale_two_x_surface_preserves_logical_page_geometry_and_hits() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.document = document::parse(
+            "<h1>Scaled page</h1><form><input name=q><button>Go</button></form>",
+            "https://example.test/",
+        );
+        let one = app.paint();
+        let boxes = app.boxes.clone();
+        let content_height = app.content_height;
+        let input = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap()
+            .clone();
+        app.pointer_down(input.x + 2, input.y + 2);
+        app.set_scale_preference(ScalePreference::Percent(200));
+        assert!(app.hits.is_empty() && app.boxes.is_empty() && app.pointer_press.is_none());
+        app.pointer_up(input.x + 2, input.y + 2);
+        let two = app.paint();
+        assert_eq!((two.width, two.height), (one.width * 2, one.height * 2));
+        assert_eq!((app.width, app.height), (640, 480));
+        assert_eq!(app.boxes, boxes);
+        assert_eq!(app.content_height, content_height);
+        let scaled_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap();
+        assert_eq!(
+            (scaled_hit.x, scaled_hit.y, scaled_hit.w, scaled_hit.h),
+            (input.x, input.y, input.w, input.h)
+        );
+        let viewport_height = app.viewport_height();
+        let page = mg_sparkle::render::render_scaled(
+            &app.document,
+            &mut app.fonts,
+            mg_sparkle::render::Viewport {
+                width: app.width,
+                height: viewport_height,
+                scroll: 0,
+            },
+            &mg_sparkle::render::Controls::default(),
+            2.,
+        );
+        let offset = app.page_top() as usize * 2 * two.width as usize;
+        assert_eq!(
+            &two.pixels[offset..offset + page.canvas.pixels.len()],
+            &page.canvas.pixels
+        );
+        app.pointer_down(input.x + 2, input.y + 2);
+        app.pointer_up(input.x + 2, input.y + 2);
+        app.type_text("logical input");
+        assert!(app.values.values().any(|value| value == "logical input"));
+    }
+
+    #[test]
+    fn scale_no_chrome_matches_standalone_scaled_sparkle() {
+        let mut app = test_app();
+        app.set_chrome(false);
+        app.resize(641, 481);
+        for percent in [75, 100, 125, 150, 175, 200, 250, 300] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            let actual = app.paint();
+            let frame = mg_sparkle::render::render_scaled(
+                &app.document,
+                &mut app.fonts,
+                mg_sparkle::render::Viewport {
+                    width: 641,
+                    height: 481,
+                    scroll: 0,
+                },
+                &mg_sparkle::render::Controls::default(),
+                f32::from(percent) / 100.,
+            );
+            assert_eq!(
+                (actual.width, actual.height),
+                (frame.canvas.width, frame.canvas.height)
+            );
+            assert_eq!(actual.pixels, frame.canvas.pixels);
+        }
+    }
+
+    #[test]
+    fn scale_native_surface_covers_four_k_and_bounds_extreme_inputs() {
+        let mut app = test_app();
+        app.set_system_scale(200);
+        app.resize_surface(3840, 2160);
+        assert_eq!((app.width, app.height), (1920, 1080));
+        app.set_scale_preference(ScalePreference::Percent(100));
+        app.resize_surface(3840, 2160);
+        assert_eq!((app.width, app.height), (3840, 2160));
+        for percent in 75..=300 {
+            app.set_scale_preference(ScalePreference::System);
+            app.set_system_scale(percent);
+            app.resize_surface(u32::MAX, u32::MAX);
+            let physical_width = (f64::from(app.width) * f64::from(app.effective_scale())).round();
+            let physical_height =
+                (f64::from(app.height) * f64::from(app.effective_scale())).round();
+            assert!((4800.0..=4803.0).contains(&physical_width));
+            assert!((3600.0..=3603.0).contains(&physical_height));
+        }
+        app.resize_surface(1441, 901);
+        app.dirty = false;
+        app.resize_surface(1442, 902);
+        assert_eq!((app.width, app.height), (481, 301));
+        assert!(app.dirty);
+        app.resize_surface(0, 0);
+        assert_eq!((app.width, app.height), (360, 240));
+        app.resize(u32::MAX, u32::MAX);
+        assert_eq!((app.width, app.height), (2400, 1800));
+    }
+
+    #[test]
+    fn scale_reflow_clamps_old_bottom_scroll_to_the_new_viewport() {
+        let mut app = test_app();
+        app.resize(640, 240);
+        app.document = document::parse(
+            &"<p>Readable content after sizing</p>".repeat(12),
+            "https://example.test/",
+        );
+        app.paint();
+        app.scroll_by(10_000);
+        app.paint();
+        assert!(app.scroll > 0);
+        app.resize(640, 1800);
+        let scrolled = app.paint();
+        assert_eq!(app.scroll, 0);
+        let fresh = app.paint();
+        assert_eq!(scrolled.pixels, fresh.pixels);
+    }
+
+    #[test]
+    fn scale_reflow_clamp_does_not_change_ordinary_redraw_scroll() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.paint();
+        app.scroll = 12;
+        app.request_redraw();
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.resize(640, 480);
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.set_theme_preference(ThemePreference::Dark);
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.set_system_scale(200);
+        app.paint();
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_settings_pointer_and_modal_keyboard_apply_immediately() {
+        let mut app = test_app();
+        app.activate(Action::Settings);
+        app.paint();
+        let plus = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::ScaleUp))
+            .unwrap()
+            .clone();
+        app.pointer_down(plus.x + 2, plus.y + 2);
+        app.pointer_up(plus.x + 2, plus.y + 2);
+        assert_eq!(app.effective_scale_percent(), 125);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::Percent(125)));
+        assert!(app.hits.is_empty());
+        assert!(app.settings_open);
+        app.handle_key(Key::Left, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.effective_scale_percent(), 100);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::Percent(100)));
+        app.handle_key(Key::Left, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.handle_key(Key::Character('+'), true, true, false);
+        assert_eq!(app.effective_scale_percent(), 125);
+        app.handle_key(Key::Escape, false, false, false);
+        assert!(!app.modal_open());
+        app.resize(360, 240);
+        app.activate(Action::Settings);
+        app.paint();
+        for hit in app
+            .hits
+            .iter()
+            .filter(|h| !matches!(h.action, Action::Menu))
+        {
+            assert!(hit.x >= 0 && hit.y >= 0);
+            assert!(hit.x + hit.w as i32 <= 360);
+            assert!(hit.y + hit.h as i32 <= 240);
+        }
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_all_popups_keep_every_action_visible_at_minimum_logical_size() {
+        let mut app = test_app();
+        app.resize(360, 240);
+        app.set_build_info("0.6.0", "Wed, 16 Sep 2026 12:00:00 GMT", "0123456789ab");
+        for action in [Action::Menu, Action::About, Action::Settings] {
+            app.activate(action);
+            app.paint();
+            assert!(
+                app.hits
+                    .iter()
+                    .any(|hit| matches!(hit.action, Action::CloseMenu))
+            );
+            for hit in &app.hits {
+                assert!(hit.x >= 0 && hit.y >= 0);
+                assert!(hit.x + hit.w as i32 <= 360);
+                assert!(hit.y + hit.h as i32 <= 240);
+            }
+            app.activate(Action::CloseMenu);
+        }
     }
 }

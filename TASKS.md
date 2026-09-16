@@ -1,5 +1,13 @@
 # Work queue
 
+2026-09-16 active: **T-015 / F-018: desktop-aware browser size**. The desktop
+advertises Xft.dpi 192 but v0.5.0 renders 1:1 pixels, making controls and pages
+too small. Add System DPI selection and saved manual size controls/shortcuts,
+crisp physical text rasterization and consistent logical layout/input/CDP.
+Verify 100/125/200% native interaction, live DPI following, restart persistence,
+all existing CI gates and a v0.6.0 release/public install. This is whole-browser
+size, not per-site/page-only zoom, monitor-specific Wayland support or new CSS.
+
 2026-09-16 complete: **T-014 / F-017 shipped as v0.5.0**, release commit
 `8c457e04a8ce00dd8cf81802da35a054d3bad8ec`. Menu > Settings offers persistent
 System/Light/Dark controls with live Linux desktop preference following.
