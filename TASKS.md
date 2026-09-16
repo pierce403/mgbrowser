@@ -1,12 +1,18 @@
 # Work queue
 
-2026-09-16 active: **T-014 / F-017: system and explicit browser appearance**.
-Add Menu > Settings with persistent System/Light/Dark controls, live Linux
-desktop preference discovery and themed chrome/dialogs. Preserve page colors,
-HTTP red warning, optional chrome and all engine behavior. Validate native
-interaction and packaged restart/portal behavior, then publish v0.5.0 through
-exact-commit CI/Pages/release and fresh public installer checks. Google and the
-remaining JSPLAN roadmap stay deferred.
+2026-09-16 complete: **T-014 / F-017 shipped as v0.5.0**, release commit
+`8c457e04a8ce00dd8cf81802da35a054d3bad8ec`. Menu > Settings offers persistent
+System/Light/Dark controls with live Linux desktop preference following.
+Rust CI 35150643020, JSPLAN CI 35150642873, Pages 35150642969 and release
+workflow 35152075966 pass on that exact commit. Public checksum, exact curl
+install/reinstall, worker/session tests, desktop/icons and actual v0.4.1
+self-update pass. Native public-binary tests cover System changes, explicit
+overrides, restart persistence, both portal APIs and unavailable-portal fallback.
+Light/Dark screenshots are visually inspected. Page colors, HTTP red warnings,
+optional chrome and engine behavior are preserved. Public archive: 7,879,494
+bytes, within the unchanged 8 MiB updater cap. See the dated log for receipts.
+No release gates remain. Stop here: further engineering requires a new request;
+Google and the remaining JSPLAN roadmap stay deferred.
 
 2026-09-16 complete: **T-013 / F-016 bounded Boa integration shipped as v0.4.1**,
 release commit `02b413f27e8ddce9b6408887317f08cd9b9b86b7`. The opt-in production

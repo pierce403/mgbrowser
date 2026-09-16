@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-017 : System, light and dark browser appearance
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -29,13 +29,18 @@ to supporting window managers. No native toolkit or page-engine changes.
 - [x] Bounded preference parsing, XDG paths, restart persistence and clear save errors.
 - [x] Native packaged UI follows an isolated desktop portal, with live changes,
   explicit overrides, persistence and matching window hint.
-- [ ] Existing workspace, component, dependency and native/CDP gates preserved.
-- [ ] Exact-commit CI/Pages, versioned release and fresh public installer verified.
+- [x] Existing workspace, component, dependency and native/CDP gates preserved.
+- [x] Exact-commit CI/Pages, versioned release and fresh public installer verified.
 
 Local acceptance on 2026-09-16 includes 9 focused theme checks in debug/release,
 independent no-chrome embedding, and the actual packaged executable controlled
-through native X11 input with a private Settings portal. Public release pending;
-remaining gates are recorded in the dated log.
+through native X11 input with a private Settings portal. Published v0.5.0 at
+8c457e04a8ce00dd8cf81802da35a054d3bad8ec: all exact-commit remote gates pass.
+The exact public installer and actual v0.4.1 self-update pass. The fresh public
+binary repeats native System/override/restart/portal-fallback acceptance, with
+unchanged page pixels and HTTP red warning. Both palettes are visually inspected;
+this desktop's real Dark preference is also verified without changing it.
+See the dated log for checksum, build identity and command receipts.
 
 ## F-016 : Modern Butane JavaScript and embedding compatibility
 
