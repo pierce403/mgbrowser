@@ -49,6 +49,7 @@ enum Action {
     ScaleDown,
     ScaleUp,
     Update,
+    Restart,
     CloseMenu,
     Address,
     Back,
@@ -117,6 +118,8 @@ pub struct Browser {
     about_lines: Vec<String>,
     update_status: String,
     update_requested: bool,
+    restart_available: bool,
+    restart_requested: bool,
     chrome: bool,
     session: net::Session,
     fonts: Fonts,
@@ -286,7 +289,7 @@ impl Browser {
                 Action::CloseMenu,
             ]
         } else if self.about_open {
-            vec![Action::Update, Action::CloseMenu]
+            vec![self.update_button_action(), Action::CloseMenu]
         } else {
             vec![
                 Action::About,
@@ -305,6 +308,7 @@ impl Browser {
                 self.bookmarks_open
             }
             Action::Update => self.menu_open || self.about_open,
+            Action::Restart => self.about_open && self.restart_available,
             Action::Theme(_) => self.settings_open,
             Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
             _ => false,
@@ -343,6 +347,24 @@ impl Browser {
     }
     pub fn take_update_request(&mut self) -> bool {
         std::mem::take(&mut self.update_requested)
+    }
+    /// Only the host can authorize restarting an installed update.
+    pub fn set_restart_available(&mut self, available: bool) {
+        self.restart_available = available;
+        self.restart_requested = false;
+        self.hits.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    pub fn take_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.restart_requested)
+    }
+    fn update_button_action(&self) -> Action {
+        if self.restart_available {
+            Action::Restart
+        } else {
+            Action::Update
+        }
     }
     /// Supply bookmarks from a host store. Chassis never accesses user files.
     pub fn set_bookmarks(&mut self, entries: Vec<bookmarks::Bookmark>) {
@@ -405,6 +427,8 @@ impl Browser {
             about_lines: vec!["mgbrowser : build details not supplied by host".into()],
             update_status: "Updates have not been checked".into(),
             update_requested: false,
+            restart_available: false,
+            restart_requested: false,
             session: net::Session::default(),
             fonts,
             width: 1100,
@@ -1355,11 +1379,16 @@ impl Browser {
                 }
             }
             Action::Update => {
-                self.update_requested = true;
+                self.update_requested = !self.restart_available;
                 self.about_open = true;
                 self.menu_open = false;
                 self.settings_open = false;
                 self.modal_focus = 0;
+            }
+            Action::Restart => {
+                if self.chrome && self.restart_available && self.about_open {
+                    self.restart_requested = true;
+                }
             }
             Action::CloseMenu => {
                 self.about_open = false;
@@ -2821,6 +2850,7 @@ impl Browser {
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {
         self.chrome = enabled && cfg!(feature = "chrome");
+        self.restart_requested = false;
         self.bookmarks_open = false;
         self.bookmark_change = None;
         self.bookmark_refresh = false;
@@ -3017,6 +3047,67 @@ mod bookmark_tests {
         app.paint();
         assert!(app.hits.iter().any(|h| matches!(h.action, Action::Back)));
         assert!(app.hits.iter().any(|h| matches!(h.action, Action::Forward)));
+    }
+}
+
+#[cfg(all(test, feature = "chrome"))]
+mod restart_tests {
+    use super::*;
+    #[test]
+    fn restart_requires_host_ready_and_explicit_about_action() {
+        let mut app = test_app();
+        app.activate(Action::About);
+        app.set_update_status("Installed text alone is not authorization".into());
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+        assert!(matches!(app.modal_actions()[0], Action::Update));
+        app.set_restart_available(true);
+        assert!(matches!(app.modal_actions()[0], Action::Restart));
+        app.key(0xff0d, false, false, false);
+        assert!(app.take_restart_request());
+        assert!(!app.take_restart_request());
+        app.set_update_status("Restart failed; try again".into());
+        app.key(0xff0d, false, false, false);
+        assert!(app.take_restart_request());
+        app.activate(Action::CloseMenu);
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+        app.activate(Action::Update);
+        assert!(!app.take_update_request());
+        assert!(app.about_open);
+        app.set_chrome(false);
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+    }
+    #[test]
+    fn installed_update_invalidates_old_press_and_fits_compact_about() {
+        let mut app = test_app();
+        app.resize(360, 240);
+        app.activate(Action::About);
+        app.paint();
+        let hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Update))
+            .unwrap()
+            .clone();
+        app.pointer_down(hit.x + 5, hit.y + 5);
+        app.set_restart_available(true);
+        app.paint();
+        app.pointer_up(hit.x + 5, hit.y + 5);
+        assert!(!app.take_restart_request());
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Restart)));
+        for hit in &app.hits {
+            assert!(
+                hit.x >= 0
+                    && hit.y >= 0
+                    && hit.x + hit.w as i32 <= 360
+                    && hit.y + hit.h as i32 <= 240
+            );
+        }
+        app.set_restart_available(false);
+        app.paint();
+        assert!(!app.hits.iter().any(|h| matches!(h.action, Action::Restart)));
     }
 }
 

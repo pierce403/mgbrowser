@@ -68,6 +68,15 @@ gate. Use private XDG roots only: never read or modify real user bookmarks.
 Inspect the saved bookmark-dialog screenshot, then repeat the same acceptance
 with the public-installed release. Storage belongs to the host, not Chassis.
 
+For post-update restart, run tools/chrome-update-smoke.sh with the packaged and
+public-installed executable. It retains the running-inode worker regression,
+then uses an explicitly synthetic newer-version wrapper to activate local
+update readiness without GitHub API access. Native clicks must preserve the old
+window after a missing-path spawn failure, then launch the replacement path,
+reopen the committed URL with preserved preferences and exit the old process.
+This fixture is not proof of a real future version; public update/install and
+checksum checks remain separate. Inspect the ready/retry dialog screenshots.
+
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis
 styled_embedding journey (real linked CSS, downloaded SVG and a scrolled click).
 Read docs/HACKER_NEWS.md for the bounded desktop contract. Compare identical

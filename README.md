@@ -2,7 +2,12 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.7.0 Experimental Preview
+## v0.7.1 Experimental Preview
+
+After an update installs, **Menu > About > Restart now** immediately launches the
+updated binary and reopens the loaded URL. Saved settings/bookmarks and the
+scripting preference carry over; unsaved edits, cookies and browsing history do
+not. Restart is always your choice, never forced. [Update details](docs/UPDATES.md).
 
 The navigation bar now groups **Menu, Back, Forward, Refresh and Bookmark** to
 the left of the URL. The star or **Ctrl+D** saves/removes the loaded page.
@@ -91,7 +96,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.7.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.7.1.md) for manual install and uninstall.
 
 ## Components
 

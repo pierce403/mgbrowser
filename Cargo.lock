@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "mg-browser"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "flate2",
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "mg-butane"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "mg-chassis"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "flate2",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "mg-sparkle"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "app_units",
  "atomic_refcell",

@@ -1,7 +1,7 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.6.0). The desktop executable remains
+four packages, all versioned together. The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 
@@ -75,7 +75,11 @@ behavior; the later Boa adoption explicitly introduces the versioned profile in
 Original protocol/allocation assertions remain in the explicit legacy test lane.
 
 The host owns render dimensions and the resulting pixel allocation. Chassis
-clamps its viewport to the existing desktop bounds. Direct Sparkle callers must
+emits update/restart requests only after explicit UI actions; the host authorizes
+restart readiness and owns executable replacement/relaunch. Engines never launch
+an updated application. Restart reopens the committed URL with fresh session state.
+
+Chassis clamps its viewport to the existing desktop bounds. Direct Sparkle callers must
 choose dimensions appropriate to their own resource limits. A page surface is
 software RGB (`0x00RRGGBB`); GPU/compositor integration remains future work.
 

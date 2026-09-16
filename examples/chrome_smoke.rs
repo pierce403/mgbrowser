@@ -53,7 +53,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             .data)
     };
     let before = capture()?;
+    if args.get(3).is_some_and(|mode| mode == "restart") {
+        let rgb: Vec<_> = before
+            .chunks_exact(4)
+            .flat_map(|p| [p[2], p[1], p[0]])
+            .collect();
+        image::RgbImage::from_raw(geometry.width.into(), geometry.height.into(), rgb)
+            .ok_or("bad screenshot size")?
+            .save(path)?;
+        let x = ((u32::from(geometry.width)
+            - u32::from(geometry.width).saturating_sub(40).min(700))
+            / 2) as i16;
+        click(x + 80, 380)?;
+        println!("NATIVE_RESTART_CLICK_OK");
+        return Ok(());
+    }
     click(28, 31)?;
+    if args.get(3).is_some_and(|mode| mode == "update") {
+        click(100, 108)?;
+        return Ok(());
+    }
     click(100, 74)?;
     let about = capture()?;
     assert_ne!(before, about, "About did not open");

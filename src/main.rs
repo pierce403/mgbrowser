@@ -108,15 +108,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut auto_update = updater::automatic_enabled(&executable);
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut initial = "https://example.com/".to_string();
+    let mut restart_scripts = false;
     let mut debug_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--no-auto-update" => auto_update = false,
-            "--enable-scripts" => app.set_scripts_enabled(true),
+            "--enable-scripts" => {
+                app.set_scripts_enabled(true);
+                restart_scripts = true;
+            }
             #[cfg(feature = "legacy-test-engine")]
             "--legacy-page-tests" => script_worker::use_legacy_for_tests(),
-            "--disable-scripts" => app.set_scripts_enabled(false),
+            "--disable-scripts" => {
+                app.set_scripts_enabled(false);
+                restart_scripts = false;
+            }
             "--remote-debugging-port" => {
                 i += 1;
                 debug_port = Some(
@@ -184,6 +191,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let (update_tx, update_rx) = std::sync::mpsc::channel();
     let mut update_running = false;
+    let mut restart_ready = false;
     let mut next_update = std::time::Instant::now();
     app.set_update_status(
         if auto_update {
@@ -424,6 +432,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let requested = app.take_update_request();
         if !update_running
+            && !restart_ready
             && (requested || (auto_update && std::time::Instant::now() >= next_update))
         {
             update_running = true;
@@ -437,9 +446,36 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         if let Ok(result) = update_rx.try_recv() {
             update_running = false;
+            restart_ready = result
+                .as_ref()
+                .is_ok_and(|message| message.starts_with("Installed "));
+            app.set_restart_available(restart_ready);
             let status = result.unwrap_or_else(|error| format!("Update failed: {error}"));
             eprintln!("UPDATE: {status}");
             app.set_update_status(status);
+        }
+        if app.take_restart_request() && restart_ready {
+            let restart_url = if app.page_url().starts_with("http://")
+                || app.page_url().starts_with("https://")
+            {
+                app.page_url()
+            } else {
+                "https://example.com/"
+            };
+            match mg_browser::restart::launch(
+                &executable,
+                restart_url,
+                restart_scripts,
+                auto_update,
+            ) {
+                Ok(child) => {
+                    eprintln!("RESTART: launched pid={}", child.id());
+                    // Returning drops Chassis, cancels/reaps its workers and closes
+                    // the old display connection. The new process uses disk bytes.
+                    return Ok(());
+                }
+                Err(error) => app.set_update_status(error),
+            }
         }
         if let Some(cdp) = &mut cdp {
             cdp.tick(&mut app);

@@ -274,12 +274,14 @@ pub fn update(target: &Path) -> Result<String, String> {
     let current = installed
         .strip_prefix("mgbrowser ")
         .ok_or("Cannot identify installed version")?;
+    // An installer or another window may already have replaced our executable.
+    // Recognize that locally, without making restart depend on API availability.
+    if version(current)? > version(env!("CARGO_PKG_VERSION"))? {
+        return Ok(format!(
+            "Installed v{current}. Restart mgbrowser to use the new build."
+        ));
+    }
     let Some(tag) = release_tag(&download(API)?, current)? else {
-        if version(current)? > version(env!("CARGO_PKG_VERSION"))? {
-            return Ok(format!(
-                "Installed v{current}. Restart mgbrowser to use the new build."
-            ));
-        }
         return Ok(format!("mgbrowser {current}: no newer stable release"));
     };
     let base = format!("{BASE}/{tag}/{ASSET}");

@@ -55,7 +55,7 @@ impl Browser {
         if saved {
             c.rect(x + 15, 28, 7, 8, p.accent);
         }
-        if matches!(action, Action::Menu) && self.update_status.starts_with("Installed ") {
+        if matches!(action, Action::Menu) && self.restart_available {
             c.rect(x + 28, 17, 5, 5, p.accent);
         }
         if enabled {
@@ -216,7 +216,18 @@ impl Browser {
             let y = 54;
             c.rect(x - 8, y, 228, 182, palette.border);
             self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
-            self.dialog_button(c, (x, y + 40), 212, "Check for updates", Action::Update, 1);
+            self.dialog_button(
+                c,
+                (x, y + 40),
+                212,
+                if self.restart_available {
+                    "Update ready: restart..."
+                } else {
+                    "Check for updates"
+                },
+                Action::Update,
+                1,
+            );
             self.dialog_button(c, (x, y + 74), 212, "Settings", Action::Settings, 2);
             self.dialog_button(c, (x, y + 108), 212, "Bookmarks", Action::Bookmarks, 3);
             self.dialog_button(c, (x, y + 142), 212, "Close", Action::CloseMenu, 4);
@@ -257,7 +268,9 @@ impl Browser {
                 13.,
                 palette.ink,
             );
-            let note = if compact {
+            let note = if self.restart_available {
+                "Reopens page. Unsaved edits and"
+            } else if compact {
                 "Restart after updating. Escape closes."
             } else {
                 "Updates take effect after restart. Escape closes."
@@ -271,12 +284,26 @@ impl Browser {
                 13.,
                 palette.muted,
             );
+            if self.restart_available {
+                c.text(
+                    &mut self.fonts,
+                    x + 16,
+                    y + if compact { 153 } else { 214 },
+                    "memory-only cookies will be lost.",
+                    13.,
+                    palette.muted,
+                );
+            }
             self.dialog_button(
                 c,
                 (x + 16, y + if compact { 180 } else { 242 }),
                 190,
-                "Check for updates",
-                Action::Update,
+                if self.restart_available {
+                    "Restart now"
+                } else {
+                    "Check for updates"
+                },
+                self.update_button_action(),
                 0,
             );
             self.dialog_button(

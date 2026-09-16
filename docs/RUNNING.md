@@ -33,6 +33,8 @@ Re-run the website installer to bootstrap automatic updates from v0.2.1 onward.
 Menu > About mgbrowser shows version, compile time (GMT/UTC) and source commit.
 Menu > Check for updates or `mgbrowser --update` checks and installs manually.
 Installed builds check on startup and daily; restart to run the installed update.
+Once installed, About offers **Restart now**. It reopens the loaded URL using
+the new executable; unsaved edits, cookies and history are lost. Restart is optional.
 `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
 See [update behavior and trust](UPDATES.md), including persistent opt-out.
 

@@ -6,6 +6,32 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-020 : Explicit restart after update
+
+Stability: in-progress
+
+### Dependencies
+
+F-015 verified updates/build identity and F-013 optional host-owned browser UX.
+
+### Properties
+
+After an installed update, About replaces its check button with Restart now.
+The menu opens the same warning panel. Restart requires an explicit user action,
+launches the installation path rather than the running inode, then shuts down
+the old browser and workers. A spawn failure retains the old window for retry.
+The loaded URL and launch preferences carry over; session state does not.
+An already-installed newer version is recognized before querying GitHub.
+See docs/UPDATES.md. No engine or whole-browser sandbox changes.
+
+### Test criteria
+
+- [ ] Host readiness gates the button and request, including keyboard/compact UI.
+- [ ] Installing during a pointer press cannot turn the old click into a restart.
+- [ ] Native replaced-path launch, failed-spawn retry, reopened page and old exit.
+- [ ] Existing component, worker, packaged and native/CDP regression gates pass.
+- [ ] Exact-commit CI/Pages, versioned release and public installer/restart verified.
+
 ## F-019 : Navigation toolbar and local bookmarks
 
 Stability: stable

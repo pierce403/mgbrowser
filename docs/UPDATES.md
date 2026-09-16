@@ -24,6 +24,22 @@ compile timestamp in GMT/UTC and source commit. The timestamp is generated durin
 the Cargo build, not at launch; `SOURCE_DATE_EPOCH` overrides it for reproducible
 builds. An updated open window continues showing its old build until restarted.
 
+Since v0.7.1, **Restart now** replaces the update-check button in About once an
+update has installed. The menu's **Update ready: restart...** item opens that
+panel. Clicking Restart now launches the binary at the installation path, then
+closes the old window and reaps its script workers. No shell or sudo is involved.
+If the executable cannot be launched, the old window stays open with an error
+and a retryable button. A newer version already installed by another window or
+the public installer is recognized locally when checking, before contacting
+GitHub. No restart button appears for failed checks or an already-current build.
+
+Restart reopens the last loaded HTTP(S) URL with a fresh GET, or example.com if
+no page has loaded. Unsubmitted address edits, form/POST state, memory-only cookies,
+history, scroll and JavaScript state are not restored. The panel warns before
+the click. Saved bookmarks/theme/size and scripting/automatic-update preferences
+are retained. Debug ports and automated-journey flags are not replayed.
+Older releases still require a manual restart once to obtain this button.
+
 ## Trust and failure behavior
 
 - The host queries only pierce403/mgbrowser releases. Tags must be stable numeric
@@ -44,8 +60,8 @@ builds. An updated open window continues showing its old build until restarted.
   signing infrastructure or claim of production-grade supply-chain security.
 - Linux file locking serializes updates; the old inode remains usable by already
   running processes. Workers re-exec `/proc/self/exe` so they stay on that process's
-  build after replacement. The UI shows `Menu *` when a new build was installed.
-  Restart manually: updates never discard the current page or force a relaunch.
+  build after replacement. The menu icon shows a dot when a new build is ready.
+  Restart is explicit: installation never discards the current page or forces a relaunch.
 - The updater replaces the executable only. The existing desktop launcher/icon
   still targets it. Re-run install.sh if launcher/icon/license material needs to
   be refreshed. Remove the marker and `.mgbrowser-update.lock` when uninstalling.

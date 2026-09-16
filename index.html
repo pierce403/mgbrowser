@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.7.0 Experimental Preview</title>
+<title>mgbrowser: v0.7.1 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -16,8 +16,9 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.7.0 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.7.1 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
 <p class="muted"><strong>Your pages, saved locally.</strong> Menu, Back, Forward, Refresh and Bookmark sit left of the URL. Use the star or Ctrl+D to save a page; Menu → Bookmarks opens your list. Desktop-aware size and light/dark settings remain available. Modern-web compatibility remains poor.</p>
+<p class="muted">After an update installs, About offers <strong>Restart now</strong> to reopen the loaded URL with the new build. Unsaved edits, cookies and history are not restored. Restart is always optional.</p>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
 <span id="copy-status" role="status"></span>
@@ -45,6 +46,7 @@
 <!-- project-status:start -->
 <p class="muted">Latest work log: <time datetime="2026-09-16">2026-09-16</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
+  <li><span>F-020 : Explicit restart after update</span><small>in-progress</small></li>
   <li><span>F-019 : Navigation toolbar and local bookmarks</span><small>stable</small></li>
   <li><span>F-018 : Desktop-aware browser size</span><small>stable</small></li>
   <li><span>F-017 : System, light and dark browser appearance</span><small>stable</small></li>

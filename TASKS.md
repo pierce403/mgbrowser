@@ -1,5 +1,10 @@
 # Work queue
 
+2026-09-16 active: **T-017 / F-020**, explicit Restart now after an installed
+update. Preserve the loaded URL and launch policy, warn about lost session
+state, keep the old window on spawn failure, test native executable replacement
+and publish v0.7.1 through the standing release/public installer gates.
+
 2026-09-16 complete: **T-016 / F-019 shipped as v0.7.0**, release commit
 `79488712b2228ba8080c53757e3e8f70a173b3fa`. Menu, Back, Forward, Refresh and
 Bookmark sit left of the URL; selection highlights only visible URL text.
