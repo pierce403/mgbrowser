@@ -2,16 +2,20 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.4.1 Experimental Preview
+## v0.5.0 Experimental Preview
+
+Browser controls now follow your desktop's light/dark preference. Open
+**Menu > Settings** to choose **System**, **Light** or **Dark**; changes apply
+immediately and are saved for the next launch. Page colors and the red plain-HTTP
+warning stay unchanged. [Appearance details](docs/APPEARANCE.md).
 
 Boa now runs opt-in page JavaScript: modern inline scripts, Promise checkpoints
 and retained click/submit handlers operate on Mg's real Rust DOM. Mg keeps its
 own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
 backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
 
-v0.4.1 is a packaging-only follow-up: size-optimized compilation and symbol
-stripping keep the download within older builds' unchanged 8 MiB updater limit.
-Engine source, dependencies, resource limits and panic behavior are unchanged.
+The size-optimized, symbol-stripped release stays within older builds' unchanged
+8 MiB updater limit. This release changes browser appearance, not web compatibility.
 
 The installer selects the latest published release. Exact release and public-
 installation receipts are recorded in the [dated work log](memory/logs/2026-09-16.md).
@@ -21,7 +25,7 @@ checksum-verified binary without sudo or Rust:
 
 ```sh
 curl -fsSL https://mgbrowser.org/install.sh | bash
-mgbrowser --enable-scripts https://example.com/
+mgbrowser https://example.com/
 ```
 
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
@@ -71,7 +75,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.4.1.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.5.0.md) for manual install and uninstall.
 
 ## Components
 

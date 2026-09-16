@@ -1,4 +1,5 @@
 //! Linux/X11 host facilities. Engines do not depend on this crate.
+pub mod appearance;
 pub mod script_worker;
 pub mod worker_memory;
 
@@ -71,6 +72,7 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff09 => Key::Tab,
         0xff51 => Key::Left,
         0xff52 => Key::Up,
+        0xff53 => Key::Right,
         0xff54 => Key::Down,
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
@@ -126,4 +128,17 @@ fn load_font_path(path: &std::path::Path) -> Result<Fonts, String> {
     let bold = bold_path.and_then(|path| std::fs::read(path).ok());
     Fonts::from_bytes_with_bold(bytes, bold)
         .map_err(|error| format!("Font {}: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_arrow_keysyms_reach_browser_controls() {
+        assert!(matches!(translate_keysym(0xff51), Some(Key::Left)));
+        assert!(matches!(translate_keysym(0xff52), Some(Key::Up)));
+        assert!(matches!(translate_keysym(0xff53), Some(Key::Right)));
+        assert!(matches!(translate_keysym(0xff54), Some(Key::Down)));
+    }
 }

@@ -1,7 +1,7 @@
 //! Linux window/event-loop composition for the Mg components.
 use mg_browser::platform::{self, script_worker};
-use mg_browser::{COMPILED, REVISION, updater};
-use mg_chassis::{Browser as App, BrowserCdp, JourneyOptions};
+use mg_browser::{COMPILED, REVISION, settings::Settings, updater};
+use mg_chassis::{Browser as App, BrowserCdp, ColorScheme, JourneyOptions};
 use std::{error::Error, thread, time::Duration};
 use x11rb::{
     connection::Connection,
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Menu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
+                "Menu > Settings: System, Light or Dark appearance (saved automatically).\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
                 "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
@@ -132,6 +132,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         auto_update = false;
     }
     app.configure_journey(journey);
+    let settings = Settings::user();
+    match settings.load() {
+        Ok(preference) => app.set_theme_preference(preference),
+        Err(error) => {
+            eprintln!("SETTINGS: {error}");
+            app.set_settings_status(error);
+        }
+    }
     let (update_tx, update_rx) = std::sync::mpsc::channel();
     let mut update_running = false;
     let mut next_update = std::time::Instant::now();
@@ -195,6 +203,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         b"mgbrowser\0mgbrowser\0",
     )?;
     let protocols = conn.intern_atom(false, b"WM_PROTOCOLS")?.reply()?.atom;
+    let theme_atom = conn
+        .intern_atom(false, b"_GTK_THEME_VARIANT")?
+        .reply()?
+        .atom;
+    let utf8_atom = conn.intern_atom(false, b"UTF8_STRING")?.reply()?.atom;
+    let system_themes = platform::appearance::spawn_watcher();
+    let mut window_theme = None;
     let icon_atom = conn.intern_atom(false, b"_NET_WM_ICON")?.reply()?.atom;
     let icon = image::load_from_memory_with_format(
         include_bytes!("../assets/mgbrowser-32.png"),
@@ -268,6 +283,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         app.poll();
+        while let Ok(theme) = system_themes.try_recv() {
+            app.set_system_theme(theme);
+        }
+        if let Some(preference) = app.take_theme_change() {
+            match settings.save(preference) {
+                Ok(()) => app.set_settings_status("Appearance saved".into()),
+                Err(error) => {
+                    eprintln!("SETTINGS: {error}");
+                    app.set_settings_status(format!("Session only: {error}"));
+                }
+            }
+        }
+        let theme = app.effective_theme();
+        if window_theme != Some(theme) {
+            // A window-manager hint, not a GTK dependency. Decorations remain WM-owned.
+            conn.change_property8(
+                PropMode::REPLACE,
+                window,
+                theme_atom,
+                utf8_atom,
+                if theme == ColorScheme::Dark {
+                    b"dark"
+                } else {
+                    b""
+                },
+            )?;
+            conn.flush()?;
+            window_theme = Some(theme);
+        }
         let requested = app.take_update_request();
         if !update_running
             && (requested || (auto_update && std::time::Instant::now() >= next_update))

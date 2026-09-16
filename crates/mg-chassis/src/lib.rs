@@ -6,6 +6,7 @@ mod chrome;
 pub mod net;
 pub mod resources;
 pub mod scripts;
+mod theme;
 pub use cdp_browser::BrowserCdp;
 use mg_sparkle::{
     document::{self, Document, Item},
@@ -22,11 +23,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+pub use theme::{ColorScheme, ThemePreference};
 
 const TOP: i32 = 108;
 const BG: u32 = 0xfafbf8;
-#[cfg(feature = "chrome")]
-const INK: u32 = 0x26342b;
 #[cfg(feature = "chrome")]
 const HTTP_CHROME: u32 = 0x9f202b;
 const MAX_EDIT_BYTES: usize = 8191;
@@ -35,6 +35,8 @@ const MAX_EDIT_BYTES: usize = 8191;
 enum Action {
     Menu,
     About,
+    Settings,
+    Theme(ThemePreference),
     Update,
     CloseMenu,
     Address,
@@ -84,6 +86,12 @@ struct PendingEvent {
 pub struct Browser {
     menu_open: bool,
     about_open: bool,
+    settings_open: bool,
+    modal_focus: usize,
+    theme_preference: ThemePreference,
+    system_theme: ColorScheme,
+    theme_change: Option<ThemePreference>,
+    settings_status: String,
     about_lines: Vec<String>,
     update_status: String,
     update_requested: bool,
@@ -155,6 +163,81 @@ impl Drop for Browser {
 }
 
 impl Browser {
+    /// Apply a host-loaded preference without generating a persistence request.
+    pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+        self.theme_preference = preference;
+        self.dirty = true;
+    }
+    pub fn theme_preference(&self) -> ThemePreference {
+        self.theme_preference
+    }
+    /// Update the desktop preference. Explicit light/dark choices keep precedence.
+    pub fn set_system_theme(&mut self, scheme: ColorScheme) {
+        if self.system_theme != scheme {
+            self.system_theme = scheme;
+            self.dirty = true;
+        }
+    }
+    pub fn effective_theme(&self) -> ColorScheme {
+        self.theme_preference.resolve(self.system_theme)
+    }
+    /// A user choice from Settings, consumed by the host to persist it.
+    pub fn take_theme_change(&mut self) -> Option<ThemePreference> {
+        self.theme_change.take()
+    }
+    /// Host-owned settings persistence or desktop-detection feedback.
+    pub fn set_settings_status(&mut self, status: String) {
+        self.settings_status = status;
+        self.dirty = true;
+    }
+    fn modal_open(&self) -> bool {
+        self.menu_open || self.about_open || self.settings_open
+    }
+    fn modal_actions(&self) -> Vec<Action> {
+        if self.settings_open {
+            vec![
+                Action::Theme(ThemePreference::System),
+                Action::Theme(ThemePreference::Light),
+                Action::Theme(ThemePreference::Dark),
+                Action::CloseMenu,
+            ]
+        } else if self.about_open {
+            vec![Action::Update, Action::CloseMenu]
+        } else {
+            vec![
+                Action::About,
+                Action::Update,
+                Action::Settings,
+                Action::CloseMenu,
+            ]
+        }
+    }
+    fn modal_action(&self, action: &Action) -> bool {
+        match action {
+            Action::Menu | Action::CloseMenu => true,
+            Action::About | Action::Settings => self.menu_open,
+            Action::Update => self.menu_open || self.about_open,
+            Action::Theme(_) => self.settings_open,
+            _ => false,
+        }
+    }
+    fn modal_key(&mut self, sym: u32, shift: bool) {
+        let actions = self.modal_actions();
+        match sym {
+            0xff1b => self.activate(Action::CloseMenu),
+            0xff09 | 0xff51..=0xff54 => {
+                let reverse = (sym == 0xff09 && shift) || sym == 0xff51 || sym == 0xff52;
+                self.modal_focus = if reverse {
+                    (self.modal_focus + actions.len() - 1) % actions.len()
+                } else {
+                    (self.modal_focus + 1) % actions.len()
+                };
+                self.dirty = true;
+            }
+            0xff0d | 0x20 => self.activate(actions[self.modal_focus % actions.len()].clone()),
+            _ => {}
+        }
+    }
     /// Host-owned build identity; reusable Chassis does not inspect its executable.
     pub fn set_build_info(&mut self, version: &str, compiled: &str, revision: &str) {
         self.about_lines = vec![
@@ -178,6 +261,12 @@ impl Browser {
             chrome: cfg!(feature = "chrome"),
             menu_open: false,
             about_open: false,
+            settings_open: false,
+            modal_focus: 0,
+            theme_preference: ThemePreference::System,
+            system_theme: ColorScheme::Light,
+            theme_change: None,
+            settings_status: String::new(),
             about_lines: vec!["mgbrowser : build details not supplied by host".into()],
             update_status: "Updates have not been checked".into(),
             update_requested: false,
@@ -1023,23 +1112,58 @@ impl Browser {
     }
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
         self.select_all = false;
+        if matches!(
+            action,
+            Action::Menu | Action::About | Action::Settings | Action::Update | Action::CloseMenu
+        ) {
+            self.hits.clear();
+            self.pointer_press = None;
+        }
         match action {
             Action::Menu => {
                 self.menu_open = !self.menu_open;
                 self.about_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
             }
             Action::About => {
                 self.about_open = true;
                 self.menu_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
+            }
+            Action::Settings => {
+                self.settings_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.modal_focus = match self.theme_preference {
+                    ThemePreference::System => 0,
+                    ThemePreference::Light => 1,
+                    ThemePreference::Dark => 2,
+                };
+            }
+            Action::Theme(preference) => {
+                // An explicit choice also retries a previously failed save, or
+                // replaces invalid settings that fell back to this same value.
+                self.set_theme_preference(preference);
+                self.theme_change = Some(preference);
+                self.modal_focus = match preference {
+                    ThemePreference::System => 0,
+                    ThemePreference::Light => 1,
+                    ThemePreference::Dark => 2,
+                };
             }
             Action::Update => {
                 self.update_requested = true;
                 self.about_open = true;
                 self.menu_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
             }
             Action::CloseMenu => {
                 self.about_open = false;
                 self.menu_open = false;
+                self.settings_open = false;
             }
             Action::Address => {
                 self.focus = Focus::Address;
@@ -1087,15 +1211,20 @@ impl Browser {
     }
     fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
         if let Some(hit) = self.hits.iter().rev().find(|h| h.contains(x, y)) {
+            // Input may arrive between opening a popup and its first paint.
+            // Reject stale page/chrome hit regions even in that interval.
+            if self.modal_open() && !self.modal_action(&hit.action) {
+                return Ok(());
+            }
             self.activate_checked(hit.action.clone())?;
-        } else {
+        } else if !self.modal_open() {
             self.focus = Focus::Page;
             self.dirty = true;
         }
         Ok(())
     }
     pub fn type_text(&mut self, text: &str) {
-        if self.menu_open || self.about_open {
+        if self.modal_open() {
             return;
         }
         if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
@@ -1140,6 +1269,10 @@ impl Browser {
         self.dirty = true;
     }
     fn enter_checked(&mut self) -> Result<(), String> {
+        if self.modal_open() {
+            self.modal_key(0xff0d, false);
+            return Ok(());
+        }
         match self.focus {
             Focus::Address => self.navigate(self.address.clone(), None, true),
             Focus::Input(node) => {
@@ -1158,10 +1291,8 @@ impl Browser {
         Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
-        if self.menu_open || self.about_open {
-            if sym == 0xff1b {
-                self.activate(Action::CloseMenu);
-            }
+        if self.modal_open() {
+            self.modal_key(sym, shift);
             return;
         }
         if self.chrome && ctrl && (sym == b'l' as u32 || sym == b'L' as u32) {
@@ -1264,7 +1395,7 @@ impl Browser {
         }
     }
     pub fn scroll_by(&mut self, amount: i32) {
-        if self.menu_open || self.about_open {
+        if self.modal_open() {
             return;
         }
         self.scroll =
@@ -1651,6 +1782,180 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn theme_settings_pointer_choices_apply_and_emit_only_user_changes() {
+        let mut app = test_app();
+        app.set_system_theme(ColorScheme::Dark);
+        app.set_theme_preference(ThemePreference::System);
+        assert_eq!(app.take_theme_change(), None);
+        assert_eq!(app.effective_theme(), ColorScheme::Dark);
+        app.paint();
+        app.click(app.width as i32 - 60, 75);
+        app.paint();
+        app.click(app.width as i32 - 180, 200);
+        assert!(app.settings_open && !app.menu_open && !app.about_open);
+        for preference in [
+            ThemePreference::Light,
+            ThemePreference::Dark,
+            ThemePreference::System,
+        ] {
+            app.paint();
+            let hit = app
+                .hits
+                .iter()
+                .find(|h| matches!(h.action, Action::Theme(p) if p == preference))
+                .unwrap()
+                .clone();
+            app.pointer_down(hit.x + 5, hit.y + 5);
+            app.pointer_up(hit.x + 5, hit.y + 5);
+            assert_eq!(app.theme_preference(), preference);
+            assert_eq!(app.effective_theme(), preference.resolve(ColorScheme::Dark));
+            assert_eq!(app.take_theme_change(), Some(preference));
+            assert_eq!(app.take_theme_change(), None);
+            app.click(hit.x + 5, hit.y + 5);
+            assert_eq!(app.take_theme_change(), Some(preference));
+            assert_eq!(app.take_theme_change(), None);
+        }
+    }
+
+    #[test]
+    fn theme_reselection_retries_failed_save_and_invalid_settings_fallback() {
+        let mut app = test_app();
+        app.set_settings_status("Invalid appearance settings JSON; using System".into());
+        app.set_theme_preference(ThemePreference::System);
+        app.set_system_theme(ColorScheme::Dark);
+        assert_eq!(app.take_theme_change(), None);
+        app.activate(Action::Settings);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_theme_change(), Some(ThemePreference::System));
+        assert_eq!(app.take_theme_change(), None);
+        app.set_settings_status("Session only: Cannot save appearance settings".into());
+        app.set_system_theme(ColorScheme::Light);
+        assert_eq!(app.take_theme_change(), None);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_theme_change(), Some(ThemePreference::System));
+        assert_eq!(app.take_theme_change(), None);
+        app.set_settings_status("Appearance saved".into());
+        app.set_theme_preference(ThemePreference::Light);
+        app.set_system_theme(ColorScheme::Dark);
+        assert_eq!(app.effective_theme(), ColorScheme::Light);
+        assert_eq!(app.take_theme_change(), None);
+    }
+
+    #[test]
+    fn theme_modal_keyboard_blocks_page_edits_navigation_and_scroll() {
+        let mut app = test_app();
+        app.address = "https://example.test/".into();
+        app.document = document::parse(
+            "<form><input id=q name=q value=original><button>Go</button></form>",
+            &app.address,
+        );
+        app.focus = Focus::Input(app.document.query_selector(0, "#q").unwrap().unwrap());
+        app.paint();
+        let input = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap()
+            .clone();
+        app.activate(Action::Settings);
+        // No intervening repaint: old page hit regions must already be invalid.
+        app.click(input.x + 2, input.y + 2);
+        app.handle_key(Key::Character('l'), true, false, false);
+        app.type_text("unexpected");
+        app.handle_key(Key::Backspace, false, false, false);
+        app.handle_key(Key::Reload, false, false, false);
+        app.scroll_by(500);
+        assert!(app.values.is_empty());
+        assert_eq!(app.address, "https://example.test/");
+        assert!(!app.loading);
+        assert_eq!(app.scroll, 0);
+        app.handle_key(Key::Tab, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::Light);
+        app.handle_key(Key::Right, false, false, false);
+        assert_eq!(app.modal_focus, 2);
+        app.handle_key(Key::Left, false, false, false);
+        assert_eq!(app.modal_focus, 1);
+        app.handle_key(Key::Down, false, false, false);
+        app.handle_key(Key::Character(' '), false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::Dark);
+        app.handle_key(Key::Tab, false, true, false);
+        app.handle_key(Key::Up, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::System);
+        app.handle_key(Key::Escape, false, false, false);
+        assert!(!app.modal_open());
+        assert!(app.hits.is_empty());
+    }
+
+    #[test]
+    fn theme_changes_chrome_but_not_page_pixels_or_http_warning() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.set_theme_preference(ThemePreference::Light);
+        let light = app.paint();
+        app.set_theme_preference(ThemePreference::Dark);
+        let dark = app.paint();
+        let start = TOP as usize * app.width as usize;
+        let end = (app.height - app.page_footer()) as usize * app.width as usize;
+        assert_eq!(&light.pixels[start..end], &dark.pixels[start..end]);
+        assert_eq!(light.pixels[0], ColorScheme::Light.palette().background);
+        assert_eq!(dark.pixels[0], ColorScheme::Dark.palette().background);
+        assert_eq!(
+            light.pixels[13 * 640 + 241],
+            ColorScheme::Light.palette().field
+        );
+        assert_eq!(
+            dark.pixels[13 * 640 + 241],
+            ColorScheme::Dark.palette().field
+        );
+        assert_eq!(
+            *dark.pixels.last().unwrap(),
+            ColorScheme::Dark.palette().background
+        );
+        app.page_url = "http://example.test/".into();
+        for preference in [ThemePreference::Light, ThemePreference::Dark] {
+            app.set_theme_preference(preference);
+            assert_eq!(app.paint().pixels[0], HTTP_CHROME);
+            assert!(app.visible_title().starts_with("HTTP: Not secure"));
+        }
+    }
+
+    #[test]
+    fn theme_panels_follow_palette_and_small_settings_controls_remain_visible() {
+        let mut app = test_app();
+        for preference in [ThemePreference::Light, ThemePreference::Dark] {
+            app.set_theme_preference(preference);
+            let palette = app.effective_theme().palette();
+            app.activate(Action::About);
+            let canvas = app.paint();
+            let x = (app.width - app.width.saturating_sub(40).min(700)) / 2;
+            assert_eq!(
+                canvas.pixels[128 * app.width as usize + x as usize + 3],
+                palette.panel
+            );
+            app.activate(Action::Settings);
+            let canvas = app.paint();
+            let x = (app.width - 600) / 2;
+            assert_eq!(
+                canvas.pixels[128 * app.width as usize + x as usize + 3],
+                palette.panel
+            );
+        }
+        app.resize(360, 240);
+        app.paint();
+        for hit in app
+            .hits
+            .iter()
+            .filter(|hit| !matches!(hit.action, Action::Menu))
+        {
+            assert!(hit.x >= 0 && hit.y >= 0);
+            assert!(hit.x + hit.w as i32 <= app.width as i32);
+            assert!(hit.y + hit.h as i32 <= app.height as i32);
+        }
+    }
 
     #[test]
     fn about_menu_uses_host_build_and_blocks_page_input() {
@@ -2155,6 +2460,7 @@ pub enum Key {
     Backspace,
     Tab,
     Left,
+    Right,
     Up,
     Down,
     PageUp,
@@ -2237,6 +2543,9 @@ impl Browser {
         self.focus = Focus::Page;
         self.select_all = false;
         self.pointer_press = None;
+        self.menu_open = false;
+        self.about_open = false;
+        self.settings_open = false;
         self.dirty = true;
     }
     fn page_top(&self) -> i32 {
@@ -2265,6 +2574,7 @@ impl Browser {
             Key::Backspace => 0xff08,
             Key::Tab => 0xff09,
             Key::Left => 0xff51,
+            Key::Right => 0xff53,
             Key::Up => 0xff52,
             Key::Down => 0xff54,
             Key::PageUp => 0xff55,
@@ -2301,4 +2611,43 @@ fn test_app() -> Browser {
         Fonts::from_bytes(std::fs::read(path).unwrap()).unwrap(),
         Arc::new(scripts::DisabledScripts),
     )
+}
+
+#[cfg(test)]
+mod theme_embedding_tests {
+    use super::*;
+
+    #[test]
+    fn theme_preference_does_not_change_toolbar_free_page_surface() {
+        let mut app = test_app();
+        app.set_chrome(false);
+        app.resize(640, 480);
+        let original = app.paint().pixels;
+        for preference in [
+            ThemePreference::System,
+            ThemePreference::Light,
+            ThemePreference::Dark,
+        ] {
+            app.set_theme_preference(preference);
+            for system in [ColorScheme::Light, ColorScheme::Dark] {
+                app.set_system_theme(system);
+                assert_eq!(app.paint().pixels, original);
+                assert_eq!(app.take_theme_change(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_chrome_dismisses_modals_and_restores_page_input() {
+        let mut app = test_app();
+        app.activate(Action::Settings);
+        assert!(app.settings_open);
+        app.set_chrome(false);
+        assert!(!app.modal_open());
+        app.document = document::parse("<form><input name=q></form>", "https://example.test/");
+        app.paint();
+        app.handle_key(Key::Tab, false, false, false);
+        app.type_text("usable");
+        assert!(app.values.values().any(|value| value == "usable"));
+    }
 }

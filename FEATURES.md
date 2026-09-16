@@ -6,6 +6,37 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-017 : System, light and dark browser appearance
+
+Stability: in-progress
+
+### Dependencies
+
+F-013 optional chrome/host boundary and F-012/F-015 release distribution.
+
+### Properties
+
+Menu > Settings offers System (default), Light and Dark. Selection applies
+immediately and persists in the user's XDG configuration directory. System
+follows the Linux desktop settings portal's color-scheme preference, with a light
+fallback when unavailable. Browser controls/dialogs are themed; website colors
+and HTTP's red warning are unchanged. The host hints matching window decorations
+to supporting window managers. No native toolkit or page-engine changes.
+
+### Test Criteria
+
+- [x] Deterministic palette, modal input and unchanged page/no-chrome pixels.
+- [x] Bounded preference parsing, XDG paths, restart persistence and clear save errors.
+- [x] Native packaged UI follows an isolated desktop portal, with live changes,
+  explicit overrides, persistence and matching window hint.
+- [ ] Existing workspace, component, dependency and native/CDP gates preserved.
+- [ ] Exact-commit CI/Pages, versioned release and fresh public installer verified.
+
+Local acceptance on 2026-09-16 includes 9 focused theme checks in debug/release,
+independent no-chrome embedding, and the actual packaged executable controlled
+through native X11 input with a private Settings portal. Public release pending;
+remaining gates are recorded in the dated log.
+
 ## F-016 : Modern Butane JavaScript and embedding compatibility
 
 Stability: in-progress

@@ -1,7 +1,7 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.4.1). The desktop executable remains
+four packages, all versioned together (currently 0.5.0). The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 
@@ -29,6 +29,11 @@ with `default-features = false`, or call `Browser::set_chrome(false)` at runtime
 The same navigation and form services remain usable without that UI. Services
 can become internal modules or smaller crates later without adding more public
 component brands now.
+
+Chassis's chrome accepts `ThemePreference` and a host-supplied `ColorScheme`.
+Theme selection does not recolor Sparkle's page pixels. The desktop host alone
+owns XDG preference persistence, Rust D-Bus portal discovery and the X11 window
+decoration hint. Embedders need no session bus or configuration directory.
 
 ## Embedding contracts
 

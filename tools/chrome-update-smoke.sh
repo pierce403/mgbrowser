@@ -16,7 +16,8 @@ export MGBROWSER_CHROME_SMOKE="$scratch"
 timeout 45s xvfb-run -a bash <<'SMOKE'
 set -euo pipefail
 scratch=$MGBROWSER_CHROME_SMOKE
-"$scratch/mgbrowser" http://127.0.0.1:7878/ --enable-scripts --remote-debugging-port=0 > "$scratch/browser.log" 2>&1 &
+XDG_CONFIG_HOME="$scratch/config" DBUS_SESSION_BUS_ADDRESS="unix:path=$scratch/no-bus" \
+    "$scratch/mgbrowser" http://127.0.0.1:7878/ --enable-scripts --remote-debugging-port=0 > "$scratch/browser.log" 2>&1 &
 browser=$!
 trap 'kill "$browser" 2>/dev/null || true; wait "$browser" 2>/dev/null || true' EXIT
 for attempt in $(seq 1 100); do

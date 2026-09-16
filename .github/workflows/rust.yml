@@ -43,6 +43,7 @@ jobs:
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
       - name: Exercise a local search and result click in an X11 window
         run: |
           target/debug/examples/journey_server > tmp/fixture-server.log 2>&1 &
@@ -333,3 +334,4 @@ jobs:
             tmp/script-journey
             tmp/event-journey
             tmp/boa-journey
+            tmp/theme-smoke.*/

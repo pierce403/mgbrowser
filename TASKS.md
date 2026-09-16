@@ -1,5 +1,13 @@
 # Work queue
 
+2026-09-16 active: **T-014 / F-017: system and explicit browser appearance**.
+Add Menu > Settings with persistent System/Light/Dark controls, live Linux
+desktop preference discovery and themed chrome/dialogs. Preserve page colors,
+HTTP red warning, optional chrome and all engine behavior. Validate native
+interaction and packaged restart/portal behavior, then publish v0.5.0 through
+exact-commit CI/Pages/release and fresh public installer checks. Google and the
+remaining JSPLAN roadmap stay deferred.
+
 2026-09-16 complete: **T-013 / F-016 bounded Boa integration shipped as v0.4.1**,
 release commit `02b413f27e8ddce9b6408887317f08cd9b9b86b7`. The opt-in production
 path uses Boa for inline scripts, bounded Promise checkpoints and retained DOM

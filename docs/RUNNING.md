@@ -32,6 +32,12 @@ Installed builds check on startup and daily; restart to run the installed update
 `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
 See [update behavior and trust](UPDATES.md), including persistent opt-out.
 
+Menu > Settings offers System, Light and Dark appearance. System follows the
+Linux desktop settings portal, with Light fallback when unavailable. The choice
+is saved automatically and applies without restarting; web pages keep their own
+colors and plain HTTP keeps its red warning. See [appearance](APPEARANCE.md) for
+desktop support, XDG configuration and window-manager limitations.
+
 ## What it renders
 
 HTML uses our bounded tokenizer/tree builder. Styled documents use Rust Stylo for

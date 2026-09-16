@@ -4,6 +4,9 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/APPEARANCE.md`: System/Light/Dark browser controls, persistent XDG
+  preference, Rust-only desktop portal discovery and isolated native acceptance.
+
 - `docs/ARCHITECTURE.md`: adopted Butane/Sparkle/Chassis/platform boundaries, optional chrome, embedding examples and future compatibility/ThermiteOS gates.
 - `JSPLAN.md`: proposed Butane engine strategy, Rust reuse evaluation, V8 techniques,
   academic sources and modern framework/embedding gates (F-016 / T-013); no engine

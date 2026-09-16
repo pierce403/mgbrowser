@@ -16,7 +16,17 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | arbitrary | 1.4.2 | MIT OR Apache-2.0 |
 | arrayref | 0.3.9 | BSD-2-Clause |
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 |
+| async-broadcast | 0.7.2 | MIT OR Apache-2.0 |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT |
+| async-executor | 1.14.0 | Apache-2.0 OR MIT |
+| async-io | 2.6.0 | Apache-2.0 OR MIT |
+| async-lock | 3.4.2 | Apache-2.0 OR MIT |
+| async-process | 2.5.0 | Apache-2.0 OR MIT |
+| async-recursion | 1.1.1 | MIT OR Apache-2.0 |
+| async-signal | 0.2.14 | Apache-2.0 OR MIT |
+| async-task | 4.7.1 | Apache-2.0 OR MIT |
+| async-trait | 0.1.92 | MIT OR Apache-2.0 |
+| atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
 | atomic_refcell | 0.1.14 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | base16ct | 1.0.0 | Apache-2.0 OR MIT |
@@ -26,6 +36,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 |
+| blocking | 1.6.2 | Apache-2.0 OR MIT |
 | boa_ast | 0.22.0 | Unlicense OR MIT |
 | boa_engine | 0.22.0 | Unlicense OR MIT |
 | boa_gc | 0.22.0 | Unlicense OR MIT |
@@ -90,9 +101,13 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | either | 1.18.0 | MIT OR Apache-2.0 |
 | elliptic-curve | 0.14.1 | Apache-2.0 OR MIT |
 | encoding_rs | 0.8.41 | (Apache-2.0 OR MIT) AND BSD-3-Clause |
+| endi | 1.1.1 | MIT |
+| enumflags2 | 0.7.12 | MIT OR Apache-2.0 |
+| enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 |
 | equator | 0.4.2 | MIT |
 | equator-macro | 0.4.2 | MIT |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
 | euclid | 0.22.14 | MIT OR Apache-2.0 |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT |
@@ -121,6 +136,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | hashbrown | 0.14.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
+| hex | 0.4.3 | MIT OR Apache-2.0 |
 | hkdf | 0.13.0 | MIT OR Apache-2.0 |
 | hmac | 0.13.0 | MIT OR Apache-2.0 |
 | http | 1.5.0 | MIT OR Apache-2.0 |
@@ -158,10 +174,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.4.1 | Apache-2.0 |
-| mg-butane | 0.4.1 | Apache-2.0 |
-| mg-chassis | 0.4.1 | Apache-2.0 |
-| mg-sparkle | 0.4.1 | Apache-2.0 |
+| mg-browser | 0.5.0 | Apache-2.0 |
+| mg-butane | 0.5.0 | Apache-2.0 |
+| mg-chassis | 0.5.0 | Apache-2.0 |
+| mg-sparkle | 0.5.0 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
@@ -181,6 +197,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | num_threads | 0.1.7 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | oneshot | 0.2.1 | MIT OR Apache-2.0 |
+| ordered-stream | 0.2.0 | MIT OR Apache-2.0 |
 | p256 | 0.14.0 | Apache-2.0 OR MIT |
 | p384 | 0.14.0 | Apache-2.0 OR MIT |
 | parking | 2.2.1 | Apache-2.0 OR MIT |
@@ -203,10 +220,12 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | pin-project | 1.1.13 | Apache-2.0 OR MIT |
 | pin-project-internal | 1.1.13 | Apache-2.0 OR MIT |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
+| piper | 0.2.5 | MIT OR Apache-2.0 |
 | pkcs1 | 0.8.0-rc.4 | Apache-2.0 OR MIT |
 | pkcs8 | 0.11.0 | Apache-2.0 OR MIT |
 | png | 0.17.16 | MIT OR Apache-2.0 |
 | png | 0.18.1 | MIT OR Apache-2.0 |
+| polling | 3.11.0 | Apache-2.0 OR MIT |
 | poly1305 | 0.9.1 | Apache-2.0 OR MIT |
 | polyval | 0.7.3 | Apache-2.0 OR MIT |
 | portable-atomic | 1.15.0 | Apache-2.0 OR MIT |
@@ -254,15 +273,18 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
+| serde_repr | 0.1.21 | MIT OR Apache-2.0 |
 | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 |
 | sha1 | 0.10.7 | MIT OR Apache-2.0 |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 |
+| signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
 | signature | 3.0.0 | Apache-2.0 OR MIT |
 | simd-adler32 | 0.3.10 | MIT |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
 | simplecss | 0.2.2 | Apache-2.0 OR MIT |
 | siphasher | 1.0.3 | MIT/Apache-2.0 |
+| slab | 0.4.12 | MIT |
 | small_btree | 0.1.0 | Unlicense OR MIT |
 | smallbitvec | 2.6.1 | MIT OR Apache-2.0 |
 | smallvec | 1.16.0 | MIT OR Apache-2.0 |
@@ -305,6 +327,9 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | toml_edit | 0.25.15+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
+| tracing | 0.1.44 | MIT |
+| tracing-attributes | 0.1.31 | MIT |
+| tracing-core | 0.1.36 | MIT |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
 | tungstenite | 0.28.0 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
@@ -321,6 +346,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 |
 | utf16_iter | 1.0.5 | Apache-2.0 OR MIT |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
+| uuid | 1.25.0 | Apache-2.0 OR MIT |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | void | 1.0.2 | MIT |
 | walkdir | 2.5.0 | Unlicense/MIT |
@@ -337,6 +363,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | xmlwriter | 0.1.0 | MIT |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
+| zbus | 5.19.0 | MIT |
+| zbus_macros | 5.19.0 | MIT |
+| zbus_names | 4.3.4 | MIT |
+| zcheapstr | 1.1.0 | MIT |
 | zerocopy | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerofrom | 0.1.8 | Unicode-3.0 |
 | zerofrom-derive | 0.1.7 | Unicode-3.0 |
@@ -345,3 +375,6 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | zerovec | 0.11.8 | Unicode-3.0 |
 | zerovec-derive | 0.11.6 | Unicode-3.0 |
 | zmij | 1.0.23 | MIT |
+| zvariant | 5.15.0 | MIT |
+| zvariant_derive | 5.15.0 | MIT |
+| zvariant_utils | 4.2.0 | MIT |

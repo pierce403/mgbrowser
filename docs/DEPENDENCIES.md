@@ -37,6 +37,7 @@ This browser is a testing and research project, not a production browser. The us
 | HTTP compression | flate2 1, defaults disabled, rust_backend only | Rust gzip/deflate decoding with a separate decoded-body limit. |
 | Session cookies | Own memory-only jar; psl 2 and httpdate 1 | Public-suffix and expiry parsing use Rust crates. No persistent or imported browser cookies. |
 | Linux window | x11rb 0.13, defaults disabled, RustConnection | Rust X11 wire protocol over OS sockets, usable through X11/XWayland. No Xlib/XCB FFI or native toolkit rendering. |
+| Desktop appearance | zbus 5.19.0, defaults disabled, async-io and blocking-api; host only | Rust D-Bus protocol to the standard settings portal over the local session socket. No libdbus, GTK/Qt or native theme renderer. OS sockets/polling remain platform interfaces. |
 | Browser automation | tungstenite 0.28 with only handshake, serde/serde_json, base64 | Loopback-only plain WebSocket CDP. No native TLS, compression or renderer fallback. Rust SHA-1 is used for the standard WebSocket handshake, not TLS certificate trust. |
 | JavaScript | Boa engine/GC 0.22.0, defaults disabled; engine fuzz feature for instruction accounting; Mg facade and DOM bridge | Rust parser/VM/GC, no C/C++ backend, JIT or production fallback. Page integration remains partial and opt-in. Original interpreter tests remain separate. |
 | Script worker controls | libc 0.2 Rust OS declarations; std process/pipes; existing serde_json | Linux x86_64 resource limits, descriptor closure and seccomp. Not a C font/image/crypto backend or replacement JavaScript engine. |
@@ -44,6 +45,28 @@ This browser is a testing and research project, not a production browser. The us
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### Desktop appearance: 2026-09-16, v0.5.0
+
+The desktop host pins MIT-licensed `zbus = 5.19.0` with default features disabled
+and only `async-io` / `blocking-api`. The selected Rust protocol/serialization
+implementation does not link libdbus, GTK or Qt. Its async I/O, polling, rustix
+and libc dependencies are OS interfaces, not browser/codec/crypto backends.
+The existing browser components do not acquire zbus or desktop-settings access.
+The worker dispatch still precedes desktop initialization, with unchanged script
+syscall permissions and execution paths. The host accepts only Unix session-bus
+addresses, excluding executable-launch and TCP transports for this service.
+
+The Linux normal/build graph, added manifests, build scripts and license texts
+are reviewed and inventoried in DEPENDENCY_LICENSES.md. async-io's build script
+probes Rust compiler support through autocfg; no C/C++ compiler or native library
+builder is introduced. Required regression, package-size and public-install
+checks accompany this addition. This is an integration/dependency review, not an
+audit of every upstream source line or a claim about other platforms.
+
+Primary references: [zbus](https://github.com/z-galaxy/zbus),
+[Settings portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html),
+[non-GTK X11 theme hint](https://docs.gtk.org/gdk3-x11/method.X11Window.set_theme_variant.html).
 
 ### Boa page adoption: 2026-09-16, v0.4.0 increment
 

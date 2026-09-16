@@ -35,6 +35,15 @@ Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked 
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.
 
+For browser appearance/settings changes, run the focused Chassis theme and host
+settings/appearance tests, then `bash tools/theme-smoke.sh PATH_TO_PACKAGED_BINARY`
+after building the theme_smoke and journey_server examples. This starts an owned
+Xvfb, private D-Bus portal and temporary XDG configuration: never change the real
+desktop preference to test following System. Verify explicit overrides, restart
+persistence, live portal changes/fallback, HTTP red warning, unchanged page pixels
+and native decoration hints. Inspect light/dark frames; an X11 property is only a
+hint and does not prove that every window manager changes its outer decoration.
+
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis

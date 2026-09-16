@@ -2,6 +2,11 @@
 
 ## Purpose and responsibilities
 
+Current request (2026-09-16): T-014 / F-017, system-following browser chrome with
+persistent System/Light/Dark choices in Menu > Settings. Ship v0.5.0 through the
+standing release gates. Keep website rendering, HTTP warnings and engine behavior
+unchanged. Further compatibility work remains deferred.
+
 Completed request (2026-09-16): the bounded Boa integration shipped as v0.4.1 at
 `02b413f27e8ddce9b6408887317f08cd9b9b86b7`. Exact-commit Rust CI, JSPLAN CI,
 Pages and release workflow are green. Public assets/checksum, exact curl
