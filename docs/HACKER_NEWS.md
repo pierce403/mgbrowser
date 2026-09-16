@@ -1,6 +1,7 @@
 # Hacker News desktop rendering goal
 
-Adopted 2026-09-09. Status: planned, not implemented or visually accepted.
+Adopted 2026-09-09. Implementation authorized 2026-09-16. Status: implemented
+locally; desktop/live/local-CI acceptance passed, remote CI/release pending.
 
 Goal: render the real https://news.ycombinator.com/ homepage recognizably and
 faithfully at desktop content widths of 1024 and 1280 pixels, with scripting
@@ -53,33 +54,76 @@ resource lifecycle; the platform supplies font data through the existing boundar
 Do not hard-code HN selectors, story content or coordinates in engine behavior.
 
 2026-09-16 dependency clarification: existing Rust implementation crates are
-allowed under docs/DEPENDENCIES.md, including candidate Servo-origin components.
-Stylo is an option to evaluate for computed styles, not an adopted dependency or
-a replacement for layout. Upstream capabilities do not expand this acceptance
-scope or waive local integration/resource tests. All gates below remain unchecked.
+allowed under docs/DEPENDENCIES.md. The implementation adopts standalone Stylo
+0.21.0 for computed styles, not Servo's browser or layout. Rust image/resvg paths
+have native/font/text/raster defaults disabled. Upstream capabilities do not
+expand acceptance scope or waive local integration/resource tests.
+
+## Implemented contract and local evidence
+
+Chassis loads same-origin linked/inline CSS in source order and actual PNG/GIF/SVG
+resources, including background-image URLs. Redirects retain same-origin checks
+and use the final stylesheet URL as their base. Budgets: 16 sheets, 32 requests,
+256 KiB per CSS body, 512 KiB per image, 2 MiB admitted resource data and one
+10-second resource deadline. Cancellation prevents further scheduling; an active
+socket/resolver operation can finish within the existing bounds. No CSS imports,
+downloaded fonts, cross-origin assets or dynamic resource fetching.
+
+Sparkle computes static styles via Stylo, then owns generic block/inline/nested
+table layout, intrinsic columns, colspan, presentation hints, regular/bold text,
+form controls, scroll-adjusted hits and software paint. The older flow projection
+remains a readable fallback on style/layout admission failure. Fonts are supplied
+by the host, and no new capabilities enter Butane or its restricted worker.
+
+PNG and first-frame GIF use Rust image; SVG accepts only bounded static shapes,
+paths and groups. DTDs, text, filters, use references, embedded images, active
+content and file/data resolvers are rejected. Raster limits: 2048 per side and
+1,048,576 pixels; decoded image cache: 128 entries/16 MiB. Natural image sizing
+is cached by resource URL. Layout admits 2 million work steps, 200,000 scene
+operations/boxes, depth 256 and 16,384 characters per text node. Failure falls
+back instead of silently truncating the page. These bounds do not sandbox Stylo
+or the browser parent. See DEPENDENCIES.md for style snapshot limits.
+
+Captured comparison (2026-09-16): saved real homepage and original assets, UTF-8
+response encoding, DejaVu Sans regular/bold, device scale one, no reference
+scrollbar gutter. At 1024x768 and 1280x800, inspected Mg/Chrome 146 screenshots
+and full-page/footer captures. All 30 story/metadata row integer positions match
+the reference: first story y42, last y1053, More y1098, separator y1123, search
+field y1168/h21. Panel bounds are reference subpixel values rounded to software
+pixels. Total height differs by one rounding pixel (1211 vs 1210). Text
+rasterization/baselines and input borders differ slightly; no missing rows,
+overlap or lost footer. Raw page content and screenshots remain in ignored tmp/.
 
 ## Acceptance
 
-- [ ] Same captured HTML/CSS/assets rendered in Mg and a reference browser at
+- [x] Same captured HTML/CSS/assets rendered in Mg and a reference browser at
   1024x768 and 1280x800 content viewports, with the same available font fallback,
   zoom and device scale. Inspect both screenshots side by side. Record any
   remaining differences rather than claiming pixel identity across font engines.
-- [ ] Centered 85% outer table (minimum 796px), #f6f6ef panel, #ff6600 header,
+- [x] Centered 85% outer table (minimum 796px), #f6f6ef panel, #ff6600 header,
   actual Y logo, header links and right-aligned login match the reference geometry.
-- [ ] All served story rows retain aligned ranks/arrows, title/domain inline flow,
+- [x] All served story rows retain aligned ranks/arrows, title/domain inline flow,
   correctly grouped small metadata, row spacing and wrapping without overlap.
   Check full-page scroll, More, footer separator/links and search field as well
   as the first screen. Fix geometry differences before tuning rasterization.
-- [ ] A fresh live homepage also renders correctly without --enable-scripts.
+- [x] A fresh live homepage also renders correctly without --enable-scripts.
   Exercise ordinary story, comments and More links, back navigation and Ctrl+L.
   Comments/destination styling is not a new acceptance target; no voting, login,
   submission or other account-changing actions are needed.
-- [ ] Small authored regression cases cover the implemented CSS/table/image
+- [x] Small authored regression cases cover the implemented CSS/table/image
   primitives, resource bounds/failure fallback and scroll-adjusted hit geometry.
   Preserve and rerun existing CI/resource assertions and native/CDP journeys.
 - [ ] Exact-commit CI/Pages, versioned binary release and fresh installation with
   the public curl command pass; packaged version, worker selftest and desktop/icon
   installation verified. Site/release notes describe the narrow compatibility gain.
+
+Live acceptance on 2026-09-16: release-built native Mg under Xvfb, scripts off,
+1024x768 content. External X11 events exercised Ctrl+L and Alt+Left; the existing
+external CDP subset clicked the actual More, comments and first-story links and
+scrolled to the footer. All delivered HTTP 200 and returned to the homepage.
+The first story led to a Mastodon page that requires JavaScript: delivery is not
+destination compatibility. Inspected fresh homepage and bottom screenshots;
+no login, vote, submission or account-changing action was attempted.
 
 ## Explicit exclusions and dependencies
 
@@ -88,7 +132,8 @@ general event loop, external scripts, new JS builtins, Google diagnostics,
 autoresearch evaluator, broad codec support or arbitrary destination compatibility.
 Do not loosen TLS, resource bounds, Rust-only dependency rules or worker isolation.
 The component extraction shipped in v0.2.1 on 2026-09-16, closing F-013 separately.
-That release adds updates/About, not CSS: all HN acceptance gates remain unchecked.
+That release adds updates/About, not CSS; HN styling belongs to the new v0.3.0
+increment. Formal MVP and broader F-005 fixture gates remain open.
 
 The conversation goal tracker still holds the unfinished Google goal and rejected
 creation of this replacement. The user must cancel that goal through the product

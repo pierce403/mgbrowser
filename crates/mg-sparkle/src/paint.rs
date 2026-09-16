@@ -1,8 +1,8 @@
 //! Rust software painting. Pixels are packed 0x00RRGGBB for the window surface.
 //!
 //! Font files are data: shaping and rasterization never call a native font API.
-//! A single face is used for now; mixed-direction bidi layout and fallback faces
-//! are not implemented. Callers split document text into lines before painting.
+//! A host may supply a separate bold face; mixed-direction bidi layout and
+//! script fallback faces are not implemented. Callers split text into lines.
 
 use std::collections::HashMap;
 
@@ -74,6 +74,23 @@ impl Canvas {
         }
     }
 
+    /// Paint with the host-provided bold face, falling back to the regular face.
+    pub fn text_weight(
+        &mut self,
+        fonts: &mut Fonts,
+        position: (i32, i32),
+        text: &str,
+        size: f32,
+        color: u32,
+        bold: bool,
+    ) {
+        if bold && let Some(face) = fonts.bold.as_deref_mut() {
+            self.text(face, position.0, position.1, text, size, color);
+        } else {
+            self.text(fonts, position.0, position.1, text, size, color);
+        }
+    }
+
     pub fn save_png(&self, path: &str) -> Result<(), String> {
         let mut image = image::RgbImage::new(self.width, self.height);
         for (target, &pixel) in image.pixels_mut().zip(&self.pixels) {
@@ -115,6 +132,7 @@ pub struct Fonts {
     font: fontdue::Font,
     cache: HashMap<(u16, u32), (fontdue::Metrics, Vec<u8>)>,
     cached_bytes: usize,
+    bold: Option<Box<Fonts>>,
 }
 
 impl Fonts {
@@ -128,7 +146,24 @@ impl Fonts {
             font,
             cache: HashMap::new(),
             cached_bytes: 0,
+            bold: None,
         })
+    }
+
+    /// Supply a separately parsed bold font without performing platform I/O.
+    pub fn from_bytes_with_bold(bytes: Vec<u8>, bold: Option<Vec<u8>>) -> Result<Self, String> {
+        let mut fonts = Self::from_bytes(bytes)?;
+        fonts.bold = bold.map(Self::from_bytes).transpose()?.map(Box::new);
+        Ok(fonts)
+    }
+
+    /// Measure the same selected face used by `Canvas::text_weight`.
+    pub fn width_weight(&mut self, text: &str, size: f32, bold: bool) -> f32 {
+        if bold && let Some(face) = self.bold.as_deref_mut() {
+            face.width(text, size)
+        } else {
+            self.width(text, size)
+        }
     }
 
     /// Measure the same shaped advances that `Canvas::text` paints.
@@ -146,6 +181,17 @@ impl Fonts {
             .horizontal_line_metrics(size)
             .map_or(size * 1.25, |metrics| metrics.new_line_size)
             .ceil() as i32
+    }
+
+    /// Pixel-aligned normal CSS line metrics. Round ascent and descent at the
+    /// device-pixel boundary separately, retaining a stable shared baseline.
+    pub fn css_line_height(&self, size: f32) -> f32 {
+        let size = font_size(size);
+        self.font
+            .horizontal_line_metrics(size)
+            .map_or(size * 1.2, |metrics| {
+                metrics.ascent.round() - metrics.descent.round() + metrics.line_gap.round()
+            })
     }
 
     fn shape(&self, text: &str, size: f32) -> Vec<PositionedGlyph> {

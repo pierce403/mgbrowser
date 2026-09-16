@@ -1,5 +1,13 @@
 # Work queue
 
+2026-09-16 active: finish publishing **T-011 / F-014 as v0.3.0**. Standalone Rust
+Stylo, bounded same-origin CSS/images and generic table/inline layout are locally
+implemented and accepted at 1024/1280 desktop widths. Fresh HN navigation and all
+normal local CI gates pass, including the unchanged language/resource gates and
+26 native/26 external CDP journeys. Remaining: exact-commit remote CI/Pages,
+immutable release tag/assets, fresh public installer and update verification.
+Do not expand compatibility or resume the Google loop while closing this release.
+
 2026-09-16 completed: **T-012 / F-015**, diagnosed HN styling, added verified
 automatic self-updates and About compile identity, published v0.2.1. Diagnosis:
 linked CSS loading/cascade/table layout remain absent. The HN implementation goal

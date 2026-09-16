@@ -1,0 +1,319 @@
+//! Bounded, Rust-only page images. No image resolver may read files or fetch URLs.
+//! PNG, the first GIF frame, and a deliberately small SVG shape subset are supported.
+use crate::paint::Canvas;
+use std::io::Cursor;
+
+const MAX_SOURCE: usize = 512 * 1024;
+const MAX_SIDE: u32 = 2048;
+const MAX_PIXELS: u64 = 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct RasterImage {
+    pub width: u32,
+    pub height: u32,
+    /// Straight (not premultiplied) RGBA, in row-major order.
+    pub pixels: Vec<u8>,
+}
+
+/// Decode supplied bytes only. Missing target dimensions use the intrinsic size;
+/// one specified dimension preserves aspect ratio. Explicit zero paints nothing.
+pub fn decode(
+    bytes: &[u8],
+    content_type: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<RasterImage, String> {
+    if bytes.len() > MAX_SOURCE {
+        return Err("Image source exceeds 512 KiB".into());
+    }
+    if width == Some(0) || height == Some(0) {
+        return Ok(RasterImage {
+            width: 0,
+            height: 0,
+            pixels: Vec::new(),
+        });
+    }
+    if content_type.split(';').next() == Some("image/svg+xml")
+        || bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+    {
+        return svg(bytes, width, height);
+    }
+    let format = image::guess_format(bytes).map_err(|e| format!("Unsupported image: {e}"))?;
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Gif) {
+        return Err("Only PNG, GIF and simple SVG page images are supported".into());
+    }
+    let reader = || {
+        let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_SIDE);
+        limits.max_image_height = Some(MAX_SIDE);
+        limits.max_alloc = Some(8 * 1024 * 1024);
+        reader.limits(limits);
+        reader
+    };
+    let (natural_width, natural_height) = reader().into_dimensions().map_err(|e| e.to_string())?;
+    check_size(natural_width, natural_height)?;
+    let (width, height) = target_size(natural_width, natural_height, width, height)?;
+    let decoded = reader().decode().map_err(|e| e.to_string())?.into_rgba8();
+    let pixels = if decoded.dimensions() == (width, height) {
+        decoded.into_raw()
+    } else {
+        image::imageops::resize(
+            &decoded,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
+        .into_raw()
+    };
+    Ok(RasterImage {
+        width,
+        height,
+        pixels,
+    })
+}
+
+fn check_size(width: u32, height: u32) -> Result<(), String> {
+    if width == 0
+        || height == 0
+        || width > MAX_SIDE
+        || height > MAX_SIDE
+        || u64::from(width) * u64::from(height) > MAX_PIXELS
+    {
+        return Err("Image dimensions exceed the small-image limit".into());
+    }
+    Ok(())
+}
+
+fn target_size(
+    nw: u32,
+    nh: u32,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<(u32, u32), String> {
+    check_size(nw, nh)?;
+    let (w, h) = match (width, height) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (
+            w,
+            (f64::from(nh) * f64::from(w) / f64::from(nw))
+                .round()
+                .max(1.0) as u32,
+        ),
+        (None, Some(h)) => (
+            (f64::from(nw) * f64::from(h) / f64::from(nh))
+                .round()
+                .max(1.0) as u32,
+            h,
+        ),
+        (None, None) => (nw, nh),
+    };
+    check_size(w, h)?;
+    Ok((w, h))
+}
+
+fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterImage, String> {
+    let source = std::str::from_utf8(bytes).map_err(|_| "SVG must be UTF-8")?;
+    let xml = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: 2048,
+        },
+    )
+    .map_err(|e| format!("Invalid or oversized SVG: {e}"))?;
+    if xml.root_element().tag_name().name() != "svg" {
+        return Err("Image is not SVG".into());
+    }
+    // Restrict complexity before the renderer sees the document. In particular,
+    // exclude filters, recursive use, embedded images, stylesheets and SVG text.
+    for node in xml.descendants().filter(|node| node.is_element()) {
+        if node.ancestors().take(34).count() > 33 {
+            return Err("SVG nesting exceeds 32 levels".into());
+        }
+        if !matches!(
+            node.tag_name().name(),
+            "svg"
+                | "g"
+                | "path"
+                | "rect"
+                | "circle"
+                | "ellipse"
+                | "line"
+                | "polyline"
+                | "polygon"
+                | "title"
+                | "desc"
+        ) {
+            return Err("Unsupported SVG element; only simple shapes are supported".into());
+        }
+        for attribute in node.attributes() {
+            if attribute.name() == "href"
+                || attribute.name().starts_with("on")
+                || attribute.value().to_ascii_lowercase().contains("url(")
+                || attribute.value().len() > 32 * 1024
+            {
+                return Err("Unsupported SVG reference, event or oversized attribute".into());
+            }
+        }
+    }
+    let options = resvg::usvg::Options {
+        // usvg's default string resolver can read local files. Neither resolver
+        // is allowed here, even if the structural allowlist is later expanded.
+        image_href_resolver: resvg::usvg::ImageHrefResolver {
+            resolve_data: Box::new(|_, _, _| None),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_str(source, &options).map_err(|e| e.to_string())?;
+    let natural = tree.size();
+    let (width, height) = target_size(
+        natural.width().ceil() as u32,
+        natural.height().ceil() as u32,
+        width,
+        height,
+    )?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).ok_or("Cannot allocate image")?;
+    let transform = resvg::tiny_skia::Transform::from_scale(
+        width as f32 / natural.width(),
+        height as f32 / natural.height(),
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let mut pixels = pixmap.take();
+    for rgba in pixels.chunks_exact_mut(4) {
+        let alpha = u32::from(rgba[3]);
+        if alpha != 0 {
+            for channel in &mut rgba[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    Ok(RasterImage {
+        width,
+        height,
+        pixels,
+    })
+}
+
+/// Blend an image onto the supplied surface, clipping in wide signed arithmetic.
+pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
+    if (image.width as usize)
+        .checked_mul(image.height as usize)
+        .and_then(|n| n.checked_mul(4))
+        != Some(image.pixels.len())
+    {
+        return;
+    }
+    let left = i64::from(x).clamp(0, i64::from(canvas.width));
+    let right = (i64::from(x) + i64::from(image.width)).clamp(0, i64::from(canvas.width));
+    let top = i64::from(y).clamp(0, i64::from(canvas.height));
+    let bottom = (i64::from(y) + i64::from(image.height)).clamp(0, i64::from(canvas.height));
+    for sy in top..bottom {
+        for sx in left..right {
+            let source = (((sy - i64::from(y)) as usize * image.width as usize)
+                + (sx - i64::from(x)) as usize)
+                * 4;
+            let rgba = &image.pixels[source..source + 4];
+            let alpha = u32::from(rgba[3]);
+            let target = &mut canvas.pixels[sy as usize * canvas.width as usize + sx as usize];
+            let blend = |channel: usize, shift: u32| {
+                (u32::from(rgba[channel]) * alpha
+                    + ((*target >> shift) & 255) * (255 - alpha)
+                    + 127)
+                    / 255
+            };
+            *target = (blend(0, 16) << 16) | (blend(1, 8) << 8) | blend(2, 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const SHAPE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10"><path d="M0 0H20V10H0Z" fill="#ff6600"/></svg>"##;
+
+    #[test]
+    fn svg_paths_viewbox_and_aspect_ratio() {
+        let image = decode(SHAPE, "image/svg+xml", Some(10), None).unwrap();
+        assert_eq!((image.width, image.height), (10, 5));
+        assert_eq!(&image.pixels[0..4], &[255, 102, 0, 255]);
+        assert!(
+            decode(SHAPE, "image/svg+xml", Some(0), Some(10))
+                .unwrap()
+                .pixels
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn svg_cannot_load_files_embedded_images_or_active_content() {
+        for content in [
+            "<image href='/etc/passwd'/>",
+            "<image href='data:image/svg+xml,garbage'/>",
+            "<use href='#x'/>",
+            "<script>alert(1)</script>",
+            "<filter/>",
+            "<text>not enabled</text>",
+            "<path fill='url(file:///etc/passwd)'/>",
+        ] {
+            let source = format!("<svg xmlns='http://www.w3.org/2000/svg'>{content}</svg>");
+            assert!(decode(source.as_bytes(), "image/svg+xml", None, None).is_err());
+        }
+        assert!(
+            decode(
+                b"<!DOCTYPE svg [<!ENTITY x 'hello'>]><svg>&x;</svg>",
+                "image/svg+xml",
+                None,
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn image_bounds_and_malformed_input_are_rejected() {
+        assert!(decode(SHAPE, "image/svg+xml", Some(2048), Some(2048)).is_err());
+        assert!(decode(&vec![0; MAX_SOURCE + 1], "image/png", None, None).is_err());
+        assert!(decode(b"not an image", "image/png", None, None).is_err());
+        let deep = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg'>{}{}{}</svg>",
+            "<g>".repeat(40),
+            "<rect width='1' height='1'/>",
+            "</g>".repeat(40)
+        );
+        assert!(decode(deep.as_bytes(), "image/svg+xml", None, None).is_err());
+    }
+
+    #[test]
+    fn png_and_transparent_gif_decode_without_native_codecs() {
+        let pixels = image::RgbaImage::from_pixel(2, 2, image::Rgba([11, 22, 33, 0]));
+        let mut png = Cursor::new(Vec::new());
+        pixels.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let image = decode(png.get_ref(), "image/png", None, None).unwrap();
+        assert_eq!((image.width, image.height), (2, 2));
+        assert_eq!(image.pixels[3], 0);
+        let mut gif = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut gif)
+            .encode_frame(image::Frame::new(pixels))
+            .unwrap();
+        let image = decode(&gif, "image/gif", None, None).unwrap();
+        assert!(image.pixels.chunks_exact(4).all(|rgba| rgba[3] == 0));
+    }
+
+    #[test]
+    fn alpha_blending_clips_extreme_and_negative_origins() {
+        let image = RasterImage {
+            width: 2,
+            height: 2,
+            pixels: [0, 0, 0, 128].repeat(4),
+        };
+        let mut canvas = Canvas::new(2, 2, 0xffffff);
+        blit(&mut canvas, &image, -1, -1);
+        assert_eq!(canvas.pixels, vec![0x7f7f7f, 0xffffff, 0xffffff, 0xffffff]);
+        let before = canvas.pixels.clone();
+        blit(&mut canvas, &image, i32::MAX, i32::MAX);
+        blit(&mut canvas, &image, i32::MIN, i32::MIN);
+        assert_eq!(before, canvas.pixels);
+    }
+}

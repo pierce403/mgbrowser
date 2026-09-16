@@ -5,6 +5,17 @@ from pathlib import Path
 import subprocess
 import sys
 
+# These exact upstream releases declare a license but omit its text from the
+# crate archive. Keep the reviewed fallback narrow: new omissions still fail.
+MPL_ARCHIVE_OMISSIONS = {
+    ("app_units", "0.7.8"), ("selectors", "0.40.0"),
+    ("stylo", "0.21.0"), ("stylo_atoms", "0.21.0"),
+    ("stylo_derive", "0.21.0"), ("stylo_dom", "0.21.0"),
+    ("stylo_static_prefs", "0.21.0"), ("stylo_traits", "0.21.0"),
+    ("to_shmem", "0.5.0"), ("to_shmem_derive", "0.1.0"),
+}
+LICENSE_INPUTS = Path(__file__).resolve().parent / "licenses"
+
 metadata = json.loads(subprocess.check_output([
     "cargo", "metadata", "--locked", "--format-version", "1",
     "--filter-platform", "x86_64-unknown-linux-gnu",
@@ -29,6 +40,9 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
         raise SystemExit(f"Missing license expression: {package['name']}")
     out.append(f"\n{'=' * 72}\n{package['name']} {package['version']} | {package['license']}\n")
     out.append(f"Source: {package['source'] or 'https://github.com/pierce403/mgbrowser'}\n")
+    if (package["source"] or "").startswith("registry+"):
+        out.append("Unmodified source archive (including MPL-covered source): "
+                   f"https://crates.io/api/v1/crates/{package['name']}/{package['version']}/download\n")
     summary.append(f"| {package['name']} | {package['version']} | {package['license']} |\n")
     root = Path(package["manifest_path"]).parent
     files = set()
@@ -37,7 +51,14 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
     if package.get("license_file"):
         files.add(root / package["license_file"])
     if not files:
-        raise SystemExit(f"No license text found: {package['name']} ({root})")
+        key = (package["name"], package["version"])
+        if key in MPL_ARCHIVE_OMISSIONS and package["license"] == "MPL-2.0":
+            fallback = LICENSE_INPUTS / "MPL-2.0.txt"
+        elif key == ("void", "1.0.2") and package["license"] == "MIT":
+            fallback = LICENSE_INPUTS / "void-1.0.2-MIT.txt"
+        else:
+            raise SystemExit(f"No license text found: {package['name']} ({root})")
+        out.append(f"\n--- Reviewed upstream text: {fallback.name} ---\n{fallback.read_text()}\n")
     for path in sorted(files):
         out.append(f"\n--- {path.relative_to(root)} ---\n{path.read_text(errors='replace')}\n")
 Path(sys.argv[1]).write_text("".join(out))

@@ -39,3 +39,11 @@ After publication, public_update_smoke with MGBROWSER_TEST_OLD_BINARY and
 `-- --ignored` exercises real release download, installation and a no-op recheck
 against a temporary copy of an older verified public binary. See docs/UPDATES.md.
 This is a manually invoked release gate, not an unattended publication agent.
+
+Stylo builds require Python 3 for its vendored code generator, but the shipped
+browser does not. Regenerate docs/DEPENDENCY_LICENSES.md with
+tools/license-inventory.py when the locked graph changes. It preserves upstream
+texts/source links and fails on unreviewed omissions; tools/licenses contains
+only explicitly reviewed missing-text fallbacks. Keep MPL dependency notices
+distinct from the project's Apache-2.0 license. Verify packaged size against
+the existing updater download/unpack limits without silently raising them.

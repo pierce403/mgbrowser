@@ -10,14 +10,20 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | aead | 0.6.1 | MIT OR Apache-2.0 |
 | aes | 0.9.3 | MIT OR Apache-2.0 |
 | aes-gcm | 0.11.1 | Apache-2.0 OR MIT |
+| app_units | 0.7.8 | MPL-2.0 |
+| arrayref | 0.3.9 | BSD-2-Clause |
+| arrayvec | 0.7.8 | MIT OR Apache-2.0 |
+| atomic_refcell | 0.1.14 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | base16ct | 1.0.0 | Apache-2.0 OR MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT |
+| bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
+| byteorder | 1.5.0 | Unlicense OR MIT |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
@@ -25,32 +31,54 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | chacha20poly1305 | 0.11.0 | Apache-2.0 OR MIT |
 | cipher | 0.5.2 | MIT OR Apache-2.0 |
 | cmov | 0.5.4 | Apache-2.0 OR MIT |
+| color_quant | 1.1.0 | MIT |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
+| core_detect | 1.0.0 | MIT/Apache-2.0 |
 | core_maths | 0.1.1 | MIT |
 | cpubits | 0.1.1 | MIT OR Apache-2.0 |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 |
 | crc32fast | 1.5.1 | MIT OR Apache-2.0 |
+| crossbeam-deque | 0.8.8 | MIT OR Apache-2.0 |
+| crossbeam-epoch | 0.9.21 | MIT OR Apache-2.0 |
+| crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 |
 | crypto-bigint | 0.7.5 | Apache-2.0 OR MIT |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 |
 | crypto-primes | 0.7.2 | Apache-2.0 OR MIT |
+| cssparser | 0.37.0 | MPL-2.0 |
+| cssparser-macros | 0.7.1 | MPL-2.0 |
 | ctr | 0.10.1 | MIT OR Apache-2.0 |
 | ctutils | 0.4.2 | Apache-2.0 OR MIT |
 | curve25519-dalek | 5.0.0 | BSD-3-Clause |
 | curve25519-dalek-derive | 0.1.1 | MIT/Apache-2.0 |
+| darling | 0.20.11 | MIT |
+| darling_core | 0.20.11 | MIT |
+| darling_macro | 0.20.11 | MIT |
 | data-encoding | 2.11.1 | MIT |
+| data-url | 0.3.2 | MIT OR Apache-2.0 |
 | der | 0.8.2 | Apache-2.0 OR MIT |
+| derive_more | 2.1.1 | MIT |
+| derive_more-impl | 2.1.1 | MIT |
 | digest | 0.10.7 | MIT OR Apache-2.0 |
 | digest | 0.11.3 | MIT OR Apache-2.0 |
 | displaydoc | 0.2.7 | MIT OR Apache-2.0 |
+| dtoa | 1.0.11 | MIT OR Apache-2.0 |
+| dtoa-short | 0.3.5 | MPL-2.0 |
 | ecdsa | 0.17.0 | Apache-2.0 OR MIT |
 | ed25519 | 3.0.0 | Apache-2.0 OR MIT |
 | ed25519-dalek | 3.0.0 | BSD-3-Clause |
+| either | 1.18.0 | MIT OR Apache-2.0 |
 | elliptic-curve | 0.14.1 | Apache-2.0 OR MIT |
+| encoding_rs | 0.8.41 | (Apache-2.0 OR MIT) AND BSD-3-Clause |
+| equivalent | 1.0.2 | Apache-2.0 OR MIT |
+| euclid | 0.22.14 | MIT OR Apache-2.0 |
+| fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | ff | 0.14.0 | MIT/Apache-2.0 |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
+| float-cmp | 0.9.0 | MIT |
+| fnv | 1.0.7 | Apache-2.0 / MIT |
 | fontdue | 0.9.4 | MIT OR Apache-2.0 OR Zlib |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 |
 | generic-array | 0.14.7 | MIT |
@@ -58,7 +86,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
 | ghash | 0.6.0 | Apache-2.0 OR MIT |
+| gif | 0.14.2 | MIT OR Apache-2.0 |
 | group | 0.14.0 | MIT/Apache-2.0 |
+| hashbrown | 0.17.1 | MIT OR Apache-2.0 |
+| heck | 0.5.0 | MIT OR Apache-2.0 |
 | hkdf | 0.13.0 | MIT OR Apache-2.0 |
 | hmac | 0.13.0 | MIT OR Apache-2.0 |
 | http | 1.5.0 | MIT OR Apache-2.0 |
@@ -67,43 +98,72 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | hybrid-array | 0.4.14 | MIT OR Apache-2.0 |
 | icu_collections | 2.3.0 | Unicode-3.0 |
 | icu_locale_core | 2.3.0 | Unicode-3.0 |
+| icu_locale_fallback | 2.3.0 | Unicode-3.0 |
+| icu_locale_fallback_data | 2.3.0 | Unicode-3.0 |
 | icu_normalizer | 2.3.0 | Unicode-3.0 |
 | icu_normalizer_data | 2.3.0 | Unicode-3.0 |
 | icu_properties | 2.3.0 | Unicode-3.0 |
 | icu_properties_data | 2.3.0 | Unicode-3.0 |
 | icu_provider | 2.3.1 | Unicode-3.0 |
+| icu_segmenter | 2.3.0 | Unicode-3.0 |
+| icu_segmenter_data | 2.3.0 | Unicode-3.0 |
+| ident_case | 1.0.1 | MIT/Apache-2.0 |
 | idna | 1.1.0 | MIT OR Apache-2.0 |
 | idna_adapter | 1.2.2 | Apache-2.0 OR MIT |
 | image | 0.25.10 | MIT OR Apache-2.0 |
+| imagesize | 0.13.0 | MIT |
+| indexmap | 2.14.2 | Apache-2.0 OR MIT |
 | inout | 0.2.2 | MIT OR Apache-2.0 |
+| itertools | 0.14.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
+| kurbo | 0.11.3 | Apache-2.0 OR MIT |
 | libc | 0.2.189 | MIT OR Apache-2.0 |
 | libm | 0.2.16 | MIT |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | litemap | 0.8.3 | Unicode-3.0 |
+| lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.2.0 | Apache-2.0 |
-| mg-butane | 0.2.0 | Apache-2.0 |
-| mg-chassis | 0.2.0 | Apache-2.0 |
-| mg-sparkle | 0.2.0 | Apache-2.0 |
+| mg-browser | 0.3.0 | Apache-2.0 |
+| mg-butane | 0.3.0 | Apache-2.0 |
+| mg-chassis | 0.3.0 | Apache-2.0 |
+| mg-sparkle | 0.3.0 | Apache-2.0 |
+| mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
+| multiversion | 0.9.0 | MIT OR Apache-2.0 |
+| multiversion-macros | 0.9.0 | MIT OR Apache-2.0 |
+| multiversion_no_op | 1.0.0 | Apache-2.0 OR MIT |
+| new_debug_unreachable | 1.0.6 | MIT |
+| num-derive | 0.4.2 | MIT OR Apache-2.0 |
+| num-integer | 0.1.47 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
+| num_cpus | 1.17.0 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | p256 | 0.14.0 | Apache-2.0 OR MIT |
 | p384 | 0.14.0 | Apache-2.0 OR MIT |
+| parking_lot | 0.12.5 | MIT OR Apache-2.0 |
+| parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
 | paste | 1.0.15 | MIT OR Apache-2.0 |
 | pem-rfc7468 | 1.0.0 | Apache-2.0 OR MIT |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
+| phf | 0.13.1 | MIT |
+| phf_codegen | 0.13.1 | MIT |
+| phf_generator | 0.13.1 | MIT |
+| phf_macros | 0.13.1 | MIT |
+| phf_shared | 0.13.1 | MIT |
+| pico-args | 0.5.0 | MIT |
 | pkcs1 | 0.8.0-rc.4 | Apache-2.0 OR MIT |
 | pkcs8 | 0.11.0 | Apache-2.0 OR MIT |
+| png | 0.17.16 | MIT OR Apache-2.0 |
 | png | 0.18.1 | MIT OR Apache-2.0 |
 | poly1305 | 0.9.1 | Apache-2.0 OR MIT |
 | polyval | 0.7.3 | Apache-2.0 OR MIT |
 | potential_utf | 0.1.6 | Unicode-3.0 |
 | ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 |
+| precomputed-hash | 0.1.1 | MIT |
 | primefield | 0.14.0 | Apache-2.0 OR MIT |
 | primeorder | 0.14.0 | Apache-2.0 OR MIT |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
@@ -115,38 +175,78 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 |
 | rand_core | 0.9.5 | MIT OR Apache-2.0 |
+| rayon | 1.12.0 | MIT OR Apache-2.0 |
+| rayon-core | 1.13.0 | MIT OR Apache-2.0 |
+| resvg | 0.45.1 | Apache-2.0 OR MIT |
 | rfc6979 | 0.6.0 | Apache-2.0 OR MIT |
+| rgb | 0.8.53 | MIT |
+| roxmltree | 0.20.0 | MIT OR Apache-2.0 |
 | rsa | 0.10.0-rc.18 | MIT OR Apache-2.0 |
+| rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.44 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
 | rustls-rustcrypto | 0.0.2-alpha | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.15 | ISC |
+| rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | rustybuzz | 0.20.1 | MIT |
+| same-file | 1.0.6 | Unlicense/MIT |
+| scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | sec1 | 0.8.1 | Apache-2.0 OR MIT |
+| selectors | 0.40.0 | MPL-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
+| serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
+| servo_arc | 0.4.3 | MIT OR Apache-2.0 |
 | sha1 | 0.10.7 | MIT OR Apache-2.0 |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 |
 | signature | 3.0.0 | Apache-2.0 OR MIT |
 | simd-adler32 | 0.3.10 | MIT |
+| simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
+| simplecss | 0.2.2 | Apache-2.0 OR MIT |
+| siphasher | 1.0.3 | MIT/Apache-2.0 |
+| smallbitvec | 2.6.1 | MIT OR Apache-2.0 |
 | smallvec | 1.16.0 | MIT OR Apache-2.0 |
 | spki | 0.8.0 | Apache-2.0 OR MIT |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 |
+| static_assertions | 1.1.0 | MIT OR Apache-2.0 |
+| strict-num | 0.1.1 | MIT |
+| string_cache | 0.9.0 | MIT OR Apache-2.0 |
+| string_cache_codegen | 0.6.1 | MIT OR Apache-2.0 |
+| strum | 0.28.0 | MIT |
+| strum_macros | 0.28.0 | MIT |
+| stylo | 0.21.0 | MPL-2.0 |
+| stylo_atoms | 0.21.0 | MPL-2.0 |
+| stylo_derive | 0.21.0 | MPL-2.0 |
+| stylo_dom | 0.21.0 | MPL-2.0 |
+| stylo_malloc_size_of | 0.21.0 | MIT OR Apache-2.0 |
+| stylo_static_prefs | 0.21.0 | MPL-2.0 |
+| stylo_traits | 0.21.0 | MPL-2.0 |
 | subtle | 2.6.1 | BSD-3-Clause |
+| svgtypes | 0.15.3 | Apache-2.0 OR MIT |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.5 | MIT OR Apache-2.0 |
 | synstructure | 0.13.2 | MIT |
+| thin-vec | 0.2.19 | MIT OR Apache-2.0 |
 | thiserror | 2.0.20 | MIT OR Apache-2.0 |
 | thiserror-impl | 2.0.20 | MIT OR Apache-2.0 |
+| tiny-skia | 0.11.4 | BSD-3-Clause |
+| tiny-skia-path | 0.11.4 | BSD-3-Clause |
 | tinystr | 0.8.4 | Unicode-3.0 |
+| to_shmem | 0.5.0 | MPL-2.0 |
+| to_shmem_derive | 0.1.0 | MPL-2.0 |
+| toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
 | tungstenite | 0.28.0 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
+| uluru | 3.1.0 | MPL-2.0 |
 | unicode-bidi-mirroring | 0.4.0 | MIT/Apache-2.0 |
 | unicode-ccc | 0.4.0 | MIT/Apache-2.0 |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
@@ -155,15 +255,22 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | universal-hash | 0.6.1 | MIT OR Apache-2.0 |
 | untrusted | 0.9.0 | ISC |
 | url | 2.5.8 | MIT OR Apache-2.0 |
+| usvg | 0.45.1 | Apache-2.0 OR MIT |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
+| void | 1.0.2 | MIT |
+| walkdir | 2.5.0 | Unlicense/MIT |
+| web_atoms | 0.2.6 | MIT OR Apache-2.0 |
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 |
+| weezl | 0.1.12 | MIT OR Apache-2.0 |
+| winnow | 1.0.4 | MIT |
 | wnaf | 0.14.1 | Apache-2.0 OR MIT |
 | writeable | 0.6.4 | Unicode-3.0 |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 |
 | x25519-dalek | 3.0.0 | BSD-3-Clause |
+| xmlwriter | 0.1.0 | MIT |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
 | zerocopy | 0.8.56 | BSD-2-Clause OR Apache-2.0 OR MIT |

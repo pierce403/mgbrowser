@@ -5,12 +5,14 @@ Rust X11 protocol code and software-rendered pixels; it does not embed another
 browser, a native UI toolkit, or a native font renderer.
 
 ```sh
-cargo run --locked --bin mgbrowser -- https://www.google.com/
+cargo run --locked --bin mgbrowser -- https://news.ycombinator.com/
 ```
 
 A readable font file is required. The browser tries DejaVu Sans and Liberation
 Sans at common Linux locations. Set `MGBROWSER_FONT=/absolute/path/font.ttf` to
 choose another file; this reads font data and does not call a platform font API.
+The matching DejaVu/Liberation bold file is loaded when available. Set
+`MGBROWSER_FONT_BOLD` to supply a corresponding bold face for a custom font.
 
 Use Ctrl+L to edit the URL, Enter to navigate, Tab to move between document input
 fields, Enter in a field to submit its form, and the mouse to activate links and
@@ -32,13 +34,16 @@ See [update behavior and trust](UPDATES.md), including persistent opt-out.
 
 ## What it renders
 
-HTML is parsed by our own bounded tokenizer/tree builder, then flattened into a
-simple flowing document with headings, text, links, and form controls. Rustybuzz
-shapes text and fontdue rasterizes it. An original partial JavaScript interpreter
-is available only with `--enable-scripts`; see below. Full CSS, font fallback/bidi
-layout and downloaded image rendering are not implemented. Images show a
-placeholder and alt text. These limits must not be mistaken for compatibility
-with the modern web.
+HTML uses our bounded tokenizer/tree builder. Styled documents use Rust Stylo for
+computed CSS and our tree-based block/inline/table layout; unstyled or rejected
+documents retain the simple readable flow projection. Rustybuzz shapes text and
+fontdue rasterizes regular/bold faces. Chassis downloads same-origin linked CSS,
+PNG/GIF and small static SVG images under explicit budgets. Unsupported resources
+show placeholders and warnings; no cross-origin assets, CSS imports or downloaded
+fonts. Full CSS, flex/grid, general positioning and font fallback/bidi layout are
+not implemented. The [Hacker News desktop scope](HACKER_NEWS.md) is intentionally
+narrow. An original partial JavaScript interpreter is available only with
+`--enable-scripts`; see below. None of this implies modern-web compatibility.
 
 HTTP(S) uses our own HTTP/1.1 transport and the selected experimental RustCrypto
 TLS provider, with public trust roots and certificate verification. Cookies are

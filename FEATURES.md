@@ -40,12 +40,12 @@ not independent release signing or whole-browser security.
 
 ## F-014 : Hacker News desktop rendering
 
-Stability: planned
+Stability: in-progress
 
-2026-09-16 diagnosis: current main still does not fetch linked stylesheets, compute
-CSS styles or lay out tables. Hacker News's linked news.css is therefore never
-applied; this is missing implementation, not a TLS/cache failure. F-015 does not
-complete or implement this rendering feature.
+2026-09-16: standalone Rust Stylo, bounded same-origin CSS/images and generic
+tree/table layout implemented locally. Same-input desktop/full-page comparison
+accepted with small raster/rounding differences. Live navigation and local CI passed; remote/release gates remain
+pending; the previously published v0.2.1 has no stylesheet support.
 
 ### Dependencies
 
@@ -60,10 +60,10 @@ and implementation order: docs/HACKER_NEWS.md. Google and mobile fidelity deferr
 
 ### Test Criteria
 
-- [ ] Same-input/font desktop screenshots compared against a reference browser.
-- [ ] Header, all story rows, wrapping, footer and scroll-adjusted links match.
-- [ ] Fresh live homepage and ordinary navigation verified with scripts disabled.
-- [ ] Focused primitive regressions and existing CI/native/CDP checks pass unchanged.
+- [x] Same-input/font desktop screenshots compared against a reference browser.
+- [x] Header, all story rows, wrapping, footer and scroll-adjusted links match.
+- [x] Fresh live homepage and ordinary navigation verified with scripts disabled.
+- [x] Focused primitive regressions and existing CI/native/CDP checks pass unchanged.
 - [ ] Versioned release and fresh public installer verified with accurate site notes.
 
 ## F-013 : Reusable Mg component boundaries
@@ -225,7 +225,7 @@ F-003.
 
 The documented static MVP HTML/CSS subset supports cascade/inheritance, block and inline flow, wrapped UTF-8 text, box styling and PNG images.
 
-Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled, initially PNG only. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
+Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled: PNG, first-frame GIF and a restricted static SVG shape/path subset. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
 
 ### Test Criteria
 
@@ -234,7 +234,10 @@ Font parsing, shaping and rasterization use Rust implementations without native 
 - [ ] Unsupported/corrupt image fixtures display a placeholder and preserve surrounding document layout and alt text.
 - [ ] Resolved font/image features contain no native implementations or implicit codec fallback.
 
-Evidence: native frames use rustybuzz/fontdue and show image placeholders/alt text. No page-image downloading or full CSS cascade yet. Current dependency guard passes; this does not satisfy the full fixture corpus.
+Current increment: rustybuzz/fontdue regular/bold faces, standalone Rust Stylo
+computed CSS, bounded generic table/inline layout and same-origin PNG/GIF/SVG
+resources under F-014. Focused tests do not satisfy the full planned fixture
+corpus or general CSS compatibility. F-005 remains in progress.
 
 ## F-006 : Reproducible autoresearch evaluator
 

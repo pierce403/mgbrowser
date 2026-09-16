@@ -113,5 +113,16 @@ pub fn load_fonts() -> Result<Fonts, String> {
 fn load_font_path(path: &std::path::Path) -> Result<Fonts, String> {
     let bytes = std::fs::read(path)
         .map_err(|error| format!("Cannot read font {}: {error}", path.display()))?;
-    Fonts::from_bytes(bytes).map_err(|error| format!("Font {}: {error}", path.display()))
+    // Discover only known sibling files; parsing/shaping remains in Rust. Custom
+    // faces can explicitly supply their bold companion without a font service.
+    let bold_path = std::env::var_os("MGBROWSER_FONT_BOLD")
+        .map(std::path::PathBuf::from)
+        .or_else(|| match path.file_name()?.to_str()? {
+            "DejaVuSans.ttf" => Some(path.with_file_name("DejaVuSans-Bold.ttf")),
+            "LiberationSans-Regular.ttf" => Some(path.with_file_name("LiberationSans-Bold.ttf")),
+            _ => None,
+        });
+    let bold = bold_path.and_then(|path| std::fs::read(path).ok());
+    Fonts::from_bytes_with_bold(bytes, bold)
+        .map_err(|error| format!("Font {}: {error}", path.display()))
 }

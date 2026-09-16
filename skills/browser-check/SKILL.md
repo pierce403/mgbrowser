@@ -11,6 +11,18 @@ For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools
 
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 
+For styled rendering, include the Sparkle styles/image/layout tests and Chassis
+styled_embedding journey (real linked CSS, downloaded SVG and a scrolled click).
+Read docs/HACKER_NEWS.md for the bounded desktop contract. Compare identical
+captured HTML/CSS/assets in Mg and a reference browser with matching viewport,
+scale, regular/bold font files and response charset; record scrollbar policy.
+Inspect both the first screen and the full-page/footer geometry, then separately
+verify fresh live navigation. Do not replace actual assets with site-specific
+drawings or treat Stylo's computed properties as implemented layout features.
+New dependency configurations require the source/feature/license review in
+docs/DEPENDENCIES.md; the component guard's exact OS-only libc exceptions are
+not permission for direct platform APIs or native browser backends in Sparkle.
+
 The driver exercises application input handlers in a real window; state that distinction when independent desktop input was not performed. A successful local fixture proves that path only. For an authorized live-site journey, use the site's actual form fields/links and ordinary cookies/redirects; record the exact failing stage and response. Never count a placeholder, interstitial link, fabricated result, or another service as completing the requested site journey.
 
 For CDP changes, read docs/CDP.md and docs/cdp-protocol.json. Run the external Rust examples/cdp_journey.rs client against an owned native browser with --remote-debugging-port=0 and the loopback fixture server; docs/CDP.md gives commands and CI reproduces them under Xvfb. This proves public WebSocket behavior independently of App hooks. Verify schema/discovery, session and stale-node errors, actual form query/result destination, viewport PNG dimensions and rendered output. Keep local endpoint ports/process identities explicit and stop only test processes you started. Use the implemented protocol subset; an unsupported Runtime command is not authorization to substitute another browser engine.

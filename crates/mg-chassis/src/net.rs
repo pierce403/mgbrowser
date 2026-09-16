@@ -54,6 +54,35 @@ impl Session {
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         submit_with_config_policy(url, body, Arc::new(config), &self.cookies, false)
     }
+
+    /// Bounded same-origin automatic subresource request. The policy also
+    /// applies to redirects, before opening a socket or sending cookies.
+    pub(crate) fn fetch_resource(
+        &self,
+        url: &str,
+        page_url: &str,
+        max_body: usize,
+        deadline: Instant,
+    ) -> Result<Response, String> {
+        let origin = Url::parse(page_url).map_err(|e| format!("Invalid resource origin: {e}"))?;
+        validate_url(&origin)?;
+        let roots =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        submit_with_limits(
+            url,
+            None,
+            Arc::new(config),
+            &self.cookies,
+            RequestLimits {
+                https_only: false,
+                origin: Some(origin),
+                max_body: max_body.min(MAX_BODY),
+                deadline,
+            },
+        )
+    }
 }
 
 /// Fetch a public HTTP(S) resource with bounded redirects, time, and body size.
@@ -97,19 +126,62 @@ fn submit_with_config_policy(
     cookies: &Mutex<CookieJar>,
     https_only: bool,
 ) -> Result<Response, String> {
+    submit_with_limits(
+        url,
+        body,
+        config,
+        cookies,
+        RequestLimits {
+            https_only,
+            origin: None,
+            max_body: MAX_BODY,
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        },
+    )
+}
+
+struct RequestLimits {
+    https_only: bool,
+    origin: Option<Url>,
+    max_body: usize,
+    deadline: Instant,
+}
+
+fn submit_with_limits(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    limits: RequestLimits,
+) -> Result<Response, String> {
     let mut url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     let mut body = body;
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
     for redirects in 0..=MAX_REDIRECTS {
         validate_url(&url)?;
-        if https_only && url.scheme() != "https" {
+        if limits.https_only && url.scheme() != "https" {
             return Err("Release download requires HTTPS, including redirects".into());
+        }
+        if limits
+            .origin
+            .as_ref()
+            .is_some_and(|origin| origin.origin() != url.origin())
+        {
+            return Err(
+                "Automatic resources are limited to the page origin, including redirects".into(),
+            );
         }
         let cookie_header = cookies
             .lock()
             .map_err(|_| "Cookie session lock failed")?
             .header(&url);
-        let (head, bytes) = request(&url, body, config.clone(), deadline, &cookie_header)?;
+        let (head, bytes) = request(
+            &url,
+            body,
+            config.clone(),
+            limits.deadline,
+            &cookie_header,
+            limits.max_body,
+        )?;
         {
             let mut jar = cookies.lock().map_err(|_| "Cookie session lock failed")?;
             for (_, value) in head.headers.iter().filter(|(name, _)| name == "set-cookie") {
@@ -143,7 +215,8 @@ fn submit_with_config_policy(
             .header("content-type")
             .unwrap_or("application/octet-stream")
             .to_owned();
-        let bytes = decode_content(bytes, head.header("content-encoding"))?;
+        let bytes =
+            decode_content_limited(bytes, head.header("content-encoding"), limits.max_body)?;
         return Ok(Response {
             url,
             status: head.status,
@@ -491,6 +564,7 @@ fn request(
     config: Arc<rustls::ClientConfig>,
     deadline: Instant,
     cookie_header: &str,
+    max_body: usize,
 ) -> Result<(Head, Vec<u8>), String> {
     let request = request_bytes_with_cookies(url, body, cookie_header)?;
     let socket = connect(url, deadline)?;
@@ -514,7 +588,7 @@ fn request(
     stream
         .flush()
         .map_err(|e| format!("Request flush failed: {e}"))?;
-    read_response(BufReader::new(stream))
+    read_response_limited(BufReader::new(stream), max_body)
 }
 
 #[cfg(test)]
@@ -666,7 +740,15 @@ fn read_head(reader: &mut impl BufRead, budget: &mut usize) -> Result<Head, Stri
     Ok(Head { status, headers })
 }
 
-fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
+#[cfg(test)]
+fn read_response(reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
+    read_response_limited(reader, MAX_BODY)
+}
+
+fn read_response_limited(
+    mut reader: impl BufRead,
+    max_body: usize,
+) -> Result<(Head, Vec<u8>), String> {
     let mut budget = MAX_HEADERS;
     let mut head = read_head(&mut reader, &mut budget)?;
     let mut interim = 0;
@@ -690,7 +772,7 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
         if !encoding.eq_ignore_ascii_case("chunked") {
             return Err(format!("Unsupported transfer encoding: {encoding}"));
         }
-        read_chunked(&mut reader)?
+        read_chunked(&mut reader, max_body)?
     } else if let Some(length) = head.header("content-length") {
         if length.is_empty() || !length.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("Invalid Content-Length".into());
@@ -698,8 +780,8 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
         let length = length
             .parse::<usize>()
             .map_err(|_| "Invalid Content-Length")?;
-        if length > MAX_BODY {
-            return Err("Response body exceeds 8 MiB limit".into());
+        if length > max_body {
+            return Err(format!("Response body exceeds {max_body} byte limit"));
         }
         let mut bytes = vec![0; length];
         reader
@@ -707,12 +789,12 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
             .map_err(|e| format!("Incomplete response body: {e}"))?;
         bytes
     } else {
-        read_limited(&mut reader)?
+        read_limited(&mut reader, max_body)?
     };
     Ok((head, bytes))
 }
 
-fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
+fn read_chunked(reader: &mut impl BufRead, max_body: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut framing_budget = MAX_HEADERS;
     loop {
@@ -728,8 +810,8 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
             while !limited_line(reader, &mut framing_budget)?.is_empty() {}
             return Ok(bytes);
         }
-        if size > MAX_BODY.saturating_sub(bytes.len()) {
-            return Err("Response body exceeds 8 MiB limit".into());
+        if size > max_body.saturating_sub(bytes.len()) {
+            return Err(format!("Response body exceeds {max_body} byte limit"));
         }
         let previous = bytes.len();
         bytes.resize(previous + size, 0);
@@ -746,19 +828,28 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
     }
 }
 
-fn read_limited(reader: &mut impl Read) -> Result<Vec<u8>, String> {
+fn read_limited(reader: &mut impl Read, max_body: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader
-        .take((MAX_BODY + 1) as u64)
+        .take((max_body + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("Response body read failed: {e}"))?;
-    if bytes.len() > MAX_BODY {
-        return Err("Response body exceeds 8 MiB limit".into());
+    if bytes.len() > max_body {
+        return Err(format!("Response body exceeds {max_body} byte limit"));
     }
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn decode_content(bytes: Vec<u8>, encoding: Option<&str>) -> Result<Vec<u8>, String> {
+    decode_content_limited(bytes, encoding, MAX_BODY)
+}
+
+fn decode_content_limited(
+    bytes: Vec<u8>,
+    encoding: Option<&str>,
+    max_body: usize,
+) -> Result<Vec<u8>, String> {
     match encoding
         .map(str::trim)
         .unwrap_or("")
@@ -766,8 +857,14 @@ fn decode_content(bytes: Vec<u8>, encoding: Option<&str>) -> Result<Vec<u8>, Str
         .as_str()
     {
         "" | "identity" => Ok(bytes),
-        "gzip" => read_limited(&mut flate2::read::MultiGzDecoder::new(bytes.as_slice())),
-        "deflate" => read_limited(&mut flate2::read::ZlibDecoder::new(bytes.as_slice())),
+        "gzip" => read_limited(
+            &mut flate2::read::MultiGzDecoder::new(bytes.as_slice()),
+            max_body,
+        ),
+        "deflate" => read_limited(
+            &mut flate2::read::ZlibDecoder::new(bytes.as_slice()),
+            max_body,
+        ),
         other => Err(format!("Unsupported content encoding: {other}")),
     }
 }
@@ -814,6 +911,25 @@ mod tests {
         }
         let huge_header = format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "x".repeat(MAX_HEADERS));
         assert!(parse(huge_header.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn subresource_body_limits_cover_framing_and_decoding() {
+        for response in [
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\n\r\nhello",
+        ] {
+            assert!(read_response_limited(Cursor::new(response), 4).is_err());
+            assert_eq!(
+                read_response_limited(Cursor::new(response), 5).unwrap().1,
+                b"hello"
+            );
+        }
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"expanded response").unwrap();
+        let bytes = encoder.finish().unwrap();
+        assert!(decode_content_limited(bytes, Some("gzip"), 4).is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! Headless HTML-flow layout and painting in page-relative pixel coordinates.
-//! This preserves Mg's limited flow model; it is not a CSS layout implementation.
+//! Headless document rendering in page-relative pixel coordinates.
+//! Styled documents use the bounded DOM renderer; documents without author CSS
+//! or loaded images retain the historical readable-flow fallback.
 use crate::{
     document::{Document, Item},
     paint::{Canvas, Fonts},
@@ -58,6 +59,24 @@ pub fn render(
     viewport: Viewport,
     controls: &Controls<'_>,
 ) -> Frame {
+    let styled = !document.stylesheets.is_empty()
+        || !document.resources.is_empty()
+        || document.nodes.iter().any(|node| node.has("style"));
+    if styled {
+        match crate::style::compute_styles(
+            document,
+            &document.stylesheets,
+            (viewport.width as f32, viewport.height as f32),
+        ) {
+            Ok(styles) => {
+                match crate::styled_layout::render(document, fonts, viewport, controls, styles) {
+                    Some(frame) => return frame,
+                    None => eprintln!("Styled layout limit reached; using readable-flow fallback"),
+                }
+            }
+            Err(error) => eprintln!("Styles unavailable; using readable-flow fallback: {error}"),
+        }
+    }
     Renderer {
         document,
         fonts,
@@ -259,7 +278,7 @@ impl Renderer<'_> {
         }
     }
 }
-fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
+pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
     let chars: Vec<_> = text.chars().rev().take(512).collect();
     let mut low = 0;
     let mut high = chars.len();

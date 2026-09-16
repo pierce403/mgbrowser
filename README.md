@@ -2,18 +2,19 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.2.1 Experimental Preview
+## v0.3.0 Experimental Preview
 
-**v0.2.1 is released.** Adds automatic updates and an About menu with the build's
-compile time/commit, including the four-component extraction. Run the installer
-once to upgrade from v0.1.1 and enable future automatic updates.
+Hacker News gets its real stylesheet, nested table layout, compact typography,
+logo and vote arrows. CSS computation uses Servo's Rust Stylo crate; Mg retains
+its own HTML parser, layout, renderer and original opt-in JavaScript engine.
+This is a narrow desktop compatibility improvement, not the full Servo browser.
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
 
 ```sh
 curl -fsSL https://mgbrowser.org/install.sh | bash
-mgbrowser https://example.com/
+mgbrowser https://news.ycombinator.com/
 ```
 
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
@@ -25,7 +26,8 @@ needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
 TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
 Current project source and original artwork use the [Apache License 2.0](LICENSE).
 Dependencies retain their own licenses. Published v0.1.0/v0.1.1 archives retain
-their original MIT license; v0.2.1 includes Apache-2.0 and NOTICE.
+their original MIT license. New releases include Apache-2.0, NOTICE and third-party
+license texts/source links, including MPL-2.0 for Stylo-related dependencies.
 
 Installed builds check for newer versions on startup and daily while open, verify
 checksums and test the new binary before replacement. Restart to use an update.
@@ -36,25 +38,28 @@ See [updater behavior and trust](docs/UPDATES.md).
 
 ### Known limitations
 
-- Hacker News styling is not implemented yet: linked CSS, cascade and table layout
-  remain planned. An update does not currently fix its appearance.
-
+- Hacker News desktop rendering is the narrow target. Mobile layouts, general
+  destination compatibility and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
 - JavaScript is an incomplete original implementation, disabled by default;
   use `--enable-scripts` to opt in. External scripts and general browser event-loop
   behavior are incomplete.
-- Full CSS is not implemented. Page images are not generally downloaded/rendered yet.
+- Full CSS is not implemented: no flex/grid or general positioning. Resource
+  loading is bounded and same-origin only; no CSS imports or downloaded fonts.
+  Images support PNG, first-frame GIF and a small static SVG shape/path subset.
+  Unsupported or blocked images remain placeholders. Dynamic resources are not fetched.
 - Linux X11/XWayland is the supported GUI target. Cookies are memory-only.
 - The restricted JavaScript worker is **not a sandbox for the browser as a whole**.
 - Do not use this release for banking, sensitive authenticated browsing, or
   arbitrary hostile websites.
 
 The preview is separate from the formal MVP, whose stronger gates remain open.
-The component extraction separates the existing engines into reusable packages without expanding web compatibility.
+The component extraction separates the engines into reusable packages; this release
+adds the small styled-document path described in [Hacker News scope](docs/HACKER_NEWS.md).
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.2.1.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.3.0.md) for manual install and uninstall.
 
 ## Components
 
@@ -172,9 +177,9 @@ browser API and storage-ownership work is needed.
 
 ## Direction
 
-Own the browser engine: HTML parsing, DOM, CSS cascade, layout, painting, navigation and JavaScript. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
+Own the browser's integration and original components, reusing reviewed Rust crates where useful. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
 
-TLS uses the experimental rustls-rustcrypto provider. Fonts and PNG decoding use Rust implementations with native backends disabled. The current document view displays image placeholders/alt text; it does not yet download/render page images. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --all-targets` for component, worker and UI/CDP tests. Full CSS and broad JavaScript compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
+TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS; font processing, PNG/GIF decoding and restricted SVG rasterization use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS/images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --all-targets` for component, worker and UI/CDP tests. Full CSS and broad JavaScript compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
 
 ## Website development
 

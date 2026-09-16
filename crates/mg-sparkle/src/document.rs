@@ -31,6 +31,32 @@ pub struct Document {
     /// A standard zero-delay HTML meta refresh. Navigation caps belong to the
     /// browser; scripts and non-HTTP refresh destinations are never executed.
     pub refresh: Option<String>,
+    /// Ordered inline and fetched author styles. Fetching belongs to Chassis.
+    pub stylesheets: Vec<StylesheetSource>,
+    /// Successfully fetched image bytes, keyed by absolute request URL.
+    pub resources: HashMap<String, ResourceData>,
+    /// Bounded, human-readable resource failures, without discarding the page.
+    pub resource_warnings: Vec<String>,
+    scripting_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StylesheetSource {
+    pub css: String,
+    pub base_url: String,
+    pub media: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceData {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StylesheetRequest {
+    Inline(StylesheetSource),
+    Linked { url: String, media: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,6 +118,77 @@ impl Node {
 }
 
 impl Document {
+    /// Whether this arena uses scripting-on HTML semantics. Inactive noscript
+    /// content must stay hidden in both projected and styled DOM rendering.
+    pub fn scripting_enabled(&self) -> bool {
+        self.scripting_enabled
+    }
+
+    /// Attached, active nodes in tree order. Template contents and scripting-on
+    /// noscript contents never gain automatic subresource fetch capabilities.
+    pub fn resource_nodes(&self) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut pending = vec![0];
+        while let Some(id) = pending.pop() {
+            let node = &self.nodes[id];
+            if node.tag == "template" || self.scripting_enabled && node.tag == "noscript" {
+                continue;
+            }
+            result.push(id);
+            pending.extend(node.children.iter().rev().copied());
+        }
+        result
+    }
+
+    /// Discover a bounded number of stylesheet sources without any network work.
+    /// One extra entry lets the loader report its sheet-count admission failure.
+    pub fn stylesheet_requests(&self) -> Vec<StylesheetRequest> {
+        self.resource_nodes()
+            .into_iter()
+            .filter_map(|id| {
+                let node = &self.nodes[id];
+                if node.has("disabled")
+                    || node.attr("type").is_some_and(|kind| {
+                        !kind.trim().is_empty() && !kind.trim().eq_ignore_ascii_case("text/css")
+                    })
+                {
+                    return None;
+                }
+                let media = node.attr("media").unwrap_or("").to_owned();
+                match node.tag.as_str() {
+                    "style" => Some(StylesheetRequest::Inline(StylesheetSource {
+                        css: node
+                            .children
+                            .iter()
+                            .filter_map(|&child| {
+                                (self.nodes[child].tag == "#text")
+                                    .then_some(self.nodes[child].text.as_str())
+                            })
+                            .collect(),
+                        base_url: self.base_url.clone(),
+                        media,
+                    })),
+                    "link"
+                        if node.attr("rel").is_some_and(|rel| {
+                            rel.split_ascii_whitespace()
+                                .any(|word| word.eq_ignore_ascii_case("stylesheet"))
+                                && !rel
+                                    .split_ascii_whitespace()
+                                    .any(|word| word.eq_ignore_ascii_case("alternate"))
+                        }) =>
+                    {
+                        Some(StylesheetRequest::Linked {
+                            url: resolve(&self.base_url, node.attr("href")?)?,
+                            media,
+                        })
+                    }
+                    _ => None,
+                }
+            })
+            .take(17)
+            .collect()
+    }
+
     /// Return the first matching descendant in tree order. The root itself is
     /// excluded, as with DOM Element.querySelector. Matching may use ancestors
     /// outside the root's subtree, as ordinary descendant selectors do.
@@ -494,6 +591,10 @@ fn project_arena(nodes: Vec<Node>, page_url: &str, scripting: bool) -> (Document
         forms: Vec::new(),
         form_nodes: Vec::new(),
         base_url,
+        stylesheets: Vec::new(),
+        resources: HashMap::new(),
+        resource_warnings: Vec::new(),
+        scripting_enabled: scripting,
         refresh: tree_order.iter().find_map(|&id| {
             let node = &nodes[id];
             if node.tag != "meta" || !node.attr("http-equiv")?.eq_ignore_ascii_case("refresh") {
@@ -559,6 +660,15 @@ fn project_arena(nodes: Vec<Node>, page_url: &str, scripting: bool) -> (Document
     let overflow = output.bytes > MAX_OUTPUT;
     let mut document = output.document;
     document.nodes = nodes;
+    let mut css_bytes = 0;
+    for request in document.stylesheet_requests().into_iter().take(16) {
+        if let StylesheetRequest::Inline(sheet) = request {
+            css_bytes += sheet.css.len();
+            if sheet.css.len() <= 256 * 1024 && css_bytes <= 1024 * 1024 {
+                document.stylesheets.push(sheet);
+            }
+        }
+    }
     (document, overflow)
 }
 
@@ -656,6 +766,30 @@ fn build_tree(source: &str) -> Vec<Node> {
                 stack.truncate(index.max(1));
             }
             continue;
+        }
+        // Table optional end tags are scoped to the nearest table. In
+        // particular a nested table must not close its containing outer cell.
+        if matches!(
+            tag.as_str(),
+            "tr" | "td" | "th" | "thead" | "tbody" | "tfoot"
+        ) && let Some(table) = stack.iter().rposition(|&id| nodes[id].tag == "table")
+        {
+            let close = stack
+                .iter()
+                .enumerate()
+                .skip(table + 1)
+                .find_map(|(index, &id)| {
+                    let open = nodes[id].tag.as_str();
+                    match tag.as_str() {
+                        "td" | "th" => matches!(open, "td" | "th"),
+                        "tr" => open == "tr",
+                        _ => matches!(open, "thead" | "tbody" | "tfoot" | "tr"),
+                    }
+                    .then_some(index)
+                });
+            if let Some(index) = close {
+                stack.truncate(index);
+            }
         }
         // A few common optional-end-tag rules keep ordinary malformed pages
         // readable. This does not implement foster parenting or adoption agency.
@@ -1530,6 +1664,51 @@ mod tests {
         ] {
             let _ = parse(source, "https://example.org/");
         }
+    }
+
+    #[test]
+    fn table_optional_end_tags_are_scoped_to_the_nearest_table() {
+        let doc = parse(
+            "<table id=outer><tr id=first><td id=a>A<td id=b><table id=inner><tr><td>X<td>Y</table><tr id=gap style='height:10px'/><tr id=last><td>Z</table>",
+            "https://example.org/",
+        );
+        let id = |selector| doc.query_selector(0, selector).unwrap().unwrap();
+        assert_eq!(doc.nodes[id("#first")].parent, id("#outer"));
+        assert_eq!(doc.nodes[id("#gap")].parent, id("#outer"));
+        assert_eq!(doc.nodes[id("#last")].parent, id("#outer"));
+        assert_eq!(doc.nodes[id("#a")].parent, id("#first"));
+        assert_eq!(doc.nodes[id("#b")].parent, id("#first"));
+        assert_eq!(doc.nodes[id("#inner")].parent, id("#b"));
+        assert!(doc.nodes[id("#gap")].children.is_empty());
+        let inner_row = doc.nodes[id("#inner")].children[0];
+        assert_eq!(doc.nodes[inner_row].children.len(), 2);
+    }
+
+    #[test]
+    fn stylesheet_discovery_preserves_order_media_and_active_content() {
+        let source = "<base href='/assets/'><style media=screen>a{color:red}</style><link rel='stylesheet alternate' href=ignored.css><link rel='STYLESHEET' media=print href=print.css><template><link rel=stylesheet href=hidden.css></template><noscript><style>b{color:blue}</style></noscript><link disabled rel=stylesheet href=disabled.css>";
+        let doc = parse(source, "https://example.org/");
+        let sheets = doc.stylesheet_requests();
+        assert_eq!(sheets.len(), 3);
+        assert!(
+            matches!(&sheets[0], StylesheetRequest::Inline(sheet) if sheet.css == "a{color:red}" && sheet.media == "screen")
+        );
+        assert!(
+            matches!(&sheets[1], StylesheetRequest::Linked {url,media} if url == "https://example.org/assets/print.css" && media == "print")
+        );
+        assert!(
+            matches!(&sheets[2], StylesheetRequest::Inline(sheet) if sheet.css == "b{color:blue}")
+        );
+        let scripting = parse_with_scripting(source, "https://example.org/", true);
+        assert!(!doc.scripting_enabled());
+        assert!(scripting.scripting_enabled());
+        assert!(
+            project_nodes(doc.nodes.clone(), "https://example.org/")
+                .unwrap()
+                .scripting_enabled()
+        );
+        assert_eq!(scripting.stylesheet_requests().len(), 2);
+        assert_eq!(doc.stylesheets.len(), 2);
     }
 
     #[test]

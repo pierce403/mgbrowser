@@ -1,5 +1,5 @@
 #[test]
-fn png_roundtrip_and_disabled_codec() {
+fn png_and_gif_roundtrip_and_disabled_codecs() {
     let pixels = image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]));
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(pixels.clone())
@@ -11,9 +11,30 @@ fn png_roundtrip_and_disabled_codec() {
             .into_rgba8(),
         pixels
     );
-    let error =
-        image::load_from_memory_with_format(b"GIF89a", image::ImageFormat::Gif).unwrap_err();
-    assert!(matches!(error, image::ImageError::Unsupported(_)));
+    // GIF is now deliberately enabled for the real HN transparent spacer.
+    // Verify the allowed codec rather than weakening the unsupported-codec gate.
+    let mut gif = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(pixels.clone())
+        .write_to(&mut gif, image::ImageFormat::Gif)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory(gif.get_ref()).unwrap().into_rgba8(),
+        pixels
+    );
+    for format in [
+        image::ImageFormat::Jpeg,
+        image::ImageFormat::WebP,
+        image::ImageFormat::Tiff,
+        image::ImageFormat::Avif,
+        image::ImageFormat::Bmp,
+        image::ImageFormat::Ico,
+    ] {
+        let error = image::load_from_memory_with_format(b"disabled codec", format).unwrap_err();
+        assert!(
+            matches!(error, image::ImageError::Unsupported(_)),
+            "{format:?}"
+        );
+    }
 }
 
 #[test]

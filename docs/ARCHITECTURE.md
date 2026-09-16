@@ -1,7 +1,7 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.2.1). The desktop executable remains
+four packages, all versioned together (currently 0.3.0). The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 
@@ -16,7 +16,12 @@ Butane has no DOM, graphics, networking or native-engine dependency. Sparkle
 provides the web-facing host bindings around Butane. Its standalone rendering
 API accepts a document, font data, viewport and control state, and returns pixels,
 layout boxes and hit regions in page-relative coordinates. It does not create a
-window, fetch resources or start a worker.
+window, fetch resources or start a worker. Sparkle uses standalone Rust Stylo for
+CSS computation and its own block/inline/table layout; it receives stylesheet
+source and bounded image bytes through Document, not a network callback. PNG/GIF
+and restricted SVG decoding remain Rust-only. Chassis owns same-origin resource
+fetching, navigation-generation cancellation and download budgets. Neither
+resource bytes nor new fetch capabilities are passed into the script worker.
 
 Chassis composes the services needed to browse. Its `chrome` Cargo feature draws
 the current toolbar, address/title strip and status area. A host can disable it
@@ -30,7 +35,8 @@ component brands now.
 - **Butane:** `runtime::Runtime` and `runtime::Host` evaluate the existing bounded
   language subset. Host methods explicitly supply external capabilities.
 - **Sparkle:** `document::parse`, `paint::Fonts::from_bytes` and `render::render`
-  provide a synchronous, headless document pipeline. `js_browser::PageRealm`
+  provide a synchronous, headless document pipeline. Optional regular/bold face
+  data is accepted by `Fonts::from_bytes_with_bold`. `js_browser::PageRealm`
   integrates the existing interpreter and DOM; embedders own execution isolation.
 - **Chassis:** `Browser::new(fonts, scripts)` accepts caller-selected font data
   and an `Arc<dyn scripts::ScriptRuntime>`. The host polls navigation, supplies

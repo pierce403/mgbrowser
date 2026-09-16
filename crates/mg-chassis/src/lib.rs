@@ -4,6 +4,7 @@ mod cdp_browser;
 #[cfg(feature = "chrome")]
 mod chrome;
 pub mod net;
+pub mod resources;
 pub mod scripts;
 pub use cdp_browser::BrowserCdp;
 use mg_sparkle::{
@@ -11,7 +12,10 @@ use mg_sparkle::{
     page_session::{ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply},
     paint::{Canvas, Fonts},
 };
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::mpsc,
@@ -62,6 +66,7 @@ enum Focus {
 }
 struct Loaded {
     generation: u64,
+    document: Option<Document>,
     result: Result<net::Response, String>,
     script: Option<Result<ScriptLoad, String>>,
 }
@@ -116,6 +121,7 @@ pub struct Browser {
     history_at: usize,
     generation: u64,
     inflight: usize,
+    resource_generation: Arc<AtomicU64>,
     loading: bool,
     tx: mpsc::Sender<Loaded>,
     rx: mpsc::Receiver<Loaded>,
@@ -134,6 +140,7 @@ pub struct Browser {
 
 impl Drop for Browser {
     fn drop(&mut self) {
+        self.resource_generation.fetch_add(1, Ordering::Relaxed);
         // Fence network jobs before they can create a late child. The pool
         // retains ownership until every already-started child has been reaped.
         self.child_pool.close();
@@ -213,6 +220,7 @@ impl Browser {
             history: Vec::new(),
             history_at: 0,
             generation: 0,
+            resource_generation: Arc::new(AtomicU64::new(0)),
             inflight: 0,
             loading: false,
             tx,
@@ -251,6 +259,8 @@ impl Browser {
             return;
         }
         self.generation += 1;
+        self.resource_generation
+            .store(self.generation, Ordering::Relaxed);
         if let Err(error) = self.child_pool.set_generation(self.generation) {
             self.block_session(&format!("Script child ownership error: {error}"));
             return;
@@ -288,6 +298,7 @@ impl Browser {
         let session = self.session.clone();
         let scripts_enabled = self.scripts_enabled;
         let pool = self.child_pool.clone();
+        let resource_generation = self.resource_generation.clone();
         eprintln!(
             "NAVIGATE {} {}",
             if body.is_some() { "POST" } else { "GET" },
@@ -298,6 +309,23 @@ impl Browser {
             // not by blocking the window thread or creating per-event threads.
             drop(retired);
             let result = session.submit(&target, body.as_deref());
+            let document = result
+                .as_ref()
+                .ok()
+                .filter(|response| {
+                    response.content_type.contains("html") || response.content_type.is_empty()
+                })
+                .map(|response| {
+                    let mut document = document::parse_with_scripting(
+                        &decode_text(&response.body, &response.content_type),
+                        response.url.as_str(),
+                        scripts_enabled,
+                    );
+                    resources::load(&session, &mut document, response.url.as_str(), || {
+                        resource_generation.load(Ordering::Relaxed) != generation
+                    });
+                    document
+                });
             let script = if scripts_enabled {
                 result
                     .as_ref()
@@ -323,6 +351,7 @@ impl Browser {
             };
             let _ = tx.send(Loaded {
                 generation,
+                document,
                 result,
                 script,
             });
@@ -407,12 +436,25 @@ impl Browser {
                         }
                         None => "JavaScript disabled".into(),
                     };
-                    self.document = if let Some(document) = projected {
+                    self.document = if let Some(mut document) = projected {
+                        if let Some(resources) = loaded.document {
+                            document.stylesheets = resources.stylesheets;
+                            document.resources = resources.resources;
+                            document.resource_warnings = resources.resource_warnings;
+                        }
                         document
                     } else if response.content_type.contains("html")
                         || response.content_type.is_empty()
                     {
-                        document::parse_with_scripting(&source, &self.address, scripting)
+                        if self.scripts_enabled && !scripting {
+                            // Rejected workers retain the original no-script
+                            // projection, not the resource discovery projection.
+                            document::parse(&source, &self.address)
+                        } else {
+                            loaded.document.unwrap_or_else(|| {
+                                document::parse_with_scripting(&source, &self.address, scripting)
+                            })
+                        }
                     } else {
                         document::parse(
                             &format!(
@@ -423,14 +465,16 @@ impl Browser {
                         )
                     };
                     self.status = format!(
-                        "HTTP {} · {} bytes · {} links · {script_status} · Stylesheets unsupported",
+                        "HTTP {} · {} bytes · {} links · {script_status} · {} stylesheets · {} resource warnings",
                         response.status,
                         response.body.len(),
                         self.document
                             .items
                             .iter()
                             .filter(|i| matches!(i, Item::Text { href: Some(_), .. }))
-                            .count()
+                            .count(),
+                        self.document.stylesheets.len(),
+                        self.document.resource_warnings.len()
                     );
                     eprintln!(
                         "LOADED {} HTTP {} title={:?} items={} forms={}",
@@ -864,7 +908,12 @@ impl Browser {
             }
         }
     }
-    fn acknowledge_projection(&mut self, document: Document, ack: &[(usize, u64)]) {
+    fn acknowledge_projection(&mut self, mut document: Document, ack: &[(usize, u64)]) {
+        // Initial resources stay parent-owned. Dynamic fetches are not supported;
+        // workers receive no network/file capabilities or resource payloads.
+        document.stylesheets = std::mem::take(&mut self.document.stylesheets);
+        document.resources = std::mem::take(&mut self.document.resources);
+        document.resource_warnings = std::mem::take(&mut self.document.resource_warnings);
         self.document = document;
         for &(node, version) in ack {
             if self.edit_versions.get(&node) == Some(&version) {
@@ -1644,6 +1693,7 @@ mod tests {
                 .send(Loaded {
                     generation: 1,
                     script: None,
+                    document: None,
                     result: Ok(net::Response {
                         url: url::Url::parse(url).unwrap(),
                         status: 200,
@@ -1770,6 +1820,7 @@ mod tests {
             .send(Loaded {
                 generation: 1,
                 script: None,
+                document: None,
                 result: Ok(net::Response {
                     url: url::Url::parse("https://example.org/").unwrap(),
                     status: 200,
@@ -1858,6 +1909,7 @@ mod tests {
                 .send(Loaded {
                     generation: 1,
                     script: Some(script),
+                    document: None,
                     result: Ok(net::Response {
                         url: url::Url::parse("https://example.test/").unwrap(),
                         status: 200,
@@ -1907,6 +1959,7 @@ mod tests {
         app.tx
             .send(Loaded {
                 generation: 1,
+                document: None,
                 script: Some(Ok(ScriptLoad {
                     session: None,
                     reply: SessionReply {

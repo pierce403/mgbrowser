@@ -67,4 +67,4 @@ done
 if [[ $font_found == false ]]; then
     printf 'No supported font found. Set MGBROWSER_FONT to a readable TrueType/OpenType font file before launching.\n'
 fi
-printf 'Requires an X11/XWayland desktop. Try: mgbrowser https://example.com/\n'
+printf 'Requires an X11/XWayland desktop. Try: mgbrowser https://news.ycombinator.com/\n'
