@@ -1,6 +1,11 @@
 # JSPLAN P0 / narrow P1 results
 
-2026-09-16. **Decision: continue with Boa as the preferred research candidate;
+2026-09-16 later update: the user subsequently authorized actual page execution.
+The v0.4.0 [Boa integration](../BOA.md) has a distinct process-contained profile;
+full P1 resource control remains open. The original decision and measurements
+below are preserved as historical evidence, not rewritten as adoption acceptance.
+
+Initial 2026-09-16 decision: **continue with Boa as the preferred research candidate;
 do not adopt it for browser pages yet.** The first contribution specified in
 JSPLAN section 12 is implemented. This does not complete the full P1 adoption
 gate, P2 modern engine foundation, or any browser framework/V8 milestone.
@@ -8,8 +13,8 @@ gate, P2 modern engine foundation, or any browser framework/V8 milestone.
 Pulled `main` to `2f7d6f2ca63de0d83cd056574bc20b957e13dfc3` before work.
 The original evaluator matches plan baseline
 `48cec83c0b1d41eb889373e414ded216d09cbf77`: no Butane language source or existing
-assertion changed. Production `Cargo.lock`, version 0.3.0 and page execution
-remain unchanged. Boa exists only in the excluded research workspace.
+assertion changed. At this checkpoint, production `Cargo.lock`, version 0.3.0 and
+page execution remained unchanged. Boa existed only in the excluded workspace.
 
 ## Implemented and measured
 

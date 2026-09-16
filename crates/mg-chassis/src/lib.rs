@@ -522,6 +522,11 @@ impl Browser {
         self.poll_page_session();
     }
     fn script_summary(reply: &SessionReply) -> String {
+        if let Some(report) = &reply.boa
+            && let Ok(json) = serde_json::to_string(report)
+        {
+            eprintln!("SCRIPT_BOA {json}");
+        }
         if let Some(report) = &reply.allocations {
             if let Ok(json) = serde_json::to_string(report) {
                 eprintln!("SCRIPT_ALLOCATION {json}");
@@ -570,10 +575,7 @@ impl Browser {
             || reply.errors.iter().any(|error| error.len() > 4096)
             || reply.scripts_executed > 32
             || reply.acknowledgements.len() > 128
-            || reply
-                .allocations
-                .as_ref()
-                .is_none_or(|report| !report.is_valid())
+            || !reply.accounting_valid()
         {
             return Err("Invalid script session report limits".into());
         }
@@ -1878,6 +1880,7 @@ mod tests {
                     errors: vec!["Rejected source".into()],
                     scripts_executed: 0,
                     allocations: None,
+                    boa: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -1899,6 +1902,7 @@ mod tests {
                     errors: vec![],
                     scripts_executed: 0,
                     allocations: Some(invalid_report),
+                    boa: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -1976,6 +1980,7 @@ mod tests {
                         errors: vec![],
                         scripts_executed: 1,
                         allocations: None,
+                        boa: None,
                     },
                 })),
                 result: Ok(net::Response {

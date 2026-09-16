@@ -1,5 +1,10 @@
 # Isolated JSPLAN experiment
 
+2026-09-16 update: the later user-authorized v0.4.0 page integration uses a
+separate [Boa process-contained profile](../../docs/BOA.md). This document and
+its measurements preserve the initial research increment, not the production
+backend's current capabilities or resource accounting. Full P1 remains open.
+
 This **research-only** executable compares original Butane with pinned Boa 0.22.
 It is not linked into `mgbrowser`, not included in releases and not an alternate
 browser backend. The separate workspace/lockfile prevents research dependencies
@@ -49,7 +54,7 @@ See [protocol and frozen inputs](../../tools/jsplan/README.md),
 the probe; Math.random is not host-injected at this pin. Supplied modules use
 an in-memory map only. No Boa filesystem loader, CLI, fetch runtime or JIT is used.
 
-The existing `mgbrowser --enable-scripts` path still runs original Butane.
-This tooling-only increment does not publish another browser binary. Browser
-adoption will require the separate resource/lifecycle gates and a versioned
-release with verified public installation.
+At the initial tooling-only checkpoint, `mgbrowser --enable-scripts` still ran
+original Butane and no new browser binary was published. The later integration
+is documented separately above; its release/public-install receipts belong in
+the dated work log, not these frozen experiment results.

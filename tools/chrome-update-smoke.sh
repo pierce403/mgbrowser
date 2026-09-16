@@ -31,6 +31,6 @@ target/debug/examples/chrome_smoke "$window" "$scratch/about.png"
 # navigation must re-exec the running inode, not the replacement at its old path.
 install -m 755 /usr/bin/false "$scratch/replacement"
 mv -fT "$scratch/replacement" "$scratch/mgbrowser"
-target/debug/examples/cdp_journey "ws://127.0.0.1:$port/devtools/page/page-1" http://127.0.0.1:7878/script-ast-arrays "$scratch/after-replacement.png"
+target/debug/examples/cdp_journey "ws://127.0.0.1:$port/devtools/page/page-1" http://127.0.0.1:7878/script-boa "$scratch/after-replacement.png"
 SMOKE
 printf 'CHROME_UPDATE_SMOKE_OK %s\n' "$scratch"

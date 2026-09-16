@@ -75,7 +75,7 @@ fn restricted_child_completed_array_ast_storage_builds_the_frozen_form() {
             .is_empty()
     );
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -126,7 +126,7 @@ fn restricted_child_compiled_array_ast_preserves_the_runtime_length_limit() {
         html: include_str!("fixtures/script/ast-array-limit.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -176,7 +176,7 @@ fn restricted_child_object_create_descriptors_build_the_frozen_form() {
             .is_empty()
     );
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -223,7 +223,8 @@ fn restricted_child_object_create_accessor_fuel_is_fatal_and_latched() {
             ),
         };
         let input = serde_json::to_vec(&request).unwrap();
-        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        let (status, stdout, stderr) =
+            run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
         assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
         let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
         assert!(reply.applied);
@@ -266,7 +267,7 @@ fn restricted_child_static_operators_build_the_frozen_form() {
             .is_empty()
     );
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -310,7 +311,7 @@ fn restricted_child_larger_operator_body_still_fails_before_form_and_later_scrip
         html,
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -342,7 +343,7 @@ fn restricted_child_core_intrinsics_build_the_frozen_form() {
         html: include_str!("fixtures/script/core-intrinsics.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -381,7 +382,7 @@ fn restricted_child_numeric_conversion_fuel_failure_is_fatal_and_latched() {
         html: "<body><p id='state'>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{new Number({valueOf:function(){while(true){}}});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -427,7 +428,7 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
         html: "<html><head><title>Before</title></head><body><p id=output>Old</p><script>document.title='Worker ready';document.getElementById('output').textContent='Changed & safe';location.href='/next?q=rust';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).expect("serialize local request");
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply =
         serde_json::from_str(&stdout).expect("decode worker reply");
@@ -448,7 +449,7 @@ fn restricted_child_callback_family_builds_the_frozen_dom_collection_form() {
         html: include_str!("fixtures/script/array-callbacks.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(
@@ -488,7 +489,7 @@ fn restricted_child_callback_length_failure_is_fatal_before_indexed_effects() {
         html:"<body><p id=state>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{Array.prototype.forEach.call({0:7,length:10001},function(){document.title='callback effect';});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -517,7 +518,7 @@ fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
         html: include_str!("fixtures/script/concat.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -557,7 +558,7 @@ fn function_prototype_reply(
         html: html.into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -609,7 +610,7 @@ fn diagnostic_reply(
         html: html.into(),
     };
     let (status, stdout, stderr) = run(
-        &["--script-worker"],
+        &["--legacy-script-worker"],
         &serde_json::to_vec(&request).unwrap(),
         Duration::from_secs(3),
     );
@@ -763,7 +764,7 @@ fn bound_function_reply(
         html: html.into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -891,7 +892,7 @@ fn empty_arguments_reply(
         html: html.into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -978,7 +979,7 @@ fn restricted_child_concat_null_receiver_is_ordinary_and_later_script_recovers()
         html: "<html><head><title>Concat fallback</title></head><body><p id=output>Readable concat fallback</p><script>Array.prototype.concat.call(null);document.title='Incorrect completion';location.href='/incorrect';</script><script>var result=[1].concat([2]);if(result.length!==2 || result[1]!==2)throw 'Concat recovery failed';document.getElementById('output').textContent='Recovered with actual concat';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1002,7 +1003,7 @@ fn restricted_child_concat_total_length_cap_is_fatal_and_latched() {
         html: "<html><head><title>Concat length fallback</title></head><body><p id=output>Readable concat length fallback</p><script>var source=Array(10000);var first=source.concat();if(first===source || first.length!==10000 || first.hasOwnProperty('9999'))throw 'First concat failed';document.getElementById('output').setAttribute('data-concat','ready');try{source.concat([1]);document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1034,7 +1035,7 @@ fn restricted_child_concat_real_element_copy_exhaustion_preserves_fallback() {
         html: "<html><head><title>Concat copy fallback</title></head><body><p id=output>Readable concat copy fallback</p><script>var source=[Array(10000).join('abcdefgh')];var first=source.concat();if(first===source || first.length!==1 || first[0].length!==79992)throw 'First concat copy failed';document.getElementById('output').setAttribute('data-concat','ready');try{for(var index=0;index<30;index++){source.concat();}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1068,7 +1069,7 @@ fn restricted_child_uses_error_family_prototypes_before_creating_controls() {
         html: include_str!("fixtures/script/errors.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1110,7 +1111,7 @@ fn restricted_child_error_diagnostic_does_not_invoke_hooks_and_later_script_reco
         html: "<html><head><title>Error diagnostic fallback</title></head><body><p id=output>Readable Error fallback</p><script>Error.prototype.toString=function(){document.title='Incorrect diagnostic hook';location.href='/incorrect';while(true){}};throw new TypeError('authored message');</script><script>document.getElementById('output').textContent='Recovered after actual TypeError';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1136,7 +1137,7 @@ fn restricted_child_error_string_coercion_fuel_failure_is_fatal_and_latched() {
         html: "<html><head><title>Error coercion fallback</title></head><body><p id=output>Readable Error coercion fallback</p><script>var error=new TypeError('message');if(!(error instanceof TypeError) || !(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');error.name={toString:function(){document.getElementById('output').setAttribute('data-hook','ready');while(true){}}};try{String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1166,7 +1167,7 @@ fn restricted_child_error_string_storage_exhaustion_preserves_fallback() {
         html: "<html><head><title>Error string storage fallback</title></head><body><p id=output>Readable Error string storage fallback</p><script>var message=Array(10000).join('abcdefgh');var error=TypeError(message);if(!(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');if(String(error).length!==message.length+11)throw 'Wrong Error string';document.getElementById('output').setAttribute('data-string','ready');try{for(var i=0;i<30;i++)String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1205,7 +1206,7 @@ fn restricted_child_uses_function_and_native_prototypes_before_creating_controls
         html: include_str!("fixtures/script/prototypes.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1253,7 +1254,8 @@ fn restricted_child_typed_prototype_depth_exhaustion_is_fatal_and_latched() {
             ),
         };
         let input = serde_json::to_vec(&request).unwrap();
-        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        let (status, stdout, stderr) =
+            run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
         assert!(
             status.success(),
             "{operation}: worker {status}: {stdout}\n{stderr}"
@@ -1289,7 +1291,7 @@ fn restricted_child_primitive_prototype_error_preserves_fallback_and_later_scrip
         html: "<html><head><title>Primitive prototype fallback</title></head><body><p>Readable primitive fallback</p><script>Object.create(7);document.title='Incorrect';location.href='/incorrect';</script><script>document.title='Recovered after prototype error';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1319,7 +1321,7 @@ fn restricted_child_uses_real_symbols_before_creating_controls() {
         html: include_str!("fixtures/script/symbols.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1357,7 +1359,7 @@ fn restricted_child_rejects_symbol_dom_conversion_and_recovers_in_later_script()
         html: "<html><head><title>Symbol conversion fallback</title></head><body><p id=output>Kept text</p><script>var token=Symbol('not text');document.getElementById('output').textContent=Object(token);location.href='/incorrect';</script><script>if(typeof token==='symbol'){document.title='Recovered after Symbol error';}</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1385,7 +1387,7 @@ fn restricted_child_symbol_description_storage_stays_cumulative_and_fatal() {
         html: "<html><head><title>Symbol storage fallback</title></head><body><p id=output>Readable Symbol fallback</p><script>var description=Array(10000).join('abcdefgh');document.getElementById('output').setAttribute('data-builder','ready');Symbol(description);document.getElementById('output').setAttribute('data-symbol','ready');try{for(var i=0;i<100;i++){Symbol(description);}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1423,7 +1425,7 @@ fn restricted_child_retains_large_ast_and_calls_real_form_builder() {
         html: include_str!("fixtures/script/ast.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1462,7 +1464,7 @@ fn restricted_child_sparse_ast_capacity_stays_cumulative_and_fatal() {
         html: "<html><head><title>Original sparse fallback</title></head><body><p>Readable sparse AST fallback</p><script>try{for(var i=0;i<6;i++){Function('return ['+Array(10000).join(',')+'];');}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1514,7 +1516,7 @@ fn restricted_child_uses_labeled_control_flow_and_uri_builtins() {
             .into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1535,7 +1537,7 @@ fn restricted_child_dynamic_compilation_creates_real_form_controls() {
         html: include_str!("fixtures/script/dynamic.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1560,7 +1562,7 @@ fn restricted_child_regexp_execution_creates_real_form_controls() {
         html: include_str!("fixtures/script/regexp.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1589,7 +1591,7 @@ fn restricted_child_rejects_invalid_literal_before_dom_prefix_effects() {
         html: "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>document.title='Incorrect prefix';var broken=/(/;</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1611,7 +1613,7 @@ fn restricted_child_iteration_and_switch_create_real_form_controls() {
         html: include_str!("fixtures/script/iteration.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1643,7 +1645,7 @@ fn restricted_child_rejects_invalid_switch_before_dom_prefix_effects() {
         html: "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>document.title='Incorrect prefix';switch(1){default:break;default:break;}</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1670,7 +1672,7 @@ fn restricted_child_deeply_grouped_factory_creates_real_form_controls() {
             .contains(&format!("var create = {}function", "(".repeat(64)))
     );
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1709,7 +1711,7 @@ fn restricted_child_malformed_group_rejects_prefix_and_preserves_later_script() 
         ),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1738,7 +1740,7 @@ fn restricted_child_excessive_group_depth_is_fatal_before_prefix_effects() {
         ),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1779,7 +1781,8 @@ fn restricted_child_nested_evaluation_limits_cannot_be_caught_or_reset() {
             ),
         };
         let input = serde_json::to_vec(&request).unwrap();
-        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        let (status, stdout, stderr) =
+            run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
         assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
         let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
         assert!(reply.applied);
@@ -1810,7 +1813,7 @@ fn restricted_child_returns_first_allocation_failure_without_reset_or_dom_effect
         ),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1847,7 +1850,8 @@ fn restricted_child_reports_successful_allocation_totals_and_pre_runtime_rejecti
             html: "<html><body><p>Local fixture</p><script>function add(a,b){return a+b;}document.title=String(add(2,3));</script></body></html>".into(),
         };
         let input = serde_json::to_vec(&request).unwrap();
-        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        let (status, stdout, stderr) =
+            run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
         assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
         let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
         assert_eq!(reply.applied, expected_applied);
@@ -1876,7 +1880,7 @@ fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budg
         html: include_str!("fixtures/script/allocation.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1913,7 +1917,7 @@ fn restricted_child_owned_function_source_creates_form_inside_unchanged_budget()
         html: include_str!("fixtures/script/sources.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1949,7 +1953,7 @@ fn restricted_child_multiple_source_fragments_keep_real_join_and_utf8_limits() {
         ),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -1981,7 +1985,7 @@ fn restricted_child_parameter_copy_creates_form_inside_unchanged_budget() {
         html: include_str!("fixtures/script/bindings.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -2021,7 +2025,7 @@ fn restricted_child_parameter_real_copy_exhaustion_latches_before_body_or_handle
         ),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -2050,7 +2054,7 @@ fn restricted_child_prepaid_arrays_create_real_form_inside_unchanged_budget() {
         html: include_str!("fixtures/script/arrays.html").into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
-    let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+    let (status, stdout, stderr) = run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
     assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
     let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
     assert!(reply.applied);
@@ -2109,7 +2113,8 @@ fn restricted_child_retained_arguments_preserve_snapshot_and_fatal_array_limits(
             ),
         };
         let input = serde_json::to_vec(&request).unwrap();
-        let (status, stdout, stderr) = run(&["--script-worker"], &input, Duration::from_secs(3));
+        let (status, stdout, stderr) =
+            run(&["--legacy-script-worker"], &input, Duration::from_secs(3));
         assert!(status.success(), "worker {status}: {stdout}\n{stderr}");
         let reply: mg_sparkle::js_browser::Reply = serde_json::from_str(&stdout).unwrap();
         assert!(reply.applied);

@@ -15,6 +15,13 @@ MPL_ARCHIVE_OMISSIONS = {
     ("to_shmem", "0.5.0"), ("to_shmem_derive", "0.1.0"),
 }
 LICENSE_INPUTS = Path(__file__).resolve().parent / "licenses"
+BOA_ARCHIVE_OMISSIONS = {
+    **{(name, "0.22.0"): "337a3668a0dc86dd401ea20906e782249a64a228"
+       for name in ("boa_ast", "boa_engine", "boa_gc", "boa_interner",
+                    "boa_macros", "boa_parser", "boa_string")},
+    **{(name, "0.1.0"): "ad8739f5e0b51d20faf7a2cce98afa5c40121438"
+       for name in ("small_btree", "tag_ptr")},
+}
 
 metadata = json.loads(subprocess.check_output([
     "cargo", "metadata", "--locked", "--format-version", "1",
@@ -56,6 +63,11 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
             fallback = LICENSE_INPUTS / "MPL-2.0.txt"
         elif key == ("void", "1.0.2") and package["license"] == "MIT":
             fallback = LICENSE_INPUTS / "void-1.0.2-MIT.txt"
+        elif key in BOA_ARCHIVE_OMISSIONS and package["license"] == "Unlicense OR MIT":
+            vcs = json.loads((root / ".cargo_vcs_info.json").read_text())
+            if vcs["git"]["sha1"] != BOA_ARCHIVE_OMISSIONS[key]:
+                raise SystemExit(f"Unreviewed Boa license source revision: {key}")
+            fallback = LICENSE_INPUTS / "boa-0.22-MIT.txt"
         else:
             raise SystemExit(f"No license text found: {package['name']} ({root})")
         out.append(f"\n--- Reviewed upstream text: {fallback.name} ---\n{fallback.read_text()}\n")

@@ -1,32 +1,37 @@
 # Work queue
 
-2026-09-16 active: **T-013 / F-016, implement JSPLAN in gated increments**.
-User requested pulling latest and implementing the plan. Fast-forwarded main to
-2f7d6f2, then implemented P0 plus the immediate narrow P1 Boa probe in a separate
-research workspace. [Results and decision](docs/jsplan/RESULTS.md) record frozen
-inputs, actual restricted-child results and open adoption gates. The production
-browser still uses original Butane; Google optimization remains deferred.
+2026-09-16 active: **T-013 / F-016, ship real Boa page execution as v0.4.0**.
+After the completed P0/narrow P1 probe, the user explicitly requested continuing
+until Boa is integrated and runs page JavaScript. The opt-in production path now
+uses Boa for inline scripts, bounded Promise checkpoints and retained DOM events.
+See [the explicit process profile](docs/BOA.md). Local modern DOM/lifecycle tests
+pass; exact-commit CI, packaged/native/CDP checks, release publication and public
+installer verification must finish before this user-facing increment is done.
+Google optimization remains deferred. No dual production engine or fallback.
 User clarified publication goes directly to main; PRs are not the default for
 user-directed work. See the standing instruction in AGENTS.md.
 
 Implementation order from JSPLAN.md, each as a bounded contribution:
 
-1. **P0/narrow P1 implemented:** Reproducible baseline, isolated Boa host/GC/jobs/
-   module probes, selected Test262 and Vue reactivity without DOM, exact dependency
-   audit and Nova toolchain comparison. **Next P1 gate:** price and implement
-   comprehensive fatal work/heap control, reviewed application profile and retained
-   realm/DOM lifecycle tests. Boa is the preferred candidate, not yet adopted.
-2. **P2:** Adopt the selected modern language/GC foundation or justify original VM
-   construction with concrete blockers. Preserve/review the resource contract.
-3. **P3/P4:** Script/module loading, jobs/tasks and DOM integration, then pinned
+1. **Current release gate:** finish and publish v0.4.0's bounded Boa integration.
+   Keep original tests/limits in the explicit research-only legacy lane. Verify
+   production never falls back and installer delivers the new actual page backend.
+2. **Remaining P1/P2:** comprehensive cooperative work/heap control, expanded
+   language/lifecycle acceptance and a broader application profile. Process-v1
+   supplies enforceable final containment, not complete native/parser/regex/GC
+   work accounting or full adoption-gate completion.
+3. **Remaining P3/P4:** external script/module loading, general tasks/timers and
+   broader DOM integration, then pinned
    React/Vue applications with real input and long-session acceptance.
 4. **P5/P6:** Measured interpreter optimizations, then optional baseline JIT with
    an explicit executable-memory/isolation design and evidence it pays off.
 5. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
    architectures, tooling and Wasm as separately scoped work.
 
-The full P1 adoption gate and P2-P8 remain incomplete. A passing small experiment
-does not mean React/Vue browser applications or V8 compatibility work.
+The full P1 gate and P2-P8 exit criteria remain incomplete. The selected Boa
+backend does not establish React/Vue browser applications or V8 compatibility.
+The initial research comparison remains reproducible in `experiments/jsplan`;
+its [historical results](docs/jsplan/RESULTS.md) are not rewritten as full conformance.
 
 2026-09-16 complete: **T-011 / F-014 shipped as v0.3.0**, release commit
 e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Rust Stylo, bounded same-origin CSS/images

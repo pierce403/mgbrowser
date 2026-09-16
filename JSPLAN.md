@@ -1,14 +1,18 @@
 # Butane JavaScript engine plan
 
-Research date: 2026-09-16. Status: proposed architecture and ordered work, not
-implemented compatibility. Tracks **F-016 / T-013**. Repository baseline:
+Research date: 2026-09-16. Status: ordered roadmap with bounded implementation
+increments, not completed compatibility. Tracks **F-016 / T-013**. Frozen baseline:
 [`48cec83c0b1d41eb889373e414ded216d09cbf77`][mg-baseline], v0.3.0.
 
 Implementation update, 2026-09-16: the immediate P0/narrow P1 contribution below
 is implemented as an [isolated research executable](experiments/jsplan/README.md).
 [Measured results and decision](docs/jsplan/RESULTS.md) supersede the unrun status
-for those named probes only. The production browser still uses original Butane;
-full adoption, browser frameworks, optimization and V8 compatibility remain gated.
+for those named probes only. The user's subsequent request to integrate real page
+execution produces the [v0.4.0 Boa backend](docs/BOA.md): opt-in inline scripts,
+Promise checkpoints and retained DOM events in the existing restricted child.
+Its explicit process-v1 profile does not complete comprehensive P1 resource
+control or the P2-P8 exit gates. Exact release/installer receipts are recorded in
+the dated work log.
 
 ## 1. Recommendation
 
@@ -40,17 +44,17 @@ The recommended order is:
    and GC contracts are ready. Consider a small optimizing tier afterward.
 7. Implement a versioned V8 embedding compatibility surface for a named consumer.
 
-This document recommends a route; it does not install a dependency, replace the
-engine, change resource caps, enable page scripting by default, or authorize an
-unbounded implementation sprint. Existing releases and their evidence remain
-intact. All suggested experiments below are unrun unless explicitly identified
-as repository inspection or upstream-reported results.
+The roadmap below does not itself authorize an unbounded implementation sprint.
+The explicitly authorized Boa page increment and its changed accounting are
+documented in BOA.md; scripting remains disabled by default. Existing releases
+and original evaluator assertions remain intact. Other suggested experiments
+are unrun unless identified as implemented, inspected or upstream-reported.
 
-## 2. What exists, and what must change
+## 2. Frozen original-engine baseline
 
-The current code is useful evidence and reusable integration work. It is not yet
-a modern JavaScript foundation. These observations come from the baseline source
-and [the current language contract](docs/JAVASCRIPT.md).
+These observations describe v0.3.0's original evaluator, preserved for regression
+research. They are not the capabilities of the subsequent Boa page backend.
+See the baseline source and [historical language contract](docs/JAVASCRIPT.md).
 
 | Area | Current evidence | Consequence for this plan |
 | --- | --- | --- |
@@ -588,7 +592,7 @@ and carry small pinned patches only when necessary. Do not immediately fork its
 GC, replace its parser and add Cranelift at once. If neither engine passes,
 publish the concrete evidence and use sections 5/7 as the original-engine design.
 
-### Repository changes to expect, not files implemented by this plan
+### Repository work map
 
 | Location | Intended work |
 | --- | --- |
@@ -599,23 +603,25 @@ publish the concrete evidence and use sections 5/7 as the original-engine design
 | `tools/`, `tests/fixtures/`, CI | Pinned Test262/WPT/app runners, experiment manifests and reproduction commands |
 | `docs/DEPENDENCIES.md`, `docs/JAVASCRIPT.md`, `docs/ARCHITECTURE.md` | Adopted choices and precise supported behavior after each milestone |
 
-Each implementation increment updates feature criteria and the dated log. Changes
+The facade and initial page binding now exist; the broader intended work above
+is not all implemented. Each increment updates feature criteria and the dated log. Changes
 to user-visible capabilities still require the project's versioned release and
-verified installer process. This documentation-only plan does not require a new
-binary release or mark F-016 stable.
+verified installer process. F-016 remains in-progress.
 
-## 12. Immediate next contribution
+## 12. Initial contribution and current increment
 
-Implement **P0 plus a narrow P1 Boa probe**: use the pinned release, no browser
+The implemented **P0 plus a narrow P1 Boa probe** uses the pinned release, no browser
 fetch runtime, one worker-owned realm, rooted DOM-like host object, nested callback,
 Promise ordering, a supplied module, forced interruption and a bounded allocation
 stress case. Preserve the old evaluator behind a test-only selection during the
 comparison. Run selected Test262 families and pure Vue reactivity without claiming
 browser support. Audit and publish the exact active dependency graph.
 
-That experiment answers the highest-value question: can we import years of Rust
-language work while preserving Mg's host and resource contracts? Its result decides
-whether our next major effort is browser integration or original VM construction.
+Its measured gaps led to the separately requested, process-contained Boa page
+integration in BOA.md. Finish that increment's v0.4.0 release and exact public
+installer verification before further features. Comprehensive native-work/GC
+budgeting, external loading, browser frameworks and V8 compatibility remain
+explicit future gates rather than implied achievements.
 
 ## Primary sources
 

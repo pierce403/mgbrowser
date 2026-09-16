@@ -40,6 +40,12 @@ After publication, public_update_smoke with MGBROWSER_TEST_OLD_BINARY and
 against a temporary copy of an older verified public binary. See docs/UPDATES.md.
 This is a manually invoked release gate, not an unattended publication agent.
 
+Since v0.4.0, package only the default Boa-backed binary, without the
+legacy-test-engine regression feature. Installed-payload and public smoke checks
+must prove modern inline script/Promise DOM execution and retained session
+selftests, not just version/isolation. Keep the actual packaged /script-boa and
+/script-events native/CDP journeys distinct from the frozen original-engine lane.
+
 Stylo builds require Python 3 for its vendored code generator, but the shipped
 browser does not. Regenerate docs/DEPENDENCY_LICENSES.md with
 tools/license-inventory.py when the locked graph changes. It preserves upstream

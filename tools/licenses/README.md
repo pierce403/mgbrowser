@@ -5,6 +5,14 @@ Reviewed 2026-09-16. These are third-party texts, not Apache-2.0 project files.
 published manifest declares the matching license and whose archive omits it.
 Other missing texts continue to fail packaging.
 
+- `boa-0.22-MIT.txt`: the MIT choice from Boa revision
+  `337a3668a0dc86dd401ea20906e782249a64a228` and its separately published utility
+  revision `ad8739f5e0b51d20faf7a2cce98afa5c40121438`. The seven Boa 0.22.0 crates
+  and small_btree/tag_ptr 0.1.0 archives omit the root notice. Packaging checks
+  their exact versions, declared license and archive VCS revision before using
+  this fallback. This matches the previously reviewed research notice in
+  `docs/jsplan/licenses/boa-MIT.txt`.
+
 - `MPL-2.0.txt`: unmodified canonical license from
   https://www.mozilla.org/media/MPL/2.0/index.txt . The exact Servo/Stylo-related
   crate versions are listed in the inventory script. Their unmodified source

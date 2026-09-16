@@ -87,6 +87,28 @@ pub struct SessionReply {
     pub errors: Vec<String>,
     pub scripts_executed: usize,
     pub allocations: Option<AllocationReport>,
+    /// Explicit Boa profile, never relabeled as original interpreter allocations.
+    #[cfg(feature = "modern")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boa: Option<mg_butane::modern::Report>,
     pub state: RealmState,
     pub acknowledgements: Vec<ControlAck>,
+}
+
+impl SessionReply {
+    /// One explicit accounting profile: never accept mixed or missing reports.
+    pub fn accounting_valid(&self) -> bool {
+        #[cfg(feature = "modern")]
+        if let Some(report) = &self.boa {
+            return self.allocations.is_none()
+                && report.is_valid()
+                && (self.state != RealmState::Ready
+                    || (report.fatal_reason.is_none() && report.opcodes_remaining > 0));
+        }
+        self.allocations.is_some_and(|report| {
+            report.is_valid()
+                && report.limit_bytes == 4 * 1024 * 1024
+                && (self.state != RealmState::Ready || report.first_rejected.is_none())
+        })
+    }
 }

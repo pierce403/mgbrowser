@@ -2,13 +2,14 @@
 
 ## Purpose and responsibilities
 
-Current request (2026-09-16): implement `JSPLAN.md` in its ordered, bounded
-increments. P0/narrow P1 lives in the excluded `experiments/jsplan` workspace,
-with frozen runner inputs and exact outcome gates under `tools/jsplan`.
-See `docs/jsplan/RESULTS.md`: Boa remains a candidate, not a page backend.
-Production adoption is blocked on explicit resource and retained-lifecycle gates;
-do not remove existing limits or silently choose a fallback engine. Google stays
-deferred. Ship any later browser-visible feature through the standing release policy.
+Current request (2026-09-16): integrate Boa until it executes actual page JS,
+then publish v0.4.0 through the standing release/installer gates. The production
+opt-in page path uses `mg-butane::modern` and Sparkle's `BoaPageRealm` under the
+explicit `boa-page-process-v1` profile in `docs/BOA.md`. No production fallback,
+native JS backend or worker syscall expansion. Original 4 MiB/fuel assertions
+remain in the explicit `legacy-test-engine` test lane. Full P1 cooperative
+resource control and the wider JSPLAN roadmap remain open; Google stays deferred.
+The dated log records exact-commit release and public-install verification.
 
 Completed request (2026-09-16): T-011 / F-014 minimal Hacker News desktop rendering
 shipped in v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Standalone Rust
@@ -89,13 +90,13 @@ tmp/site --check
 git diff --check
 ```
 
-The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://www.google.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked --workspace --all-targets` covers transport, parser, paint, original JS/DOM behavior, restricted workers and UI state; local X11/CDP journeys exercise real controls. A local fixture is not evidence that Google returns search results. The general autoresearch executor is not implemented. The original JavaScript subset is experimental and opt-in with `--enable-scripts`; read docs/JAVASCRIPT.md before changing execution or its boundary.
+The site is plain HTML/CSS, without a build dependency download. `.github/workflows/pages.yml` validates and publishes a site-only artifact on pushes to `main`. Run the browser with `cargo run --locked --bin mgbrowser -- https://example.com/`; see `docs/RUNNING.md` for controls and local journey verification. `cargo test --locked --workspace --features legacy-test-engine --all-targets` covers modern and original-baseline JS/DOM, transport, parser, paint, restricted workers and UI state; local X11/CDP journeys exercise real controls. A local fixture is not evidence that Google returns search results. The general autoresearch executor is not implemented. Boa scripting is experimental and opt-in with `--enable-scripts`; read docs/BOA.md and docs/PAGE_SESSIONS.md before changing execution or its boundary. docs/JAVASCRIPT.md preserves the original evaluator's historical contract.
 
 `crates/mg-sparkle/src/document.rs` owns HTML parsing, `crates/mg-chassis/src/net.rs` owns HTTP/TLS/session cookies, `crates/mg-sparkle/src/paint.rs` owns Rust shaping/rasterization, and `crates/mg-sparkle/src/render.rs` owns page layout. Chassis owns navigation and optional chrome; `src/main.rs` composes the window/event loop. Fonts and isolated script services enter Chassis through explicit host APIs. Keep new test pages clearly identified as fixtures. Never replace Google with a fabricated page/result or count an interstitial link as a search result. Browser test screenshots contain page/query data; keep live raw responses and session details in ignored tmp/ by default.
 
 `crates/mg-chassis/src/cdp.rs` owns loopback discovery/WebSocket transport; `crates/mg-chassis/src/cdp_browser.rs` binds the documented CDP subset to real browser behavior. Read docs/CDP.md and its schema before changing protocol commands. Use the external examples/cdp_journey.rs fixture client for CDP input/navigation verification. Protocol support is partial; never return success for an unimplemented behavior or claim general automation-client compatibility without a pinned client test.
 
-`crates/mg-butane/src/` owns the original language implementation; `crates/mg-sparkle/src/js_browser.rs` exposes bounded DOM/navigation capabilities. `src/platform/script_worker.rs` executes page scripts in a restricted Linux x86_64 child; unsupported isolation fails closed. Do not execute live scripts in the parent, weaken TLS, impersonate another browser, or port site challenge logic. Unsupported language/platform behavior is compatibility work, not permission for a substitute engine. Preserve readable fallback on source/projection rejection and keep proposed navigation parent-validated.
+`crates/mg-butane/src/modern.rs` owns the Boa execution facade; the original language files remain a test baseline. `crates/mg-sparkle/src/js_browser/boa.rs` binds the shared bounded DOM/navigation operations to modern page execution. `src/platform/script_worker.rs` executes page scripts in a restricted Linux x86_64 child; unsupported isolation fails closed. The worker allocator counts outstanding/cumulative System requests, not GC live heap or RSS. Do not execute live scripts in the parent, weaken TLS, impersonate another browser, or port site challenge logic. Preserve readable fallback on source/projection rejection and keep proposed navigation parent-validated. Browser-visible changes still require a new release, not just a source push.
 
 ## Collaboration
 

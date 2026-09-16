@@ -1,18 +1,18 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.3.0). The desktop executable remains
+four packages, all versioned together (currently 0.4.0). The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 
 | Package | Responsibility | Production Mg dependencies |
 | --- | --- | --- |
-| `mg-butane` | JavaScript syntax, values, evaluator, builtins and resource accounting | None |
+| `mg-butane` | Boa execution facade/policy and preserved original evaluator baseline | None |
 | `mg-sparkle` | HTML parsing, DOM, browser bindings, page protocol, flow layout and software painting | `mg-butane` |
 | `mg-chassis` | Navigation, HTTP/TLS, cookies, history, page-session coordination, CDP and optional browser controls | `mg-sparkle` |
 | `mg-browser` | Executable composition, X11 window/input/surface, platform font discovery and Linux script-worker isolation | All three libraries |
 
-Butane has no DOM, graphics, networking or native-engine dependency. Sparkle
+Butane has no DOM, graphics, networking or C/C++ engine dependency. Sparkle
 provides the web-facing host bindings around Butane. Its standalone rendering
 API accepts a document, font data, viewport and control state, and returns pixels,
 layout boxes and hit regions in page-relative coordinates. It does not create a
@@ -32,12 +32,15 @@ component brands now.
 
 ## Embedding contracts
 
-- **Butane:** `runtime::Runtime` and `runtime::Host` evaluate the existing bounded
-  language subset. Host methods explicitly supply external capabilities.
+- **Butane:** `modern::Engine` wraps the pinned Boa parser/VM/GC, guarded source/
+  function/global-getter execution, job checkpoints and fatal policy. It does
+  not itself provide OS isolation. `runtime::Runtime` / `runtime::Host` remain
+  the original interpreter's regression API, not a page fallback.
 - **Sparkle:** `document::parse`, `paint::Fonts::from_bytes` and `render::render`
   provide a synchronous, headless document pipeline. Optional regular/bold face
-  data is accepted by `Fonts::from_bytes_with_bold`. `js_browser::PageRealm`
-  integrates the existing interpreter and DOM; embedders own execution isolation.
+  data is accepted by `Fonts::from_bytes_with_bold`. `js_browser::boa::BoaPageRealm`
+  integrates Boa and the bounded Rust DOM; embedders own execution isolation.
+  The original `js_browser::PageRealm` remains the test baseline.
 - **Chassis:** `Browser::new(fonts, scripts)` accepts caller-selected font data
   and an `Arc<dyn scripts::ScriptRuntime>`. The host polls navigation, supplies
   pointer/key input, and displays the `Canvas` returned by `paint`. `BrowserCdp`
@@ -51,8 +54,10 @@ Chassis fences navigation generations and validates returned DOM/default actions
 The platform service owns child processes, isolation, cumulative accounting,
 cancellation and bounded reaping. `DisabledScripts` returns an explicit error
 when a host has no isolated worker. The desktop still requires `--enable-scripts`;
-unsupported platforms retain the existing refusal path. Resource limits, protocol
-validation and script language semantics are unchanged by this extraction.
+unsupported platforms retain the existing refusal path. The extraction preserved
+behavior; the later Boa adoption explicitly introduces the versioned profile in
+[BOA.md](BOA.md) and protocol v2 with validated engine-specific accounting.
+Original protocol/allocation assertions remain in the explicit legacy test lane.
 
 The host owns render dimensions and the resulting pixel allocation. Chassis
 clamps its viewport to the existing desktop bounds. Direct Sparkle callers must
@@ -71,7 +76,7 @@ cargo run --locked -p mg-sparkle --example render -- \
   tests/fixtures/journey/home.html /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf tmp/sparkle.png
 cargo run --locked -p mg-chassis --no-default-features --example headless -- \
   https://example.com/ /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf tmp/headless.png
-cargo test --locked --workspace --all-targets
+cargo test --locked --workspace --features legacy-test-engine --all-targets
 cargo test --locked -p mg-chassis --no-default-features --test embedding
 python3 tools/check-components.py
 ```
@@ -89,21 +94,24 @@ with default features disabled, avoiding workspace feature unification.
 The long-term direction is Butane as a replacement for V8/JavaScriptCore and
 Sparkle as a replacement for Blink/WebKit, including potential use by Tauri
 embedders. **This release does not implement those drop-in APIs or ABIs.** Tauri's
-existing WebView integrations cannot select Sparkle today. The original limited
-language, HTML-flow model and browser compatibility remain as documented.
+existing WebView integrations cannot select Sparkle today. Modern Boa syntax does
+not supply missing DOM/loading/task APIs or full CSS/layout compatibility.
 
 [JSPLAN.md](../JSPLAN.md) develops the proposed Butane path: evaluate Boa and Nova
 against the existing host/resource boundary, establish modern React/Vue tests,
-then pursue measured optimization and a pinned V8 embedding adapter. Its research
-recommendations do not replace the adopted contracts above or install an engine.
+then pursue measured optimization and a pinned V8 embedding adapter. The user-
+authorized Boa page increment adopts only the bounded contract in BOA.md, not
+the roadmap's comprehensive P1 resource gate or later framework/V8 milestones.
 
 The first [P0/P1 research executable](../experiments/jsplan/README.md) now has its
 own excluded Cargo workspace and lockfile. It depends on original Butane for an
 explicit baseline and Boa for a comparison, not a production fallback. It shares
 the unchanged `src/platform/script_isolation.rs` with the actual Linux workers;
-engine initialization follows isolation. The production component graph, page
-protocol, worker permissions and library API are unchanged. No Boa dependency is
-linked into the released browser.
+engine initialization follows isolation. The v0.4.0 page path now also links Boa
+through Butane's optional `modern` feature, enabled for the browser and Sparkle.
+Sparkle directly names Boa types/macros for traced wrappers; execution remains
+behind Butane's guarded facade. Worker syscall permissions remain unchanged.
+Published release/installer acceptance is recorded separately in the dated log.
 
 Further work needs separately scoped acceptance gates:
 

@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
   "baseline_commit": "48cec83c0b1d41eb889373e414ded216d09cbf77",
-  "baseline_source_sha256": "ed89c0f7c2b40458b2b26f77e5bfb47648b1bdb7d3e303dcbab51d7d3ca948d1",
+  "baseline_historical_package_sha256": "ed89c0f7c2b40458b2b26f77e5bfb47648b1bdb7d3e303dcbab51d7d3ca948d1",
+  "baseline_source_sha256": "c959e57980b07a41be0ec91fd22339a2068fc4b6fc2d239109d97d0ebf440f77",
+  "baseline_source_scope": "All original src Rust files; excludes only modern.rs/modern directory and the exact modern module declaration. Cargo metadata is audited separately.",
   "boa_revision": "337a3668a0dc86dd401ea20906e782249a64a228",
   "test262": {
     "revision": "07eded464b6ce232331835198efccddc6e26eb08",

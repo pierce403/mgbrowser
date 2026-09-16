@@ -33,7 +33,7 @@ jobs:
             if curl -fsS http://127.0.0.1:7878/ >/dev/null; then break; fi
             sleep 0.1
           done
-          timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-ast-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
+          timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
       - uses: actions/upload-artifact@v4
         with:
           name: release-payload

@@ -9,9 +9,37 @@
 mod isolation;
 #[path = "script_worker_session.rs"]
 mod retained;
+#[cfg(all(
+    feature = "legacy-test-engine",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub use retained::legacy_session_entry;
+
+#[cfg(feature = "legacy-test-engine")]
+static LEGACY_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Only present in explicit original-engine test builds, never release packages.
+#[cfg(feature = "legacy-test-engine")]
+pub fn use_legacy_for_tests() {
+    LEGACY_TEST_MODE.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn legacy_test_mode() -> bool {
+    #[cfg(feature = "legacy-test-engine")]
+    return LEGACY_TEST_MODE.load(std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(feature = "legacy-test-engine"))]
+    false
+}
 #[allow(unused_imports)] // Retained public integration types and legacy API.
 pub use retained::{ChildPool, Session, SessionUpdate, session_entry, session_selftest};
 
+#[cfg(all(
+    feature = "legacy-test-engine",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub use linux::legacy_worker_entry;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unused_imports)]
 pub use linux::{execute, selftest, worker_entry};
@@ -324,12 +352,22 @@ mod linux {
     /// Called by the executable's early --script-worker branch, before App,
     /// fonts, display connection, or any browser/network handles are opened.
     pub fn worker_entry() -> ! {
+        worker_entry_for(false)
+    }
+    #[cfg(feature = "legacy-test-engine")]
+    pub fn legacy_worker_entry() -> ! {
+        worker_entry_for(true)
+    }
+    fn worker_entry_for(legacy: bool) -> ! {
         let probe = std::env::args().nth(2);
         if let Err(error) = install_isolation() {
             worker_error(
                 &format!("Script-worker isolation unavailable: {error}"),
                 SETUP_EXIT,
             );
+        }
+        if !legacy {
+            crate::platform::worker_memory::activate();
         }
         if let Some(probe) = probe {
             match probe.strip_prefix("--probe=") {
@@ -357,7 +395,19 @@ mod linux {
                 REQUEST_EXIT,
             ),
         };
-        let reply = mg_sparkle::js_browser::execute(request);
+        let mut reply = {
+            #[cfg(feature = "legacy-test-engine")]
+            if legacy {
+                mg_sparkle::js_browser::execute(request)
+            } else {
+                mg_sparkle::js_browser::boa::execute(request)
+            }
+            #[cfg(not(feature = "legacy-test-engine"))]
+            mg_sparkle::js_browser::boa::execute(request)
+        };
+        if let Some(report) = &mut reply.boa {
+            report.worker_memory = Some(crate::platform::worker_memory::report());
+        }
         let bytes = match encode(&reply, OUTPUT_LIMIT) {
             Ok(bytes) => bytes,
             Err(_) => worker_error("Script-worker reply exceeds 4 MiB", REQUEST_EXIT),
@@ -384,6 +434,10 @@ mod linux {
         }
     }
     fn run_probe(mode: &str) -> ! {
+        if crate::platform::worker_memory::probe(mode) {
+            let _ = io::stdout().write_all(b"allocation-alignment:passed");
+            std::process::exit(0);
+        }
         match mode {
             "deny" => {
                 if std::env::vars_os().next().is_some() {

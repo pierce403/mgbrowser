@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><title>Boa page fixture</title></head><body>
+<h1>Modern JavaScript: real page execution</h1>
+<p id="status">Script-disabled fallback: no search controls have been created.</p>
+<main id="app"></main>
+<script>
+"use strict";
+let shared = 40;
+const identity = {};
+const retained = new WeakMap([[identity, 2]]);
+class Model {
+  constructor() { this.fields = new Map([["q", ""], ["source", "fixture"]]); }
+  answer() { return shared + retained.get(identity); }
+}
+const model = new Proxy(new Model(), { get: (target, key) => Reflect.get(target, key) });
+</script>
+<script>
+"use strict";
+const { answer } = { answer: model.answer() };
+if (answer !== 42) throw new Error("Modern language or cross-script state failed");
+Promise.resolve(answer).then(value => {
+  const form = document.createElement("form");
+  form.action = "/search";
+  form.method = "get";
+  for (const [name, value] of model.fields) {
+    const input = document.createElement("input");
+    input.name = name;
+    input.value = value;
+    input.type = name === "q" ? "text" : "hidden";
+    form.appendChild(input);
+  }
+  const button = document.createElement("button");
+  button.type = "submit";
+  button.textContent = "Search local fixture";
+  form.appendChild(button);
+  document.getElementById("app").appendChild(form);
+  document.getElementById("status").textContent = `Boa Promise checkpoint: ${value}`;
+  document.title = "Boa JavaScript page ready";
+});
+</script>
+</body></html>

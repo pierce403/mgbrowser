@@ -20,7 +20,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
+fn wire_version() -> u8 {
+    if super::super::legacy_test_mode() {
+        1
+    } else {
+        VERSION
+    }
+}
 const LIFETIME: Duration = Duration::from_secs(300);
 const TRANSACTIONS: u64 = 64;
 const WIRE_LIMIT: usize = 32 * 1024 * 1024;
@@ -359,13 +366,19 @@ struct Worker {
     generation: u64,
     pool: ChildPool,
     last_report: Option<AllocationReport>,
+    last_boa: Option<mg_butane::modern::Report>,
+    legacy: bool,
 }
 impl Worker {
     fn start(pool: ChildPool, generation: u64) -> Result<Self, String> {
         // Keep this process and its workers on the same build across an update.
         let mut command = Command::new("/proc/self/exe");
         command
-            .arg("--script-session")
+            .arg(if super::super::legacy_test_mode() {
+                "--legacy-script-session"
+            } else {
+                "--script-session"
+            })
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -421,6 +434,8 @@ impl Worker {
             generation,
             pool,
             last_report: None,
+            last_boa: None,
+            legacy: super::super::legacy_test_mode(),
         })
     }
     fn check(&mut self, shared: &Shared, deadline: Option<Instant>) -> Result<(), String> {
@@ -558,6 +573,7 @@ impl Worker {
                     .map_err(|error| format!("Invalid script-session reply: {error}"))?;
                 validate_reply(request, &frame)?;
                 validate_cumulative(self.last_report, frame.reply.allocations)?;
+                validate_engine_profile(&frame.reply, self.legacy, self.last_boa.as_ref())?;
                 self.check(shared, Some(deadline))?;
                 // A complete response is one frame, not the prefix of an
                 // unsolicited stream. Check coalesced trailing bytes before
@@ -578,6 +594,7 @@ impl Worker {
                     Err(error) => return Err(error.to_string()),
                 }
                 self.last_report = frame.reply.allocations;
+                self.last_boa = frame.reply.boa.clone();
                 return Ok(frame.reply);
             }
             if !progressed {
@@ -643,7 +660,7 @@ fn manage(
         }
     }
     let initial = RequestFrame {
-        version: VERSION,
+        version: wire_version(),
         generation,
         session_id: id,
         sequence: 0,
@@ -709,7 +726,7 @@ fn manage(
                     }
                     validate_input(&input)?;
                     let request = RequestFrame {
-                        version: VERSION,
+                        version: wire_version(),
                         generation,
                         session_id: id,
                         sequence,
@@ -781,7 +798,7 @@ fn validate_input(input: &SessionInput) -> Result<(), String> {
     Ok(())
 }
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
-    if frame.version != VERSION
+    if frame.version != request.version
         || frame.generation != request.generation
         || frame.session_id != request.session_id
         || frame.sequence != request.sequence
@@ -821,8 +838,12 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Script-session arena exceeds its node limit".into());
     }
-    if reply.state == RealmState::Ready && (reply.snapshot.is_none() || reply.allocations.is_none())
+    if reply.boa.as_ref().is_some_and(|report| !report.is_valid())
+        || (reply.boa.is_some() && reply.allocations.is_some())
     {
+        return Err("Invalid or mixed script-session engine report".into());
+    }
+    if reply.state == RealmState::Ready && (reply.snapshot.is_none() || !reply.accounting_valid()) {
         return Err("Ready script session omitted its arena or allocation report".into());
     }
     if reply.state == RealmState::Ready
@@ -861,6 +882,37 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     Ok(())
 }
+fn validate_engine_profile(
+    reply: &SessionReply,
+    legacy: bool,
+    previous: Option<&mg_butane::modern::Report>,
+) -> Result<(), String> {
+    // A rejected initial document may have no realm or report. Once a realm
+    // exists its parent-selected engine cannot change, even on terminal replies.
+    let rejected_initial = previous.is_none()
+        && reply.state == RealmState::Closed
+        && reply.snapshot.is_none()
+        && reply.allocations.is_none()
+        && reply.boa.is_none();
+    if !rejected_initial && (reply.boa.is_some() == legacy) {
+        return Err("Script session returned the wrong engine profile".into());
+    }
+    if let Some(previous) = previous {
+        reply
+            .boa
+            .as_ref()
+            .ok_or("Script session lost its Boa resource report")?
+            .validate_after(previous)
+            .map_err(str::to_owned)?;
+    }
+    if let Some(report) = &reply.boa
+        && report.worker_memory.is_none()
+    {
+        return Err("Boa worker omitted process allocation accounting".into());
+    }
+    Ok(())
+}
+
 fn validate_cumulative(
     previous: Option<AllocationReport>,
     next: Option<AllocationReport>,
@@ -959,23 +1011,67 @@ fn write_frame(
 
 /// Early executable entrypoint, before fonts/display/network are initialized.
 pub fn session_entry() -> ! {
+    session_entry_for(false)
+}
+#[cfg(feature = "legacy-test-engine")]
+pub fn legacy_session_entry() -> ! {
+    session_entry_for(true)
+}
+fn session_entry_for(legacy: bool) -> ! {
     if install_isolation().is_err() {
         std::process::exit(73);
     }
     if std::env::args().len() != 2 {
         std::process::exit(74);
     }
-    let result = child_loop(&mut io::stdin().lock(), &mut io::stdout().lock());
+    if !legacy {
+        crate::platform::worker_memory::activate();
+    }
+    let result = child_loop_for(&mut io::stdin().lock(), &mut io::stdout().lock(), legacy);
     std::process::exit(if result.is_ok() { 0 } else { 74 })
 }
-fn child_loop(reader: &mut impl Read, writer: &mut impl Write) -> Result<(), String> {
+enum PageEngine {
+    Boa(mg_sparkle::js_browser::boa::BoaPageRealm),
+    #[cfg(feature = "legacy-test-engine")]
+    Legacy(mg_sparkle::js_browser::PageRealm),
+}
+impl PageEngine {
+    fn start(request: Request, legacy: bool) -> (Option<Self>, SessionReply) {
+        #[cfg(feature = "legacy-test-engine")]
+        if legacy {
+            let (realm, reply) = mg_sparkle::js_browser::PageRealm::start(request);
+            return (realm.map(Self::Legacy), reply);
+        }
+        let _ = legacy;
+        let (realm, reply) = mg_sparkle::js_browser::boa::BoaPageRealm::start(request);
+        (realm.map(Self::Boa), reply)
+    }
+    fn dispatch(&mut self, input: SessionInput) -> SessionReply {
+        match self {
+            Self::Boa(realm) => realm.dispatch(input),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(realm) => realm.dispatch(input),
+        }
+    }
+}
+fn attach_memory(reply: &mut SessionReply) {
+    if let Some(report) = &mut reply.boa {
+        report.worker_memory = Some(crate::platform::worker_memory::report());
+    }
+}
+fn child_loop_for(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    legacy: bool,
+) -> Result<(), String> {
+    let version = if legacy { 1 } else { VERSION };
     let mut wire = 0;
     let Some(payload) = read_frame(reader, &mut wire, INPUT_LIMIT)? else {
         return Err("Session initialization missing".into());
     };
     let request: RequestFrame =
         serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
-    if request.version != VERSION
+    if request.version != version
         || request.sequence != 0
         || request.expected_revision != 0
         || request.session_id == 0
@@ -985,13 +1081,14 @@ fn child_loop(reader: &mut impl Read, writer: &mut impl Write) -> Result<(), Str
     let FrameCommand::Init(initial) = request.command else {
         return Err("First session command must be Init".into());
     };
-    let (mut realm, reply) = mg_sparkle::js_browser::PageRealm::start(initial);
+    let (mut realm, mut reply) = PageEngine::start(initial, legacy);
+    attach_memory(&mut reply);
     let mut revision = reply.revision;
     let mut terminal = reply.state != RealmState::Ready;
     write_frame(
         writer,
         &ReplyFrame {
-            version: VERSION,
+            version,
             generation: request.generation,
             session_id: request.session_id,
             sequence: 0,
@@ -1009,7 +1106,7 @@ fn child_loop(reader: &mut impl Read, writer: &mut impl Write) -> Result<(), Str
         };
         let event: RequestFrame =
             serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
-        if event.version != VERSION
+        if event.version != version
             || event.generation != request.generation
             || event.session_id != request.session_id
             || event.sequence != sequence
@@ -1021,16 +1118,17 @@ fn child_loop(reader: &mut impl Read, writer: &mut impl Write) -> Result<(), Str
             return Err("Repeated session initialization".into());
         };
         validate_input(&input)?;
-        let reply = realm
+        let mut reply = realm
             .as_mut()
             .ok_or("Script realm is unavailable")?
             .dispatch(input);
+        attach_memory(&mut reply);
         revision = reply.revision;
         terminal = reply.state != RealmState::Ready;
         write_frame(
             writer,
             &ReplyFrame {
-                version: VERSION,
+                version,
                 generation: request.generation,
                 session_id: request.session_id,
                 sequence,
@@ -1313,6 +1411,7 @@ mod tests {
                 errors: Vec::new(),
                 scripts_executed: 1,
                 allocations: Some(report(10)),
+                boa: None,
                 state: RealmState::Ready,
                 acknowledgements: Vec::new(),
             },
@@ -1464,6 +1563,54 @@ mod tests {
         assert!(rejected.is_valid());
         validate_cumulative(Some(rejected), Some(rejected)).unwrap();
         assert!(validate_cumulative(Some(rejected), Some(old)).is_err());
+    }
+    #[test]
+    fn boa_profile_requires_process_accounting_and_cannot_fall_back_or_reset() {
+        use mg_butane::modern::{
+            Engine, WORKER_CUMULATIVE_LIMIT, WORKER_OUTSTANDING_LIMIT, WorkerMemory,
+        };
+        let mut request = request(0);
+        request.version = VERSION;
+        let mut frame = response(&request);
+        assert!(validate_engine_profile(&frame.reply, false, None).is_err());
+        frame.reply.allocations = None;
+        frame.reply.boa = Some(Engine::new().unwrap().report());
+        assert!(validate_engine_profile(&frame.reply, false, None).is_err());
+        frame.reply.boa.as_mut().unwrap().worker_memory = Some(WorkerMemory {
+            outstanding_bytes: 100,
+            peak_bytes: 100,
+            cumulative_bytes: 200,
+            allocations: 2,
+            outstanding_limit_bytes: WORKER_OUTSTANDING_LIMIT,
+            cumulative_limit_bytes: WORKER_CUMULATIVE_LIMIT,
+        });
+        validate_reply(&request, &frame).unwrap();
+        validate_engine_profile(&frame.reply, false, None).unwrap();
+        assert!(validate_engine_profile(&frame.reply, true, None).is_err());
+        let previous = frame.reply.boa.clone().unwrap();
+        frame
+            .reply
+            .boa
+            .as_mut()
+            .unwrap()
+            .worker_memory
+            .as_mut()
+            .unwrap()
+            .cumulative_bytes = 199;
+        assert!(validate_engine_profile(&frame.reply, false, Some(&previous)).is_err());
+        frame.reply.boa = Some(previous.clone());
+        frame.reply.allocations = Some(report(10));
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.reply.allocations = None;
+        frame.reply.boa.as_mut().unwrap().fatal_reason = Some("latched limit".into());
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.reply.state = RealmState::Closed;
+        frame.reply.snapshot = None;
+        frame.reply.boa = None;
+        validate_engine_profile(&frame.reply, false, None).unwrap();
+        assert!(validate_engine_profile(&frame.reply, false, Some(&previous)).is_err());
+        frame.reply.allocations = Some(report(10));
+        assert!(validate_engine_profile(&frame.reply, false, None).is_err());
     }
     #[test]
     fn active_accounting_and_lifetime_are_nonrenewable_but_terminal_projection_can_be_charged() {

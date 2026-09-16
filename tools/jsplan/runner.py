@@ -68,12 +68,29 @@ def corpus_fingerprint(root):
 
 
 def baseline_fingerprint():
+    """Pin the original implementation, excluding only the new engine wiring.
+
+    Cargo metadata is reviewed separately and now carries optional Boa deps.
+    Original AST definitions in lib.rs remain covered: strip only the exact
+    feature-gated declaration, not arbitrary lines or other module contents.
+    The historical package-wide hash remains recorded in inputs.json.
+    """
     root = ROOT / "crates/mg-butane"
-    paths = sorted([root / "Cargo.toml", *root.joinpath("src").rglob("*.rs")])
+    paths = sorted(path for path in root.joinpath("src").rglob("*.rs")
+                   if path.relative_to(root).as_posix() != "src/modern.rs"
+                   and not path.relative_to(root).as_posix().startswith("src/modern/"))
     digest = hashlib.sha256()
     for path in paths:
+        if path.is_symlink():
+            raise ValueError(f"Symlink in original baseline: {path}")
+        source = path.read_bytes()
+        if path == root / "src/lib.rs":
+            declaration = b'#[cfg(feature = "modern")]\npub mod modern;\n'
+            if source.count(declaration) > 1:
+                raise ValueError("Duplicate modern module declaration in baseline")
+            source = source.replace(declaration, b"", 1)
         digest.update(str(path.relative_to(root)).encode() + b"\0")
-        digest.update(hashlib.sha256(path.read_bytes()).digest())
+        digest.update(hashlib.sha256(source).digest())
     return digest.hexdigest()
 
 

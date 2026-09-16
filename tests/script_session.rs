@@ -31,7 +31,7 @@ impl Peer {
     fn start() -> Self {
         let mut child = Owned(
             Command::new(env!("CARGO_BIN_EXE_mgbrowser"))
-                .arg("--script-session")
+                .arg("--legacy-script-session")
                 .env_clear()
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

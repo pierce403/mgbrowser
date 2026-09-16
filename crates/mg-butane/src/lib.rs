@@ -1,6 +1,8 @@
 //! An original, bounded JavaScript interpreter; not a conforming ECMAScript engine yet.
 use std::rc::Rc;
 
+#[cfg(feature = "modern")]
+pub mod modern;
 pub mod regexp;
 pub mod runtime;
 mod storage;

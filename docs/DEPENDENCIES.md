@@ -17,10 +17,10 @@ The existing OS/std interface exception below remains unchanged.
 
 This permits scoped crate reuse, not an incidental whole-engine replacement.
 The policy clarification itself did not install Stylo; the separately authorized
-HN implementation now adopts the configuration reviewed below. The original Butane
-implementation and component boundaries remain unchanged. Replacing them would
-need a separately scoped decision and validation. Upstream tests complement,
-not replace, Mg integration/resource tests and the feature-release gates.
+HN implementation adopted the configuration below. A subsequent explicit user
+request authorizes the Boa-backed page lane in [BOA.md](BOA.md), with its reviewed
+profile and separate release gates. The original evaluator remains a test
+baseline. Upstream tests complement, not replace, Mg integration/resource tests.
 
 ## Adopted 2026-09-07
 
@@ -38,12 +38,36 @@ This browser is a testing and research project, not a production browser. The us
 | Session cookies | Own memory-only jar; psl 2 and httpdate 1 | Public-suffix and expiry parsing use Rust crates. No persistent or imported browser cookies. |
 | Linux window | x11rb 0.13, defaults disabled, RustConnection | Rust X11 wire protocol over OS sockets, usable through X11/XWayland. No Xlib/XCB FFI or native toolkit rendering. |
 | Browser automation | tungstenite 0.28 with only handshake, serde/serde_json, base64 | Loopback-only plain WebSocket CDP. No native TLS, compression or renderer fallback. Rust SHA-1 is used for the standard WebSocket handshake, not TLS certificate trust. |
-| JavaScript | Own lexer, parser, evaluator and DOM bridge in Rust | No external parser, runtime, JIT, browser engine or native-language execution backend. Partial and opt-in, not ECMAScript conformance. |
+| JavaScript | Boa engine/GC 0.22.0, defaults disabled; engine fuzz feature for instruction accounting; Mg facade and DOM bridge | Rust parser/VM/GC, no C/C++ backend, JIT or production fallback. Page integration remains partial and opt-in. Original interpreter tests remain separate. |
 | Script worker controls | libc 0.2 Rust OS declarations; std process/pipes; existing serde_json | Linux x86_64 resource limits, descriptor closure and seccomp. Not a C font/image/crypto backend or replacement JavaScript engine. |
 
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### Boa page adoption: 2026-09-16, v0.4.0 increment
+
+`mg-butane::modern` uses exactly `boa_engine = 0.22.0` and `boa_gc = 0.22.0`,
+default features disabled. The engine's `fuzz` feature exposes cumulative opcode
+accounting; it does not select a fuzz runner or native backend. Sparkle names the
+same types directly because upstream GC/native-data derive macros require those
+crate names. No engine fork or upstream source patch is carried.
+
+The isolated [source/feature/license review](jsplan/DEPENDENCY_AUDIT.md) records
+the pinned engine. The combined production lock graph is independently guarded
+by `tools/check-dependencies.rs` and `tools/check-components.py`; dependency
+features are not inferred from the upstream project name. Reviewed `getrandom`,
+`time` and synchronization paths use OS primitives, not native JavaScript or
+crypto implementations. Direct `libc` use stays in the platform host; transitive
+versioned OS-only edges are enumerated by the component guard.
+
+Boa's MIT license option is preserved in the package's third-party license texts
+and source links; project code remains Apache-2.0. The new process-v1 allocation
+profile is requested-System-byte accounting, not GC live heap or RSS. Native
+parser/builtin/regex/GC work retains final CPU/address-space/parent containment;
+full cooperative resource-control acceptance remains open. See BOA.md for exact
+caps, retained lifecycle behavior and honest unsupported browser capabilities.
+Public release/installer verification remains a separate gate.
 
 ### Stylo adoption review: 2026-09-16
 
@@ -64,13 +88,14 @@ code; Python is needed to build, not to run the browser. Atom/preference build
 scripts also generate Rust. `stylo_malloc_size_of` exposes allocator-measurement
 callback types, but does not select a native allocator implementation, and Mg
 does not supply or call such callbacks. Transitive `libc` remains the existing
-OS-primitive exception, not an approved native browser backend. Its reviewed
+OS-primitive exception, not an approved native browser backend. Stylo's reviewed
 incoming edges in Sparkle are `num_cpus 1.17.0 -> libc 0.2.189` (CPU affinity/count)
 and `parking_lot 0.12.5 -> parking_lot_core 0.9.12 -> libc 0.2.189`
 (Linux futex synchronization/errno). Stylo's CPU/locking dependencies are
 unconditional, and its atom crates also use `parking_lot` through `string_cache`.
-Direct Sparkle `libc` use remains prohibited; component checks allow only these
-reviewed versioned primitive paths and require a new review if they change.
+Direct Sparkle `libc` use remains prohibited. Component checks allow these
+versioned primitive paths and the separately reviewed Boa paths above; changes
+require a new review.
 
 Primary versioned source: [Stylo manifest](https://github.com/servo/stylo/blob/ff4af3d2878696da31818d09bec9e4290f1dbcfb/style/Cargo.toml),
 [build script](https://github.com/servo/stylo/blob/ff4af3d2878696da31818d09bec9e4290f1dbcfb/style/build.rs),
@@ -123,7 +148,7 @@ On 2026-09-07, transport tests passed, including local trusted, unknown-issuer, 
 
 Ordinary Google homepage delivery and real form submission succeeded through the native window with verified TLS and session cookies. The initial script-disabled journey reached a JavaScript-required page. The later opt-in scripting attempt still failed: the search response returned HTTP 200 but unsupported script behavior left no rendered result links. The actual first-result/destination goal remains unmet. Separately, the authored local script-built form and destination journey passed through both native handlers and external CDP. See `JAVASCRIPT.md` and the dated log; fixture success is not Google compatibility. The HN slice adds bounded author stylesheet and image loading, not full CSS/image-format coverage; unsupported images retain a readable placeholder.
 
-The original interpreter runs eligible inline scripts, startup callbacks and bounded later click/submit handlers in one retained realm per document. Browser use requires `--enable-scripts` and a fresh restricted Linux x86_64 worker. The worker has an empty environment, closes inherited descriptors, installs seccomp/resource limits before reading page input, and returns bounded DOM/navigation data to the parent. Its direct libc dependency supplies Rust declarations for those operating-system calls; no native parser, interpreter, font, image or crypto implementation was added. External script loading and a general event loop are absent. Unsupported isolation fails closed; the renderer and network parent remain outside this boundary. Retention and cumulative lifetime/transaction/wire admission follow `PAGE_SESSIONS.md`.
+Boa runs eligible inline scripts, startup callbacks, Promise checkpoints and bounded later click/submit handlers in one retained realm per document. Browser use requires `--enable-scripts` and a fresh restricted Linux x86_64 worker. The worker has an empty environment, closes inherited descriptors, installs seccomp/resource limits before reading page input, and returns bounded DOM/navigation data to the parent. Its direct libc dependency supplies Rust declarations for those operating-system calls; no native parser, interpreter, font, image or crypto implementation was added. External script loading and a general event loop are absent. Unsupported isolation fails closed; the renderer and network parent remain outside this boundary. Retention and cumulative lifetime/transaction/wire admission follow `PAGE_SESSIONS.md`; modern engine/allocator accounting follows `BOA.md`.
 
 Requests have a 30-second deadline across HTTP redirects, an 8-second socket/DNS-wait budget per operation, eight HTTP redirects, 64 KiB request/header bounds, and separate 8 MiB encoded/decoded body bounds. The window currently permits two outstanding navigation workers and ignores stale completions. Superseded network operations continue until completion or timeout; cancellation does not interrupt sockets or the platform resolver. A resolver thread can outlive the caller's bounded wait. These transport limits do not constitute network-process isolation or a fully cancellable resource budget. Script workers separately have two cumulative active wall seconds, one CPU second and a 256 MiB address-space cap. Retained sessions also have a 300-second absolute lifetime, 64 transactions and 32 MiB aggregate wire admission; evaluator/DOM/protocol bounds are documented in `JAVASCRIPT.md` and `PAGE_SESSIONS.md`.
 
@@ -147,10 +172,11 @@ The browser must eventually show a broken-image placeholder and available alt te
 
 The isolated JSPLAN experiment has a separate locked Boa graph and
 [source/feature/license audit](jsplan/DEPENDENCY_AUDIT.md). It is excluded from
-the production workspace and release assets. The original JavaScript entry above
-remains accurate for the shipped browser; the experiment does not approve a
-production engine substitution or alter its component guard.
+the production workspace and release assets. The subsequent explicitly scoped
+v0.4.0 page integration has its own production dependency graph and resource
+contract above. The initial experiment's outcome counts are not a general
+browser-conformance or security claim.
 
 Record provider revision, Rust version, OS/architecture and a minimal local reproducer for failures. Distinguish provider failures from our integration mistakes; preserve failing fixtures when lawful and free of secrets. Report normal interoperability and correctness bugs through a separately authorized upstream contribution. Handle potential security findings responsibly; do not automatically publish exploit details or run offensive testing against third parties. No external issue submission or autonomous testing is configured by this policy.
 
-`python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The external locked dependency versions are unchanged by the component split.
+`python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The historical component split did not change external dependencies; the later Stylo and Boa integrations have separate reviewed graphs.

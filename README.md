@@ -2,19 +2,22 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.3.0 Experimental Preview
+## v0.4.0 Experimental Preview
 
-Hacker News gets its real stylesheet, nested table layout, compact typography,
-logo and vote arrows. CSS computation uses Servo's Rust Stylo crate; Mg retains
-its own HTML parser, layout, renderer and original opt-in JavaScript engine.
-This is a narrow desktop compatibility improvement, not the full Servo browser.
+Boa now runs opt-in page JavaScript: modern inline scripts, Promise checkpoints
+and retained click/submit handlers operate on Mg's real Rust DOM. Mg keeps its
+own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
+backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
+
+The installer selects the latest published release. Exact release and public-
+installation receipts are recorded in the [dated work log](memory/logs/2026-09-16.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
 
 ```sh
 curl -fsSL https://mgbrowser.org/install.sh | bash
-mgbrowser https://news.ycombinator.com/
+mgbrowser --enable-scripts https://example.com/
 ```
 
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
@@ -27,7 +30,7 @@ TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
 Current project source and original artwork use the [Apache License 2.0](LICENSE).
 Dependencies retain their own licenses. Published v0.1.0/v0.1.1 archives retain
 their original MIT license. New releases include Apache-2.0, NOTICE and third-party
-license texts/source links, including MPL-2.0 for Stylo-related dependencies.
+license texts/source links, including Boa's MIT option and MPL-2.0 for Stylo-related dependencies.
 
 Installed builds check for newer versions on startup and daily while open, verify
 checksums and test the new binary before replacement. Restart to use an update.
@@ -41,9 +44,14 @@ See [updater behavior and trust](docs/UPDATES.md).
 - Hacker News desktop rendering is the narrow target. Mobile layouts, general
   destination compatibility and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
-- JavaScript is an incomplete original implementation, disabled by default;
-  use `--enable-scripts` to opt in. External scripts and general browser event-loop
-  behavior are incomplete.
+- Boa-backed JavaScript integration is incomplete and disabled by default;
+  use `--enable-scripts` to opt in. External scripts, modules, timers, fetch/XHR
+  and general browser event-loop behavior are not implemented. No React/Vue
+  browser-app compatibility is claimed.
+- Script budgets include cumulative opcodes, sources/jobs and 32/64 MiB
+  outstanding/cumulative worker allocation requests. This is not GC/RSS
+  measurement or complete cooperative budgeting; native work retains final
+  OS/parent containment. Active detached listeners persist until removal/teardown.
 - Full CSS is not implemented: no flex/grid or general positioning. Resource
   loading is bounded and same-origin only; no CSS imports or downloaded fonts.
   Images support PNG, first-frame GIF and a small static SVG shape/path subset.
@@ -55,11 +63,11 @@ See [updater behavior and trust](docs/UPDATES.md).
 
 The preview is separate from the formal MVP, whose stronger gates remain open.
 The component extraction separates the engines into reusable packages; this release
-adds the small styled-document path described in [Hacker News scope](docs/HACKER_NEWS.md).
+preserves the styled-document path described in [Hacker News scope](docs/HACKER_NEWS.md).
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.3.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.4.0.md) for manual install and uninstall.
 
 ## Components
 
@@ -67,7 +75,7 @@ See [preview details](docs/RELEASE-v0.3.0.md) for manual install and uninstall.
 | --- | --- |
 | `mg-browser` | Desktop executable and platform integration |
 | `mg-chassis` | Browser services and optional toolbar/UX |
-| `mg-butane` | Original JavaScript engine |
+| `mg-butane` | Boa embedding/policy and original interpreter test baseline |
 | `mg-sparkle` | HTML, DOM, layout and software rendering |
 
 Butane runs independently of the browser. Sparkle renders documents to pixels
@@ -79,16 +87,17 @@ ThermiteOS port remain future work.
 See [JSPLAN.md](JSPLAN.md) for the proposed Butane roadmap: a Boa-first Rust
 engine evaluation, modern React/Vue acceptance tests, V8-inspired optimizations,
 academic references and separately gated embedding compatibility. The first
-[isolated P0/P1 experiment](experiments/jsplan/README.md) is implemented: original
-Butane versus Boa 0.22, with pinned tests and honest failure counts. No engine
-replacement or browser framework support has shipped from it. See the
-[decision and remaining gates](docs/jsplan/RESULTS.md).
+[isolated P0/P1 experiment](experiments/jsplan/README.md) compares original Butane
+with Boa 0.22 using pinned tests and honest failure counts. The subsequent
+[page integration](docs/BOA.md) uses an explicit process-contained profile, not
+the original logical allocation report. Full P1 resource control, external
+loading/framework support, performance and V8 compatibility remain open.
 
 ## Engineering background (pre-MVP)
 
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.
 
-**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. An opt-in original JavaScript interpreter creates usable controls and retains page state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete. There is no general autoresearch executor yet.
+**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. Opt-in Boa page execution creates usable controls and retains state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete and deferred. There is no general autoresearch executor yet.
 
 ```sh
 cargo run --locked --bin mgbrowser -- https://example.com/
@@ -100,6 +109,12 @@ For automation, add `--remote-debugging-port=9222` (or `0` for an available port
 The loopback CDP subset provides discovery, navigation, DOM inspection, input and
 PNG screenshots; see [the protocol contract and example client](docs/CDP.md).
 Full CDP support is the long-term target, not current compatibility.
+
+### Historical original-engine work
+
+The following records the preserved pre-v0.4 evaluator baseline, not the current
+page backend or Boa's resource model. Original assertions still run through the
+explicit `legacy-test-engine` test feature; they are not a production fallback.
 
 The original interpreter includes bounded Function/eval and UTF-16 regular
 expressions with RegExp and String matching/replacement/splitting, plus
@@ -164,7 +179,7 @@ Authored forms
 are tested through real worker, native and CDP paths;
 this remains a small, opt-in language subset, not general web compatibility.
 
-The latest bounded Google attempt loads the homepage and submits its actual form
+The last historical bounded Google attempt loaded the homepage and submitted its actual form
 through the retained session. Search still has no actionable results: its first
 failure is Ast 377,733 rejected after 4,135,770 accepted bytes against the unchanged
 4 MiB cap. This response reports no unsupported descriptor error. The changed
@@ -178,7 +193,8 @@ browser API and storage-ownership work is needed.
 - [Next tasks](TASKS.md)
 - [Autoresearch design](docs/AUTORESEARCH.md)
 - [CDP automation and roadmap](docs/CDP.md)
-- [Original JavaScript subset and limits](docs/JAVASCRIPT.md)
+- [Boa page execution and limits](docs/BOA.md)
+- [Original JavaScript baseline and historical evidence](docs/JAVASCRIPT.md)
 - [Retained page interaction](docs/PAGE_SESSIONS.md)
 - [Contributing](CONTRIBUTING.md)
 - [Agent instructions](AGENTS.md), [memory](MEMORY.md), and [skills](SKILLS.md)
@@ -187,7 +203,7 @@ browser API and storage-ownership work is needed.
 
 Own the browser's integration and original components, reusing reviewed Rust crates where useful. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
 
-TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS; font processing, PNG/GIF decoding and restricted SVG rasterization use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS/images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --all-targets` for component, worker and UI/CDP tests. Full CSS and broad JavaScript compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
+TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS; Boa supplies page JavaScript; fonts, PNG/GIF and restricted SVG use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS/images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --features legacy-test-engine --all-targets` for modern and preserved-baseline tests. Full CSS and broad browser compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
 
 ## Website development
 

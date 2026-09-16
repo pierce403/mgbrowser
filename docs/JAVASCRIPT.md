@@ -1,18 +1,23 @@
-# Original Rust JavaScript engine
+# JavaScript: current backend and original baseline
 
 The historical Google search journey remains incomplete and deferred. Current
-work follows [JSPLAN](../JSPLAN.md): an isolated Boa-first research experiment,
-not a production engine replacement. [Results](jsplan/RESULTS.md) keep language,
-host/resource and browser acceptance separate. No fabricated results, browser
+work follows [JSPLAN](../JSPLAN.md). The v0.4.0 increment integrates Boa for actual
+opt-in inline page scripts, bounded Promise checkpoints and retained DOM events;
+see [BOA.md](BOA.md) for the current backend, explicit process-v1 resource profile
+and publication status. Full P1 resource control and wider framework/embedding
+gates remain open. [Initial results](jsplan/RESULTS.md) preserve the earlier
+research evidence. No fabricated results, browser
 impersonation or site-specific response rewriting is a substitute for compatibility.
 
-## Implemented research subset
+## Historical original-engine contract
 
-Scripting is disabled by default. `--enable-scripts` opts into the original Rust
-lexer, parser, tree-walking evaluator and DOM bridge in `crates/mg-butane/src/` and
-`crates/mg-sparkle/src/js_browser.rs`. The browser executes it only through the restricted
-Linux x86_64 worker in `src/platform/script_worker.rs`. No existing parser, JavaScript
-runtime, browser engine, or external browser executes page code for us.
+The remainder of this document records the original pre-v0.4 Rust lexer/parser,
+tree-walking evaluator and DOM bridge in `crates/mg-butane/src/` and
+`crates/mg-sparkle/src/js_browser.rs`. Its semantic, allocation and worker tests
+are preserved through the explicit `legacy-test-engine` test feature. It is not
+the current `--enable-scripts` backend and is never selected after a Boa failure.
+Historical references below to current limits, missing language constructs and
+dated live checkpoints apply to that baseline, not Boa's modern language support.
 
 The language is a small, non-strict, ES5-like subset, not ECMAScript conformance:
 

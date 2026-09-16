@@ -155,6 +155,28 @@ class ReportTests(unittest.TestCase):
 
 
 class IntegrityTests(unittest.TestCase):
+    def test_baseline_excludes_only_reviewed_modern_wiring(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = root / "crates/mg-butane/src"
+            src.mkdir(parents=True)
+            (src / "runtime.rs").write_text("original runtime")
+            (src / "syntax.rs").write_text("original syntax")
+            (src / "lib.rs").write_text("pub enum Expr { Old }\n")
+            with patch("runner.ROOT", root):
+                original = runner.baseline_fingerprint()
+                (src.parent / "Cargo.toml").write_text("optional engine metadata")
+                (src / "modern.rs").write_text("new engine implementation")
+                (src / "lib.rs").write_text(
+                    '#[cfg(feature = "modern")]\npub mod modern;\n'
+                    "pub enum Expr { Old }\n")
+                self.assertEqual(runner.baseline_fingerprint(), original)
+                (src / "runtime.rs").write_text("changed original runtime")
+                self.assertNotEqual(runner.baseline_fingerprint(), original)
+                (src / "runtime.rs").write_text("original runtime")
+                (src / "lib.rs").write_text("pub enum Expr { Changed }\n")
+                self.assertNotEqual(runner.baseline_fingerprint(), original)
+
     def test_changed_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source.js"

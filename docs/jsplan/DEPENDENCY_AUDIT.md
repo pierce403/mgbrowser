@@ -1,10 +1,16 @@
 # JSPLAN P1 dependency and host-contract audit
 
+2026-09-16 later update: v0.4.0 production adoption has a separate
+[dependency review](BOA_DEPENDENCIES.md) and [page profile](../BOA.md). The frozen
+research graph and host probes below remain historical evidence; they do not
+describe the later production graph or complete its P1 resource gate.
+
 2026-09-16. Scope: Linux `x86_64-unknown-linux-gnu`, Rust 1.91.1, an isolated
 research executable. This is **not production engine adoption**, a security audit
 of every upstream line, a Test262 score, or framework/browser compatibility.
-The browser workspace `Cargo.lock` and its published v0.3.0 dependency graph stay
-unchanged. No network runtime, Boa CLI or foreign JavaScript engine is imported.
+At this research checkpoint the browser workspace `Cargo.lock` and published
+v0.3.0 dependency graph stayed unchanged. No network runtime, Boa CLI or foreign
+JavaScript engine was imported.
 
 ## Reproducible inputs
 

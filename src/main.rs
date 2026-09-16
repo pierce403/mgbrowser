@@ -9,6 +9,9 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 const BG: u32 = 0xfafbf8;
+#[global_allocator]
+static ALLOCATOR: platform::worker_memory::WorkerAllocator =
+    platform::worker_memory::WorkerAllocator;
 fn main() -> Result<(), Box<dyn Error>> {
     // Worker dispatch must precede fonts, display, networking and debug-server setup.
     match std::env::args().nth(1).as_deref() {
@@ -39,6 +42,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--script-worker") => script_worker::worker_entry(),
         Some("--script-session") => script_worker::session_entry(),
+        #[cfg(all(
+            feature = "legacy-test-engine",
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        Some("--legacy-script-worker") => script_worker::legacy_worker_entry(),
+        #[cfg(all(
+            feature = "legacy-test-engine",
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        Some("--legacy-script-session") => script_worker::legacy_session_entry(),
         Some("--script-session-selftest") => {
             script_worker::session_selftest()?;
             return Ok(());
@@ -65,6 +80,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         match args[i].as_str() {
             "--no-auto-update" => auto_update = false,
             "--enable-scripts" => app.set_scripts_enabled(true),
+            #[cfg(feature = "legacy-test-engine")]
+            "--legacy-page-tests" => script_worker::use_legacy_for_tests(),
             "--disable-scripts" => app.set_scripts_enabled(false),
             "--remote-debugging-port" => {
                 i += 1;
@@ -99,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nOwn JavaScript interpreter is experimental and opt-in; see docs/JAVASCRIPT.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nBoa page JavaScript is experimental and opt-in; see docs/BOA.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
             }

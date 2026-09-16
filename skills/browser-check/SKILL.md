@@ -18,7 +18,20 @@ inherited memory high-water state; distinguish peak process RSS from live heap.
 Research-only tooling is not a browser backend or a framework compatibility claim.
 Any actual browser adoption still requires the standing release/installer gates.
 
-Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
+Production Boa page execution uses the separate process-contained profile in
+docs/BOA.md. Run modern, boa_pages, boa_page_events and boa_worker tests in debug
+and release, including real restricted-child allocation/job/opcode failures.
+Preserve the old interpreter's tests with --features legacy-test-engine and its
+explicit --legacy-page-tests fixture lane. Never package that feature or infer
+production Boa compatibility from original-engine fixtures. Packaged production
+acceptance uses /script-boa and the unchanged /script-events through native input
+and external CDP, plus the installed-binary worker/session smoke checks.
+WeakRef/removed-listener tests must use actual engine checkpoint cleanup, not
+test-only ClearKeptObjects. Distinguish requested System allocation counters,
+GC reachability and RSS; parser/native/regex/GC work still relies on hard process
+containment where cooperative hooks are absent. This is not full JSPLAN P1/P4.
+
+Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.
 

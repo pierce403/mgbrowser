@@ -4,6 +4,7 @@ Run from the repository root after publication: python3 tools/public-release-smo
 The prefix is retained under ignored tmp/ for inspection. Requires no Rust toolchain.
 """
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -45,6 +46,19 @@ with subprocess.Popen([binary, "--script-worker"], stdin=subprocess.PIPE, env=en
         worker.terminate()
         worker.wait(timeout=3)
 subprocess.run([binary, "--script-worker-selftest"], env=env, check=True, timeout=20)
+subprocess.run([binary, "--script-session-selftest"], env=env, check=True, timeout=20)
+page = (repo / "tests/fixtures/script/boa.html").read_text()
+reply = json.loads(subprocess.check_output(
+    [binary, "--script-worker"],
+    input=json.dumps({"url": "http://127.0.0.1:7878/script-boa", "html": page}),
+    text=True, env={}, timeout=5,
+))
+assert not reply["errors"], reply["errors"]
+assert reply["boa"]["profile"] == "boa-page-process-v1"
+assert reply["boa"]["worker_memory"]["cumulative_bytes"] > 0
+assert "Boa Promise checkpoint: 42" in reply["html"]
+assert '<form' in reply["html"]
+print("PUBLIC_BOA_PAGE_EXECUTION_OK", flush=True)
 assert subprocess.check_output([binary, "--version"], text=True).strip() == f"mgbrowser {expected}"
 data = root / ".local/share"
 desktop = data / "applications/mgbrowser.desktop"

@@ -9,9 +9,21 @@ homepage.workspace = true
 publish = false
 description = "Mg browser executable and platform integration"
 
+[features]
+# Frozen original-interpreter process regressions only. Never packaged.
+legacy-test-engine = []
+
 [[bin]]
 name = "mgbrowser"
 path = "src/main.rs"
+
+[[test]]
+name = "script_worker"
+required-features = ["legacy-test-engine"]
+
+[[test]]
+name = "script_session"
+required-features = ["legacy-test-engine"]
 
 [dependencies]
 mg-chassis = { workspace = true, features = ["chrome"] }
@@ -40,7 +52,7 @@ default-members = [".", "crates/mg-butane", "crates/mg-sparkle", "crates/mg-chas
 resolver = "3"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -48,9 +60,12 @@ repository = "https://github.com/pierce403/mgbrowser"
 homepage = "https://mgbrowser.org"
 
 [workspace.dependencies]
-mg-butane = { path = "crates/mg-butane", version = "0.3.0" }
-mg-sparkle = { path = "crates/mg-sparkle", version = "0.3.0" }
-mg-chassis = { path = "crates/mg-chassis", version = "0.3.0", default-features = false }
+mg-butane = { path = "crates/mg-butane", version = "0.4.0" }
+mg-sparkle = { path = "crates/mg-sparkle", version = "0.4.0" }
+mg-chassis = { path = "crates/mg-chassis", version = "0.4.0", default-features = false }
+# Boa's fuzz feature exposes its cumulative opcode counter; no JIT or native backend.
+boa_engine = { version = "=0.22.0", default-features = false, features = ["fuzz"] }
+boa_gc = { version = "=0.22.0", default-features = false }
 # Never enable rustls's default aws-lc-rs provider or ring.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", rev = "70f76c039e587192688af18a80d5d6435dedaf22", default-features = false, features = ["std", "tls12", "zeroize"] }

@@ -22,16 +22,21 @@ modern language and React/Vue application gates, V8-inspired performance work,
 academic experiments and a separately tested V8 embedding adapter. Preserve
 explicit host capabilities and restricted execution. Language, browser behavior,
 API compatibility, binary ABI and performance claims require distinct evidence.
-P0 and a narrow P1 research executable now compare original Butane with Boa 0.22
-inside the existing restricted worker policy. A separate locked workspace keeps
-Boa out of the production browser. See [results and decision](docs/jsplan/RESULTS.md).
-No production replacement engine, JIT, full Test262 score or browser framework
-compatibility is implemented. Resource/lifecycle adoption gates remain open.
+The P0/narrow P1 comparison remains isolated and pinned. The subsequent user-
+authorized v0.4.0 increment adopts Boa 0.22 for actual opt-in inline page scripts,
+Promise checkpoints and retained DOM events, with no original-engine fallback.
+See [the process-v1 profile](docs/BOA.md) and the preserved
+[initial results](docs/jsplan/RESULTS.md). Full cooperative resource control,
+JSPLAN exit gates, JIT, full Test262 and browser framework compatibility remain
+open. Exact release and public-installer receipts belong in the dated work log.
 
 ### Test Criteria
 
 - [x] Pinned selected Test262 baseline and explicit full/profile denominators,
   capability exclusions and failure classifications; not full-suite conformance.
+- [x] Local Boa page tests verify modern inline scripts, Promise DOM mutation,
+  retained events, weak wrapper identity, callback re-entry and teardown under
+  an explicit process-contained profile; original tests and limits are preserved.
 - [ ] Recorded engine choice after dependency, license, host/rooting, budget and
   restricted-worker evaluation, without a fallback engine executing page code.
 - [ ] Modern language, reclaimable memory and explicit bounded application profile.
@@ -327,13 +332,27 @@ Stability: in-progress
 
 ### Dependencies
 
-Own language/runtime, DOM integration and execution-boundary roadmap; now required for F-010 before a complete static MVP release.
+Reviewed Rust language/runtime, DOM integration and execution-boundary roadmap;
+required for F-010 before a complete static MVP release.
 
 ### Properties
 
-Original Rust lexer/parser/tree-walking interpreter with an explicit classic-script subset, bounded DOM capabilities and opt-in --enable-scripts. Inline scripts share a retained realm; startup and later click/submit mutations produce native controls and CDP-visible nodes without replay. A restricted Linux x86_64 child denies new file/network/process access and has cumulative logical, CPU, memory, active-wall and absolute-lifetime limits. Unsupported platforms fail closed. No embedded existing browser/runtime shortcut or ECMAScript conformance claim. The bounded interaction contract is in docs/PAGE_SESSIONS.md; broader events, timers and external scripts remain unsupported.
+Boa-backed Rust page execution with bounded DOM capabilities and opt-in
+--enable-scripts. Inline scripts, Promise checkpoints and later click/submit
+handlers share a retained realm and produce native/CDP-visible controls without
+replay. A restricted Linux x86_64 child denies new file/network/process access;
+docs/BOA.md specifies cumulative opcode/source/job and worker-allocation limits
+plus unchanged CPU/address-space/wall/lifetime containment. Unsupported platforms
+fail closed. This is not general ECMAScript/browser conformance. The original
+evaluator remains an explicit test baseline, not a production fallback. Broader
+events, timers, external scripts and modules remain unsupported.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
+
+The checked criteria and engineering history below preserve the original
+evaluator's verified baseline, not Boa resource/conformance claims. The explicit
+`legacy-test-engine` research lane retains those assertions and limits; it is not
+a production fallback. Current Boa acceptance is tracked in F-016 and docs/BOA.md.
 
 ### Test Criteria
 

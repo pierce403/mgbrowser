@@ -22,12 +22,12 @@ jobs:
           tmp/check-dependencies
           python3 tools/check-components.py
       - name: Run browser component and interaction tests
-        run: cargo +1.91.1 test --locked --workspace --all-targets
+        run: cargo +1.91.1 test --locked --workspace --features legacy-test-engine --all-targets
       - name: Check language, allocations, DOM and restricted workers in release mode
-        run: cargo +1.91.1 test --locked --workspace --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_ast_arrays --test js_ast_array_limits --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+        run: cargo +1.91.1 test --locked --workspace --features legacy-test-engine --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_ast_arrays --test js_ast_array_limits --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session --test modern --test boa_worker --test boa_pages --test boa_page_events
       - name: Build browser and local fixture server
         run: |
-          cargo +1.91.1 build --locked --workspace --bins --examples
+          cargo +1.91.1 build --locked --workspace --features legacy-test-engine --bins --examples
           timeout 15s target/debug/examples/measure_ast_storage
           timeout 5s target/debug/examples/measure_object_create
           timeout 20s target/debug/examples/measure_ast_arrays
@@ -92,7 +92,7 @@ jobs:
           [[ "$debugger_ready" == true ]]
           target/debug/examples/cdp_journey "ws://127.0.0.1:$cdp_port/devtools/page/page-1" http://127.0.0.1:7878/ tmp/cdp-journey.png 2>&1 | tee tmp/cdp-client.log
           CDP
-      - name: Exercise isolated scripts, fallback recovery and external CDP
+      - name: Preserve original-engine scripts, fallback recovery and external CDP
         run: |
           set -euo pipefail
           mkdir -p tmp/script-journey
@@ -107,33 +107,33 @@ jobs:
             sleep 0.1
           done
           [[ "$fixture_ready" == true ]]
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-redirect --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-dynamic --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-dynamic
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-regexp --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-regexp
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-iteration --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-iteration
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-expressions --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-expressions
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-allocation --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-allocation
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-arrays
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bindings --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bindings
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-sources
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-ast --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-ast
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-symbols --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-symbols
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-prototypes --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-prototypes
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-errors --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-errors
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-concat --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-concat
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-empty-arguments --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-empty-arguments
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-function-prototypes --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-function-prototypes
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bound-functions
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-diagnostics --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-diagnostics
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-producers --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-producers
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-array-callbacks --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-array-callbacks
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-core-intrinsics --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-core-intrinsics
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-static-operators --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-static-operators
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-object-create --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-object-create
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-ast-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-ast-arrays
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-redirect --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-dynamic --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-dynamic
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-regexp --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-regexp
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-iteration --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-iteration
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-expressions --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-expressions
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-allocation --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-allocation
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-arrays --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-arrays
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bindings --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bindings
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-sources
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-ast --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-ast
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-symbols --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-symbols
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-prototypes --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-prototypes
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-errors --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-errors
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-concat --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-concat
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-empty-arguments --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-empty-arguments
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-function-prototypes --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-function-prototypes
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-bound-functions
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-diagnostics --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-diagnostics
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-producers --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-producers
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-array-callbacks --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-array-callbacks
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-core-intrinsics --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-core-intrinsics
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-static-operators --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-static-operators
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-object-create --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-object-create
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-ast-arrays --enable-scripts --legacy-page-tests --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/script-journey/native-ast-arrays
           timeout 50s xvfb-run -a bash <<'SCRIPT_CDP'
           set -euo pipefail
-          target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
+          target/debug/mgbrowser http://127.0.0.1:7878/script-home --enable-scripts --legacy-page-tests --remote-debugging-port=0 > tmp/script-journey/browser.log 2>&1 &
           script_browser_pid=$!
           trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
           debugger_ready=false
@@ -171,7 +171,7 @@ jobs:
           # not share one fixed deadline. All checks and worker limits remain.
           timeout 50s xvfb-run -a bash <<'STORAGE_CDP'
           set -euo pipefail
-          target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --remote-debugging-port=0 > tmp/script-journey/storage-browser.log 2>&1 &
+          target/debug/mgbrowser http://127.0.0.1:7878/script-sources --enable-scripts --legacy-page-tests --remote-debugging-port=0 > tmp/script-journey/storage-browser.log 2>&1 &
           script_browser_pid=$!
           trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
           debugger_ready=false
@@ -205,7 +205,7 @@ jobs:
           STORAGE_CDP
           timeout 50s xvfb-run -a bash <<'BOUND_CDP'
           set -euo pipefail
-          target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --remote-debugging-port=0 > tmp/script-journey/bound-browser.log 2>&1 &
+          target/debug/mgbrowser http://127.0.0.1:7878/script-bound-functions --enable-scripts --legacy-page-tests --remote-debugging-port=0 > tmp/script-journey/bound-browser.log 2>&1 &
           script_browser_pid=$!
           trap 'kill "$script_browser_pid" 2>/dev/null || true; wait "$script_browser_pid" 2>/dev/null || true' EXIT
           debugger_ready=false
@@ -237,7 +237,7 @@ jobs:
           target/debug/examples/cdp_command "ws://127.0.0.1:$script_port/devtools/page/page-1" '[{"method":"Page.navigate","params":{"url":"http://127.0.0.1:7878/script-ast-arrays"}},{"method":"Page.captureScreenshot"}]' --screenshot tmp/script-journey/ast-arrays-home.png > tmp/script-journey/ast-arrays-home.json
           target/debug/examples/cdp_journey "ws://127.0.0.1:$script_port/devtools/page/page-1" http://127.0.0.1:7878/script-ast-arrays tmp/script-journey/cdp-ast-arrays-destination.png 2>&1 | tee tmp/script-journey/cdp-ast-arrays-client.log
           BOUND_CDP
-      - name: Exercise retained click and submit handlers over native input and CDP
+      - name: Preserve original-engine retained handlers over native input and CDP
         run: |
           set -euo pipefail
           mkdir -p tmp/event-journey
@@ -252,10 +252,10 @@ jobs:
             sleep 0.1
           done
           [[ "$event_ready" == true ]]
-          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --smoke-events --exit-after-smoke --evidence-dir tmp/event-journey/native 2>&1 | tee tmp/event-journey/native.log
+          timeout 30s xvfb-run -a target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --legacy-page-tests --smoke-events --exit-after-smoke --evidence-dir tmp/event-journey/native 2>&1 | tee tmp/event-journey/native.log
           timeout 45s xvfb-run -a bash <<'EVENT_CDP'
           set -euo pipefail
-          target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --remote-debugging-port=0 > tmp/event-journey/browser.log 2>&1 &
+          target/debug/mgbrowser http://127.0.0.1:7878/script-events --enable-scripts --legacy-page-tests --remote-debugging-port=0 > tmp/event-journey/browser.log 2>&1 &
           event_browser_pid=$!
           trap 'kill "$event_browser_pid" 2>/dev/null || true; wait "$event_browser_pid" 2>/dev/null || true' EXIT
           event_debugger_ready=false
@@ -275,6 +275,48 @@ jobs:
           if grep -F '/event-trap' tmp/event-journey/server.log; then exit 1; fi
           [[ $(grep -cFx '200 OK /event-search' tmp/event-journey/server.log) == 2 ]]
           [[ $(grep -cFx '200 OK /event-destination' tmp/event-journey/server.log) == 2 ]]
+      - name: Exercise packaged Boa page scripts and retained handlers over native input and CDP
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/boa-journey
+          target/debug/examples/journey_server > tmp/boa-journey/server.log 2>&1 &
+          boa_fixture_pid=$!
+          trap 'kill "$boa_fixture_pid" 2>/dev/null || true; wait "$boa_fixture_pid" 2>/dev/null || true' EXIT
+          boa_ready=false
+          boa_deadline=$((SECONDS + 10))
+          while (( SECONDS < boa_deadline )); do
+            kill -0 "$boa_fixture_pid"
+            if curl --fail --silent --max-time 1 http://127.0.0.1:7878/script-boa > /dev/null; then boa_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$boa_ready" == true ]]
+          # This payload was rebuilt without legacy-test-engine before packaging.
+          payload=tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          timeout 30s xvfb-run -a "$payload" http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/boa-journey/native 2>&1 | tee tmp/boa-journey/native.log
+          timeout 30s xvfb-run -a "$payload" http://127.0.0.1:7878/script-events --enable-scripts --smoke-events --exit-after-smoke --evidence-dir tmp/boa-journey/native-events 2>&1 | tee tmp/boa-journey/native-events.log
+          timeout 60s xvfb-run -a bash <<'BOA_CDP'
+          set -euo pipefail
+          tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --remote-debugging-port=0 > tmp/boa-journey/browser.log 2>&1 &
+          boa_browser_pid=$!
+          trap 'kill "$boa_browser_pid" 2>/dev/null || true; wait "$boa_browser_pid" 2>/dev/null || true' EXIT
+          boa_debugger_ready=false
+          boa_debugger_deadline=$((SECONDS + 10))
+          while (( SECONDS < boa_debugger_deadline )); do
+            kill -0 "$boa_browser_pid"
+            boa_port=
+            if [[ -f tmp/boa-journey/browser.log ]]; then
+              boa_port=$(sed -n 's#^CDP listening on ws://127.0.0.1:\([0-9][0-9]*\)/.*#\1#p' tmp/boa-journey/browser.log)
+            fi
+            if [[ -n "$boa_port" ]] && curl --fail --silent --max-time 1 "http://127.0.0.1:$boa_port/json/version" > /dev/null; then boa_debugger_ready=true; break; fi
+            sleep 0.1
+          done
+          [[ "$boa_debugger_ready" == true ]]
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$boa_port/devtools/page/page-1" http://127.0.0.1:7878/script-boa tmp/boa-journey/cdp-destination.png 2>&1 | tee tmp/boa-journey/client.log
+          target/debug/examples/cdp_journey "ws://127.0.0.1:$boa_port/devtools/page/page-1" http://127.0.0.1:7878/script-events tmp/boa-journey/cdp-event-destination.png 2>&1 | tee tmp/boa-journey/event-client.log
+          BOA_CDP
+          if grep -F '/event-trap' tmp/boa-journey/server.log; then exit 1; fi
+          [[ $(grep -cFx '200 OK /event-search' tmp/boa-journey/server.log) == 2 ]]
+          [[ $(grep -cFx '200 OK /event-destination' tmp/boa-journey/server.log) == 2 ]]
       - name: Preserve rendered local journey
         if: always()
         uses: actions/upload-artifact@v4
@@ -290,3 +332,4 @@ jobs:
             tmp/cdp-version.json
             tmp/script-journey
             tmp/event-journey
+            tmp/boa-journey

@@ -4,6 +4,8 @@ use mg_butane::runtime::{AllocationReport, Host, Runtime, Value};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
+#[cfg(feature = "modern")]
+pub mod boa;
 mod events;
 use crate::page_session::{
     ArenaSnapshot, DefaultAction, EventOutcome, RealmState, SessionInput, SessionReply,
@@ -30,6 +32,9 @@ pub struct Reply {
     pub scripts_executed: usize,
     /// Fixed-size realm diagnostics, absent if rejected before runtime creation.
     pub allocations: Option<AllocationReport>,
+    #[cfg(feature = "modern")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boa: Option<mg_butane::modern::Report>,
 }
 
 struct BrowserHost {
@@ -66,6 +71,8 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
         errors: Vec::new(),
         scripts_executed: 0,
         allocations: None,
+        #[cfg(feature = "modern")]
+        boa: None,
     };
     if request.html.len() > MAX_SOURCE || request.url.len() > 16_384 {
         reply
@@ -273,6 +280,8 @@ impl PageRealm {
             errors: old.errors,
             scripts_executed: old.scripts_executed,
             allocations: old.allocations,
+            #[cfg(feature = "modern")]
+            boa: None,
             state,
             acknowledgements: Vec::new(),
         };

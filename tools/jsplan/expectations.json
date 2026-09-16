@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "review": "P0/P1 release-profile baseline: Boa symbol WeakMap keys are two real TypeError failures; unavailable Test262 realm hooks stay unsupported. No whole-suite conformance claim.",
-  "manifest_sha256": "8c89b2ea9a082609b329bc78ab210975c981c438b9f054faad804ba02195dbcf",
+  "manifest_sha256": "dba86969e48c7e5cc21fe182f38093a6a40f3acc4d8fe72518e0c262a6e43966",
   "denominator": {
     "files": 53582,
     "variants": 102926,

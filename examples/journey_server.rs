@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 include_str!("../tests/fixtures/journey/home.html"),
             ),
             "/script-home" => ("200 OK", include_str!("../tests/fixtures/script/home.html")),
+            "/script-boa" => ("200 OK", include_str!("../tests/fixtures/script/boa.html")),
             "/script-core-intrinsics" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/core-intrinsics.html"),
