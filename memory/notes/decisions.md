@@ -1,5 +1,10 @@
 # Decisions and open choices
 
+2026-09-16: User explicitly directs always pushing this kind of project work to
+main, with no PRs. Apply this as the default for user-directed plans, documentation
+and routine changes unless the user explicitly asks for a PR. Record the rule in
+AGENTS.md and publish JSPLAN.md directly; the earlier draft PR is superseded.
+
 2026-09-16: User requests deep Butane/JavaScript planning in JSPLAN.md, aiming for
 eventual V8 drop-in use, modern Vue/React, useful V8/academic techniques, pragmatic
 compatibility scope and reuse of pure-Rust work. JSPLAN.md recommends a Boa-first

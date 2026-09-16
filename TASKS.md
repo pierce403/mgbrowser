@@ -1,10 +1,12 @@
 # Work queue
 
-2026-09-16 current request: **T-013 / F-016, Butane research and JSPLAN.md**.
+2026-09-16 planning complete: **T-013 / F-016, Butane research and JSPLAN.md**.
 The deliverable is the researched [JSPLAN.md](JSPLAN.md), with repository-specific
 gaps, Rust reuse candidates, V8 techniques, academic work and acceptance gates.
 This request is documentation only. Engine adoption and implementation remain
 planned; the completed HN task below does not reactivate unrelated work.
+User clarified publication goes directly to main; PRs are not the default for
+user-directed work. See the standing instruction in AGENTS.md.
 
 Proposed implementation order from JSPLAN.md, each as a bounded contribution:
 

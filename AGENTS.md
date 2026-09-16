@@ -44,6 +44,12 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
 
 ## Work and closeout
 
+- Standing user instruction (2026-09-16): publish user-directed project work,
+  including plans, documentation and routine changes, directly to `main`. Do not
+  open a PR or draft PR for this work unless the user explicitly requests one.
+  Preserve unrelated changes and use ordinary fast-forward publication; this does
+  not authorize force pushes, history replacement or unrequested implementation.
+
 - Standing user instruction (2026-09-08): every user-facing feature addition must
   finish with a new versioned GitHub Release and an updated, verified website
   installer. A source-only push is not feature completion. Bump the package/lock
@@ -59,7 +65,10 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
 - Stage reusable observations in `memory/learnings.md`; promote verified recurring lessons into concise instructions or skills. User decisions can be recorded directly. Do not turn a single failure into a universal rule.
 - Select skills automatically from `SKILLS.md` when their descriptions match; read the selected `SKILL.md`. Use `curator` when procedures change. Keep skills in tracked `skills/`, accessible to any harness through this catalog.
 - Keep `index.html` accurate whenever milestones or project scope change. Run the Rust site tool below to refresh feature status and the latest log date. It must pass `--check` before publication.
-- Run relevant checks, record remaining limitations, and commit finished work. Push when the task authorizes publication; public contributions use PRs. Never auto-merge research results merely because a score improved.
+- Run relevant checks, record remaining limitations, and commit finished work.
+  Publish user-directed work directly to main under the standing instruction
+  above. Outside contributors may still use PRs. Never adopt research results
+  merely because a score improved.
 - During active work, revisit https://recurse.bot if the last check is over a week old; record useful differences, applying project judgment. No background agent or scheduled research run is implied.
 
 ## Verified bootstrap commands
