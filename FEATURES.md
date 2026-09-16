@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-019 : Navigation toolbar and local bookmarks
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -25,11 +25,21 @@ compatibility. See docs/BOOKMARKS.md.
 
 ### Test criteria
 
-- [ ] Text-only URL selection at 100/125/200%; left menu and history availability.
-- [ ] Bookmark values, limits, persistence, deduplication, removal and file failures.
-- [ ] Modal input isolation, compact pagination and no-chrome embedding preserved.
-- [ ] Packaged native back/forward/refresh and bookmark add/open/remove/restart.
-- [ ] Exact-commit CI/Pages, new GitHub Release and fresh public installer verified.
+- [x] Text-only URL selection at 100/125/200%; left menu and history availability.
+- [x] Bookmark values, limits, persistence, deduplication, removal and file failures.
+- [x] Modal input isolation, compact pagination and no-chrome embedding preserved.
+- [x] Packaged native back/forward/refresh and bookmark add/open/remove/restart.
+- [x] Exact-commit CI/Pages, new GitHub Release and fresh public installer verified.
+
+Published v0.7.0 at 79488712b2228ba8080c53757e3e8f70a173b3fa. Rust CI
+35160797175, JSPLAN 35160797233, Pages 35160797223 and release 35161878680 pass.
+Local replay: 1,389 debug and 1,289 selected release checks, all existing native/
+CDP journeys and packaged installer/updater/appearance acceptance. Public bytes,
+checksum, exact curl install/reinstall, worker/session/Boa, desktop/icons and
+actual v0.6.0 self-update/no-op recheck pass. The public-installed executable
+passes native bookmark add/open/remove/restart, loaded-page refresh/history,
+URL-only selection and complete scale/theme acceptance; its dialog is visually
+inspected. Receipts are in the 2026-09-16 log. No broader web/MVP claim.
 
 ## F-018 : Desktop-aware browser size
 

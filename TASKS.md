@@ -1,10 +1,15 @@
 # Work queue
 
-2026-09-16 active: **T-016 / F-019**, navigation toolbar and local bookmarks.
-Move Menu to the left of the URL with Back/Forward/Refresh/Bookmark; highlight
-only URL text. Implement bounded local add/open/remove persistence and shortcuts,
-preserve theme/scale and modal behavior, then ship v0.7.0 through exact-commit
-CI/Pages, release payload and public installer/native acceptance. No engine work.
+2026-09-16 complete: **T-016 / F-019 shipped as v0.7.0**, release commit
+`79488712b2228ba8080c53757e3e8f70a173b3fa`. Menu, Back, Forward, Refresh and
+Bookmark sit left of the URL; selection highlights only visible URL text.
+Local bounded bookmarks support save/open/remove, restart and shortcuts.
+Rust CI 35160797175, JSPLAN 35160797233, Pages 35160797223 and release
+35161878680 pass. Public archive/checksum, exact curl install/reinstall,
+worker/session/Boa, desktop/icons and actual v0.6.0 update/no-op recheck pass.
+The public binary repeats native history/refresh/bookmark/restart acceptance
+and existing scale/theme/native/CDP checks. No engine feature was added.
+See today's log for receipts. No release gates remain; stop this request here.
 
 2026-09-16 complete: **T-015 / F-018 shipped as v0.6.0**, release commit
 `363065dc17b51d8159d3434b74e393686bdc9d99`. System follows desktop DPI (192 DPI
