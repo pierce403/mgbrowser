@@ -1,47 +1,37 @@
 # Work queue
 
-2026-09-16 closeout: **packaging-only v0.4.1 for the T-013 / F-016 Boa increment**.
-The bounded Boa v0.4.0 increment is implemented
-at release commit `7fe29669f25440cf82e1218e235aa745080874ff`. The opt-in production
+2026-09-16 complete: **T-013 / F-016 bounded Boa integration shipped as v0.4.1**,
+release commit `02b413f27e8ddce9b6408887317f08cd9b9b86b7`. The opt-in production
 path uses Boa for inline scripts, bounded Promise checkpoints and retained DOM
-events. See [the explicit process profile](docs/BOA.md). Rust CI 35134759156,
-JSPLAN CI 35134759136 and Pages 35134759152 are green on that exact commit.
-Release workflow 35136272001 is green and v0.4.0 is public. Exact public command
-install/reinstall, website/assets/checksum, version/About identity, worker/session
-selftests, real Boa fixture execution and desktop/icons pass. Two public-binary
-native and two external CDP journeys pass, with exact retained-event requests,
-zero traps and readable fatal-loop recovery followed by successful navigation.
-After the confirmed GitHub rate-limit reset, the real v0.3.0 updater rejected
-v0.4.0's 10,321,503-byte archive against its existing 8 MiB response cap. Publish
-v0.4.1 with the adopted `opt-level = "s"`, `strip = "symbols"` release profile
-and a package-size guard. The full local archive is 7,239,619 bytes, 1,148,989
-below the unchanged cap; unpacked payload is 23,746,560 bytes. Packaged worker/
-session checks and all 1,334 main debug tests pass. Default LTO/codegen settings,
-panic behavior, engine source, dependencies and resource/network limits are
-unchanged. Keep v0.4.0's tag/assets immutable. New exact-commit CI,
-release, public-install/journey and updater evidence remain required. Finish only
-this packaging fix and its release gates, then stop. Further engineering requires
-a new request.
-Google optimization remains deferred. No dual production engine or fallback.
+events. See [the explicit process profile](docs/BOA.md). Rust CI 35139133042,
+JSPLAN CI 35139133037, Pages 35139133092 and release workflow 35140430106 are
+green on that exact commit. Public archive/checksum, exact curl install/reinstall,
+version/About identity, worker/session selftests, real Boa fixture execution and
+desktop/icons pass. Two installed-binary native and two external CDP journeys
+pass, with retained-event requests, zero traps and readable fatal-loop recovery.
+Actual v0.3.0 and v0.4.0 binaries update to v0.4.1, then pass a no-op update check.
+The public archive is 7,240,140 bytes compressed and 23,746,560 unpacked, within
+the unchanged 8 MiB updater cap. The size-optimized, symbol-stripped release
+preserves engine source, dependencies, resource limits and panic behavior.
+v0.4.0's tag/assets remain immutable; its oversize-package failure and the full
+receipts remain in the dated log. No release gates remain. Stop here: further
+engineering requires a new request. Google optimization remains deferred.
+No dual production engine or fallback.
 User clarified publication goes directly to main; PRs are not the default for
 user-directed work. See the standing instruction in AGENTS.md.
 
-Closeout and deferred JSPLAN roadmap; later engineering requires a new request:
+Deferred JSPLAN roadmap; all later engineering requires a new request:
 
-1. **Current closeout only:** finish the smaller v0.4.1 package, unchanged locked
-   graph, exact-commit CI/release and fresh public installation/journey/updater
-   checks. Record exact receipts in the daily log. Do not resume implementation
-   after these gates pass.
-2. **Remaining P1/P2:** comprehensive cooperative work/heap control, expanded
+1. **Remaining P1/P2:** comprehensive cooperative work/heap control, expanded
    language/lifecycle acceptance and a broader application profile. Process-v1
    supplies enforceable final containment, not complete native/parser/regex/GC
    work accounting or full adoption-gate completion.
-3. **Remaining P3/P4:** external script/module loading, general tasks/timers and
+2. **Remaining P3/P4:** external script/module loading, general tasks/timers and
    broader DOM integration, then pinned
    React/Vue applications with real input and long-session acceptance.
-4. **P5/P6:** Measured interpreter optimizations, then optional baseline JIT with
+3. **P5/P6:** Measured interpreter optimizations, then optional baseline JIT with
    an explicit executable-memory/isolation design and evidence it pays off.
-5. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
+4. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
    architectures, tooling and Wasm as separately scoped work.
 
 F-016, the full P1 gate and P2-P8 exit criteria remain incomplete. The selected Boa

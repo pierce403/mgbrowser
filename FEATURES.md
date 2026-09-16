@@ -48,7 +48,7 @@ open. Exact release and public-installer receipts belong in the dated work log.
   evidence; any JIT has separate executable-memory and GC/deoptimization gates.
 - [ ] A named pinned external consumer passes the documented V8 source API subset;
   broad binary compatibility is not inferred from this result.
-- [x] The bounded v0.4.0 increment satisfies versioned release/installer policy;
+- [x] The bounded Boa increment and v0.4.1 packaging follow-up satisfy release/installer policy;
   this does not complete the wider feature or its remaining adoption gates.
 
 Published 2026-09-16: v0.4.0 at
@@ -59,6 +59,14 @@ desktop/icons and two native/two external CDP journeys pass. An infinite script
 stops at the opcode budget, leaves readable fallback and permits onward browsing
 in the same process. These authored fixtures prove the bounded integration, not
 general website or framework compatibility. See the dated log for receipts.
+
+Packaging follow-up v0.4.1 is published at
+02b413f27e8ddce9b6408887317f08cd9b9b86b7 with all exact-commit gates green.
+Size-oriented compilation and stripped symbols keep the complete public archive
+at 7,240,140 bytes, below existing updaters' unchanged 8 MiB download ceiling.
+The exact public installer, modern worker/session and native/CDP checks pass;
+actual v0.3.0 and v0.4.0 binaries both upgrade themselves and then report no newer
+release. Engine source, dependency graph and resource assertions are unchanged.
 
 ## F-015 : Self-updates and build identity
 

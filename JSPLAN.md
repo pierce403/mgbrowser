@@ -619,9 +619,10 @@ browser support. Audit and publish the exact active dependency graph.
 
 Its measured gaps led to the separately requested, process-contained Boa page
 integration in BOA.md, released as v0.4.0. Its actual old-version updater exposed
-an oversized archive despite successful public curl installation. Finish the
-packaging-only v0.4.1 follow-up and real upgrade verification before further
-features. Comprehensive native-work/GC
+an oversized archive despite successful public curl installation. The
+packaging-only v0.4.1 follow-up now passes real upgrades from v0.3.0 and v0.4.0,
+fresh public installation and packaged native/CDP checks. This bounded request
+is complete; further features require a new task. Comprehensive native-work/GC
 budgeting, external loading, browser frameworks and V8 compatibility remain
 explicit future gates rather than implied achievements.
 
