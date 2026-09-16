@@ -1,4 +1,5 @@
 //! Chassis: browser state, services, and optional chrome with a host-supplied platform.
+pub mod bookmarks;
 pub mod cdp;
 mod cdp_browser;
 #[cfg(feature = "chrome")]
@@ -38,6 +39,11 @@ enum Action {
     Menu,
     About,
     Settings,
+    Bookmarks,
+    ToggleBookmark,
+    OpenBookmark(usize),
+    RemoveBookmark(usize),
+    BookmarkPage(bool),
     Theme(ThemePreference),
     Scale(ScalePreference),
     ScaleDown,
@@ -92,6 +98,12 @@ pub struct Browser {
     menu_open: bool,
     about_open: bool,
     settings_open: bool,
+    bookmarks_open: bool,
+    bookmarks: Vec<bookmarks::Bookmark>,
+    bookmark_page: usize,
+    bookmark_change: Option<bookmarks::BookmarkChange>,
+    bookmark_refresh: bool,
+    bookmark_status: String,
     modal_focus: usize,
     theme_preference: ThemePreference,
     system_theme: ColorScheme,
@@ -245,10 +257,25 @@ impl Browser {
         self.dirty = true;
     }
     fn modal_open(&self) -> bool {
-        self.menu_open || self.about_open || self.settings_open
+        self.menu_open || self.about_open || self.settings_open || self.bookmarks_open
     }
     fn modal_actions(&self) -> Vec<Action> {
-        if self.settings_open {
+        if self.bookmarks_open {
+            let start = self.bookmark_page * self.bookmark_rows();
+            let mut actions = Vec::new();
+            for i in start..(start + self.bookmark_rows()).min(self.bookmarks.len()) {
+                actions.push(Action::OpenBookmark(i));
+                actions.push(Action::RemoveBookmark(i));
+            }
+            if self.bookmark_page > 0 {
+                actions.push(Action::BookmarkPage(false));
+            }
+            if start + self.bookmark_rows() < self.bookmarks.len() {
+                actions.push(Action::BookmarkPage(true));
+            }
+            actions.push(Action::CloseMenu);
+            actions
+        } else if self.settings_open {
             vec![
                 Action::Theme(ThemePreference::System),
                 Action::Theme(ThemePreference::Light),
@@ -265,6 +292,7 @@ impl Browser {
                 Action::About,
                 Action::Update,
                 Action::Settings,
+                Action::Bookmarks,
                 Action::CloseMenu,
             ]
         }
@@ -272,7 +300,10 @@ impl Browser {
     fn modal_action(&self, action: &Action) -> bool {
         match action {
             Action::Menu | Action::CloseMenu => true,
-            Action::About | Action::Settings => self.menu_open,
+            Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
+            Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
+                self.bookmarks_open
+            }
             Action::Update => self.menu_open || self.about_open,
             Action::Theme(_) => self.settings_open,
             Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
@@ -313,6 +344,41 @@ impl Browser {
     pub fn take_update_request(&mut self) -> bool {
         std::mem::take(&mut self.update_requested)
     }
+    /// Supply bookmarks from a host store. Chassis never accesses user files.
+    pub fn set_bookmarks(&mut self, entries: Vec<bookmarks::Bookmark>) {
+        self.bookmarks = entries
+            .into_iter()
+            .take(bookmarks::MAX_BOOKMARKS)
+            .filter_map(|b| bookmarks::Bookmark::new(&b.url, &b.title).ok())
+            .collect();
+        self.bookmark_page = self
+            .bookmark_page
+            .min(self.bookmarks.len().saturating_sub(1) / self.bookmark_rows());
+        self.modal_focus = 0;
+        self.hits.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    pub fn take_bookmark_change(&mut self) -> Option<bookmarks::BookmarkChange> {
+        self.bookmark_change.take()
+    }
+    pub fn take_bookmark_refresh(&mut self) -> bool {
+        std::mem::take(&mut self.bookmark_refresh)
+    }
+    pub fn set_bookmark_status(&mut self, status: String) {
+        self.status = status.clone();
+        self.bookmark_status = status;
+        self.dirty = true;
+    }
+    fn bookmark_rows(&self) -> usize {
+        ((self.height.saturating_sub(40).min(540).saturating_sub(122)) / 48).clamp(1, 8) as usize
+    }
+    fn current_bookmark(&self) -> Option<bookmarks::Bookmark> {
+        bookmarks::Bookmark::new(&self.page_url, &self.document.title).ok()
+    }
+    fn is_bookmarked(&self) -> bool {
+        self.bookmarks.iter().any(|b| b.url == self.page_url)
+    }
     pub fn new(fonts: Fonts, scripts: Arc<dyn scripts::ScriptRuntime>) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
@@ -320,6 +386,12 @@ impl Browser {
             menu_open: false,
             about_open: false,
             settings_open: false,
+            bookmarks_open: false,
+            bookmarks: Vec::new(),
+            bookmark_page: 0,
+            bookmark_change: None,
+            bookmark_refresh: false,
+            bookmark_status: "Local bookmarks : Ctrl+D to save or remove this page".into(),
             modal_focus: 0,
             theme_preference: ThemePreference::System,
             system_theme: ColorScheme::Light,
@@ -1177,12 +1249,62 @@ impl Browser {
         self.select_all = false;
         if matches!(
             action,
-            Action::Menu | Action::About | Action::Settings | Action::Update | Action::CloseMenu
+            Action::Menu
+                | Action::About
+                | Action::Settings
+                | Action::Update
+                | Action::CloseMenu
+                | Action::Bookmarks
+                | Action::OpenBookmark(_)
+                | Action::BookmarkPage(_)
         ) {
             self.hits.clear();
             self.pointer_press = None;
+            self.bookmarks_open = false;
         }
         match action {
+            Action::Bookmarks => {
+                self.bookmarks_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.settings_open = false;
+                self.bookmark_refresh = true;
+                self.modal_focus = 0;
+            }
+            Action::ToggleBookmark => {
+                if let Some(bookmark) = self.current_bookmark() {
+                    self.bookmark_change = Some(if self.is_bookmarked() {
+                        bookmarks::BookmarkChange::Remove(bookmark.url)
+                    } else {
+                        bookmarks::BookmarkChange::Add(bookmark)
+                    });
+                } else {
+                    self.set_bookmark_status(
+                        "Only HTTP(S) pages without URL credentials can be bookmarked".into(),
+                    );
+                }
+            }
+            Action::OpenBookmark(index) => {
+                if let Some(bookmark) = self.bookmarks.get(index) {
+                    self.navigate(bookmark.url.clone(), None, true);
+                }
+            }
+            Action::RemoveBookmark(index) => {
+                if let Some(bookmark) = self.bookmarks.get(index) {
+                    self.bookmark_change =
+                        Some(bookmarks::BookmarkChange::Remove(bookmark.url.clone()));
+                }
+            }
+            Action::BookmarkPage(next) => {
+                self.bookmarks_open = true;
+                let last = self.bookmarks.len().saturating_sub(1) / self.bookmark_rows();
+                self.bookmark_page = if next {
+                    (self.bookmark_page + 1).min(last)
+                } else {
+                    self.bookmark_page.saturating_sub(1)
+                };
+                self.modal_focus = 0;
+            }
             Action::Menu => {
                 self.menu_open = !self.menu_open;
                 self.about_open = false;
@@ -1268,7 +1390,7 @@ impl Browser {
                     self.navigate(href, None, true);
                 }
             }
-            Action::Reload => self.navigate(self.address.clone(), None, false),
+            Action::Reload => self.navigate(self.page_url.clone(), None, false),
             Action::Back => {
                 if self.history_at > 0 && self.inflight < 2 {
                     self.history_at -= 1;
@@ -1390,6 +1512,14 @@ impl Browser {
             self.activate(Action::Address);
             return;
         }
+        if self.chrome && ctrl && !alt && (sym == b'd' as u32 || sym == b'D' as u32) {
+            self.activate(Action::ToggleBookmark);
+            return;
+        }
+        if self.chrome && ctrl && shift && !alt && (sym == b'o' as u32 || sym == b'O' as u32) {
+            self.activate(Action::Bookmarks);
+            return;
+        }
         if ctrl && (sym == b'a' as u32 || sym == b'A' as u32) {
             self.select_all = true;
             self.dirty = true;
@@ -1397,6 +1527,10 @@ impl Browser {
         }
         if alt && sym == 0xff51 {
             self.activate(Action::Back);
+            return;
+        }
+        if alt && sym == 0xff53 {
+            self.activate(Action::Forward);
             return;
         }
         if sym == 0xffc2 || (ctrl && (sym == b'r' as u32 || sym == b'R' as u32)) {
@@ -1915,9 +2049,9 @@ mod tests {
         assert_eq!(app.take_theme_change(), None);
         assert_eq!(app.effective_theme(), ColorScheme::Dark);
         app.paint();
-        app.click(app.width as i32 - 60, 75);
+        app.click(28, 31);
         app.paint();
-        app.click(app.width as i32 - 180, 200);
+        app.click(100, 142);
         assert!(app.settings_open && !app.menu_open && !app.about_open);
         for preference in [
             ThemePreference::Light,
@@ -2086,10 +2220,10 @@ mod tests {
         let mut app = test_app();
         app.set_build_info("0.2.1", "Wed, 16 Sep 2026 12:00:00 GMT", "abc123");
         app.paint();
-        app.click(app.width as i32 - 60, 75);
+        app.click(28, 31);
         assert!(app.menu_open);
         app.paint();
-        app.click(app.width as i32 - 180, 120);
+        app.click(100, 74);
         assert!(app.about_open);
         app.paint();
         assert!(app.about_lines[1].contains("16 Sep 2026"));
@@ -2687,6 +2821,9 @@ impl Browser {
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {
         self.chrome = enabled && cfg!(feature = "chrome");
+        self.bookmarks_open = false;
+        self.bookmark_change = None;
+        self.bookmark_refresh = false;
         self.hits.clear();
         self.boxes.clear();
         self.focus = Focus::Page;
@@ -2760,6 +2897,127 @@ fn test_app() -> Browser {
         Fonts::from_bytes(std::fs::read(path).unwrap()).unwrap(),
         Arc::new(scripts::DisabledScripts),
     )
+}
+
+#[cfg(all(test, feature = "chrome"))]
+mod bookmark_tests {
+    use super::*;
+    #[test]
+    fn bookmarks_use_committed_page_and_keyboard_toggles() {
+        let mut app = test_app();
+        app.page_url = "https://example.com/".into();
+        app.document.title = "Saved page".into();
+        app.address = "https://not-submitted.example/".into();
+        app.key(b'd' as u32, true, false, false);
+        let Some(bookmarks::BookmarkChange::Add(value)) = app.take_bookmark_change() else {
+            panic!("missing add")
+        };
+        assert_eq!(value.url, app.page_url);
+        assert_eq!(value.title, "Saved page");
+        app.set_bookmarks(vec![value]);
+        assert!(app.is_bookmarked());
+        app.key(b'd' as u32, true, false, false);
+        assert!(
+            matches!(app.take_bookmark_change(), Some(bookmarks::BookmarkChange::Remove(url)) if url == app.page_url)
+        );
+        app.key(b'O' as u32, true, true, false);
+        assert!(app.bookmarks_open && app.take_bookmark_refresh());
+        app.type_text("must not reach address");
+        assert_eq!(app.address, "https://not-submitted.example/");
+        app.key(0xff1b, false, false, false);
+        assert!(!app.modal_open());
+        app.set_chrome(false);
+        app.key(b'd' as u32, true, false, false);
+        assert!(app.take_bookmark_change().is_none());
+    }
+    #[test]
+    fn bookmark_pages_fit_small_windows_and_stale_clicks_are_invalidated() {
+        let mut app = test_app();
+        let entries = (0..12)
+            .map(|i| {
+                bookmarks::Bookmark::new(&format!("https://example.com/{i}"), &format!("Page {i}"))
+                    .unwrap()
+            })
+            .collect();
+        app.set_bookmarks(entries);
+        app.resize(360, 240);
+        app.activate(Action::Bookmarks);
+        app.paint();
+        assert_eq!(app.bookmark_rows(), 1);
+        for hit in &app.hits {
+            assert!(
+                hit.x >= 0
+                    && hit.y >= 0
+                    && hit.x + hit.w as i32 <= 360
+                    && hit.y + hit.h as i32 <= 240
+            );
+            assert!(app.modal_action(&hit.action));
+        }
+        app.activate(Action::BookmarkPage(true));
+        assert!(app.bookmarks_open);
+        assert_eq!(app.bookmark_page, 1);
+        app.paint();
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::OpenBookmark(1)))
+        );
+        app.pointer_down(50, 100);
+        app.set_bookmarks(vec![]);
+        assert!(app.hits.is_empty() && app.pointer_press.is_none());
+        assert_eq!(app.bookmark_page, 0);
+        app.paint();
+        assert_eq!(app.modal_actions().len(), 1);
+    }
+    #[test]
+    fn address_selection_covers_only_visible_url_at_every_scale() {
+        let mut app = test_app();
+        for percent in [100, 125, 200] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            app.address = "https://example.com/".into();
+            app.activate(Action::Address);
+            let c = app.paint();
+            let pixel = |x: usize, y: usize| {
+                c.pixels
+                    [(y * percent as usize / 100) * c.width as usize + x * percent as usize / 100]
+            };
+            let p = app.effective_theme().palette();
+            assert_eq!(pixel(249, 21), p.selection);
+            assert_eq!(pixel(700, 21), p.field);
+            app.address.clear();
+            let c = app.paint();
+            assert_eq!(
+                c.pixels[(21 * percent as usize / 100) * c.width as usize
+                    + 249 * percent as usize / 100],
+                p.field
+            );
+        }
+    }
+    #[test]
+    fn disabled_history_has_no_hit_and_menu_is_left_of_address() {
+        let mut app = test_app();
+        app.paint();
+        assert!(
+            !app.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::Back | Action::Forward))
+        );
+        let menu = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Menu))
+            .unwrap();
+        assert!(menu.x < 240 && menu.y == 14);
+        app.history = vec![
+            "https://example.com/".into(),
+            "https://example.org/".into(),
+            "https://example.net/".into(),
+        ];
+        app.history_at = 1;
+        app.paint();
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Back)));
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Forward)));
+    }
 }
 
 #[cfg(test)]

@@ -53,8 +53,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .data)
     };
     let before = capture()?;
-    click(geometry.width as i16 - 60, 75)?;
-    click(geometry.width as i16 - 180, 120)?;
+    click(28, 31)?;
+    click(100, 74)?;
     let about = capture()?;
     assert_ne!(before, about, "About did not open");
     let rgb: Vec<_> = about

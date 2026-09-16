@@ -60,6 +60,14 @@ binary after release. Screen-global X11 DPI is not per-monitor Wayland scaling.
 
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 
+For toolbar/bookmark changes, the scale smoke also tests packaged native
+Back/Forward/Refresh, loaded-versus-edited URL selection, local save/open/remove,
+restart and Ctrl+D. Preserve those assertions when changing toolbar coordinates.
+Run bookmark store/value/modal tests and the independent no-chrome embedding
+gate. Use private XDG roots only: never read or modify real user bookmarks.
+Inspect the saved bookmark-dialog screenshot, then repeat the same acceptance
+with the public-installed release. Storage belongs to the host, not Chassis.
+
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis
 styled_embedding journey (real linked CSS, downloaded SVG and a scrolled click).
 Read docs/HACKER_NEWS.md for the bounded desktop contract. Compare identical

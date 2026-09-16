@@ -250,7 +250,6 @@ impl<'a> Browser<'a> {
         let result = wait(&format!("rendered scale {percent}%"), || {
             let frame = self.frame()?;
             let edge = physical(107, percent) as usize;
-            let logical_width = (u32::from(frame.width) * 100).div_ceil(u32::from(percent)) as i32;
             let hints = WmSizeHints::get_normal_hints(&self.display.conn, self.window)?.reply()?;
             Ok(frame.pixel(0, 0) == HTTP
                 && frame.pixel(0, edge - 1) == HTTP
@@ -265,8 +264,8 @@ impl<'a> Browser<'a> {
                 )
                 && matches!(
                     frame.pixel(
-                        physical(logical_width - 98, percent) as usize,
-                        physical(64, percent) as usize
+                        physical(12, percent) as usize,
+                        physical(16, percent) as usize
                     ),
                     0x323c35 | 0xe3e9df
                 )
@@ -514,15 +513,13 @@ impl<'a> Browser<'a> {
         ))
     }
     fn settings(&self) -> Result<()> {
-        let (w, h) = self.logical_size()?;
-        let menu_y = 102.min(h.saturating_sub(170));
-        self.click(w - 60, 75)?;
+        self.click(28, 31)?;
         let menu = wait("painted Menu", || {
             let f = self.frame()?;
             Ok(matches!(
                 f.pixel(
-                    physical(w - 230, self.scale) as usize,
-                    physical(menu_y + 9, self.scale) as usize
+                    physical(18, self.scale) as usize,
+                    physical(63, self.scale) as usize
                 ),
                 0x323c35 | 0xe3e9df
             ))
@@ -532,7 +529,7 @@ impl<'a> Browser<'a> {
                 .save(&self.log.with_extension("menu-failure.png"))?;
         }
         menu?;
-        self.click(w - 180, menu_y + 100)?;
+        self.click(100, 142)?;
         let (x, y, _) = self.settings_geometry()?;
         wait("painted Settings", || {
             let f = self.frame()?;
@@ -603,7 +600,7 @@ fn main() -> Result<()> {
     let mut browser = Browser::start(&display, &payload, &scratch, "system-dpi")?;
     browser.wait_scale(200)?;
     let frame = browser.settled()?;
-    frame.sharp_two_x_text((24, 21, 40, 22));
+    frame.sharp_two_x_text((250, 22, 200, 20));
     frame.sharp_two_x_text((32, 132, 300, 30));
     frame.save(&scratch.join("native-200.png"))?;
     browser.journey()?;
@@ -705,6 +702,77 @@ fn main() -> Result<()> {
     browser.key(u32::from(b'0'), true)?;
     browser.wait_scale(100)?;
     saved(&scratch, "light", "system".into())?;
+    // Reuse the owned display, native input and unchanged local page fixtures.
+    // This runs against the packaged/public-installed executable, not cargo run.
+    browser.resize(1100, 820)?;
+    browser.navigate("/")?;
+    browser.key(b'l' as u32, true)?;
+    let selected = browser.settled()?;
+    assert_eq!(
+        selected.pixel(700, 21),
+        0xffffff,
+        "selection filled blank address space"
+    );
+    assert_ne!(selected.pixel(249, 21), 0xffffff, "URL selection missing");
+    browser.text("https://not-submitted.example/")?;
+    browser.click(204, 31)?;
+    let bookmarks_path = scratch.join("config/mgbrowser/bookmarks.json");
+    wait("bookmark current page", || {
+        let Ok(bytes) = fs::read(&bookmarks_path) else {
+            return Ok(false);
+        };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        Ok(value["entries"].as_array().unwrap().len() == 1
+            && value["entries"][0]["url"] == format!("{BASE}/"))
+    })?;
+    // Refresh must ignore the edited address, then navigation/history must work.
+    let count = browser.loaded_count()?;
+    browser.click(160, 31)?;
+    browser.loaded_after(count, "Local browser journey fixture")?;
+    browser.navigate("/destination")?;
+    let count = browser.loaded_count()?;
+    browser.click(72, 31)?;
+    browser.loaded_after(count, "Local browser journey fixture")?;
+    let count = browser.loaded_count()?;
+    browser.click(116, 31)?;
+    browser.loaded_after(count, "/destination")?;
+    drop(browser);
+    let mut browser = Browser::start(&display, &payload, &scratch, "bookmark-restart")?;
+    browser.wait_scale(100)?;
+    browser.navigate("/destination")?;
+    browser.click(28, 31)?;
+    browser.settled()?;
+    browser.click(100, 176)?;
+    wait("bookmark dialog", || {
+        Ok(browser.frame()?.pixel(170, 140) == 0xc4cebd)
+    })?;
+    browser.settled()?.save(&scratch.join("bookmarks.png"))?;
+    let count = browser.loaded_count()?;
+    browser.click(230, 218)?;
+    browser.loaded_after(count, "Local browser journey fixture")?;
+    browser.click(28, 31)?;
+    browser.settled()?;
+    browser.click(100, 176)?;
+    wait("bookmark dialog reopened", || {
+        Ok(browser.frame()?.pixel(170, 140) == 0xc4cebd)
+    })?;
+    browser.click(878, 218)?;
+    wait("bookmark removed", || {
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&bookmarks_path)?)?;
+        Ok(value["entries"].as_array().unwrap().is_empty())
+    })?;
+    browser.key(0xff1b, false)?;
+    browser.key(b'd' as u32, true)?;
+    wait("Ctrl+D saves bookmark", || {
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&bookmarks_path)?)?;
+        Ok(value["entries"].as_array().unwrap().len() == 1)
+    })?;
+    browser.key(b'd' as u32, true)?;
+    wait("Ctrl+D removes bookmark", || {
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&bookmarks_path)?)?;
+        Ok(value["entries"].as_array().unwrap().is_empty())
+    })?;
+    println!("NATIVE_BOOKMARK_TOOLBAR_SMOKE_OK {}", scratch.display());
     println!("NATIVE_SCALE_SMOKE_OK {}", scratch.display());
     Ok(())
 }

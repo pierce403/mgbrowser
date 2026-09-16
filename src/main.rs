@@ -63,6 +63,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
+                "Toolbar: Menu, Back, Forward, Refresh, Bookmark, URL.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\n"
+            );
+            println!(
                 "Menu > Settings: theme and browser size (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
@@ -164,6 +167,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     app.configure_journey(journey);
     let settings = Settings::user();
+    let bookmarks = mg_browser::bookmarks::BookmarkStore::user();
+    match bookmarks.load() {
+        Ok(entries) => app.set_bookmarks(entries),
+        Err(error) => app.set_bookmark_status(error),
+    }
     match settings.load() {
         Ok(preferences) => {
             app.set_theme_preference(preferences.theme);
@@ -346,6 +354,27 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         app.poll();
+        if app.take_bookmark_refresh() {
+            match bookmarks.load() {
+                Ok(entries) => app.set_bookmarks(entries),
+                Err(error) => app.set_bookmark_status(error),
+            }
+        }
+        if let Some(change) = app.take_bookmark_change() {
+            match bookmarks.apply(&change) {
+                Ok(entries) => {
+                    app.set_bookmarks(entries);
+                    app.set_bookmark_status(
+                        match change {
+                            mg_chassis::bookmarks::BookmarkChange::Add(_) => "Bookmark saved",
+                            mg_chassis::bookmarks::BookmarkChange::Remove(_) => "Bookmark removed",
+                        }
+                        .into(),
+                    );
+                }
+                Err(error) => app.set_bookmark_status(error),
+            }
+        }
         while let Ok(theme) = system_themes.try_recv() {
             app.set_system_theme(theme);
         }

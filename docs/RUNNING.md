@@ -16,8 +16,12 @@ The matching DejaVu/Liberation bold file is loaded when available. Set
 
 Use Ctrl+L to edit the URL, Enter to navigate, Tab to move between document input
 fields, Enter in a field to submit its form, and the mouse to activate links and
-buttons. Scroll with the wheel/Page Up/Page Down; Back/Next/Reload controls are in
-the toolbar. Text editing initially supports typing, select-all, and Backspace;
+buttons. Scroll with the wheel/Page Up/Page Down. Menu, Back, Forward, Refresh
+and Bookmark icons sit left of the URL. Alt+Left/Right navigates history;
+Ctrl+R or F5 refreshes the loaded page, ignoring unsubmitted address edits.
+Ctrl+D toggles a bookmark; Menu > Bookmarks or Ctrl+Shift+O opens the saved list.
+See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
+Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
 
 Plain `http://` URLs work as well as HTTPS. Since v0.1.1, the browser displays a red

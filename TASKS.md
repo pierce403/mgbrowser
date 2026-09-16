@@ -1,5 +1,11 @@
 # Work queue
 
+2026-09-16 active: **T-016 / F-019**, navigation toolbar and local bookmarks.
+Move Menu to the left of the URL with Back/Forward/Refresh/Bookmark; highlight
+only URL text. Implement bounded local add/open/remove persistence and shortcuts,
+preserve theme/scale and modal behavior, then ship v0.7.0 through exact-commit
+CI/Pages, release payload and public installer/native acceptance. No engine work.
+
 2026-09-16 complete: **T-015 / F-018 shipped as v0.6.0**, release commit
 `363065dc17b51d8159d3434b74e393686bdc9d99`. System follows desktop DPI (192 DPI
 selects 200%); saved manual 75..300% sizes and Ctrl+plus/minus/0 scale controls

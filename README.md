@@ -2,7 +2,14 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.6.0 Experimental Preview
+## v0.7.0 Experimental Preview
+
+The navigation bar now groups **Menu, Back, Forward, Refresh and Bookmark** to
+the left of the URL. The star or **Ctrl+D** saves/removes the loaded page.
+**Menu > Bookmarks** or **Ctrl+Shift+O** opens the local list, with open/remove
+controls. Bookmarks survive restart; no account or sync is involved.
+URL selection highlights just the visible URL text, not the whole address field.
+[Bookmark details](docs/BOOKMARKS.md).
 
 The browser now follows your desktop's display size, so controls and websites
 are readable on high-DPI screens. **Menu > Settings > Size** offers System or
@@ -21,7 +28,7 @@ own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
 backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
 
 The size-optimized, symbol-stripped release stays within older builds' unchanged
-8 MiB updater limit. This release changes browser sizing, not web compatibility.
+8 MiB updater limit. This release changes browser controls, not web compatibility.
 
 The installer selects the latest published release. Exact release and public-
 installation receipts are recorded in the [dated work log](memory/logs/2026-09-16.md).
@@ -84,7 +91,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.6.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.7.0.md) for manual install and uninstall.
 
 ## Components
 

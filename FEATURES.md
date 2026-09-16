@@ -6,6 +6,31 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-019 : Navigation toolbar and local bookmarks
+
+Stability: in-progress
+
+### Dependencies
+
+F-004 native navigation, F-013 optional Chassis chrome, F-017 themes, F-018 sizing.
+
+### Properties
+
+Menu, Back, Forward, Refresh and Bookmark precede the URL. Selection covers only
+visible URL text. Refresh and bookmark act on the loaded page, not an unsubmitted
+address. A bounded local bookmark list supports add, open, remove and pagination;
+Ctrl+D toggles and Ctrl+Shift+O opens it. Host-owned atomic storage preserves
+malformed data and merges concurrent-window edits. No sync, folders or new web
+compatibility. See docs/BOOKMARKS.md.
+
+### Test criteria
+
+- [ ] Text-only URL selection at 100/125/200%; left menu and history availability.
+- [ ] Bookmark values, limits, persistence, deduplication, removal and file failures.
+- [ ] Modal input isolation, compact pagination and no-chrome embedding preserved.
+- [ ] Packaged native back/forward/refresh and bookmark add/open/remove/restart.
+- [ ] Exact-commit CI/Pages, new GitHub Release and fresh public installer verified.
+
 ## F-018 : Desktop-aware browser size
 
 Stability: stable

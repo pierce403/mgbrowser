@@ -175,8 +175,8 @@ impl Browser {
     }
 
     fn open_settings(&self) -> Result<()> {
-        self.click(self.width as i16 - 60, 75)?;
-        self.click(self.width as i16 - 180, 200)
+        self.click(28, 31)?;
+        self.click(100, 142)
     }
 
     fn select(&self, index: i16) -> Result<()> {
