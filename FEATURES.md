@@ -48,7 +48,17 @@ open. Exact release and public-installer receipts belong in the dated work log.
   evidence; any JIT has separate executable-memory and GC/deoptimization gates.
 - [ ] A named pinned external consumer passes the documented V8 source API subset;
   broad binary compatibility is not inferred from this result.
-- [ ] Shipped user-facing increments satisfy versioned release/installer policy.
+- [x] The bounded v0.4.0 increment satisfies versioned release/installer policy;
+  this does not complete the wider feature or its remaining adoption gates.
+
+Published 2026-09-16: v0.4.0 at
+7fe29669f25440cf82e1218e235aa745080874ff. Exact-commit Rust, JSPLAN and Pages plus
+the tagged release workflow pass. The exact public curl command installs and
+reinstalls the checksum-verified binary, whose real Boa worker/session tests,
+desktop/icons and two native/two external CDP journeys pass. An infinite script
+stops at the opcode budget, leaves readable fallback and permits onward browsing
+in the same process. These authored fixtures prove the bounded integration, not
+general website or framework compatibility. See the dated log for receipts.
 
 ## F-015 : Self-updates and build identity
 

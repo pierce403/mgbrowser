@@ -1538,7 +1538,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mg-browser"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64",
  "flate2",
@@ -1558,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "mg-butane"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "mg-chassis"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64",
  "flate2",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "mg-sparkle"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "app_units",
  "atomic_refcell",

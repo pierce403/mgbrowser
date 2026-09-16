@@ -53,3 +53,7 @@ texts/source links and fails on unreviewed omissions; tools/licenses contains
 only explicitly reviewed missing-text fallbacks. Keep MPL dependency notices
 distinct from the project's Apache-2.0 license. Verify packaged size against
 the existing updater download/unpack limits without silently raising them.
+The compressed tar.gz must fit the already-installed transport's 8 MiB response
+limit as well as the separate 64 MiB unpacked limit. package-release.sh and the
+installer smoke test both enforce the compressed ceiling. Do not infer upgrade
+compatibility from a successful curl install or an unpack-only updater test.

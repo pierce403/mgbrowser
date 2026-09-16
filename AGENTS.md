@@ -2,14 +2,27 @@
 
 ## Purpose and responsibilities
 
-Current request (2026-09-16): integrate Boa until it executes actual page JS,
-then publish v0.4.0 through the standing release/installer gates. The production
-opt-in page path uses `mg-butane::modern` and Sparkle's `BoaPageRealm` under the
+Current closeout (2026-09-16): prepare packaging-only v0.4.1. The bounded Boa
+v0.4.0 increment is implemented
+at release commit `7fe29669f25440cf82e1218e235aa745080874ff`. Rust CI, JSPLAN CI
+and Pages are green on that exact commit. The public release, checksum-verified
+install/reinstall, real Boa fixture, worker/session selftests and desktop/icons
+and public native/CDP journeys with fatal-loop recovery are verified. The real
+v0.3.0 updater exposed v0.4.0's 10,321,503-byte archive exceeding the existing
+8 MiB download cap. The adopted v0.4.1 release profile uses `opt-level = "s"`
+and `strip = "symbols"`, retaining default LTO/codegen settings, panic behavior,
+engine source, dependencies, resource limits and immutable v0.4.0 assets. The
+local complete archive is 7,239,619 bytes, 1,148,989 below the cap; packaged
+worker/session checks and all 1,334 main debug tests pass. New exact-commit
+CI/release/public-install/journey/updater evidence is still required; do not claim
+it prematurely. Finish this packaging fix, then stop engineering until a new
+request. The production opt-in page path uses `mg-butane::modern`
+and Sparkle's `BoaPageRealm` under the
 explicit `boa-page-process-v1` profile in `docs/BOA.md`. No production fallback,
 native JS backend or worker syscall expansion. Original 4 MiB/fuel assertions
 remain in the explicit `legacy-test-engine` test lane. Full P1 cooperative
-resource control and the wider JSPLAN roadmap remain open; Google stays deferred.
-The dated log records exact-commit release and public-install verification.
+resource control, F-016 and P2-P8 remain unfinished; Google stays deferred.
+Record final release/public-install receipts in the dated log before closeout.
 
 Completed request (2026-09-16): T-011 / F-014 minimal Hacker News desktop rendering
 shipped in v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Standalone Rust

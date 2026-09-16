@@ -1,7 +1,7 @@
 # Mg components
 
 Adopted 2026-09-09. The workspace separates the original implementations into
-four packages, all versioned together (currently 0.4.0). The desktop executable remains
+four packages, all versioned together (currently 0.4.1). The desktop executable remains
 `mgbrowser`. The libraries currently have experimental Rust APIs and are consumed
 from this repository; they are not published on crates.io.
 

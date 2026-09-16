@@ -1,21 +1,37 @@
 # Work queue
 
-2026-09-16 active: **T-013 / F-016, ship real Boa page execution as v0.4.0**.
-After the completed P0/narrow P1 probe, the user explicitly requested continuing
-until Boa is integrated and runs page JavaScript. The opt-in production path now
-uses Boa for inline scripts, bounded Promise checkpoints and retained DOM events.
-See [the explicit process profile](docs/BOA.md). Local modern DOM/lifecycle tests
-pass; exact-commit CI, packaged/native/CDP checks, release publication and public
-installer verification must finish before this user-facing increment is done.
+2026-09-16 closeout: **packaging-only v0.4.1 for the T-013 / F-016 Boa increment**.
+The bounded Boa v0.4.0 increment is implemented
+at release commit `7fe29669f25440cf82e1218e235aa745080874ff`. The opt-in production
+path uses Boa for inline scripts, bounded Promise checkpoints and retained DOM
+events. See [the explicit process profile](docs/BOA.md). Rust CI 35134759156,
+JSPLAN CI 35134759136 and Pages 35134759152 are green on that exact commit.
+Release workflow 35136272001 is green and v0.4.0 is public. Exact public command
+install/reinstall, website/assets/checksum, version/About identity, worker/session
+selftests, real Boa fixture execution and desktop/icons pass. Two public-binary
+native and two external CDP journeys pass, with exact retained-event requests,
+zero traps and readable fatal-loop recovery followed by successful navigation.
+After the confirmed GitHub rate-limit reset, the real v0.3.0 updater rejected
+v0.4.0's 10,321,503-byte archive against its existing 8 MiB response cap. Publish
+v0.4.1 with the adopted `opt-level = "s"`, `strip = "symbols"` release profile
+and a package-size guard. The full local archive is 7,239,619 bytes, 1,148,989
+below the unchanged cap; unpacked payload is 23,746,560 bytes. Packaged worker/
+session checks and all 1,334 main debug tests pass. Default LTO/codegen settings,
+panic behavior, engine source, dependencies and resource/network limits are
+unchanged. Keep v0.4.0's tag/assets immutable. New exact-commit CI,
+release, public-install/journey and updater evidence remain required. Finish only
+this packaging fix and its release gates, then stop. Further engineering requires
+a new request.
 Google optimization remains deferred. No dual production engine or fallback.
 User clarified publication goes directly to main; PRs are not the default for
 user-directed work. See the standing instruction in AGENTS.md.
 
-Implementation order from JSPLAN.md, each as a bounded contribution:
+Closeout and deferred JSPLAN roadmap; later engineering requires a new request:
 
-1. **Current release gate:** finish and publish v0.4.0's bounded Boa integration.
-   Keep original tests/limits in the explicit research-only legacy lane. Verify
-   production never falls back and installer delivers the new actual page backend.
+1. **Current closeout only:** finish the smaller v0.4.1 package, unchanged locked
+   graph, exact-commit CI/release and fresh public installation/journey/updater
+   checks. Record exact receipts in the daily log. Do not resume implementation
+   after these gates pass.
 2. **Remaining P1/P2:** comprehensive cooperative work/heap control, expanded
    language/lifecycle acceptance and a broader application profile. Process-v1
    supplies enforceable final containment, not complete native/parser/regex/GC
@@ -28,7 +44,7 @@ Implementation order from JSPLAN.md, each as a bounded contribution:
 5. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
    architectures, tooling and Wasm as separately scoped work.
 
-The full P1 gate and P2-P8 exit criteria remain incomplete. The selected Boa
+F-016, the full P1 gate and P2-P8 exit criteria remain incomplete. The selected Boa
 backend does not establish React/Vue browser applications or V8 compatibility.
 The initial research comparison remains reproducible in `experiments/jsplan`;
 its [historical results](docs/jsplan/RESULTS.md) are not rewritten as full conformance.

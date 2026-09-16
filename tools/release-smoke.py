@@ -38,6 +38,9 @@ Promise.resolve(new Counter(values.get(key)).answer()).then(answer => {
 
 
 assets = Path(sys.argv[1]).resolve()
+# Match already-published updaters, not just the curl installer's capabilities.
+assert (assets / "mgbrowser-linux-x86_64.tar.gz").stat().st_size <= 8 * 1024 * 1024, \
+    "Release archive exceeds the existing updater's 8 MiB download limit"
 expected_version = re.search(r'^version = "([^"]+)"', Path("Cargo.toml").read_text(), re.M).group(1)
 assert f"v{expected_version} Experimental Preview" in Path("index.html").read_text()
 with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temporary:

@@ -618,8 +618,10 @@ comparison. Run selected Test262 families and pure Vue reactivity without claimi
 browser support. Audit and publish the exact active dependency graph.
 
 Its measured gaps led to the separately requested, process-contained Boa page
-integration in BOA.md. Finish that increment's v0.4.0 release and exact public
-installer verification before further features. Comprehensive native-work/GC
+integration in BOA.md, released as v0.4.0. Its actual old-version updater exposed
+an oversized archive despite successful public curl installation. Finish the
+packaging-only v0.4.1 follow-up and real upgrade verification before further
+features. Comprehensive native-work/GC
 budgeting, external loading, browser frameworks and V8 compatibility remain
 explicit future gates rather than implied achievements.
 
