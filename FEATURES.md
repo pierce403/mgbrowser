@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-018 : Desktop-aware browser size
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -29,9 +29,18 @@ implement independent page zoom. Existing image decode/cache limits remain.
 - [x] Bounded desktop DPI discovery, correct priority/fallback and legacy settings migration.
 - [x] Sharp physical text, scaled rectangles/images and unchanged 1x rendering.
 - [x] Logical native/CDP input and physical screenshots remain aligned at fractional/2x scales.
-- [ ] Native System/manual controls, shortcuts, resize, scroll and restart persistence pass.
-- [ ] Existing component/resource/worker/native/CDP gates pass without weakened assertions.
-- [ ] Exact-commit CI/Pages, versioned release and fresh public install/upgrade verified.
+- [x] Native System/manual controls, shortcuts, resize, scroll and restart persistence pass.
+- [x] Existing component/resource/worker/native/CDP gates pass without weakened assertions.
+- [x] Exact-commit CI/Pages, versioned release and fresh public install/upgrade verified.
+
+Published v0.6.0 at 363065dc17b51d8159d3434b74e393686bdc9d99. Rust, JSPLAN,
+Pages and release workflows pass on that commit. The exact public installer,
+checksums, worker/session/Boa execution and desktop/icons pass. The downloaded
+binary repeats native System/manual scaling, 100/125/200% navigation, 125/200%
+CDP, persistence, compact dialogs, scrolling and 4K resize; frames inspected.
+Actual v0.5.0 self-update installs v0.6.0 and its selftests pass. Its additional
+already-current check was blocked by GitHub's exhausted anonymous API quota,
+not an installation failure; see docs/UPDATES.md and the dated evidence log.
 
 ## F-017 : System, light and dark browser appearance
 

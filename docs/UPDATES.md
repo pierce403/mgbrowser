@@ -6,6 +6,13 @@ latest published, non-prerelease release on startup and every 24 hours while ope
 Checks run off the window thread. A failed check leaves the current binary intact;
 the next automatic retry is in 24 hours or at the next launch.
 
+Checks use GitHub's unauthenticated public API and can receive HTTP 403 when its
+shared-IP request quota is exhausted. This is an update-check failure, not a
+failed browser launch. Wait for GitHub's quota reset before checking again; do
+not repeatedly retry. The website's checksum-verifying curl installer uses the
+public release-download links and remains an alternative when that API quota
+is exhausted. No GitHub token is required or stored by the browser.
+
 Use Menu > Check for updates or `mgbrowser --update` for a manual check/install.
 Use `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` to disable automatic checks
 for a launch. Delete the marker to disable them persistently. Installing with

@@ -2,11 +2,15 @@
 
 ## Purpose and responsibilities
 
-Current request (2026-09-16): T-015 / F-018, readable whole-browser sizing.
-Follow desktop DPI by default and offer a persistent System/manual size setting
-for both browser controls and websites. Rasterize text at the physical scale;
-keep logical input/CDP geometry consistent and preserve all existing gates.
-Ship the bounded change as v0.6.0. No unrelated compatibility/JavaScript work.
+Completed request (2026-09-16): T-015 / F-018 shipped as v0.6.0 at
+`363065dc17b51d8159d3434b74e393686bdc9d99`. System follows effective X11 DPI;
+saved 75..300% sizing and Ctrl+plus/minus/0 scale controls and pages together,
+with physical glyph rasterization and logical input/CDP coordinates. Exact-
+commit CI/Pages/release, public install, actual v0.5.0 upgrade and public native
+scale acceptance pass. An extra no-op update recheck hit GitHub's anonymous API
+quota; do not call that check passed or bypass the limit. See docs/UPDATES.md.
+Scope is screen-global X11 sizing, not per-monitor Wayland or per-site zoom.
+No feature/release work remains. Further engineering requires a new request.
 
 Completed request (2026-09-16): T-014 / F-017 shipped in v0.5.0 at
 `8c457e04a8ce00dd8cf81802da35a054d3bad8ec`. Menu > Settings provides persistent

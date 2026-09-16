@@ -1,12 +1,17 @@
 # Work queue
 
-2026-09-16 active: **T-015 / F-018: desktop-aware browser size**. The desktop
-advertises Xft.dpi 192 but v0.5.0 renders 1:1 pixels, making controls and pages
-too small. Add System DPI selection and saved manual size controls/shortcuts,
-crisp physical text rasterization and consistent logical layout/input/CDP.
-Verify 100/125/200% native interaction, live DPI following, restart persistence,
-all existing CI gates and a v0.6.0 release/public install. This is whole-browser
-size, not per-site/page-only zoom, monitor-specific Wayland support or new CSS.
+2026-09-16 complete: **T-015 / F-018 shipped as v0.6.0**, release commit
+`363065dc17b51d8159d3434b74e393686bdc9d99`. System follows desktop DPI (192 DPI
+selects 200%); saved manual 75..300% sizes and Ctrl+plus/minus/0 scale controls
+and pages with crisp text and consistent logical input/CDP geometry. Rust CI
+35156845128, JSPLAN 35156845107, Pages 35156845115 and release 35158103311 pass.
+Public checksum/install/reinstall, worker/session/Boa, desktop/icons and actual
+v0.5.0 upgrade pass. The public binary repeats System/manual/native/CDP,
+persistence, scroll/compact/4K acceptance. The extra no-op updater recheck hit
+GitHub's anonymous API quota and is not claimed successful; the installed
+version is verified. See the dated log and docs/UPDATES.md. This is whole-browser
+size, not per-site zoom, monitor-specific Wayland support or new CSS.
+No feature/release gates remain. Stop: further engineering requires a new request.
 
 2026-09-16 complete: **T-014 / F-017 shipped as v0.5.0**, release commit
 `8c457e04a8ce00dd8cf81802da35a054d3bad8ec`. Menu > Settings offers persistent
