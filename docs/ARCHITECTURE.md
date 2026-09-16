@@ -97,6 +97,14 @@ against the existing host/resource boundary, establish modern React/Vue tests,
 then pursue measured optimization and a pinned V8 embedding adapter. Its research
 recommendations do not replace the adopted contracts above or install an engine.
 
+The first [P0/P1 research executable](../experiments/jsplan/README.md) now has its
+own excluded Cargo workspace and lockfile. It depends on original Butane for an
+explicit baseline and Boa for a comparison, not a production fallback. It shares
+the unchanged `src/platform/script_isolation.rs` with the actual Linux workers;
+engine initialization follows isolation. The production component graph, page
+protocol, worker permissions and library API are unchanged. No Boa dependency is
+linked into the released browser.
+
 Further work needs separately scoped acceptance gates:
 
 1. Expand and stabilize Rust embedding contracts: runtime lifecycle and handles,

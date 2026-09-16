@@ -1,17 +1,21 @@
 # Work queue
 
-2026-09-16 planning complete: **T-013 / F-016, Butane research and JSPLAN.md**.
-The deliverable is the researched [JSPLAN.md](JSPLAN.md), with repository-specific
-gaps, Rust reuse candidates, V8 techniques, academic work and acceptance gates.
-This request is documentation only. Engine adoption and implementation remain
-planned; the completed HN task below does not reactivate unrelated work.
+2026-09-16 active: **T-013 / F-016, implement JSPLAN in gated increments**.
+User requested pulling latest and implementing the plan. Fast-forwarded main to
+2f7d6f2, then implemented P0 plus the immediate narrow P1 Boa probe in a separate
+research workspace. [Results and decision](docs/jsplan/RESULTS.md) record frozen
+inputs, actual restricted-child results and open adoption gates. The production
+browser still uses original Butane; Google optimization remains deferred.
 User clarified publication goes directly to main; PRs are not the default for
 user-directed work. See the standing instruction in AGENTS.md.
 
-Proposed implementation order from JSPLAN.md, each as a bounded contribution:
+Implementation order from JSPLAN.md, each as a bounded contribution:
 
-1. **P0/P1:** Freeze baselines and run a narrow Boa integration probe; compare
-   Nova where relevant and record the engine/dependency/resource decision.
+1. **P0/narrow P1 implemented:** Reproducible baseline, isolated Boa host/GC/jobs/
+   module probes, selected Test262 and Vue reactivity without DOM, exact dependency
+   audit and Nova toolchain comparison. **Next P1 gate:** price and implement
+   comprehensive fatal work/heap control, reviewed application profile and retained
+   realm/DOM lifecycle tests. Boa is the preferred candidate, not yet adopted.
 2. **P2:** Adopt the selected modern language/GC foundation or justify original VM
    construction with concrete blockers. Preserve/review the resource contract.
 3. **P3/P4:** Script/module loading, jobs/tasks and DOM integration, then pinned
@@ -21,7 +25,8 @@ Proposed implementation order from JSPLAN.md, each as a bounded contribution:
 5. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
    architectures, tooling and Wasm as separately scoped work.
 
-No implementation stage is complete merely because the plan is written.
+The full P1 adoption gate and P2-P8 remain incomplete. A passing small experiment
+does not mean React/Vue browser applications or V8 compatibility work.
 
 2026-09-16 complete: **T-011 / F-014 shipped as v0.3.0**, release commit
 e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Rust Stylo, bounded same-origin CSS/images

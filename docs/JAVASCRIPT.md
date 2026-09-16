@@ -1,8 +1,10 @@
 # Original Rust JavaScript engine
 
-The Google search journey remains the end-to-end goal. Its observed no-JavaScript
-response makes real script execution necessary; no alternate engine, fabricated
-results, browser impersonation, or Google-specific response rewriting is a substitute.
+The historical Google search journey remains incomplete and deferred. Current
+work follows [JSPLAN](../JSPLAN.md): an isolated Boa-first research experiment,
+not a production engine replacement. [Results](jsplan/RESULTS.md) keep language,
+host/resource and browser acceptance separate. No fabricated results, browser
+impersonation or site-specific response rewriting is a substitute for compatibility.
 
 ## Implemented research subset
 

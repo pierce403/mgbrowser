@@ -34,6 +34,7 @@ tungstenite.workspace = true
 url.workspace = true
 
 [workspace]
+exclude = ["experiments/jsplan"]
 members = ["crates/mg-butane", "crates/mg-sparkle", "crates/mg-chassis"]
 default-members = [".", "crates/mg-butane", "crates/mg-sparkle", "crates/mg-chassis"]
 resolver = "3"

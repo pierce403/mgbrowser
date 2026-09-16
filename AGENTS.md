@@ -2,6 +2,14 @@
 
 ## Purpose and responsibilities
 
+Current request (2026-09-16): implement `JSPLAN.md` in its ordered, bounded
+increments. P0/narrow P1 lives in the excluded `experiments/jsplan` workspace,
+with frozen runner inputs and exact outcome gates under `tools/jsplan`.
+See `docs/jsplan/RESULTS.md`: Boa remains a candidate, not a page backend.
+Production adoption is blocked on explicit resource and retained-lifecycle gates;
+do not remove existing limits or silently choose a fallback engine. Google stays
+deferred. Ship any later browser-visible feature through the standing release policy.
+
 Completed request (2026-09-16): T-011 / F-014 minimal Hacker News desktop rendering
 shipped in v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Standalone Rust
 Stylo computes CSS; Mg owns generic table/inline layout and bounded same-origin

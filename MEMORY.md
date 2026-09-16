@@ -8,6 +8,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `JSPLAN.md`: proposed Butane engine strategy, Rust reuse evaluation, V8 techniques,
   academic sources and modern framework/embedding gates (F-016 / T-013); no engine
   adoption or new compatibility is implied by the plan.
+- `docs/jsplan/RESULTS.md`: implemented P0/narrow P1 comparison, exact dependency
+  review, selected Test262/Vue results and remaining Boa adoption gates.
+  `experiments/jsplan` is excluded from the production workspace; `tools/jsplan`
+  holds immutable inputs and reviewed outcome expectations. Browser stays v0.3.0.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

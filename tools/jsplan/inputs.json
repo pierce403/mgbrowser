@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "48cec83c0b1d41eb889373e414ded216d09cbf77",
+  "baseline_source_sha256": "ed89c0f7c2b40458b2b26f77e5bfb47648b1bdb7d3e303dcbab51d7d3ca948d1",
+  "boa_revision": "337a3668a0dc86dd401ea20906e782249a64a228",
+  "test262": {
+    "revision": "07eded464b6ce232331835198efccddc6e26eb08",
+    "url": "https://codeload.github.com/tc39/test262/tar.gz/07eded464b6ce232331835198efccddc6e26eb08",
+    "sha256": "f15c5392be96dbcb92c32bc48a27d41c0d58e9579776e2061d895341822be75d",
+    "corpus_sha256": "0eaf9ac99ef6aa0ac91af344165150db8cb35a612975649d8c1d0bfc2fff747a",
+    "root": "test262-07eded464b6ce232331835198efccddc6e26eb08",
+    "families": [
+      "built-ins/Proxy/get",
+      "built-ins/Map/prototype/set",
+      "built-ins/WeakMap/prototype/set",
+      "built-ins/Promise/resolve"
+    ],
+    "files": [
+      "language/statements/let/global-use-before-initialization-in-prior-statement.js",
+      "language/statements/let/redeclaration-error-from-within-strict-mode-function.js",
+      "language/expressions/arrow-function/dstr/obj-ptrn-id-init-fn-name-arrow.js",
+      "language/module-code/parse-err-export-dflt-const.js",
+      "language/module-code/eval-export-dflt-fun-named-semi.js"
+    ]
+  },
+  "authored": {
+    "es5-observables.js": "305574bc4917c2bff9dbc384e992689a708c8157988c27e9919dd3a8291ecd3f",
+    "modern-observables.js": "9ff1032162f52158c1d43344622bc526533f8c83f73e11b54da92a5823b3055a",
+    "vue-reactivity.js": "5fb827c964e49bbc0d931fdefaa58ee3bc4945eacd5b5395a03190b11bcadf6e"
+  },
+  "vue": {
+    "package": "@vue/reactivity",
+    "version": "3.5.42",
+    "url": "https://registry.npmjs.org/@vue/reactivity/-/reactivity-3.5.42.tgz",
+    "sha256": "6d2b0aff8390816f99b9160a757ce33ef2c883dc8d2e8bb92f67b76a0a36e31c",
+    "bundle": "package/dist/reactivity.global.prod.js",
+    "bundle_sha256": "06e809eadeb5d914e144f01c3e826b02e1c379af1a500b0800b4ce205d33f95f"
+  }
+}

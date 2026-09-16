@@ -1,0 +1,22 @@
+[package]
+name = "mg-jsplan-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+publish = false
+description = "Isolated, test-only JSPLAN engine evaluation, not a browser backend"
+
+[workspace]
+
+[dependencies]
+mg-butane = { path = "../../crates/mg-butane" }
+boa_engine = { version = "=0.22.0", default-features = false }
+boa_gc = { version = "=0.22.0", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[[bin]]
+name = "mg-jsplan-probe"
+path = "src/main.rs"

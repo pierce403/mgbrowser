@@ -4,6 +4,12 @@ Research date: 2026-09-16. Status: proposed architecture and ordered work, not
 implemented compatibility. Tracks **F-016 / T-013**. Repository baseline:
 [`48cec83c0b1d41eb889373e414ded216d09cbf77`][mg-baseline], v0.3.0.
 
+Implementation update, 2026-09-16: the immediate P0/narrow P1 contribution below
+is implemented as an [isolated research executable](experiments/jsplan/README.md).
+[Measured results and decision](docs/jsplan/RESULTS.md) supersede the unrun status
+for those named probes only. The production browser still uses original Butane;
+full adoption, browser frameworks, optimization and V8 compatibility remain gated.
+
 ## 1. Recommendation
 
 **Make Butane a useful, embeddable Rust JavaScript engine by reusing a serious

@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-016 : Modern Butane JavaScript and embedding compatibility
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -22,12 +22,16 @@ modern language and React/Vue application gates, V8-inspired performance work,
 academic experiments and a separately tested V8 embedding adapter. Preserve
 explicit host capabilities and restricted execution. Language, browser behavior,
 API compatibility, binary ABI and performance claims require distinct evidence.
-No replacement engine, JIT, Test262 score or framework compatibility is implemented
-by publication of the plan. See T-013 for ordered future increments.
+P0 and a narrow P1 research executable now compare original Butane with Boa 0.22
+inside the existing restricted worker policy. A separate locked workspace keeps
+Boa out of the production browser. See [results and decision](docs/jsplan/RESULTS.md).
+No production replacement engine, JIT, full Test262 score or browser framework
+compatibility is implemented. Resource/lifecycle adoption gates remain open.
 
 ### Test Criteria
 
-- [ ] Pinned Test262 baseline and explicit capability/skip/failure denominators.
+- [x] Pinned selected Test262 baseline and explicit full/profile denominators,
+  capability exclusions and failure classifications; not full-suite conformance.
 - [ ] Recorded engine choice after dependency, license, host/rooting, budget and
   restricted-worker evaluation, without a fallback engine executing page code.
 - [ ] Modern language, reclaimable memory and explicit bounded application profile.

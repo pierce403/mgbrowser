@@ -78,8 +78,11 @@ ThermiteOS port remain future work.
 
 See [JSPLAN.md](JSPLAN.md) for the proposed Butane roadmap: a Boa-first Rust
 engine evaluation, modern React/Vue acceptance tests, V8-inspired optimizations,
-academic references and separately gated embedding compatibility. This is a
-research plan; no engine replacement or framework support has shipped from it.
+academic references and separately gated embedding compatibility. The first
+[isolated P0/P1 experiment](experiments/jsplan/README.md) is implemented: original
+Butane versus Boa 0.22, with pinned tests and honest failure counts. No engine
+replacement or browser framework support has shipped from it. See the
+[decision and remaining gates](docs/jsplan/RESULTS.md).
 
 ## Engineering background (pre-MVP)
 

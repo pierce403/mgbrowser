@@ -145,6 +145,12 @@ The browser must eventually show a broken-image placeholder and available alt te
 
 ## Upstream research evidence
 
+The isolated JSPLAN experiment has a separate locked Boa graph and
+[source/feature/license audit](jsplan/DEPENDENCY_AUDIT.md). It is excluded from
+the production workspace and release assets. The original JavaScript entry above
+remains accurate for the shipped browser; the experiment does not approve a
+production engine substitution or alter its component guard.
+
 Record provider revision, Rust version, OS/architecture and a minimal local reproducer for failures. Distinguish provider failures from our integration mistakes; preserve failing fixtures when lawful and free of secrets. Report normal interoperability and correctness bugs through a separately authorized upstream contribution. Handle potential security findings responsibly; do not automatically publish exploit details or run offensive testing against third parties. No external issue submission or autonomous testing is configured by this policy.
 
 `python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The external locked dependency versions are unchanged by the component split.

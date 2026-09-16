@@ -5,6 +5,19 @@ description: Validate mgbrowser transport, document, paint and native interactio
 
 # Browser check
 
+For JSPLAN engine research, also read `experiments/jsplan/README.md` and
+`docs/jsplan/RESULTS.md`. Keep the experiment's workspace/lockfile separate from
+production. Build its release executable with Rust 1.91.1, run protocol and
+runner tests, verify the exact dependency audit, then run the pinned-input
+comparison and `tools/jsplan/check_report.py`. The check includes known failures:
+do not shrink the denominator or update expectations automatically. Use the
+supervised empty-environment pipe protocol with the shared production isolation;
+never initialize an experimental engine in the browser parent. Record debug and
+release results separately. GNU time measurements exclude the Python launcher's
+inherited memory high-water state; distinguish peak process RSS from live heap.
+Research-only tooling is not a browser backend or a framework compatibility claim.
+Any actual browser adoption still requires the standing release/installer gates.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.
