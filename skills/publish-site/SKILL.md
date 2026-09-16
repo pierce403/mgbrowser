@@ -29,6 +29,13 @@ files. Preview publication does not complete F-007 or the Google compatibility g
 After publication, run `python3 tools/public-release-smoke.py VERSION` from the
 repo root. It verifies public bytes, the exact advertised curl command, current
 version, replacement of an in-use executable, a fresh worker selftest, desktop/icons
-and latest links. Existing browser processes must restart after installation;
-do not claim that an old process can keep spawning workers after its binary is replaced.
+and latest links. Existing browser processes must restart to use the new build.
+Since v0.2.1, Linux workers re-exec the running inode through /proc/self/exe;
+`bash tools/chrome-update-smoke.sh PATH_TO_PACKAGED_BINARY` verifies native About
+and an existing scripted CDP journey after replacement of a test-owned binary.
+Do not assume this continuity for older releases. For updater changes, also run
+the packaged_update_smoke test with MGBROWSER_TEST_RELEASE and `-- --ignored`.
+After publication, public_update_smoke with MGBROWSER_TEST_OLD_BINARY and
+`-- --ignored` exercises real release download, installation and a no-op recheck
+against a temporary copy of an older verified public binary. See docs/UPDATES.md.
 This is a manually invoked release gate, not an unattended publication agent.

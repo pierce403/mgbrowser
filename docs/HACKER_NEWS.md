@@ -81,8 +81,8 @@ Desktop first: below-800px/mobile fidelity is deferred. No full CSS, flex/grid,
 general event loop, external scripts, new JS builtins, Google diagnostics,
 autoresearch evaluator, broad codec support or arbitrary destination compatibility.
 Do not loosen TLS, resource bounds, Rust-only dependency rules or worker isolation.
-The pending v0.2.0 component release remains a separate, uncompleted publication
-obligation; do not falsely check F-013 complete while planning this feature.
+The component extraction shipped in v0.2.1 on 2026-09-16, closing F-013 separately.
+That release adds updates/About, not CSS: all HN acceptance gates remain unchecked.
 
 The conversation goal tracker still holds the unfinished Google goal and rejected
 creation of this replacement. The user must cancel that goal through the product

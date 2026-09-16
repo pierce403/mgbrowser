@@ -4,9 +4,9 @@
 
 ## v0.2.1 Experimental Preview
 
-**v0.2.1 publication in progress.** Adds automatic updates and an About menu with
-the build's compile time/commit, including the four-component extraction. The
-installer follows the latest published release; until publication it is v0.1.1.
+**v0.2.1 is released.** Adds automatic updates and an About menu with the build's
+compile time/commit, including the four-component extraction. Run the installer
+once to upgrade from v0.1.1 and enable future automatic updates.
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -50,7 +50,7 @@ See [updater behavior and trust](docs/UPDATES.md).
   arbitrary hostile websites.
 
 The preview is separate from the formal MVP, whose stronger gates remain open.
-v0.2.0 extracts the existing engines into reusable packages without expanding web compatibility.
+The component extraction separates the existing engines into reusable packages without expanding web compatibility.
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.

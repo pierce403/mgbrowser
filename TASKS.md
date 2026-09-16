@@ -1,12 +1,13 @@
 # Work queue
 
-2026-09-16 current request: **T-012 / F-015**, diagnose HN styling, add verified
-automatic self-updates and About compile identity, publish v0.2.1. Diagnosis:
+2026-09-16 completed: **T-012 / F-015**, diagnosed HN styling, added verified
+automatic self-updates and About compile identity, published v0.2.1. Diagnosis:
 linked CSS loading/cascade/table layout remain absent. The HN implementation goal
 below stays planned; this request does not silently expand into that engine work.
-v0.2.1 will include the unpublished v0.2.0 extraction. Prior authentication blocker
-is historical: current gh/HTTPS authentication works; publication still needs
-fresh exact-commit CI, tagged assets and public installation evidence.
+v0.2.1 includes the unpublished v0.2.0 extraction, closing T-010 / F-013 too.
+Release commit 830c6ca4ede1ccd5c23d3b73ebfd89aca06729ef: exact-SHA Rust CI,
+Pages, tagged release, public install and native public updater upgrade all passed.
+See the 2026-09-16 log. Stop this request here; HN engine work remains planned.
 
 Current user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
 See docs/HACKER_NEWS.md for the inspected live requirements, minimal sequence and
@@ -17,14 +18,15 @@ does not complete the formal MVP or the pending component-release obligation.
 The conversation tracker still needs the user to cancel its unfinished Google
 goal before the new goal can be activated there.
 
-Prior task: **T-010 / F-013, extraction complete; v0.2.0 publication pending**. User approved
+Historical task: **T-010 / F-013, now shipped in v0.2.1**. User approved
 Butane (JS), Sparkle (HTML/rendering), Chassis (services/optional UX) and mg-browser
 (platform host), including push to main. Verify independent embedding, preserve
 worker isolation and native/CDP journeys, then finish the versioned release and
 public-installer gates. Drop-in compatibility and ThermiteOS implementation are
 future tasks, not part of this extraction.
 
-Source is published at a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Local component,
+Historical 2026-09-09 checkpoint, superseded by the release above:
+source was published at a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Local component,
 package/installer and all 26 native/26 CDP journeys passed. Release tagging needs
 an authenticated git/tag-capable path: shell Git has no credentials, and the
 current connector exposes branch/file operations but no tag/release operation.

@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-015 : Self-updates and build identity
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -28,7 +28,15 @@ running version, compile time and commit. See docs/UPDATES.md for trust/limits.
   failures preserve its original bytes and concurrent updates are excluded.
 - [x] About/menu input and compile metadata verified, including a native screenshot.
 - [x] Existing workspace, component, worker and native/CDP regression gates pass.
-- [ ] Exact-commit CI/Pages and v0.2.1 public release/installer verified.
+- [x] Exact-commit CI/Pages and v0.2.1 public release/installer verified.
+
+Verified 2026-09-16: v0.2.1 at 830c6ca4ede1ccd5c23d3b73ebfd89aca06729ef.
+Rust run 35095863499, Pages 35095863472 and release 35096862370 passed. Exact
+public curl install/reinstall, checksum, version/build metadata, worker selftest,
+desktop/icons and download links passed. The native Rust updater upgraded a
+temporary verified public v0.1.1 binary using actual public v0.2.1 assets, then
+performed a no-op recheck. This describes the documented experimental updater,
+not independent release signing or whole-browser security.
 
 ## F-014 : Hacker News desktop rendering
 
@@ -60,7 +68,7 @@ and implementation order: docs/HACKER_NEWS.md. Google and mobile fidelity deferr
 
 ## F-013 : Reusable Mg component boundaries
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -82,15 +90,17 @@ V8/JSC, Blink/WebKit/Tauri drop-in APIs and ThermiteOS support remain future wor
 - [x] Original language, DOM, transport and actual worker regressions pass in the workspace.
 - [x] Component dependency guard rejects upward edges and window dependencies in reusable libraries.
 - [x] Native/CDP fixture journeys and exact-commit Rust/Pages checks pass for publication.
-- [ ] v0.2.0 release assets and the fresh public installer are verified.
+- [x] Component release assets and fresh public installer verified in v0.2.1,
+  superseding the unpublished v0.2.0 package.
 
 Local 2026-09-09 evidence: workspace debug and selected release suites passed;
 independent no-chrome form navigation, default-disabled isolation, PNG and font
 checks passed. Native static form/result navigation passed and frames were
 inspected. All 26 native/26 CDP journeys passed locally and in Rust run 34352084178 for
 a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Pages run 34352084185 passed for that
-commit, and public HTTPS index/installer bytes matched. The v0.2.0 binary release
-remains pending because this session has no authenticated tag-creation path.
+commit, and public HTTPS index/installer bytes matched. The former publication
+blocker was resolved on 2026-09-16: v0.2.1 includes this extraction and passed
+the public installer gates recorded under F-015. No v0.2.0 tag was published.
 
 ## F-012 : v0.1 experimental preview
 
