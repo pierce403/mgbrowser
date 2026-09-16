@@ -31,6 +31,12 @@ Build a browser from the ground up in Rust and a reproducible autoresearch harne
 - Read affected feature Properties, Dependencies, and Test Criteria before changes. Exact stability values are `planned`, `in-progress`, and `stable`. Only verified, complete behavior is stable.
 - Follow `docs/MVP.md` for scope and `docs/AUTORESEARCH.md` for the proposed experiment contract. Do not silently substitute an existing browser engine or JavaScript runtime.
 - The user chose experimental `rustls-rustcrypto` TLS and Rust-only font/image implementations. Follow `docs/DEPENDENCIES.md`; no native codec/font/crypto fallback. Unsupported images are preferable to C bindings. Keep certificate verification enabled despite research status.
+- User clarification (2026-09-16): existing Rust implementation crates, including
+  Servo-origin components, are welcome after dependency/features/license/test
+  review. Do not limit reuse to utilities or assume upstream reputation proves
+  compatibility. No C/C++ implementation backends, including transitive/static
+  bindings. This does not itself adopt Stylo or replace Butane/the browser engine;
+  follow the scoped decision and OS-interface boundary in `docs/DEPENDENCIES.md`.
 
 ## Work and closeout
 

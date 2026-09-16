@@ -18,9 +18,9 @@ Its script is not needed to display the initial page.
 1. **Stylesheet resources and computed style.** Chassis fetches linked CSS with
    bounded sizes/counts, verified TLS, relative URL resolution and navigation
    cancellation. Sparkle receives resource data without acquiring network access.
-   Implement a small generic CSS parser/cascade: selector lists, type/class/id,
-   compound and descendant selectors, applicable link states, specificity, source
-   order, inheritance and inline styles. Parse media blocks without accidentally
+   Implement or integrate a reviewed Rust CSS parser/cascade: selector lists,
+   type/class/id, compound and descendant selectors, applicable link states,
+   specificity, source order, inheritance and inline styles. Parse media blocks without accidentally
    applying mobile rules to desktop. Unsupported declarations must not discard
    supported neighboring declarations. Preserve link behavior and hidden content.
 2. **Tree-based boxes and tables.** Replace the flat rendering projection where
@@ -51,6 +51,12 @@ Its script is not needed to display the initial page.
 Butane remains unchanged. Sparkle owns style/layout/image paint; Chassis owns
 resource lifecycle; the platform supplies font data through the existing boundary.
 Do not hard-code HN selectors, story content or coordinates in engine behavior.
+
+2026-09-16 dependency clarification: existing Rust implementation crates are
+allowed under docs/DEPENDENCIES.md, including candidate Servo-origin components.
+Stylo is an option to evaluate for computed styles, not an adopted dependency or
+a replacement for layout. Upstream capabilities do not expand this acceptance
+scope or waive local integration/resource tests. All gates below remain unchecked.
 
 ## Acceptance
 

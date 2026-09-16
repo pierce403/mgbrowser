@@ -6,7 +6,21 @@ The immediate user acceptance goal is to open our browser, navigate to google.co
 
 The broader first product is a Linux desktop browser for reading and navigating documents: enter an HTTP(S) URL, read styled text and images, scroll, follow links, and navigate back/forward without a crash on the versioned MVP corpus. It remains a testing and research browser, not initially suitable for banking, accounts, or arbitrary hostile sites.
 
-The target is 100% Rust browser code, with our own HTML parser, DOM, CSS parser/cascade, layout, paint orchestration, navigation, and JavaScript engine. These components are not all complete; an original partial JS interpreter is now implemented. No Chromium, WebKit, Servo embedding, system webview, or existing JavaScript runtime. The user approved Rust utility crates, experimental `rustls-rustcrypto` for TLS, and Rust-only font/image processing. No C/C++ font, image or cryptographic implementations, including transitive or statically linked bindings. Unsupported images are preferable to native fallbacks; an additional decoder can be written here in Rust when needed. See `DEPENDENCIES.md` for the actual Cargo configuration and audit boundary. The initial Linux window uses x11rb's Rust X11 protocol implementation through X11/XWayland, without Xlib/XCB FFI; operating-system/window-server interfaces are recorded separately from browser implementation.
+The target is 100% Rust browser implementation code. The 2026-09-16 user
+clarification permits existing Rust implementation crates, including reviewed
+Servo-origin CSS components: reuse is not limited to utility libraries. Our
+current HTML/DOM, layout, paint orchestration, navigation and partial JavaScript
+implementation remain in place; no Stylo integration or engine replacement is
+implied. Embedding Chromium, WebKit, stock Servo or a system webview is not this
+architecture. A JavaScript replacement is not part of the current CSS/HN task.
+The user approved experimental `rustls-rustcrypto` for TLS and Rust-only font/image
+processing. No C/C++ browser, JavaScript, font, image or cryptographic backends,
+including transitive or statically linked bindings. Unsupported images are
+preferable to native fallbacks; an additional decoder can be written here in Rust
+when needed. See `DEPENDENCIES.md` for crate-adoption checks and the actual Cargo
+configuration. The Linux window uses x11rb's Rust X11 protocol through X11/XWayland,
+without Xlib/XCB FFI; OS/std/window-server interfaces are recorded separately from
+browser implementation.
 
 Linux is the first implemented window target, with portable core code and macOS/Windows later. No schedule promises until the first rendering slice establishes throughput.
 

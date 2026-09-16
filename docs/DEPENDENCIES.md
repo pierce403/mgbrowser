@@ -1,5 +1,26 @@
 # Rust dependency policy
 
+## Reusable Rust implementations: clarified 2026-09-16
+
+Existing Rust crates are acceptable for browser functionality, not just utility
+code. "From the ground up in Rust" does not require reimplementing an available
+Rust CSS parser, style engine, layout algorithm or decoder. Servo-origin crates
+such as Stylo are candidates, not automatically approved dependencies.
+
+The selected implementation and its active transitive dependencies must not bind
+to or compile C/C++ browser, JavaScript, font, image or crypto backends, whether
+dynamically or statically linked. Review the pinned target/features, source,
+build scripts, licenses and relevant tests before adoption; project reputation
+or a Rust API is not evidence that this boundary or our acceptance tests pass.
+Record build-time code generators separately from runtime implementations.
+The existing OS/std interface exception below remains unchanged.
+
+This permits scoped crate reuse, not an incidental whole-engine replacement.
+No Stylo dependency is installed by this decision; the current original Butane
+implementation and component boundaries remain unchanged. Replacing them would
+need a separately scoped decision and validation. Upstream tests complement,
+not replace, Mg integration/resource tests and the feature-release gates.
+
 ## Adopted 2026-09-07
 
 This browser is a testing and research project, not a production browser. The user explicitly accepts building on experimental rustls-rustcrypto, including the opportunity to discover and help resolve upstream bugs. This does not authorize weakening certificate/hostname validation or silently substituting native cryptography.

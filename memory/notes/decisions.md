@@ -1,5 +1,13 @@
 # Decisions and open choices
 
+2026-09-16: User explicitly accepts existing Rust implementation crates, including
+Servo-origin components, provided they do not bind to C/C++ implementations.
+This relaxes the earlier utility-only/from-scratch wording, not the Rust-only
+backend boundary. Audit active target/features and transitive/build dependencies,
+licenses and tests; upstream reputation is not sufficient evidence. Stylo remains
+a candidate, not installed. Current Butane/component boundaries and HN acceptance
+gates remain unchanged; a whole-engine replacement is not part of this decision.
+
 2026-09-08: User explicitly selects Apache License 2.0, superseding the earlier
 MIT fallback for current project-authored source/docs/artwork and future releases.
 Preserve dependency licenses and immutable v0.1.0/v0.1.1 MIT archives.
