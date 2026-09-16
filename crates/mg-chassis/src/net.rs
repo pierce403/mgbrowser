@@ -52,7 +52,7 @@ impl Session {
         let mut config =
             crate::tls_client_config(roots).map_err(|e| format!("TLS configuration: {e}"))?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        submit_with_config(url, body, Arc::new(config), &self.cookies)
+        submit_with_config_policy(url, body, Arc::new(config), &self.cookies, false)
     }
 }
 
@@ -66,17 +66,45 @@ pub fn submit(url: &str, body: Option<&str>) -> Result<Response, String> {
     Session::new().submit(url, body)
 }
 
+#[cfg(test)]
 fn submit_with_config(
     url: &str,
     body: Option<&str>,
     config: Arc<rustls::ClientConfig>,
     cookies: &Mutex<CookieJar>,
 ) -> Result<Response, String> {
+    submit_with_config_policy(url, body, config, cookies, false)
+}
+
+/// Isolated release transport: no browser cookies and HTTPS on every redirect.
+pub fn fetch_release(url: &str) -> Result<Response, String> {
+    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    submit_with_config_policy(
+        url,
+        None,
+        Arc::new(config),
+        &Mutex::new(CookieJar::default()),
+        true,
+    )
+}
+
+fn submit_with_config_policy(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    https_only: bool,
+) -> Result<Response, String> {
     let mut url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     let mut body = body;
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     for redirects in 0..=MAX_REDIRECTS {
         validate_url(&url)?;
+        if https_only && url.scheme() != "https" {
+            return Err("Release download requires HTTPS, including redirects".into());
+        }
         let cookie_header = cookies
             .lock()
             .map_err(|_| "Cookie session lock failed")?
@@ -790,6 +818,11 @@ mod tests {
 
     #[test]
     fn unsupported_urls_and_oversized_forms_fail_before_network() {
+        assert!(
+            fetch_release("http://127.0.0.1:1/")
+                .unwrap_err()
+                .contains("HTTPS")
+        );
         assert!(fetch("file:///etc/passwd").unwrap_err().contains("scheme"));
         assert!(
             fetch("https://user:password@example.org")
@@ -1136,10 +1169,11 @@ mod tests {
                 .unwrap();
         let config = Arc::new(config);
 
-        for (host, trusted, succeeds) in [
-            ("localhost", true, true),
-            ("localhost", false, false),
-            ("127.0.0.1", true, false),
+        for (host, trusted, succeeds, downgrade) in [
+            ("localhost", true, true, false),
+            ("localhost", false, false, false),
+            ("127.0.0.1", true, false, false),
+            ("localhost", true, false, true),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -1163,9 +1197,12 @@ mod tests {
                         Ok(_) => {}
                     }
                 }
-                stream
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\ntrusted")
-                    .unwrap();
+                let reply: &[u8] = if downgrade {
+                    b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 0\r\n\r\n"
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\ntrusted"
+                };
+                stream.write_all(reply).unwrap();
                 stream.flush().unwrap();
             });
             let mut roots = rustls::RootCertStore::empty();
@@ -1177,13 +1214,29 @@ mod tests {
                     .unwrap();
             }
             let client = Arc::new(crate::tls_client_config(roots).unwrap());
-            let response = submit_with_config(
-                &format!("https://{host}:{port}/"),
-                None,
-                client,
-                &Mutex::new(CookieJar::default()),
-            );
-            if succeeds {
+            let response = if downgrade {
+                submit_with_config_policy(
+                    &format!("https://{host}:{port}/"),
+                    None,
+                    client,
+                    &Mutex::new(CookieJar::default()),
+                    true,
+                )
+            } else {
+                submit_with_config(
+                    &format!("https://{host}:{port}/"),
+                    None,
+                    client,
+                    &Mutex::new(CookieJar::default()),
+                )
+            };
+            if downgrade {
+                assert!(
+                    response
+                        .unwrap_err()
+                        .contains("Release download requires HTTPS")
+                );
+            } else if succeeds {
                 assert_eq!(response.unwrap().body, b"trusted");
             } else {
                 let error = response.unwrap_err();

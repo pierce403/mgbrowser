@@ -2,6 +2,11 @@
 
 ## Purpose and responsibilities
 
+Current request (2026-09-16): diagnose Hacker News styling and deliver T-012 /
+F-015 self-updates and About build identity. CSS loading/cascade/table layout are
+still absent, so HN remains planned, not fixed by this release. Publish v0.2.1
+including the component extraction; do not create a separate v0.2.0 afterward.
+
 Current authorized goal (2026-09-09): minimal Hacker News desktop rendering,
 scoped in `docs/HACKER_NEWS.md` and T-011 / F-014. Google optimization remains
 deferred. Ship any resulting feature through the standing release policy.

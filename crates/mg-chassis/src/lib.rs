@@ -29,6 +29,10 @@ const MAX_EDIT_BYTES: usize = 8191;
 
 #[derive(Clone, Debug)]
 enum Action {
+    Menu,
+    About,
+    Update,
+    CloseMenu,
     Address,
     Back,
     Forward,
@@ -73,6 +77,11 @@ struct PendingEvent {
     input: SessionInput,
 }
 pub struct Browser {
+    menu_open: bool,
+    about_open: bool,
+    about_lines: Vec<String>,
+    update_status: String,
+    update_requested: bool,
     chrome: bool,
     session: net::Session,
     fonts: Fonts,
@@ -139,10 +148,32 @@ impl Drop for Browser {
 }
 
 impl Browser {
+    /// Host-owned build identity; reusable Chassis does not inspect its executable.
+    pub fn set_build_info(&mut self, version: &str, compiled: &str, revision: &str) {
+        self.about_lines = vec![
+            format!("mgbrowser {version}"),
+            format!("Compiled: {compiled}"),
+            format!("Commit: {revision}"),
+            "Experimental Preview : Apache-2.0".into(),
+        ];
+        self.dirty = true;
+    }
+    pub fn set_update_status(&mut self, status: String) {
+        self.update_status = status;
+        self.dirty = true;
+    }
+    pub fn take_update_request(&mut self) -> bool {
+        std::mem::take(&mut self.update_requested)
+    }
     pub fn new(fonts: Fonts, scripts: Arc<dyn scripts::ScriptRuntime>) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             chrome: cfg!(feature = "chrome"),
+            menu_open: false,
+            about_open: false,
+            about_lines: vec!["mgbrowser : build details not supplied by host".into()],
+            update_status: "Updates have not been checked".into(),
+            update_requested: false,
             session: net::Session::default(),
             fonts,
             width: 1100,
@@ -392,7 +423,7 @@ impl Browser {
                         )
                     };
                     self.status = format!(
-                        "HTTP {} · {} bytes · {} links · {script_status} · CSS partial",
+                        "HTTP {} · {} bytes · {} links · {script_status} · Stylesheets unsupported",
                         response.status,
                         response.body.len(),
                         self.document
@@ -942,6 +973,23 @@ impl Browser {
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
         self.select_all = false;
         match action {
+            Action::Menu => {
+                self.menu_open = !self.menu_open;
+                self.about_open = false;
+            }
+            Action::About => {
+                self.about_open = true;
+                self.menu_open = false;
+            }
+            Action::Update => {
+                self.update_requested = true;
+                self.about_open = true;
+                self.menu_open = false;
+            }
+            Action::CloseMenu => {
+                self.about_open = false;
+                self.menu_open = false;
+            }
             Action::Address => {
                 self.focus = Focus::Address;
                 self.select_all = true;
@@ -996,6 +1044,9 @@ impl Browser {
         Ok(())
     }
     pub fn type_text(&mut self, text: &str) {
+        if self.menu_open || self.about_open {
+            return;
+        }
         if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
             return;
         }
@@ -1056,6 +1107,12 @@ impl Browser {
         Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
+        if self.menu_open || self.about_open {
+            if sym == 0xff1b {
+                self.activate(Action::CloseMenu);
+            }
+            return;
+        }
         if self.chrome && ctrl && (sym == b'l' as u32 || sym == b'L' as u32) {
             self.activate(Action::Address);
             return;
@@ -1156,6 +1213,9 @@ impl Browser {
         }
     }
     pub fn scroll_by(&mut self, amount: i32) {
+        if self.menu_open || self.about_open {
+            return;
+        }
         self.scroll =
             (self.scroll + amount).clamp(0, (self.content_height - self.height as i32 + 40).max(0));
         self.dirty = true;
@@ -1540,6 +1600,36 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn about_menu_uses_host_build_and_blocks_page_input() {
+        let mut app = test_app();
+        app.set_build_info("0.2.1", "Wed, 16 Sep 2026 12:00:00 GMT", "abc123");
+        app.paint();
+        app.click(app.width as i32 - 60, 75);
+        assert!(app.menu_open);
+        app.paint();
+        app.click(app.width as i32 - 180, 120);
+        assert!(app.about_open);
+        app.paint();
+        assert!(app.about_lines[1].contains("16 Sep 2026"));
+        assert!(
+            app.hits
+                .iter()
+                .all(|h| matches!(h.action, Action::Menu | Action::CloseMenu | Action::Update))
+        );
+        let address = app.address.clone();
+        app.key(b'l' as u32, true, false, false);
+        app.type_text("unexpected");
+        app.scroll_by(100);
+        assert_eq!(app.address, address);
+        assert_eq!(app.scroll, 0);
+        app.activate(Action::Update);
+        assert!(app.take_update_request());
+        assert!(!app.take_update_request());
+        app.key(0xff1b, false, false, false);
+        assert!(!app.about_open && !app.menu_open);
+    }
 
     #[test]
     fn http_warning_follows_loaded_url_not_location_edits() {
@@ -2001,6 +2091,7 @@ type App = Browser;
 /// Platform-neutral keyboard input. Text entry may also use Browser::type_text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
+    Escape,
     Character(char),
     Enter,
     Backspace,
@@ -2110,6 +2201,7 @@ impl Browser {
     }
     pub fn handle_key(&mut self, key: Key, ctrl: bool, shift: bool, alt: bool) {
         let sym = match key {
+            Key::Escape => 0xff1b,
             Key::Character(ch) => ch as u32,
             Key::Enter => 0xff0d,
             Key::Backspace => 0xff08,

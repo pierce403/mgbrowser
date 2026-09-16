@@ -23,7 +23,12 @@ title/address strip and "HTTP: Not secure" for a loaded HTTP page; the desktop
 window manager still controls the outer decoration. Typing HTTPS in the location
 field does not clear the warning until that page loads. Ctrl+L selects the whole
 location from either the page or a form field; type a URL and press Enter.
-Re-run the website installer to get the latest feature release.
+Re-run the website installer to bootstrap automatic updates from v0.2.1 onward.
+Menu > About mgbrowser shows version, compile time (GMT/UTC) and source commit.
+Menu > Check for updates or `mgbrowser --update` checks and installs manually.
+Installed builds check on startup and daily; restart to run the installed update.
+`--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
+See [update behavior and trust](UPDATES.md), including persistent opt-out.
 
 ## What it renders
 

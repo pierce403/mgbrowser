@@ -6,9 +6,38 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-015 : Self-updates and build identity
+
+Stability: in-progress
+
+### Dependencies
+
+F-012 distribution, F-013 host/chrome boundary and verified Rust HTTPS transport.
+
+### Properties
+
+Installed Linux browsers check for stable releases, verify tag-pinned downloads
+and SHA-256, test the new executable and atomically replace it without sudo or
+forced restart. Automatic checks can be disabled. Menu > About and --about show
+running version, compile time and commit. See docs/UPDATES.md for trust/limits.
+
+### Test Criteria
+
+- [x] Reject malformed versions, downgrade/prerelease, bad hashes and unsafe archives.
+- [x] Real packaged executable validates and replaces a temporary installation;
+  failures preserve its original bytes and concurrent updates are excluded.
+- [x] About/menu input and compile metadata verified, including a native screenshot.
+- [x] Existing workspace, component, worker and native/CDP regression gates pass.
+- [ ] Exact-commit CI/Pages and v0.2.1 public release/installer verified.
+
 ## F-014 : Hacker News desktop rendering
 
 Stability: planned
+
+2026-09-16 diagnosis: current main still does not fetch linked stylesheets, compute
+CSS styles or lay out tables. Hacker News's linked news.css is therefore never
+applied; this is missing implementation, not a TLS/cache failure. F-015 does not
+complete or implement this rendering feature.
 
 ### Dependencies
 

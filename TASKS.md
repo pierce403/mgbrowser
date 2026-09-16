@@ -1,5 +1,13 @@
 # Work queue
 
+2026-09-16 current request: **T-012 / F-015**, diagnose HN styling, add verified
+automatic self-updates and About compile identity, publish v0.2.1. Diagnosis:
+linked CSS loading/cascade/table layout remain absent. The HN implementation goal
+below stays planned; this request does not silently expand into that engine work.
+v0.2.1 will include the unpublished v0.2.0 extraction. Prior authentication blocker
+is historical: current gh/HTTPS authentication works; publication still needs
+fresh exact-commit CI, tagged assets and public installation evidence.
+
 Current user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
 See docs/HACKER_NEWS.md for the inspected live requirements, minimal sequence and
 unchecked acceptance gates. Implement CSS resources/cascade, table/inline layout,

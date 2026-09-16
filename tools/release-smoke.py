@@ -30,6 +30,9 @@ with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temp
         binary = binary_dir / "mgbrowser"
         version = subprocess.check_output([binary, "--version"], env=env, text=True).strip()
         assert version == f"mgbrowser {expected_version}", version
+        about = subprocess.check_output([binary, "--about"], env=env, text=True)
+        assert f"mgbrowser {expected_version}" in about and "Compiled:" in about and "GMT" in about and "Commit:" in about
+        assert (binary_dir / ".mgbrowser-auto-update").read_text() == "enabled\n"
         # Reinstall while the old executable is running: replacing its inode
         # must work without truncating a live binary (ETXTBSY).
         old_inode = binary.stat().st_ino

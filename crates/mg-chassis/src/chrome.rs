@@ -52,7 +52,7 @@ impl Browser {
             &mut self.fonts,
             &visible_title,
             16.,
-            self.width as f32 - 185.,
+            self.width as f32 - 285.,
         );
         c.text(
             &mut self.fonts,
@@ -78,6 +78,52 @@ impl Browser {
             let thumb = (area * area / (self.content_height - TOP).max(1)).max(20);
             let sy = TOP + self.scroll * area / (self.content_height - TOP).max(1);
             c.rect(self.width as i32 - 9, sy, 6, thumb as u32, 0x8b9c83);
+        }
+        if self.menu_open || self.about_open {
+            // A popup cannot dispatch clicks into the covered page.
+            self.hits.clear();
+        }
+        let menu = if self.update_status.starts_with("Installed ") {
+            "Menu *"
+        } else {
+            "Menu"
+        };
+        self.button(c, self.width as i32 - 100, 62, 86, menu, Action::Menu);
+        if self.menu_open {
+            let x = self.width as i32 - 234;
+            c.rect(x - 8, 102, 228, 126, 0xc4cebd);
+            self.button(c, x, 108, 212, "About mgbrowser", Action::About);
+            self.button(c, x, 148, 212, "Check for updates", Action::Update);
+            self.button(c, x, 188, 212, "Close", Action::CloseMenu);
+        }
+        if self.about_open {
+            let w = self.width.saturating_sub(40).min(700);
+            let x = (self.width - w) as i32 / 2;
+            c.rect(x, 125, w, 300, 0xc4cebd);
+            c.rect(x + 2, 127, w - 4, 296, 0xfafbf8);
+            for (i, line) in self.about_lines.iter().enumerate() {
+                let text = fit_head(&mut self.fonts, line, 16., w as f32 - 32.);
+                c.text(
+                    &mut self.fonts,
+                    x + 16,
+                    145 + i as i32 * 30,
+                    &text,
+                    16.,
+                    INK,
+                );
+            }
+            let status = fit_head(&mut self.fonts, &self.update_status, 13., w as f32 - 32.);
+            c.text(&mut self.fonts, x + 16, 288, &status, 13., INK);
+            c.text(
+                &mut self.fonts,
+                x + 16,
+                320,
+                "Updates take effect after restart. Escape closes.",
+                13.,
+                INK,
+            );
+            self.button(c, x + 16, 367, 190, "Check for updates", Action::Update);
+            self.button(c, x + 218, 367, 70, "Close", Action::CloseMenu);
         }
     }
 }

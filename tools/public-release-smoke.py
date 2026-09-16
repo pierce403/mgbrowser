@@ -30,6 +30,10 @@ env.pop("MGBROWSER_INSTALL_DIR", None)
 subprocess.run(["bash", "-o", "pipefail", "-c", command], env=env, check=True, timeout=180)
 binary = root / ".local/bin/mgbrowser"
 assert subprocess.check_output([binary, "--version"], text=True).strip() == f"mgbrowser {expected}"
+about = subprocess.check_output([binary, "--about"], text=True)
+assert f"mgbrowser {expected}" in about and "Compiled:" in about and "GMT" in about and "Commit:" in about
+assert (binary.parent / ".mgbrowser-auto-update").read_text() == "enabled\n"
+print("PUBLIC_BUILD_IDENTITY", about, flush=True)
 with subprocess.Popen([binary, "--script-worker"], stdin=subprocess.PIPE, env=env) as worker:
     try:
         assert worker.poll() is None

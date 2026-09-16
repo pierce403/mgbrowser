@@ -32,6 +32,9 @@ install -m 755 "$payload/mgbrowser" "$pending"
 mv -fT -- "$pending" "$install_dir/mgbrowser"
 pending=
 install -m 644 "$payload/mgbrowser.svg" "$data_dir/icons/hicolor/scalable/apps/mgbrowser.svg"
+if [[ ${MGBROWSER_NO_AUTO_UPDATE:-0} == 0 ]]; then
+    printf 'enabled\n' > "$install_dir/.mgbrowser-auto-update"
+fi
 install -m 644 "$payload/mgbrowser-256.png" "$data_dir/icons/hicolor/256x256/apps/mgbrowser.png"
 install -m 644 "$payload/LICENSE" "$payload/README.md" "$payload/THIRD_PARTY_LICENSES.txt" "$data_dir/mgbrowser/"
 # Older MIT releases do not contain NOTICE; preserve their install compatibility.
@@ -47,6 +50,12 @@ if command -v update-desktop-database >/dev/null; then update-desktop-database "
 if command -v gtk-update-icon-cache >/dev/null; then gtk-update-icon-cache -f -t "$data_dir/icons/hicolor" >/dev/null 2>&1 || true; fi
 printf 'Installed %s\n' "$version"
 printf 'Restart any open mgbrowser windows after updating.\n'
+if [[ -f "$install_dir/.mgbrowser-auto-update" ]]; then
+    printf 'Automatic update checks enabled. Use --no-auto-update or MGBROWSER_NO_AUTO_UPDATE=1 to opt out.\n'
+else
+    printf 'Automatic update checks disabled. Use mgbrowser --update to check manually.\n'
+fi
+printf 'Menu > About shows version, compile time and commit.\n'
 case ":$PATH:" in *":$install_dir:"*) ;; *) printf 'Add this directory to your PATH: %s\nFor this shell: export PATH="%s:$PATH"\n' "$install_dir" "$install_dir";; esac
 font_found=false
 for font in "${MGBROWSER_FONT:-/nonexistent}" \

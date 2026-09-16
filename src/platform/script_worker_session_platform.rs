@@ -362,8 +362,8 @@ struct Worker {
 }
 impl Worker {
     fn start(pool: ChildPool, generation: u64) -> Result<Self, String> {
-        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        let mut command = Command::new(executable);
+        // Keep this process and its workers on the same build across an update.
+        let mut command = Command::new("/proc/self/exe");
         command
             .arg("--script-session")
             .env_clear()

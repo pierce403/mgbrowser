@@ -156,14 +156,8 @@ mod linux {
                 None,
             ));
         }
-        let executable = std::env::current_exe().map_err(|e| {
-            failure(
-                FailureKind::Other,
-                format!("Cannot locate script-worker executable: {e}"),
-                None,
-            )
-        })?;
-        let mut command = Command::new(executable);
+        // Re-exec this inode even after a self-update atomically replaced its path.
+        let mut command = Command::new("/proc/self/exe");
         command
             .arg("--script-worker")
             .env_clear()

@@ -64,6 +64,7 @@ impl ScriptSession for script_worker::Session {
 /// Convert X11's key symbols at the platform boundary.
 pub fn translate_keysym(sym: u32) -> Option<Key> {
     Some(match sym {
+        0xff1b => Key::Escape,
         0xff0d => Key::Enter,
         0xff08 => Key::Backspace,
         0xff09 => Key::Tab,

@@ -23,7 +23,9 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
-          cargo +1.91.1 build --locked --example journey_server
+          MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
+          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey
+          bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           target/debug/examples/journey_server > tmp/release-fixture.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT

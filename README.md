@@ -2,11 +2,11 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.2.0 Experimental Preview
+## v0.2.1 Experimental Preview
 
-**Source available; binary release pending.** The four-component refactor is on
-main. The installer below currently delivers the published v0.1.1 preview.
-The v0.2.0 package and release notes are prepared; publication awaits its tag.
+**v0.2.1 publication in progress.** Adds automatic updates and an About menu with
+the build's compile time/commit, including the four-component extraction. The
+installer follows the latest published release; until publication it is v0.1.1.
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -25,9 +25,19 @@ needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable
 TrueType/OpenType font file. `mgbrowser --help` lists controls and options.
 Current project source and original artwork use the [Apache License 2.0](LICENSE).
 Dependencies retain their own licenses. Published v0.1.0/v0.1.1 archives retain
-their original MIT license; v0.2.0 includes Apache-2.0 and NOTICE.
+their original MIT license; v0.2.1 includes Apache-2.0 and NOTICE.
+
+Installed builds check for newer versions on startup and daily while open, verify
+checksums and test the new binary before replacement. Restart to use an update.
+Menu > About shows the running build's version, compile time and source commit.
+Use Menu > Check for updates or `mgbrowser --update` manually; disable background
+checks with `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1`.
+See [updater behavior and trust](docs/UPDATES.md).
 
 ### Known limitations
+
+- Hacker News styling is not implemented yet: linked CSS, cascade and table layout
+  remain planned. An update does not currently fix its appearance.
 
 - Modern-web compatibility is poor. Google search → first result is not working.
 - JavaScript is an incomplete original implementation, disabled by default;
@@ -44,7 +54,7 @@ v0.2.0 extracts the existing engines into reusable packages without expanding we
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.2.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.2.1.md) for manual install and uninstall.
 
 ## Components
 
