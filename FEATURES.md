@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-020 : Update progress, explicit restart and compact toolbar
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -30,13 +30,25 @@ See docs/UPDATES.md. No engine or whole-browser sandbox changes.
 
 ### Test criteria
 
-- [ ] Known/unknown/truncated/redirect body progress and unchanged transport limits.
-- [ ] Scaled/compact progress bar, state cleanup and right-hand menu interaction.
-- [ ] Host readiness gates the button and request, including keyboard/compact UI.
-- [ ] Installing during a pointer press cannot turn the old click into a restart.
-- [ ] Native replaced-path launch, failed-spawn retry, reopened page and old exit.
-- [ ] Existing component, worker, packaged and native/CDP regression gates pass.
-- [ ] Exact-commit CI/Pages, versioned release and public installer/restart verified.
+- [x] Known/unknown/truncated/redirect body progress and unchanged transport limits.
+- [x] Scaled/compact progress bar, state cleanup and right-hand menu interaction.
+- [x] Host readiness gates the button and request, including keyboard/compact UI.
+- [x] Installing during a pointer press cannot turn the old click into a restart.
+- [x] Native replaced-path launch, failed-spawn retry, reopened page and old exit.
+- [x] Existing component, worker, packaged and native/CDP regression gates pass.
+- [x] Exact-commit CI/Pages, versioned release and public installer/restart verified.
+
+Published v0.7.1 at 8d8ad5654950d7f720c427aa4a396ec93927af5f. Rust CI
+35164990594, JSPLAN 35164990612, Pages 35164990646 and release 35166215804 pass.
+Exact-commit checks: 1,395 debug and 1,295 selected release checks, all existing
+native/CDP journeys, packaged installer/updater and theme/scale checks. Public
+checksum, exact installer/reinstaller, worker/session/Boa, desktop/icons and
+actual v0.7.0 upgrade/no-op recheck pass. The public binary repeats native
+restart/failure-retry, toolbar/bookmark and full theme/scale acceptance. Download
+progress is tested with known/unknown framed bodies and rendered scaled/compact
+panels; no future public release is fabricated to claim a live GUI download.
+Screenshots are inspected and receipts are in the 2026-09-16 log. Scrolling
+remains fixed-step; this release adds no web-engine compatibility.
 
 ## F-019 : Navigation toolbar and local bookmarks
 

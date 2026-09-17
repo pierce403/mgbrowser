@@ -1,10 +1,16 @@
 # Work queue
 
-2026-09-16 active: **T-017 / F-020**, explicit Restart now after an installed
-update, download progress, and a compact toolbar with a right-hand hamburger menu.
-Preserve the loaded URL and launch policy, warn about lost session
-state, keep the old window on spawn failure, test native executable replacement
-and publish v0.7.1 through the standing release/public installer gates.
+2026-09-16 complete: **T-017 / F-020 shipped as v0.7.1**, release commit
+`8d8ad5654950d7f720c427aa4a396ec93927af5f`. About shows download progress and
+offers Restart now after installation, with session-loss warning and failed-
+spawn retry. One toolbar row places the hamburger menu right of the URL.
+Rust CI 35164990594, JSPLAN 35164990612, Pages 35164990646 and release
+35166215804 pass on that commit. Public checksum/install/reinstall,
+worker/session/Boa, desktop/icons, v0.7.0 upgrade/no-op and public native
+restart/theme/scale/bookmark acceptance pass. See today's log for receipts.
+Scrolling was diagnosed as immediate 100-logical-pixel wheel jumps; short
+target-position animation was recommended, not implemented. No release gates
+remain; further feature work needs a new request.
 
 2026-09-16 complete: **T-016 / F-019 shipped as v0.7.0**, release commit
 `79488712b2228ba8080c53757e3e8f70a173b3fa`. Menu, Back, Forward, Refresh and
