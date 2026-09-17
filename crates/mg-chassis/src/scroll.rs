@@ -63,6 +63,9 @@ impl Browser {
         }
         if next != self.scroll {
             self.scroll = next;
+            // The next paint may discover a shorter document, including on the
+            // final frame after the motion itself has already been cleared.
+            self.scroll_reflow_pending = true;
             self.hits.clear();
             self.boxes.clear();
             self.pointer_press = None;
@@ -206,6 +209,8 @@ mod tests {
         assert!(app.values.values().any(|v| v == "still aligned"));
         app.wheel_scroll_at(100, now);
         app.document = document::parse("<p>Short page</p>", "https://example.test/");
+        app.advance_scroll(now + DURATION);
+        assert!(app.smooth_scroll.is_none());
         app.paint();
         assert_eq!(app.scroll, 0);
         assert!(app.smooth_scroll.is_none());
