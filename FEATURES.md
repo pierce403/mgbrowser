@@ -6,6 +6,31 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-021 : Smooth wheel scrolling
+
+Stability: in-progress
+
+### Dependencies
+
+F-004 native input/navigation, F-018 logical/physical sizing, F-013 host boundaries.
+
+### Properties
+
+Native wheel steps ease over 150 ms with elapsed-time cubic ease-out. Repeated
+input accumulates toward a clamped target; reversal starts from visible position.
+Clicks/keys, menus, navigation, resizing and scale changes cancel motion.
+No idle animation redraws. Keyboard/CDP scrolling remains immediate. No new
+dependency, touchpad valuators, kinetic fling, compositor or page-engine change.
+Software paint cost still limits frame rate. Optional chrome remains optional.
+
+### Test criteria
+
+- [ ] Deterministic intermediate/end positions, coalescing, reversal and bounds.
+- [ ] Click/keyboard/modal/navigation/geometry cancellation and painted hit alignment.
+- [ ] Native packaged wheel shows intermediate frames, settles and reverses at 100/200%.
+- [ ] Existing resource/worker/native/CDP and independent no-chrome gates pass.
+- [ ] Exact-commit CI/Pages, release and fresh public install/native verification.
+
 ## F-020 : Update progress, explicit restart and compact toolbar
 
 Stability: stable

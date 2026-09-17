@@ -332,8 +332,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         logical_coordinate(e.event_x, app.effective_scale_percent()),
                         logical_coordinate(e.event_y, app.effective_scale_percent()),
                     ),
-                    4 => app.scroll_by(-100),
-                    5 => app.scroll_by(100),
+                    4 => app.wheel_scroll_by(-100),
+                    5 => app.wheel_scroll_by(100),
                     _ => {}
                 },
                 Event::ButtonRelease(e) if e.detail == 1 => {
@@ -494,6 +494,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(cdp) = &mut cdp {
             cdp.tick(&mut app);
         }
+        app.advance_scroll(std::time::Instant::now());
         if app.is_dirty() {
             let canvas = app.paint();
             // Split uploads below the core X11 request-size limit.

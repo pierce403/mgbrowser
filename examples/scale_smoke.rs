@@ -305,6 +305,11 @@ impl<'a> Browser<'a> {
         Ok(previous)
     }
     fn button(&self, x: i16, y: i16, detail: u8) -> Result<()> {
+        self.send_button(x, y, detail)?;
+        thread::sleep(Duration::from_millis(100));
+        Ok(())
+    }
+    fn send_button(&self, x: i16, y: i16, detail: u8) -> Result<()> {
         for (response_type, mask) in [
             (BUTTON_PRESS_EVENT, EventMask::BUTTON_PRESS),
             (BUTTON_RELEASE_EVENT, EventMask::BUTTON_RELEASE),
@@ -331,7 +336,66 @@ impl<'a> Browser<'a> {
             )?;
         }
         self.display.conn.flush()?;
+        Ok(())
+    }
+    fn scrollbar_top(&self) -> Result<usize> {
+        let geometry = self.display.conn.get_geometry(self.window)?.reply()?;
+        let pixels = self
+            .display
+            .conn
+            .get_image(
+                ImageFormat::Z_PIXMAP,
+                self.window,
+                geometry.width as i16 - physical(6, self.scale),
+                0,
+                1,
+                geometry.height,
+                u32::MAX,
+            )?
+            .reply()?
+            .data;
+        pixels
+            .chunks_exact(4)
+            .position(|p| {
+                matches!(
+                    u32::from_le_bytes([p[0], p[1], p[2], 0]),
+                    0x8b9c83 | 0x80967f
+                )
+            })
+            .ok_or_else(|| "Scroll thumb not visible".into())
+    }
+    fn smooth_wheel(&self, scratch: &Path) -> Result<()> {
+        self.navigate("/")?;
+        self.settled()?;
+        let first = self.scrollbar_top()?;
+        self.send_button(physical(400, self.scale), physical(175, self.scale), 5)?;
+        let start = Instant::now();
+        let mut samples = vec![first];
+        while start.elapsed() < Duration::from_millis(550) {
+            let next = self.scrollbar_top()?;
+            if samples.last() != Some(&next) {
+                samples.push(next);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            samples.len() >= 3,
+            "Wheel jumped without intermediate frames: {samples:?}"
+        );
+        assert!(
+            samples.windows(2).all(|p| p[0] < p[1]),
+            "Wheel overshot or reversed: {samples:?}"
+        );
+        let end = self.scrollbar_top()?;
         thread::sleep(Duration::from_millis(100));
+        assert_eq!(self.scrollbar_top()?, end, "Animation failed to settle");
+        self.settled()?
+            .save(&scratch.join(format!("smooth-wheel-{}.png", self.scale)))?;
+        self.send_button(physical(400, self.scale), physical(175, self.scale), 4)?;
+        wait("wheel returns to initial position", || {
+            Ok(self.scrollbar_top()? == first)
+        })?;
+        println!("NATIVE_SMOOTH_WHEEL_OK {}% {samples:?}", self.scale);
         Ok(())
     }
     fn click(&self, x: i32, y: i32) -> Result<()> {
@@ -649,11 +713,15 @@ fn main() -> Result<()> {
     browser.wait_scale(100)?;
     browser.journey()?;
     browser.settled()?.save(&scratch.join("native-100.png"))?;
+    browser.resize(500, 240)?;
+    browser.smooth_wheel(&scratch)?;
+    browser.resize(1100, 820)?;
     // A compact viewport requires actual wheel input to reveal the original form.
     display.dpi("192")?;
     browser.wait_scale(200)?;
     browser.resize(1000, 480)?;
     browser.wait_scale(200)?;
+    browser.smooth_wheel(&scratch)?;
     let before = browser.settled()?.bytes;
     browser.button(800, 350, 5)?;
     wait("wheel scroll repaint", || {

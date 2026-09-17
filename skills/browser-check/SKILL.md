@@ -82,6 +82,15 @@ at compact and scaled sizes in both themes; a received-byte count is not an
 installation-success signal. After toolbar height changes, update native/CDP
 geometry expectations while retaining pixel, input and resource assertions.
 
+For wheel easing, run Chassis's deterministic scroll tests with controlled
+Instants: intermediate/final positions, reversal, bounds, cancellation and
+painted hit alignment. Retain the native scale-smoke scrollbar traces at
+100/200%: several monotonic intermediate frames, settling and return to origin
+must occur on the packaged and public-installed binary. Final position alone
+does not prove smooth motion. Preserve immediate keyboard/CDP behavior and
+optional-chrome embedding. This does not establish touchpad/kinetic support or
+a general frame-rate guarantee on software-rendered pages.
+
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis
 styled_embedding journey (real linked CSS, downloaded SVG and a scrolled click).
 Read docs/HACKER_NEWS.md for the bounded desktop contract. Compare identical

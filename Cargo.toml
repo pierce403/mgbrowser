@@ -60,7 +60,7 @@ default-members = [".", "crates/mg-butane", "crates/mg-sparkle", "crates/mg-chas
 resolver = "3"
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -68,9 +68,9 @@ repository = "https://github.com/pierce403/mgbrowser"
 homepage = "https://mgbrowser.org"
 
 [workspace.dependencies]
-mg-butane = { path = "crates/mg-butane", version = "0.7.1" }
-mg-sparkle = { path = "crates/mg-sparkle", version = "0.7.1" }
-mg-chassis = { path = "crates/mg-chassis", version = "0.7.1", default-features = false }
+mg-butane = { path = "crates/mg-butane", version = "0.7.2" }
+mg-sparkle = { path = "crates/mg-sparkle", version = "0.7.2" }
+mg-chassis = { path = "crates/mg-chassis", version = "0.7.2", default-features = false }
 # Boa's fuzz feature exposes its cumulative opcode counter; no JIT or native backend.
 boa_engine = { version = "=0.22.0", default-features = false, features = ["fuzz"] }
 boa_gc = { version = "=0.22.0", default-features = false }

@@ -8,6 +8,7 @@ pub mod net;
 pub mod resources;
 mod scale;
 pub mod scripts;
+mod scroll;
 mod theme;
 pub use cdp_browser::BrowserCdp;
 use mg_sparkle::{
@@ -150,6 +151,7 @@ pub struct Browser {
     focus: Focus,
     select_all: bool,
     scroll: i32,
+    smooth_scroll: Option<scroll::ScrollMotion>,
     content_height: i32,
     history: Vec<String>,
     history_at: usize,
@@ -222,6 +224,7 @@ impl Browser {
         self.scale_change.take()
     }
     fn invalidate_scaled_geometry(&mut self) {
+        self.stop_scroll();
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.scroll_reflow_pending = true;
         self.hits.clear();
@@ -482,6 +485,7 @@ impl Browser {
             },
             select_all: false,
             scroll: 0,
+            smooth_scroll: None,
             content_height: 0,
             history: Vec::new(),
             history_at: 0,
@@ -514,6 +518,7 @@ impl Browser {
         add_history: bool,
         automatic: bool,
     ) {
+        self.stop_scroll();
         let target = if target.contains("://") {
             target
         } else {
@@ -631,6 +636,7 @@ impl Browser {
             }
             self.loading = false;
             self.scroll = 0;
+            self.stop_scroll();
             self.values.clear();
             self.edit_versions.clear();
             self.pending_event = None;
@@ -1288,6 +1294,7 @@ impl Browser {
         let _ = self.activate_checked(action);
     }
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
+        self.stop_scroll();
         self.select_all = false;
         if matches!(
             action,
@@ -1458,6 +1465,7 @@ impl Browser {
         let _ = self.click_checked(x, y);
     }
     fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
+        self.stop_scroll();
         if let Some(hit) = self.hits.iter().rev().find(|h| h.contains(x, y)) {
             // Input may arrive between opening a popup and its first paint.
             // Reject stale page/chrome hit regions even in that interval.
@@ -1539,6 +1547,7 @@ impl Browser {
         Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
+        self.stop_scroll();
         if ctrl && !alt {
             let scale_action = match sym {
                 0x2b | 0x3d => Some(Action::ScaleUp),
@@ -1667,11 +1676,14 @@ impl Browser {
         }
     }
     pub fn scroll_by(&mut self, amount: i32) {
+        self.stop_scroll();
         if self.modal_open() {
             return;
         }
-        self.scroll =
-            (self.scroll + amount).clamp(0, (self.content_height - self.height as i32 + 40).max(0));
+        self.scroll = self
+            .scroll
+            .saturating_add(amount)
+            .clamp(0, self.max_scroll());
         self.dirty = true;
     }
     #[cfg(test)]
@@ -1728,7 +1740,8 @@ impl Browser {
         );
         self.content_height = frame.content_height + top;
         let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
-        if clamp_scroll && self.scroll > max_scroll {
+        if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
+            self.stop_scroll();
             self.scroll = max_scroll;
             return self.paint_with_scroll_clamp(false);
         }
@@ -2867,6 +2880,7 @@ impl Browser {
     }
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {
+        self.stop_scroll();
         self.chrome = enabled && cfg!(feature = "chrome");
         self.restart_requested = false;
         self.bookmarks_open = false;
@@ -2889,6 +2903,7 @@ impl Browser {
         if self.chrome { 29 } else { 0 }
     }
     pub fn pointer_down(&mut self, x: i32, y: i32) {
+        self.stop_scroll();
         self.pointer_press = Some((x, y));
     }
     pub fn pointer_up(&mut self, x: i32, y: i32) {

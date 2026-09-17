@@ -1,5 +1,10 @@
 # Work queue
 
+2026-09-16 active: **T-018 / F-021**, smooth wheel scrolling. Implement bounded
+150 ms easing, responsive reversal and input/navigation cancellation; retain
+immediate keyboard/CDP scrolling and existing resource/worker assertions.
+Publish v0.7.2 and verify the public installer and native animation.
+
 2026-09-16 complete: **T-017 / F-020 shipped as v0.7.1**, release commit
 `8d8ad5654950d7f720c427aa4a396ec93927af5f`. About shows download progress and
 offers Restart now after installation, with session-loss warning and failed-

@@ -25,6 +25,12 @@ See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
 Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
 
+Since v0.7.2, wheel steps ease over 150 ms and repeated steps accumulate.
+Reversing responds from the visible position. Clicking, keys (including Escape),
+menus, navigation, resize and size changes stop animation. Keyboard and CDP
+scrolling remain immediate. This does not add high-resolution touchpad gestures
+or compositor rendering; frame rate still depends on software paint cost.
+
 Plain `http://` URLs work as well as HTTPS. Since v0.1.1, the browser displays a red
 title/address strip and "HTTP: Not secure" for a loaded HTTP page; the desktop
 window manager still controls the outer decoration. Typing HTTPS in the location

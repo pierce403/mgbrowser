@@ -83,6 +83,12 @@ Chassis clamps its viewport to the existing desktop bounds. Direct Sparkle calle
 choose dimensions appropriate to their own resource limits. A page surface is
 software RGB (`0x00RRGGBB`); GPU/compositor integration remains future work.
 
+Wheel easing belongs to Chassis, not page engines: native hosts call
+`wheel_scroll_by` for logical wheel deltas and `advance_scroll(Instant)` before
+painting dirty frames. Existing `scroll_by` and CDP remain immediate. Motion
+invalidates old hit geometry; hosts must present the updated paint before using
+its coordinates. Clicks, keys, navigation and geometry changes cancel motion.
+
 ## Runnable examples and checks
 
 Run from the repository root with Rust 1.91.1. Substitute a readable font path
