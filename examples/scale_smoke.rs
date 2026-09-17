@@ -249,7 +249,7 @@ impl<'a> Browser<'a> {
     fn wait_scale(&mut self, percent: u16) -> Result<()> {
         let result = wait(&format!("rendered scale {percent}%"), || {
             let frame = self.frame()?;
-            let edge = physical(107, percent) as usize;
+            let edge = physical(63, percent) as usize;
             let hints = WmSizeHints::get_normal_hints(&self.display.conn, self.window)?.reply()?;
             Ok(frame.pixel(0, 0) == HTTP
                 && frame.pixel(0, edge - 1) == HTTP
@@ -443,15 +443,15 @@ impl<'a> Browser<'a> {
     }
     fn journey(&self) -> Result<()> {
         self.navigate("/")?;
-        self.click(100, 240)?;
+        self.click(100, 196)?;
         self.text(&format!("scale{}", self.scale))?;
         let count = self.loaded_count()?;
-        self.click(90, 287)?;
+        self.click(90, 243)?;
         self.loaded_after(count, "Local fixture results")?;
         // Locate the actual rendered blue link, then deliver independent X11 input.
         let frame = self.frame()?;
         let mut bounds: Option<(usize, usize, usize, usize)> = None;
-        for y in physical(108, self.scale) as usize
+        for y in physical(64, self.scale) as usize
             ..usize::from(frame.height) - physical(29, self.scale) as usize
         {
             for x in 0..usize::from(frame.width) - 20 {
@@ -513,12 +513,13 @@ impl<'a> Browser<'a> {
         ))
     }
     fn settings(&self) -> Result<()> {
-        self.click(28, 31)?;
+        let (width, _) = self.logical_size()?;
+        self.click(width - 28, 31)?;
         let menu = wait("painted Menu", || {
             let f = self.frame()?;
             Ok(matches!(
                 f.pixel(
-                    physical(18, self.scale) as usize,
+                    physical(width - 222, self.scale) as usize,
                     physical(63, self.scale) as usize
                 ),
                 0x323c35 | 0xe3e9df
@@ -529,7 +530,7 @@ impl<'a> Browser<'a> {
                 .save(&self.log.with_extension("menu-failure.png"))?;
         }
         menu?;
-        self.click(100, 142)?;
+        self.click(width - 140, 142)?;
         let (x, y, _) = self.settings_geometry()?;
         wait("painted Settings", || {
             let f = self.frame()?;
@@ -600,7 +601,7 @@ fn main() -> Result<()> {
     let mut browser = Browser::start(&display, &payload, &scratch, "system-dpi")?;
     browser.wait_scale(200)?;
     let frame = browser.settled()?;
-    frame.sharp_two_x_text((250, 22, 200, 20));
+    frame.sharp_two_x_text((206, 22, 200, 20));
     frame.sharp_two_x_text((32, 132, 300, 30));
     frame.save(&scratch.join("native-200.png"))?;
     browser.journey()?;
@@ -713,9 +714,9 @@ fn main() -> Result<()> {
         0xffffff,
         "selection filled blank address space"
     );
-    assert_ne!(selected.pixel(249, 21), 0xffffff, "URL selection missing");
+    assert_ne!(selected.pixel(205, 21), 0xffffff, "URL selection missing");
     browser.text("https://not-submitted.example/")?;
-    browser.click(204, 31)?;
+    browser.click(160, 31)?;
     let bookmarks_path = scratch.join("config/mgbrowser/bookmarks.json");
     wait("bookmark current page", || {
         let Ok(bytes) = fs::read(&bookmarks_path) else {
@@ -727,22 +728,22 @@ fn main() -> Result<()> {
     })?;
     // Refresh must ignore the edited address, then navigation/history must work.
     let count = browser.loaded_count()?;
-    browser.click(160, 31)?;
+    browser.click(116, 31)?;
     browser.loaded_after(count, "Local browser journey fixture")?;
     browser.navigate("/destination")?;
     let count = browser.loaded_count()?;
-    browser.click(72, 31)?;
+    browser.click(28, 31)?;
     browser.loaded_after(count, "Local browser journey fixture")?;
     let count = browser.loaded_count()?;
-    browser.click(116, 31)?;
+    browser.click(72, 31)?;
     browser.loaded_after(count, "/destination")?;
     drop(browser);
     let mut browser = Browser::start(&display, &payload, &scratch, "bookmark-restart")?;
     browser.wait_scale(100)?;
     browser.navigate("/destination")?;
-    browser.click(28, 31)?;
+    browser.click(browser.logical_size()?.0 - 28, 31)?;
     browser.settled()?;
-    browser.click(100, 176)?;
+    browser.click(browser.logical_size()?.0 - 140, 176)?;
     wait("bookmark dialog", || {
         Ok(browser.frame()?.pixel(170, 140) == 0xc4cebd)
     })?;
@@ -750,9 +751,9 @@ fn main() -> Result<()> {
     let count = browser.loaded_count()?;
     browser.click(230, 218)?;
     browser.loaded_after(count, "Local browser journey fixture")?;
-    browser.click(28, 31)?;
+    browser.click(browser.logical_size()?.0 - 28, 31)?;
     browser.settled()?;
-    browser.click(100, 176)?;
+    browser.click(browser.logical_size()?.0 - 140, 176)?;
     wait("bookmark dialog reopened", || {
         Ok(browser.frame()?.pixel(170, 140) == 0xc4cebd)
     })?;

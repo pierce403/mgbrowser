@@ -6,7 +6,7 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
-## F-020 : Explicit restart after update
+## F-020 : Update progress, explicit restart and compact toolbar
 
 Stability: in-progress
 
@@ -17,6 +17,10 @@ F-015 verified updates/build identity and F-013 optional host-owned browser UX.
 ### Properties
 
 After an installed update, About replaces its check button with Restart now.
+Download progress reports actual bytes with a percentage only for known lengths;
+unknown sizes show activity, and verification remains a separate stage.
+One toolbar row contains Back/Forward/Refresh/Bookmark, URL, then a right-hand
+hamburger menu. The redundant title row is removed; native window titles remain.
 The menu opens the same warning panel. Restart requires an explicit user action,
 launches the installation path rather than the running inode, then shuts down
 the old browser and workers. A spawn failure retains the old window for retry.
@@ -26,6 +30,8 @@ See docs/UPDATES.md. No engine or whole-browser sandbox changes.
 
 ### Test criteria
 
+- [ ] Known/unknown/truncated/redirect body progress and unchanged transport limits.
+- [ ] Scaled/compact progress bar, state cleanup and right-hand menu interaction.
 - [ ] Host readiness gates the button and request, including keyboard/compact UI.
 - [ ] Installing during a pointer press cannot turn the old click into a restart.
 - [ ] Native replaced-path launch, failed-spawn retry, reopened page and old exit.
@@ -42,7 +48,8 @@ F-004 native navigation, F-013 optional Chassis chrome, F-017 themes, F-018 sizi
 
 ### Properties
 
-Menu, Back, Forward, Refresh and Bookmark precede the URL. Selection covers only
+Back, Forward, Refresh and Bookmark precede the URL; the hamburger menu follows
+it since v0.7.1 (F-020). Selection covers only
 visible URL text. Refresh and bookmark act on the loaded page, not an unsubmitted
 address. A bounded local bookmark list supports add, open, remove and pagination;
 Ctrl+D toggles and Ctrl+Shift+O opens it. Host-owned atomic storage preserves
@@ -51,7 +58,7 @@ compatibility. See docs/BOOKMARKS.md.
 
 ### Test criteria
 
-- [x] Text-only URL selection at 100/125/200%; left menu and history availability.
+- [x] Text-only URL selection at 100/125/200% and history availability (v0.7.0 left menu; F-020 moves it right).
 - [x] Bookmark values, limits, persistence, deduplication, removal and file failures.
 - [x] Modal input isolation, compact pagination and no-chrome embedding preserved.
 - [x] Packaged native back/forward/refresh and bookmark add/open/remove/restart.

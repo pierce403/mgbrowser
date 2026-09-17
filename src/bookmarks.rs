@@ -10,6 +10,15 @@ use std::{
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+struct BookmarkLock(std::fs::File);
+impl Drop for BookmarkLock {
+    fn drop(&mut self) {
+        // Unlock the shared open-file description explicitly: a concurrent
+        // fork/exec can temporarily hold a duplicate even after our File closes.
+        // SAFETY: this guard owns a live, exclusively locked descriptor.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
 pub struct BookmarkStore {
     path: Option<PathBuf>,
 }
@@ -106,10 +115,11 @@ impl BookmarkStore {
         if !lock.metadata().map_err(|e| e.to_string())?.is_file() {
             return Err("Bookmark lock must be a regular file".into());
         }
-        // SAFETY: the live file owns this descriptor. Closing it releases the lock.
+        // SAFETY: the live file owns this descriptor.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("Bookmarks are busy in another window; try again".into());
         }
+        let _lock = BookmarkLock(lock);
         let mut entries = self.load()?;
         match change {
             BookmarkChange::Add(bookmark) => {
@@ -204,6 +214,34 @@ mod tests {
             0o600
         );
         fs::remove_dir_all(store.path.unwrap().parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn completed_edit_unlocks_even_when_a_child_holds_a_duplicate_descriptor() {
+        let store = store();
+        let path = store
+            .path
+            .as_ref()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(".bookmarks.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let inherited = file.try_clone().unwrap();
+        let guard = BookmarkLock(file);
+        assert!(store.apply(&add("https://example.com/")).is_err());
+        drop(guard);
+        assert_eq!(store.apply(&add("https://example.com/")).unwrap().len(), 1);
+        drop(inherited);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
     #[test]
     fn malformed_and_symlink_files_are_preserved() {

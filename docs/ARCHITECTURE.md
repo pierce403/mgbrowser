@@ -24,7 +24,7 @@ fetching, navigation-generation cancellation and download budgets. Neither
 resource bytes nor new fetch capabilities are passed into the script worker.
 
 Chassis composes the services needed to browse. Its `chrome` Cargo feature draws
-the current toolbar, address/title strip and status area. A host can disable it
+the current single-row toolbar/address field and status area. A host can disable it
 with `default-features = false`, or call `Browser::set_chrome(false)` at runtime.
 The same navigation and form services remain usable without that UI. Services
 can become internal modules or smaller crates later without adding more public

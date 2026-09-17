@@ -28,7 +28,7 @@ use std::{
 };
 pub use theme::{ColorScheme, ThemePreference};
 
-const TOP: i32 = 108;
+const TOP: i32 = 64;
 const BG: u32 = 0xfafbf8;
 #[cfg(feature = "chrome")]
 const HTTP_CHROME: u32 = 0x9f202b;
@@ -117,6 +117,7 @@ pub struct Browser {
     settings_status: String,
     about_lines: Vec<String>,
     update_status: String,
+    update_progress: Option<(usize, Option<usize>)>,
     update_requested: bool,
     restart_available: bool,
     restart_requested: bool,
@@ -343,6 +344,22 @@ impl Browser {
     }
     pub fn set_update_status(&mut self, status: String) {
         self.update_status = status;
+        self.update_progress = None;
+        self.dirty = true;
+    }
+    /// Byte progress is informational, never authorization to install or restart.
+    pub fn set_update_progress(&mut self, received: usize, total: Option<usize>) {
+        let total = total.filter(|total| *total > 0 && received <= *total);
+        self.update_status = match total {
+            Some(total) => format!(
+                "Downloading: {}% ({} / {} KiB)",
+                (received as u128 * 100 / total as u128),
+                received / 1024,
+                total.div_ceil(1024)
+            ),
+            None => format!("Downloading: {} KiB (size unknown)", received / 1024),
+        };
+        self.update_progress = Some((received, total));
         self.dirty = true;
     }
     pub fn take_update_request(&mut self) -> bool {
@@ -426,6 +443,7 @@ impl Browser {
             settings_status: String::new(),
             about_lines: vec!["mgbrowser : build details not supplied by host".into()],
             update_status: "Updates have not been checked".into(),
+            update_progress: None,
             update_requested: false,
             restart_available: false,
             restart_requested: false,
@@ -2078,9 +2096,9 @@ mod tests {
         assert_eq!(app.take_theme_change(), None);
         assert_eq!(app.effective_theme(), ColorScheme::Dark);
         app.paint();
-        app.click(28, 31);
+        app.click(app.width as i32 - 28, 31);
         app.paint();
-        app.click(100, 142);
+        app.click(app.width as i32 - 140, 142);
         assert!(app.settings_open && !app.menu_open && !app.about_open);
         for preference in [
             ThemePreference::Light,
@@ -2249,10 +2267,10 @@ mod tests {
         let mut app = test_app();
         app.set_build_info("0.2.1", "Wed, 16 Sep 2026 12:00:00 GMT", "abc123");
         app.paint();
-        app.click(28, 31);
+        app.click(app.width as i32 - 28, 31);
         assert!(app.menu_open);
         app.paint();
-        app.click(100, 74);
+        app.click(app.width as i32 - 140, 74);
         assert!(app.about_open);
         app.paint();
         assert!(app.about_lines[1].contains("16 Sep 2026"));
@@ -3012,19 +3030,19 @@ mod bookmark_tests {
                     [(y * percent as usize / 100) * c.width as usize + x * percent as usize / 100]
             };
             let p = app.effective_theme().palette();
-            assert_eq!(pixel(249, 21), p.selection);
+            assert_eq!(pixel(205, 21), p.selection);
             assert_eq!(pixel(700, 21), p.field);
             app.address.clear();
             let c = app.paint();
             assert_eq!(
                 c.pixels[(21 * percent as usize / 100) * c.width as usize
-                    + 249 * percent as usize / 100],
+                    + 205 * percent as usize / 100],
                 p.field
             );
         }
     }
     #[test]
-    fn disabled_history_has_no_hit_and_menu_is_left_of_address() {
+    fn disabled_history_has_no_hit_and_menu_is_right_of_address() {
         let mut app = test_app();
         app.paint();
         assert!(
@@ -3037,7 +3055,13 @@ mod bookmark_tests {
             .iter()
             .find(|h| matches!(h.action, Action::Menu))
             .unwrap();
-        assert!(menu.x < 240 && menu.y == 14);
+        let address = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Address))
+            .unwrap();
+        assert!(menu.x >= address.x + address.w as i32 && menu.y == 14);
+        assert_eq!(TOP, 64, "No duplicate title row below the address");
         app.history = vec![
             "https://example.com/".into(),
             "https://example.org/".into(),
@@ -3053,6 +3077,55 @@ mod bookmark_tests {
 #[cfg(all(test, feature = "chrome"))]
 mod restart_tests {
     use super::*;
+    #[test]
+    fn download_progress_paints_known_and_unknown_sizes_and_clears_on_status() {
+        let mut app = test_app();
+        app.activate(Action::About);
+        for percent in [100, 125, 200] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            app.set_theme_preference(if percent == 200 {
+                ThemePreference::Dark
+            } else {
+                ThemePreference::Light
+            });
+            for (width, height) in [(900, 700), (360, 240)] {
+                app.resize(width, height);
+                app.set_update_progress(2048, Some(4096));
+                assert!(app.update_status.contains("50%"));
+                assert!(!app.restart_available);
+                let frame = app.paint();
+                if let Ok(directory) = std::env::var("MGBROWSER_TEST_PROGRESS_SCREENSHOTS") {
+                    frame
+                        .save_png(&format!("{directory}/progress-{percent}-{width}.png"))
+                        .unwrap();
+                }
+                let w = width.saturating_sub(40).min(700);
+                let x = ((width - w) / 2 + 16) as i32;
+                let compact = height < 450;
+                let h = if compact { 232 } else { 300 };
+                let y =
+                    125.min(height.saturating_sub(h + 4) as i32) + if compact { 127 } else { 184 };
+                let pixel = |x: i32| {
+                    frame.pixels[frame.physical_edge(i64::from(y + 2)) as usize
+                        * frame.width as usize
+                        + frame.physical_edge(i64::from(x)) as usize]
+                };
+                assert_eq!(pixel(x + 2), app.effective_theme().palette().accent);
+                assert_eq!(
+                    pixel(x + (w - 32) as i32 - 2),
+                    app.effective_theme().palette().border
+                );
+                app.set_update_progress(2048, None);
+                assert!(app.update_status.contains("size unknown"));
+                app.paint();
+                app.set_update_progress(2048, Some(1));
+                assert_eq!(app.update_progress, Some((2048, None)));
+                app.set_update_status("Verifying checksum and installing...".into());
+                assert_eq!(app.update_progress, None);
+                assert!(!app.take_restart_request());
+            }
+        }
+    }
     #[test]
     fn restart_requires_host_ready_and_explicit_about_action() {
         let mut app = test_app();

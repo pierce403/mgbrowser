@@ -107,15 +107,30 @@ fn submit_with_config(
 
 /// Isolated release transport: no browser cookies and HTTPS on every redirect.
 pub fn fetch_release(url: &str) -> Result<Response, String> {
+    fetch_release_with_progress(url, &mut |_, _| {})
+}
+
+/// Report received body bytes for a successful release response. Missing lengths
+/// remain unknown; redirects, TLS verification and response limits are unchanged.
+pub fn fetch_release_with_progress(
+    url: &str,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Response, String> {
     let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    submit_with_config_policy(
+    submit_with_limits_progress(
         url,
         None,
         Arc::new(config),
         &Mutex::new(CookieJar::default()),
-        true,
+        RequestLimits {
+            https_only: true,
+            origin: None,
+            max_body: MAX_BODY,
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        },
+        progress,
     )
 }
 
@@ -154,6 +169,17 @@ fn submit_with_limits(
     cookies: &Mutex<CookieJar>,
     limits: RequestLimits,
 ) -> Result<Response, String> {
+    submit_with_limits_progress(url, body, config, cookies, limits, &mut |_, _| {})
+}
+
+fn submit_with_limits_progress(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    limits: RequestLimits,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Response, String> {
     let mut url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     let mut body = body;
     for redirects in 0..=MAX_REDIRECTS {
@@ -181,6 +207,7 @@ fn submit_with_limits(
             limits.deadline,
             &cookie_header,
             limits.max_body,
+            progress,
         )?;
         {
             let mut jar = cookies.lock().map_err(|_| "Cookie session lock failed")?;
@@ -565,6 +592,7 @@ fn request(
     deadline: Instant,
     cookie_header: &str,
     max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(Head, Vec<u8>), String> {
     let request = request_bytes_with_cookies(url, body, cookie_header)?;
     let socket = connect(url, deadline)?;
@@ -588,7 +616,7 @@ fn request(
     stream
         .flush()
         .map_err(|e| format!("Request flush failed: {e}"))?;
-    read_response_limited(BufReader::new(stream), max_body)
+    read_response_progress(BufReader::new(stream), max_body, progress)
 }
 
 #[cfg(test)]
@@ -745,9 +773,15 @@ fn read_response(reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
     read_response_limited(reader, MAX_BODY)
 }
 
-fn read_response_limited(
+#[cfg(test)]
+fn read_response_limited(reader: impl BufRead, max_body: usize) -> Result<(Head, Vec<u8>), String> {
+    read_response_progress(reader, max_body, &mut |_, _| {})
+}
+
+fn read_response_progress(
     mut reader: impl BufRead,
     max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(Head, Vec<u8>), String> {
     let mut budget = MAX_HEADERS;
     let mut head = read_head(&mut reader, &mut budget)?;
@@ -765,6 +799,11 @@ fn read_response_limited(
     if matches!(head.status, 204 | 304) {
         return Ok((head, Vec::new()));
     }
+    let mut report = |received, total| {
+        if head.status == 200 {
+            progress(received, total);
+        }
+    };
     let bytes = if let Some(encoding) = head.header("transfer-encoding") {
         if head.header("content-length").is_some() {
             return Err("Ambiguous HTTP body length".into());
@@ -772,7 +811,8 @@ fn read_response_limited(
         if !encoding.eq_ignore_ascii_case("chunked") {
             return Err(format!("Unsupported transfer encoding: {encoding}"));
         }
-        read_chunked(&mut reader, max_body)?
+        report(0, None);
+        read_chunked_progress(&mut reader, max_body, &mut report)?
     } else if let Some(length) = head.header("content-length") {
         if length.is_empty() || !length.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("Invalid Content-Length".into());
@@ -784,17 +824,54 @@ fn read_response_limited(
             return Err(format!("Response body exceeds {max_body} byte limit"));
         }
         let mut bytes = vec![0; length];
-        reader
-            .read_exact(&mut bytes)
-            .map_err(|e| format!("Incomplete response body: {e}"))?;
+        report(0, Some(length));
+        read_body_progress(&mut reader, &mut bytes, 0, Some(length), &mut report)?;
         bytes
     } else {
-        read_limited(&mut reader, max_body)?
+        report(0, None);
+        let mut bytes = Vec::new();
+        loop {
+            let mut buffer = [0; 8192];
+            let count = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("Response body read failed: {e}"))?;
+            if count == 0 {
+                break;
+            }
+            if count > max_body.saturating_sub(bytes.len()) {
+                return Err(format!("Response body exceeds {max_body} byte limit"));
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            report(bytes.len(), None);
+        }
+        bytes
     };
     Ok((head, bytes))
 }
 
-fn read_chunked(reader: &mut impl BufRead, max_body: usize) -> Result<Vec<u8>, String> {
+fn read_body_progress(
+    reader: &mut impl Read,
+    bytes: &mut [u8],
+    offset: usize,
+    total: Option<usize>,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(), String> {
+    let mut received = 0;
+    for chunk in bytes.chunks_mut(8192) {
+        reader
+            .read_exact(chunk)
+            .map_err(|e| format!("Incomplete response body: {e}"))?;
+        received += chunk.len();
+        progress(offset + received, total);
+    }
+    Ok(())
+}
+
+fn read_chunked_progress(
+    reader: &mut impl BufRead,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut framing_budget = MAX_HEADERS;
     loop {
@@ -815,9 +892,7 @@ fn read_chunked(reader: &mut impl BufRead, max_body: usize) -> Result<Vec<u8>, S
         }
         let previous = bytes.len();
         bytes.resize(previous + size, 0);
-        reader
-            .read_exact(&mut bytes[previous..])
-            .map_err(|e| format!("Incomplete chunk: {e}"))?;
+        read_body_progress(reader, &mut bytes[previous..], previous, None, progress)?;
         let mut ending = [0; 2];
         reader
             .read_exact(&mut ending)
@@ -877,6 +952,63 @@ mod tests {
 
     fn parse(bytes: &[u8]) -> Result<(Head, Vec<u8>), String> {
         read_response(BufReader::new(Cursor::new(bytes)))
+    }
+
+    #[test]
+    fn release_progress_counts_body_bytes_without_redirects_or_framing() {
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 20000\r\n\r\n".to_vec();
+        response.extend(vec![b'x'; 20000]);
+        let mut events = Vec::new();
+        let (_, bytes) =
+            read_response_progress(Cursor::new(response), MAX_BODY, &mut |n, total| {
+                events.push((n, total))
+            })
+            .unwrap();
+        assert_eq!(bytes.len(), 20000);
+        assert_eq!(
+            events,
+            vec![
+                (0, Some(20000)),
+                (8192, Some(20000)),
+                (16384, Some(20000)),
+                (20000, Some(20000))
+            ]
+        );
+        for response in [
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"[..],
+            &b"HTTP/1.1 200 OK\r\n\r\nabcde"[..],
+        ] {
+            events.clear();
+            let (_, bytes) = read_response_progress(Cursor::new(response), 5, &mut |n, total| events.push((n, total))).unwrap();
+            assert_eq!(bytes, b"abcde");
+            assert_eq!(events.first(), Some(&(0, None)));
+            assert_eq!(events.last(), Some(&(5, None)));
+            assert!(events.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        }
+        events.clear();
+        read_response_progress(
+            Cursor::new(b"HTTP/1.1 302 Found\r\nContent-Length: 3\r\n\r\nabc"),
+            3,
+            &mut |n, total| events.push((n, total)),
+        )
+        .unwrap();
+        assert!(events.is_empty());
+        assert!(
+            read_response_progress(
+                Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc"),
+                3,
+                &mut |_, _| {}
+            )
+            .is_err()
+        );
+        assert!(
+            read_response_progress(
+                Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc"),
+                4,
+                &mut |_, _| {}
+            )
+            .is_err()
+        );
     }
 
     #[test]

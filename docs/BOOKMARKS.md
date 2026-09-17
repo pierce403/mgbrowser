@@ -1,7 +1,8 @@
 # Navigation and bookmarks
 
-The toolbar orders Menu, Back, Forward, Refresh and Bookmark before the address
-field. Back/Forward are disabled when no matching history entry exists. Alt+Left
+The single-row toolbar orders Back, Forward, Refresh and Bookmark before the address
+field, with the hamburger menu on the right. There is no duplicate title row.
+Back/Forward are disabled when no matching history entry exists. Alt+Left
 and Alt+Right navigate history; Ctrl+R/F5 refreshes the loaded page, not an edited
 but unsubmitted URL. Ctrl+L selects the URL: the highlight follows the visible
 text width, leaving the unused field background alone.

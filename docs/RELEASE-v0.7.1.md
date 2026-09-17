@@ -2,6 +2,14 @@
 
 Linux x86_64 / X11 or XWayland, glibc 2.35 or newer. Rust 1.91.1, locked dependencies.
 
+The toolbar is now one row: Back, Forward, Refresh and Bookmark on the left,
+URL in the middle, hamburger menu on the right. The redundant browser/page title
+row is removed; the native window title remains.
+
+About shows actual download progress, including received bytes and a percentage
+when the server provides the size. Unknown sizes use an activity segment, not an
+invented percentage. Verification/installation is a separate stage.
+
 After an update installs, About now offers **Restart now**. The menu's
 **Update ready: restart...** item opens the same panel. One click launches the
 installed executable, reopens the loaded URL and closes the old browser and

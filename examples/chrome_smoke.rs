@@ -88,12 +88,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("NATIVE_RESTART_CLICK_OK");
         return Ok(());
     }
-    click(28, 31)?;
+    click(geometry.width as i16 - 28, 31)?;
     if args.get(3).is_some_and(|mode| mode == "update") {
-        click(100, 108)?;
+        click(geometry.width as i16 - 140, 108)?;
         return Ok(());
     }
-    click(100, 74)?;
+    click(geometry.width as i16 - 140, 74)?;
     let about = capture()?;
     assert_ne!(before, about, "About did not open");
     let rgb: Vec<_> = about

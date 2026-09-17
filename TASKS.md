@@ -1,7 +1,8 @@
 # Work queue
 
 2026-09-16 active: **T-017 / F-020**, explicit Restart now after an installed
-update. Preserve the loaded URL and launch policy, warn about lost session
+update, download progress, and a compact toolbar with a right-hand hamburger menu.
+Preserve the loaded URL and launch policy, warn about lost session
 state, keep the old window on spawn failure, test native executable replacement
 and publish v0.7.1 through the standing release/public installer gates.
 

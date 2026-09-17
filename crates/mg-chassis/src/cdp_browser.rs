@@ -973,9 +973,9 @@ mod tests {
             assert_eq!(model, baseline, "CSS geometry at {percent}%");
             let metrics = app.metrics();
             assert_eq!(metrics["cssLayoutViewport"]["clientWidth"], 640);
-            assert_eq!(metrics["cssLayoutViewport"]["clientHeight"], 343);
+            assert_eq!(metrics["cssLayoutViewport"]["clientHeight"], 480 - TOP - 29);
             assert_eq!(metrics["layoutViewport"]["clientWidth"], surface.width);
-            let top = surface.physical_edge(108) as usize;
+            let top = surface.physical_edge(i64::from(TOP)) as usize;
             let bottom = surface.physical_edge(451) as usize;
             assert_eq!(metrics["layoutViewport"]["clientHeight"], bottom - top);
             let png = base64::engine::general_purpose::STANDARD

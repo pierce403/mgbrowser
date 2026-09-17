@@ -21,6 +21,15 @@ const PAYLOAD: &str = "mgbrowser-linux-x86_64/mgbrowser";
 const MAX_UNPACKED: u64 = 64 * 1024 * 1024;
 pub const MARKER: &str = ".mgbrowser-auto-update";
 
+pub enum UpdateEvent {
+    Status(&'static str),
+    Download {
+        received: usize,
+        total: Option<usize>,
+    },
+    Finished(Result<String, String>),
+}
+
 fn version(value: &str) -> Result<[u64; 3], String> {
     let parts: Vec<_> = value.split('.').collect();
     if parts.len() != 3
@@ -269,6 +278,13 @@ pub fn automatic_enabled(target: &Path) -> bool {
 }
 
 pub fn update(target: &Path) -> Result<String, String> {
+    update_with_progress(target, &mut |_| {})
+}
+
+pub fn update_with_progress(
+    target: &Path,
+    report: &mut dyn FnMut(UpdateEvent),
+) -> Result<String, String> {
     let _lock = lock(target)?;
     let installed = binary_output(target, "--version")?;
     let current = installed
@@ -286,7 +302,22 @@ pub fn update(target: &Path) -> Result<String, String> {
     };
     let base = format!("{BASE}/{tag}/{ASSET}");
     let checksum = download(&format!("{base}.sha256"))?;
-    let archive = download(&base)?;
+    report(UpdateEvent::Status("Connecting to release download..."));
+    let mut last = None;
+    let response = mg_chassis::net::fetch_release_with_progress(&base, &mut |received, total| {
+        let now = Instant::now();
+        if last.is_none_or(|time| now.duration_since(time) >= Duration::from_millis(100))
+            || total == Some(received)
+        {
+            report(UpdateEvent::Download { received, total });
+            last = Some(now);
+        }
+    })?;
+    if response.status != 200 {
+        return Err(format!("Release server returned HTTP {}", response.status));
+    }
+    let archive = response.body;
+    report(UpdateEvent::Status("Verifying checksum and installing..."));
     install(target, &archive, &checksum, &tag[1..])?;
     Ok(format!(
         "Installed {tag}. Restart mgbrowser to use the new build."

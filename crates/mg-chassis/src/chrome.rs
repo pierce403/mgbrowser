@@ -116,65 +116,42 @@ impl Browser {
                 palette.background
             },
         );
-        self.toolbar_button(c, 10, Action::Menu, true);
+        self.toolbar_button(c, self.width as i32 - 46, Action::Menu, true);
         self.toolbar_button(
             c,
-            54,
+            10,
             Action::Back,
             self.history_at > 0 && self.inflight < 2,
         );
         self.toolbar_button(
             c,
-            98,
+            54,
             Action::Forward,
             self.history_at + 1 < self.history.len() && self.inflight < 2,
         );
-        self.toolbar_button(c, 142, Action::Reload, self.page_url != "about:blank");
+        self.toolbar_button(c, 98, Action::Reload, self.page_url != "about:blank");
         self.toolbar_button(
             c,
-            186,
+            142,
             Action::ToggleBookmark,
             self.current_bookmark().is_some(),
         );
-        let aw = self.width.saturating_sub(255);
-        c.rect(240, 12, aw, 39, palette.field);
+        let aw = self.width.saturating_sub(252);
+        c.rect(196, 12, aw, 39, palette.field);
         let address = fit_tail(&mut self.fonts, &self.address, 16., aw as f32 - 20.);
         if self.focus == Focus::Address && self.select_all && !address.is_empty() {
             let width =
                 (self.fonts.width(&address, 16.).ceil() as u32 + 4).min(aw.saturating_sub(14));
-            c.rect(248, 20, width, 25, palette.selection);
+            c.rect(204, 20, width, 25, palette.selection);
         }
-        c.text(&mut self.fonts, 250, 22, &address, 16., palette.ink);
+        c.text(&mut self.fonts, 206, 22, &address, 16., palette.ink);
         self.hits.push(Hit {
-            x: 240,
+            x: 196,
             y: 12,
             w: aw,
             h: 39,
             action: Action::Address,
         });
-        c.text(
-            &mut self.fonts,
-            18,
-            66,
-            "mgbrowser",
-            19.,
-            if http { 0xffffff } else { palette.accent },
-        );
-        let visible_title = self.visible_title();
-        let title = fit_head(
-            &mut self.fonts,
-            &visible_title,
-            16.,
-            self.width as f32 - 180.,
-        );
-        c.text(
-            &mut self.fonts,
-            160,
-            68,
-            &title,
-            16.,
-            if http { 0xffffff } else { palette.ink },
-        );
         c.rect(0, TOP - 1, self.width, 1, palette.border);
         c.rect(
             0,
@@ -209,10 +186,10 @@ impl Browser {
             self.hits.clear();
         }
         if self.menu_open {
-            self.toolbar_button(c, 10, Action::Menu, true);
+            self.toolbar_button(c, self.width as i32 - 46, Action::Menu, true);
         }
         if self.menu_open {
-            let x = 14;
+            let x = self.width as i32 - 226;
             let y = 54;
             c.rect(x - 8, y, 228, 182, palette.border);
             self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
@@ -268,6 +245,20 @@ impl Browser {
                 13.,
                 palette.ink,
             );
+            if let Some((received, total)) = self.update_progress {
+                let width = w - 32;
+                let bar_y = y + if compact { 127 } else { 184 };
+                c.rect(x + 16, bar_y, width, 6, palette.border);
+                if let Some(total) = total {
+                    let filled = (received as u128 * u128::from(width) / total as u128) as u32;
+                    c.rect(x + 16, bar_y, filled, 6, palette.accent);
+                } else {
+                    // Unknown content length: moving segment, not a fake percentage.
+                    let segment = width / 5;
+                    let offset = ((received / 8192) % (width - segment).max(1) as usize) as i32;
+                    c.rect(x + 16 + offset, bar_y, segment, 6, palette.accent);
+                }
+            }
             let note = if self.restart_available {
                 "Reopens page. Unsaved edits and"
             } else if compact {

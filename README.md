@@ -4,13 +4,15 @@
 
 ## v0.7.1 Experimental Preview
 
-After an update installs, **Menu > About > Restart now** immediately launches the
+About shows download progress with received bytes and percentage when the server
+provides a total size. After an update installs, **Menu > About > Restart now** immediately launches the
 updated binary and reopens the loaded URL. Saved settings/bookmarks and the
 scripting preference carry over; unsaved edits, cookies and browsing history do
 not. Restart is always your choice, never forced. [Update details](docs/UPDATES.md).
 
-The navigation bar now groups **Menu, Back, Forward, Refresh and Bookmark** to
-the left of the URL. The star or **Ctrl+D** saves/removes the loaded page.
+The single-row navigation bar groups **Back, Forward, Refresh and Bookmark** to
+the left of the URL, with a **hamburger menu** on the right. The redundant browser/
+page title row is removed; the window title remains. The star or **Ctrl+D** saves/removes the loaded page.
 **Menu > Bookmarks** or **Ctrl+Shift+O** opens the local list, with open/remove
 controls. Bookmarks survive restart; no account or sync is involved.
 URL selection highlights just the visible URL text, not the whole address field.

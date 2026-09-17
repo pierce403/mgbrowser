@@ -441,10 +441,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tx = update_tx.clone();
             let target = executable.clone();
             thread::spawn(move || {
-                let _ = tx.send(updater::update(&target));
+                let result = updater::update_with_progress(&target, &mut |event| {
+                    let _ = tx.send(event);
+                });
+                let _ = tx.send(updater::UpdateEvent::Finished(result));
             });
         }
-        if let Ok(result) = update_rx.try_recv() {
+        while let Ok(event) = update_rx.try_recv() {
+            let result = match event {
+                updater::UpdateEvent::Status(status) => {
+                    app.set_update_status(status.into());
+                    continue;
+                }
+                updater::UpdateEvent::Download { received, total } => {
+                    app.set_update_progress(received, total);
+                    continue;
+                }
+                updater::UpdateEvent::Finished(result) => result,
+            };
             update_running = false;
             restart_ready = result
                 .as_ref()

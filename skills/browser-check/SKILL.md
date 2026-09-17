@@ -76,6 +76,11 @@ window after a missing-path spawn failure, then launch the replacement path,
 reopen the committed URL with preserved preferences and exit the old process.
 This fixture is not proof of a real future version; public update/install and
 checksum checks remain separate. Inspect the ready/retry dialog screenshots.
+For download progress, preserve transport tests for exact body bytes, unknown
+lengths, chunk framing, redirects, limits and truncation. Inspect the About bar
+at compact and scaled sizes in both themes; a received-byte count is not an
+installation-success signal. After toolbar height changes, update native/CDP
+geometry expectations while retaining pixel, input and resource assertions.
 
 For styled rendering, include the Sparkle styles/image/layout tests and Chassis
 styled_embedding journey (real linked CSS, downloaded SVG and a scrolled click).

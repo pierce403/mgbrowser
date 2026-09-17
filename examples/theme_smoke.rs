@@ -175,8 +175,8 @@ impl Browser {
     }
 
     fn open_settings(&self) -> Result<()> {
-        self.click(28, 31)?;
-        self.click(100, 142)
+        self.click(self.width as i16 - 28, 31)?;
+        self.click(self.width as i16 - 140, 142)
     }
 
     fn select(&self, index: i16) -> Result<()> {
@@ -273,8 +273,8 @@ impl Browser {
 
     fn page(&self) -> Result<Vec<u8>> {
         let frame = self.capture()?;
-        // Native chrome ends at 108; exclude status and the chrome scrollbar.
-        Ok((108..usize::from(self.height) - 29)
+        // Native chrome ends at 64; exclude status and the chrome scrollbar.
+        Ok((64..usize::from(self.height) - 29)
             .flat_map(|y| {
                 let start = y * usize::from(self.width) * 4;
                 frame[start..start + (usize::from(self.width) - 9) * 4]

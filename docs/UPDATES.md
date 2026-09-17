@@ -24,7 +24,13 @@ compile timestamp in GMT/UTC and source commit. The timestamp is generated durin
 the Cargo build, not at launch; `SOURCE_DATE_EPOCH` overrides it for reproducible
 builds. An updated open window continues showing its old build until restarted.
 
-Since v0.7.1, **Restart now** replaces the update-check button in About once an
+Since v0.7.1, About displays actual received archive bytes and download progress.
+A known Content-Length gives a percentage; unknown/chunked lengths show an
+activity segment and byte count instead. Redirect bodies are not counted, and
+download completion does not imply successful verification or installation.
+Progress clears on verification, success or failure. The UI remains responsive.
+
+**Restart now** replaces the update-check button in About once an
 update has installed. The menu's **Update ready: restart...** item opens that
 panel. Clicking Restart now launches the binary at the installation path, then
 closes the old window and reaps its script workers. No shell or sudo is involved.

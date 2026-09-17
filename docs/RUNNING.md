@@ -16,8 +16,9 @@ The matching DejaVu/Liberation bold file is loaded when available. Set
 
 Use Ctrl+L to edit the URL, Enter to navigate, Tab to move between document input
 fields, Enter in a field to submit its form, and the mouse to activate links and
-buttons. Scroll with the wheel/Page Up/Page Down. Menu, Back, Forward, Refresh
-and Bookmark icons sit left of the URL. Alt+Left/Right navigates history;
+buttons. Scroll with the wheel/Page Up/Page Down. Back, Forward, Refresh
+and Bookmark icons sit left of the URL; the hamburger menu sits on its right.
+The duplicate title row is removed. Alt+Left/Right navigates history;
 Ctrl+R or F5 refreshes the loaded page, ignoring unsubmitted address edits.
 Ctrl+D toggles a bookmark; Menu > Bookmarks or Ctrl+Shift+O opens the saved list.
 See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
@@ -33,7 +34,9 @@ Re-run the website installer to bootstrap automatic updates from v0.2.1 onward.
 Menu > About mgbrowser shows version, compile time (GMT/UTC) and source commit.
 Menu > Check for updates or `mgbrowser --update` checks and installs manually.
 Installed builds check on startup and daily; restart to run the installed update.
-Once installed, About offers **Restart now**. It reopens the loaded URL using
+About shows received bytes and a progress bar while downloading: a percentage
+when the server supplies a size, otherwise an activity segment without a guessed
+percentage. Verification/installation is a separate stage. Once installed, About offers **Restart now**. It reopens the loaded URL using
 the new executable; unsaved edits, cookies and history are lost. Restart is optional.
 `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
 See [update behavior and trust](UPDATES.md), including persistent opt-out.
