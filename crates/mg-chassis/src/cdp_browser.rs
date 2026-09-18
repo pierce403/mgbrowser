@@ -2,7 +2,7 @@
 use super::{App, Focus, Item};
 #[cfg(all(test, feature = "chrome"))]
 use super::{TOP, test_app};
-use crate::cdp::{Command, Server};
+use crate::cdp::{Command, MAX_TARGETS, PageInfo, Server, target_number};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::{collections::HashMap, io::Cursor, time::Instant};
@@ -28,11 +28,13 @@ struct Route {
 }
 #[derive(Default)]
 struct Scope {
+    target: String,
     page: bool,
     dom: bool,
     pressed: Option<(i32, i32, u64)>,
 }
 struct Pending {
+    target: String,
     route: Route,
     id: Value,
     generation: u64,
@@ -43,6 +45,8 @@ pub struct BrowserCdp {
     pending: Vec<Pending>,
     next_session: u64,
     started: Instant,
+    live_targets: Vec<String>,
+    last_target_number: u64,
 }
 
 type Reply = Result<Value, (i32, String)>;
@@ -94,6 +98,24 @@ pub fn frame(app: &App) -> Value {
     frame
 }
 
+fn frame_id(target: &str) -> String {
+    format!("frame-{}", target.strip_prefix("page-").unwrap_or(target))
+}
+
+fn frame_for(app: &App, target: &str) -> Value {
+    let mut value = frame(app);
+    value["id"] = json!(frame_id(target));
+    value
+}
+
+fn version(p: &Value) -> Reply {
+    keys(p, &[])?;
+    Ok(
+        json!({"protocolVersion":"1.3","product":concat!("mgbrowser/",env!("CARGO_PKG_VERSION")),
+        "revision":"experimental-cdp-subset","userAgent":crate::net::USER_AGENT,"jsVersion":"mgbrowser-js/0.1-experimental"}),
+    )
+}
+
 impl BrowserCdp {
     pub fn bind(port: u16) -> Result<Self, String> {
         let server = Server::bind(port)?;
@@ -107,23 +129,108 @@ impl BrowserCdp {
             pending: Vec::new(),
             next_session: 1,
             started: Instant::now(),
+            live_targets: Vec::new(),
+            last_target_number: 0,
         })
     }
     pub fn tick(&mut self, app: &mut App) {
+        if let Err(error) = self.tick_pages(&mut [(TARGET, app)]) {
+            eprintln!("CDP page registration failed: {error}");
+        }
+    }
+
+    /// Tick every live page, including inactive tabs. IDs must be permanent,
+    /// monotonically allocated `page-N` values. Moving a Browser between panes
+    /// must retain its ID; a closed ID can never identify a new Browser.
+    /// Validation completes before any command or event is processed.
+    pub fn tick_pages(&mut self, pages: &mut [(&str, &mut App)]) -> Result<(), String> {
+        if pages.len() > MAX_TARGETS {
+            return Err("CDP target limit is 16".into());
+        }
+        let mut highest = self.last_target_number;
+        for (index, (target, _)) in pages.iter().enumerate() {
+            let number = target_number(target).ok_or("CDP target ID must be canonical page-N")?;
+            if pages[..index]
+                .iter()
+                .any(|(previous, _)| previous == target)
+            {
+                return Err("Duplicate CDP target ID".into());
+            }
+            if !self.live_targets.iter().any(|live| live == target)
+                && number <= self.last_target_number
+            {
+                return Err("CDP target IDs cannot be reused or allocated out of order".into());
+            }
+            highest = highest.max(number);
+        }
+        self.last_target_number = highest;
+        self.live_targets = pages
+            .iter()
+            .map(|(target, _)| (*target).to_owned())
+            .collect();
+        let stale: Vec<_> = self
+            .scopes
+            .iter()
+            .filter_map(|(route, scope)| {
+                (!self.live_targets.contains(&scope.target)).then_some(route.clone())
+            })
+            .collect();
+        for route in stale {
+            self.cancel_pending(&route, "Target closed");
+            self.scopes.remove(&route);
+            if let Some(session) = &route.session {
+                self.event(
+                    &Route {
+                        client: route.client,
+                        session: None,
+                    },
+                    "Target.detachedFromTarget",
+                    json!({"sessionId":session}),
+                );
+            }
+        }
+        self.publish_pages(pages)?;
         let clients = self.server.client_ids();
         self.scopes
             .retain(|route, _| clients.contains(&route.client));
         self.pending.retain(|p| clients.contains(&p.route.client));
-        self.flush_events(app);
+        for (target, app) in pages.iter_mut() {
+            self.flush_page_events(target, app);
+        }
         // Bound work per window frame so a busy client cannot monopolize input.
         for _ in 0..16 {
             let Some(command) = self.server.try_recv() else {
                 break;
             };
-            self.command(app, command);
-            self.flush_events(app);
+            self.command_pages(pages, command);
+            for (target, app) in pages.iter_mut() {
+                self.flush_page_events(target, app);
+            }
         }
-        self.server.update_page(&app.document.title, &app.page_url);
+        self.publish_pages(pages)
+    }
+
+    fn publish_pages(&self, pages: &[(&str, &mut App)]) -> Result<(), String> {
+        self.server.update_pages(
+            &pages
+                .iter()
+                .map(|(id, app)| PageInfo {
+                    id: (*id).to_owned(),
+                    title: crate::cdp::bounded_text(&app.document.title, 4096),
+                    url: crate::cdp::bounded_text(&app.page_url, 16 * 1024),
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn cancel_pending(&mut self, route: &Route, reason: &str) {
+        for pending in std::mem::take(&mut self.pending) {
+            if &pending.route == route {
+                self.reply(route, pending.id, Err(failed(reason)));
+            } else {
+                self.pending.push(pending);
+            }
+        }
     }
     fn reply(&self, route: &Route, id: Value, result: Reply) {
         let mut message = match result {
@@ -142,36 +249,50 @@ impl BrowserCdp {
         }
         self.server.send(route.client, message);
     }
+    #[cfg(test)]
     fn flush_events(&mut self, app: &mut App) {
+        self.flush_page_events(TARGET, app);
+    }
+    fn flush_page_events(&mut self, target: &str, app: &mut App) {
+        let frame_id = frame_id(target);
         for event in std::mem::take(&mut app.cdp_events) {
             match event {
                 Event::DocumentUpdated => {
-                    for scope in self.scopes.values_mut() {
+                    for scope in self
+                        .scopes
+                        .values_mut()
+                        .filter(|scope| scope.target == target)
+                    {
                         scope.pressed = None;
                     }
                     for (route, scope) in &self.scopes {
-                        if scope.dom {
+                        if scope.target == target && scope.dom {
                             self.event(route, "DOM.documentUpdated", json!({}));
                         }
                     }
                 }
                 Event::Started => {
                     for (route, scope) in &self.scopes {
-                        if scope.page {
-                            self.event(route, "Page.frameStartedLoading", json!({"frameId":FRAME}));
+                        if scope.target == target && scope.page {
+                            self.event(
+                                route,
+                                "Page.frameStartedLoading",
+                                json!({"frameId":frame_id}),
+                            );
                         }
                     }
                 }
                 Event::Finished {
                     generation,
-                    frame,
+                    mut frame,
                     error,
                 } => {
+                    frame["id"] = json!(frame_id);
                     let pending = std::mem::take(&mut self.pending);
                     for p in pending {
-                        if p.generation == generation {
+                        if p.target == target && p.generation == generation {
                             let mut result =
-                                json!({"frameId":FRAME,"loaderId":generation.to_string()});
+                                json!({"frameId":frame_id,"loaderId":generation.to_string()});
                             if let Some(error) = &error {
                                 result["errorText"] = json!(error);
                             }
@@ -180,11 +301,18 @@ impl BrowserCdp {
                             self.pending.push(p);
                         }
                     }
-                    for scope in self.scopes.values_mut() {
+                    for scope in self
+                        .scopes
+                        .values_mut()
+                        .filter(|scope| scope.target == target)
+                    {
                         scope.pressed = None;
                     }
                     let timestamp = self.started.elapsed().as_secs_f64();
                     for (route, scope) in &self.scopes {
+                        if scope.target != target {
+                            continue;
+                        }
                         if scope.dom {
                             self.event(route, "DOM.documentUpdated", json!({}));
                         }
@@ -206,7 +334,11 @@ impl BrowserCdp {
                                     json!({"timestamp":timestamp}),
                                 );
                             }
-                            self.event(route, "Page.frameStoppedLoading", json!({"frameId":FRAME}));
+                            self.event(
+                                route,
+                                "Page.frameStoppedLoading",
+                                json!({"frameId":frame_id}),
+                            );
                         }
                     }
                 }
@@ -214,18 +346,22 @@ impl BrowserCdp {
         }
         let pending = std::mem::take(&mut self.pending);
         for p in pending {
-            if p.generation != app.generation {
-                self.reply(&p.route, p.id, Ok(json!({"frameId":FRAME,"errorText":"net::ERR_ABORTED: superseded navigation"})));
+            if p.target == target && p.generation != app.generation {
+                self.reply(&p.route, p.id, Ok(json!({"frameId":frame_id,"errorText":"net::ERR_ABORTED: superseded navigation"})));
             } else {
                 self.pending.push(p);
             }
         }
     }
-    fn target_info(&self, app: &App) -> Value {
-        json!({"targetId":TARGET,"type":"page","title":app.document.title,"url":app.page_url,
-            "attached":!self.scopes.is_empty() || !self.server.page_client_ids().is_empty(),"canAccessOpener":false})
+    fn target_info(&self, target: &str, app: &App) -> Value {
+        json!({"targetId":target,"type":"page","title":crate::cdp::bounded_text(&app.document.title,4096),"url":crate::cdp::bounded_text(&app.page_url,16 * 1024),
+            "attached":self.scopes.values().any(|scope| scope.target == target) || self.server.page_clients().iter().any(|(_, id)| id == target),"canAccessOpener":false})
     }
+    #[cfg(test)]
     fn command(&mut self, app: &mut App, command: Command) {
+        self.command_pages(&mut [(TARGET, app)], command);
+    }
+    fn command_pages(&mut self, pages: &mut [(&str, &mut App)], command: Command) {
         let message = &command.message;
         let id = message.get("id").cloned().unwrap_or(Value::Null);
         let route = Route {
@@ -256,13 +392,65 @@ impl BrowserCdp {
         }
         let method = message["method"].as_str().unwrap();
         let params = message.get("params").cloned().unwrap_or(json!({}));
-        let result = self.dispatch(app, &route, command.browser, method, &params);
+        if method == "Browser.getVersion" {
+            self.reply(&route, id, version(&params));
+            return;
+        }
+        if method == "Target.getTargets" {
+            let result = keys(&params, &[]).map(|()| json!({"targetInfos":pages.iter().map(|(target, app)|self.target_info(target, app)).collect::<Vec<_>>()}));
+            self.reply(&route, id, result);
+            return;
+        }
+        let routed = self
+            .scopes
+            .get(&route)
+            .map(|scope| scope.target.clone())
+            .or(command.target);
+        let target: Result<String, (i32, String)> = match method {
+            "Target.attachToTarget" => string(&params, "targetId").map(str::to_owned),
+            "Target.getTargetInfo" if params.get("targetId").is_some() => {
+                string(&params, "targetId").map(str::to_owned)
+            }
+            "Target.getTargetInfo" => routed
+                .or_else(|| (pages.len() == 1).then(|| pages[0].0.to_owned()))
+                .ok_or_else(|| {
+                    invalid(
+                        "targetId is required on a browser endpoint with zero or multiple pages",
+                    )
+                }),
+            "Target.detachFromTarget" => string(&params, "sessionId").and_then(|session| {
+                self.scopes
+                    .get(&Route {
+                        client: route.client,
+                        session: Some(session.into()),
+                    })
+                    .map(|scope| scope.target.clone())
+                    .ok_or_else(|| failed("Unknown sessionId"))
+            }),
+            _ if page_method(method) => routed.ok_or_else(|| {
+                failed("Page commands require an attached sessionId on the browser endpoint")
+            }),
+            _ => Err((-32601, format!("{method} is not implemented by mgbrowser"))),
+        };
+        let target = match target {
+            Ok(target) => target,
+            Err(error) => {
+                self.reply(&route, id, Err(error));
+                return;
+            }
+        };
+        let Some((_, app)) = pages.iter_mut().find(|(id, _)| *id == target) else {
+            self.reply(&route, id, Err(failed("Unknown or closed target")));
+            return;
+        };
+        let result = self.dispatch_page(app, &target, &route, command.browser, method, &params);
         match result {
             Ok(result) if method == "Page.navigate" => {
                 if result.get("errorText").is_some() {
                     self.reply(&route, id, Ok(result));
                 } else {
                     self.pending.push(Pending {
+                        target,
                         route,
                         id,
                         generation: app.generation,
@@ -272,6 +460,7 @@ impl BrowserCdp {
             result => self.reply(&route, id, result),
         }
     }
+    #[cfg(test)]
     fn dispatch(
         &mut self,
         app: &mut App,
@@ -280,31 +469,36 @@ impl BrowserCdp {
         method: &str,
         p: &Value,
     ) -> Reply {
+        self.dispatch_page(app, TARGET, route, browser, method, p)
+    }
+    fn dispatch_page(
+        &mut self,
+        app: &mut App,
+        target: &str,
+        route: &Route,
+        browser: bool,
+        method: &str,
+        p: &Value,
+    ) -> Reply {
         match method {
-            "Browser.getVersion" => {
-                keys(p, &[])?;
-                return Ok(
-                    json!({"protocolVersion":"1.3","product":concat!("mgbrowser/",env!("CARGO_PKG_VERSION")),
-                    "revision":"experimental-cdp-subset","userAgent":crate::net::USER_AGENT,"jsVersion":"mgbrowser-js/0.1-experimental"}),
-                );
-            }
+            "Browser.getVersion" => return version(p),
             "Target.getTargets" => {
                 keys(p, &[])?;
-                return Ok(json!({"targetInfos":[self.target_info(app)]}));
+                return Ok(json!({"targetInfos":[self.target_info(target, app)]}));
             }
             "Target.getTargetInfo" => {
                 keys(p, &["targetId"])?;
-                if p.get("targetId").is_some() && string(p, "targetId")? != TARGET {
+                if p.get("targetId").is_some() && string(p, "targetId")? != target {
                     return Err(failed("Unknown target"));
                 }
-                return Ok(json!({"targetInfo":self.target_info(app)}));
+                return Ok(json!({"targetInfo":self.target_info(target, app)}));
             }
             "Target.attachToTarget" => {
                 keys(p, &["targetId", "flatten"])?;
                 if !browser || route.session.is_some() {
                     return Err(invalid("Attach on the browser endpoint without sessionId"));
                 }
-                if string(p, "targetId")? != TARGET {
+                if string(p, "targetId")? != target {
                     return Err(failed("Unknown target"));
                 }
                 if !boolean(p, "flatten", false)? {
@@ -326,9 +520,12 @@ impl BrowserCdp {
                         client: route.client,
                         session: Some(session.clone()),
                     },
-                    Scope::default(),
+                    Scope {
+                        target: target.to_owned(),
+                        ..Scope::default()
+                    },
                 );
-                self.event(route,"Target.attachedToTarget",json!({"sessionId":session,"targetInfo":self.target_info(app),"waitingForDebugger":false}));
+                self.event(route,"Target.attachedToTarget",json!({"sessionId":session,"targetInfo":self.target_info(target, app),"waitingForDebugger":false}));
                 return Ok(json!({"sessionId":session}));
             }
             "Target.detachFromTarget" => {
@@ -346,7 +543,7 @@ impl BrowserCdp {
                 if self.scopes.remove(&detached).is_none() {
                     return Err(failed("Unknown sessionId"));
                 }
-                self.pending.retain(|p| p.route != detached);
+                self.cancel_pending(&detached, "Session detached");
                 self.event(
                     route,
                     "Target.detachedFromTarget",
@@ -356,27 +553,7 @@ impl BrowserCdp {
             }
             _ => {}
         }
-        let recognized = matches!(
-            method,
-            "Page.enable"
-                | "Page.disable"
-                | "Page.navigate"
-                | "Page.reload"
-                | "Page.getFrameTree"
-                | "Page.getLayoutMetrics"
-                | "Page.captureScreenshot"
-                | "DOM.enable"
-                | "DOM.disable"
-                | "DOM.getDocument"
-                | "DOM.querySelector"
-                | "DOM.querySelectorAll"
-                | "DOM.getAttributes"
-                | "DOM.getBoxModel"
-                | "DOM.focus"
-                | "Input.dispatchMouseEvent"
-                | "Input.dispatchKeyEvent"
-                | "Input.insertText"
-        );
+        let recognized = page_method(method);
         if !recognized {
             return Err((-32601, format!("{method} is not implemented by mgbrowser")));
         }
@@ -385,7 +562,14 @@ impl BrowserCdp {
                 "Page commands require an attached sessionId on the browser endpoint",
             ));
         }
-        let scope = self.scopes.entry(route.clone()).or_default();
+        let scope = self.scopes.entry(route.clone()).or_insert_with(|| Scope {
+            target: target.to_owned(),
+            ..Scope::default()
+        });
+        if scope.target != target {
+            return Err(failed("Session target mismatch"));
+        }
+        let frame_id = frame_id(target);
         match method {
             "Page.enable" | "Page.disable" => {
                 keys(p, &[])?;
@@ -399,7 +583,7 @@ impl BrowserCdp {
             }
             "Page.navigate" => {
                 keys(p, &["url", "frameId"])?;
-                if p.get("frameId").is_some() && string(p, "frameId")? != FRAME {
+                if p.get("frameId").is_some() && string(p, "frameId")? != frame_id {
                     return Err(failed("Unknown frameId"));
                 }
                 let target = string(p, "url")?;
@@ -414,7 +598,7 @@ impl BrowserCdp {
                     return Err(failed("Navigation busy; two requests are still finishing"));
                 }
                 app.navigate(url.to_string(), None, true);
-                Ok(json!({"frameId":FRAME}))
+                Ok(json!({"frameId":frame_id}))
             }
             "Page.reload" => {
                 keys(p, &["ignoreCache"])?;
@@ -436,7 +620,7 @@ impl BrowserCdp {
             }
             "Page.getFrameTree" => {
                 keys(p, &[])?;
-                Ok(json!({"frameTree":{"frame":frame(app)}}))
+                Ok(json!({"frameTree":{"frame":frame_for(app, target)}}))
             }
             "Page.getLayoutMetrics" => {
                 keys(p, &[])?;
@@ -626,6 +810,30 @@ impl BrowserCdp {
             _ => unreachable!(),
         }
     }
+}
+
+fn page_method(method: &str) -> bool {
+    matches!(
+        method,
+        "Page.enable"
+            | "Page.disable"
+            | "Page.navigate"
+            | "Page.reload"
+            | "Page.getFrameTree"
+            | "Page.getLayoutMetrics"
+            | "Page.captureScreenshot"
+            | "DOM.enable"
+            | "DOM.disable"
+            | "DOM.getDocument"
+            | "DOM.querySelector"
+            | "DOM.querySelectorAll"
+            | "DOM.getAttributes"
+            | "DOM.getBoxModel"
+            | "DOM.focus"
+            | "Input.dispatchMouseEvent"
+            | "Input.dispatchKeyEvent"
+            | "Input.insertText"
+    )
 }
 
 fn coordinate(p: &Value, key: &str, bound: f64) -> Result<i32, (i32, String)> {
@@ -931,6 +1139,264 @@ mod tests {
             .unwrap()
             .unwrap();
         (node, app.node_id(node))
+    }
+
+    fn wire(cdp: &BrowserCdp, endpoint: &str) -> tungstenite::WebSocket<TcpStream> {
+        let stream = TcpStream::connect(("127.0.0.1", cdp.server.port())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(40)))
+            .unwrap();
+        tungstenite::client(
+            format!("ws://127.0.0.1:{}{endpoint}", cdp.server.port()),
+            stream,
+        )
+        .unwrap()
+        .0
+    }
+
+    fn rpc_pages(
+        cdp: &mut BrowserCdp,
+        pages: &mut [(&str, &mut App)],
+        socket: &mut tungstenite::WebSocket<TcpStream>,
+        id: u64,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Value {
+        let mut request = json!({"id":id,"method":method,"params":params});
+        if let Some(session) = session {
+            request["sessionId"] = json!(session);
+        }
+        socket
+            .send(tungstenite::Message::Text(request.to_string().into()))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(Instant::now() < deadline, "CDP reply timed out: {method}");
+            cdp.tick_pages(pages).unwrap();
+            match socket.read() {
+                Ok(tungstenite::Message::Text(text)) => {
+                    let reply: Value = serde_json::from_str(&text).unwrap();
+                    if reply["id"] == id {
+                        return reply;
+                    }
+                }
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                message => panic!("Unexpected CDP message: {message:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_targets_keep_dom_input_sessions_and_identity_separate() {
+        let (mut first, mut second) = (fixture(), fixture());
+        first.document.title = "First tab".into();
+        second.document.title = "Second tab".into();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+            .unwrap();
+        let mut browser = wire(&cdp, "/devtools/browser/browser-1");
+        let mut direct = wire(&cdp, "/devtools/page/page-7");
+        let result = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut browser,
+            1,
+            "Target.getTargets",
+            json!({}),
+            None,
+        );
+        assert_eq!(result["result"]["targetInfos"].as_array().unwrap().len(), 2);
+        let attached = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut browser,
+            2,
+            "Target.attachToTarget",
+            json!({"targetId":"page-7","flatten":true}),
+            None,
+        );
+        let session = attached["result"]["sessionId"].as_str().unwrap().to_owned();
+        let tree = rpc_pages(
+            &mut cdp,
+            &mut [("page-7", &mut second), ("page-1", &mut first)],
+            &mut browser,
+            3,
+            "Page.getFrameTree",
+            json!({}),
+            Some(&session),
+        );
+        assert_eq!(tree["result"]["frameTree"]["frame"]["id"], "frame-7");
+        let (second_input, input_id) = input(&second);
+        let focused = rpc_pages(
+            &mut cdp,
+            &mut [("page-7", &mut second), ("page-1", &mut first)],
+            &mut browser,
+            4,
+            "DOM.focus",
+            json!({"nodeId":input_id}),
+            Some(&session),
+        );
+        assert!(focused.get("error").is_none());
+        let edited = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut direct,
+            5,
+            "Input.insertText",
+            json!({"text":" SECOND"}),
+            None,
+        );
+        assert!(edited.get("error").is_none());
+        assert_eq!(
+            second.values.get(&second_input).map(String::as_str),
+            Some("old SECOND")
+        );
+        assert!(first.values.is_empty());
+        let ambiguous = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut browser,
+            6,
+            "Target.getTargetInfo",
+            json!({}),
+            None,
+        );
+        assert_eq!(ambiguous["error"]["code"], -32602);
+        let pending_route = cdp
+            .scopes
+            .keys()
+            .find(|route| route.session.as_deref() == Some(&session))
+            .unwrap()
+            .clone();
+        cdp.pending.push(Pending {
+            target: "page-7".into(),
+            route: pending_route,
+            id: json!(99),
+            generation: second.generation,
+        });
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let cancelled: Value =
+            serde_json::from_str(&browser.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(cancelled["id"], 99);
+        assert_eq!(cancelled["sessionId"], session);
+        assert_eq!(cancelled["error"]["message"], "Target closed");
+        let detached: Value =
+            serde_json::from_str(&browser.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(detached["method"], "Target.detachedFromTarget");
+        assert_eq!(detached["params"]["sessionId"], session);
+        assert!(direct.read().is_err());
+        let stale = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first)],
+            &mut browser,
+            7,
+            "Input.insertText",
+            json!({"text":"must not enter first"}),
+            Some(&session),
+        );
+        assert_eq!(stale["error"]["code"], -32000);
+        assert!(first.values.is_empty());
+        assert!(
+            cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+                .is_err()
+        );
+        cdp.tick_pages(&mut [("page-1", &mut first), ("page-9", &mut second)])
+            .unwrap();
+        let targets = rpc_pages(
+            &mut cdp,
+            &mut [("page-9", &mut second), ("page-1", &mut first)],
+            &mut browser,
+            8,
+            "Target.getTargets",
+            json!({}),
+            None,
+        );
+        assert_eq!(targets["result"]["targetInfos"][0]["targetId"], "page-9");
+        assert!(
+            cdp.tick_pages(&mut [("page-1", &mut first), ("page-1", &mut second)])
+                .is_err()
+        );
+        assert_eq!(cdp.live_targets, ["page-9", "page-1"]);
+    }
+
+    #[test]
+    fn equal_navigation_generations_and_events_remain_target_scoped() {
+        let (mut first, mut second) = (fixture(), fixture());
+        first.generation = 3;
+        second.generation = 3;
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+            .unwrap();
+        let mut one = wire(&cdp, "/devtools/page/page-1");
+        let mut seven = wire(&cdp, "/devtools/page/page-7");
+        let clients = cdp.server.page_clients();
+        let route_for = |target: &str| Route {
+            client: clients.iter().find(|(_, id)| id == target).unwrap().0,
+            session: None,
+        };
+        let r1 = route_for("page-1");
+        let r7 = route_for("page-7");
+        for (target, route, app) in [("page-1", &r1, &mut first), ("page-7", &r7, &mut second)] {
+            cdp.dispatch_page(app, target, route, false, "Page.enable", &json!({}))
+                .unwrap();
+            cdp.dispatch_page(app, target, route, false, "DOM.enable", &json!({}))
+                .unwrap();
+            cdp.scopes.get_mut(route).unwrap().pressed = Some((1, 2, app.geometry_revision));
+            cdp.pending.push(Pending {
+                target: target.into(),
+                route: route.clone(),
+                id: json!(target),
+                generation: 3,
+            });
+        }
+        second.cdp_events.push(Event::Started);
+        second.cdp_events.push(Event::Finished {
+            generation: 3,
+            frame: frame(&second),
+            error: Some("second-only failure".into()),
+        });
+        cdp.flush_page_events("page-7", &mut second);
+        assert_eq!(cdp.pending.len(), 1);
+        assert_eq!(cdp.pending[0].target, "page-1");
+        assert!(cdp.scopes[&r1].pressed.is_some());
+        assert!(cdp.scopes[&r7].pressed.is_none());
+        let mut received = Vec::new();
+        for _ in 0..5 {
+            received.push(
+                serde_json::from_str::<Value>(&seven.read().unwrap().into_text().unwrap()).unwrap(),
+            );
+        }
+        assert_eq!(received[0]["params"]["frameId"], "frame-7");
+        assert!(received.iter().any(|reply| reply["id"] == "page-7"
+            && reply["result"]["errorText"] == "second-only failure"));
+        assert!(
+            received
+                .iter()
+                .any(|event| event["method"] == "Page.frameNavigated"
+                    && event["params"]["frame"]["id"] == "frame-7")
+        );
+        assert!(
+            matches!(one.read(), Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut))
+        );
+        cdp.flush_page_events("page-7", &mut second);
+        assert_eq!(cdp.pending.len(), 1);
+        first.generation = 4;
+        cdp.flush_page_events("page-1", &mut first);
+        let aborted: Value =
+            serde_json::from_str(&one.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(aborted["id"], "page-1");
+        assert_eq!(aborted["result"]["frameId"], "frame-1");
+        assert!(
+            aborted["result"]["errorText"]
+                .as_str()
+                .unwrap()
+                .contains("ERR_ABORTED")
+        );
     }
     #[test]
     fn toolbar_free_cdp_uses_the_full_page_surface_and_coordinates() {
@@ -1429,6 +1895,7 @@ mod tests {
             Command {
                 client: r.client,
                 browser: true,
+                target: None,
                 message: json!({"id":7,"method":"Page.enable","sessionId":one["sessionId"]}),
             },
         );
@@ -1490,7 +1957,7 @@ mod tests {
             client,
             session: None,
         };
-        assert_eq!(cdp.target_info(&app)["attached"], true);
+        assert_eq!(cdp.target_info(TARGET, &app)["attached"], true);
         cdp.dispatch(&mut app, &r, false, "Page.disable", &json!({}))
             .unwrap();
         app.cdp_events.push(Event::Started);
@@ -1504,6 +1971,7 @@ mod tests {
             .unwrap();
         app.generation = 3;
         cdp.pending.push(Pending {
+            target: TARGET.into(),
             route: r.clone(),
             id: json!(9),
             generation: 3,
@@ -1539,6 +2007,7 @@ mod tests {
             ]
         );
         cdp.pending.push(Pending {
+            target: TARGET.into(),
             route: r,
             id: json!(10),
             generation: 2,

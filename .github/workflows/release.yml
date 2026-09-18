@@ -24,10 +24,14 @@ jobs:
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
-          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke
+          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/inspector-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/tabs-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/workspace-cdp-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/workspace-restart-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           target/debug/examples/journey_server > tmp/release-fixture.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT

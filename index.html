@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.7.2 Experimental Preview</title>
+<title>mgbrowser: v0.8.0 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -16,9 +16,9 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.7.2 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
-<p class="muted"><strong>Smoother wheel scrolling.</strong> A short animation replaces abrupt jumps; clicks and keys stop motion. The compact toolbar keeps navigation and bookmarks left of the URL, with a hamburger menu on the right. Modern-web compatibility remains poor.</p>
-<p class="muted">About shows <strong>download progress</strong>, then offers <strong>Restart now</strong> after installation to reopen the loaded URL with the new build. Unsaved edits, cookies and history are not restored. Restart is always optional.</p>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.8.0 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<p class="muted"><strong>Inspect the page. Move your tabs.</strong> Right-click Inspect element or press F12 for native DOM and compatibility diagnostics. Ctrl+T opens a tab; drag tabs into windows or left/right page groups. Modern-web compatibility remains poor.</p>
+<p class="muted">Smooth wheel scrolling, light/dark controls, sizing and bookmarks remain. About shows <strong>download progress</strong> and offers <strong>Restart now</strong>. Restart reopens committed URLs with fresh sessions, without unsaved edits, cookies, history or pane placement.</p>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
 <span id="copy-status" role="status"></span>
@@ -30,12 +30,14 @@
 <section class="detail"><p class="eyebrow">Reusable Rust components</p><h2>Butane. Sparkle. Chassis.</h2><p>Butane embeds Boa with bounded execution policy and preserves our original interpreter as a test baseline. Sparkle handles HTML, DOM, layout and painting. Chassis brings browser services and optional controls; mg-browser supplies the desktop and platform integration.</p><p>The libraries have standalone examples and support rendering without a window. V8/WebKit drop-in compatibility, Tauri integration and a ThermiteOS port remain future work. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/ARCHITECTURE.md">Architecture and embedding guide ↗</a></p><p>The <a href="https://github.com/pierce403/mgbrowser/blob/main/JSPLAN.md">Butane JavaScript plan ↗</a> remains a longer roadmap. Boa now executes inline page scripts under an <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/BOA.md">explicit process-contained profile ↗</a>. Comprehensive cooperative resource control, external loading and React/Vue browser applications remain open. The <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/jsplan/RESULTS.md">initial experiment results ↗</a> remain separate evidence.</p></section>
 <section class="detail" id="limitations"><p class="eyebrow">Read before browsing</p><h2>Known limitations</h2><ul>
 <li>Modern-web compatibility is poor. The Google search → first result journey is not working.</li>
+<li>Faithful Google News rendering and ordinary Playwright compatibility remain unfinished. The native inspector is read-only, not the Chrome DevTools frontend or a JavaScript debugger.</li>
 <li>Boa-backed JavaScript integration is incomplete. Scripting is disabled by default and requires <code>--enable-scripts</code>.</li>
 <li>External scripts, modules, timers, fetch/XHR and general browser event-loop behavior are not implemented. No React/Vue browser-app compatibility is claimed.</li>
 <li>Script workers bound cumulative opcodes, sources/jobs and allocation requests. This is not complete cooperative work budgeting or GC/RSS measurement. Active detached listeners persist until removal or teardown.</li>
 <li>Full CSS is not implemented: no flex/grid or general positioning. No CSS imports, downloaded fonts or cross-origin assets. Images are limited to PNG, first-frame GIF and small static SVG shapes/paths; unsupported images remain placeholders.</li>
 <li>Hacker News desktop is a narrow target, not mobile fidelity, account actions or general destination compatibility. Dynamic resources are not fetched.</li>
 <li>Linux X11/XWayland is the supported GUI target. Cookies are memory-only.</li>
+<li>Tabs are limited to 16 across four windows, with two left/right groups per window. Navigation/script budgets remain per tab/worker, not a combined memory or CPU quota.</li>
 <li>System size follows screen-global X11 desktop DPI, with 100% fallback. This is whole-browser size, not per-site page zoom or per-monitor Wayland scaling. Images retain their existing decoded resolution.</li>
 <li>System appearance follows the Linux settings portal's light/dark preference, with Light fallback when unavailable. Custom desktop skins/accents are not copied; window managers may ignore decoration hints. Pages are not forced into dark mode.</li>
 <li>The restricted JavaScript worker is <strong>not a sandbox for the browser as a whole</strong>.</li>
@@ -47,7 +49,7 @@
 <p class="muted">Latest work log: <time datetime="2026-09-17">2026-09-17</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
   <li><span>F-025 : Google News desktop reading</span><small>planned</small></li>
-  <li><span>F-024 : Pinned Playwright browser control</span><small>planned</small></li>
+  <li><span>F-024 : Pinned Playwright browser control</span><small>in-progress</small></li>
   <li><span>F-023 : Detachable tabs and left/right page groups</span><small>in-progress</small></li>
   <li><span>F-022 : Native inspection and compatibility diagnostics</span><small>in-progress</small></li>
   <li><span>F-021 : Smooth wheel scrolling</span><small>stable</small></li>

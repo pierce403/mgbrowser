@@ -29,7 +29,24 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct Command {
     pub client: u64,
     pub browser: bool,
+    /// Captured at the direct-page WebSocket handshake, never the focused tab.
+    pub target: Option<String>,
     pub message: Value,
+}
+
+pub const MAX_TARGETS: usize = 16;
+
+#[derive(Clone)]
+pub struct PageInfo {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+}
+
+/// IDs are monotonically allocated by the host and are never recycled.
+pub(crate) fn target_number(id: &str) -> Option<u64> {
+    let number = id.strip_prefix("page-")?.parse::<u64>().ok()?;
+    (number != 0 && id == format!("page-{number}")).then_some(number)
 }
 
 pub struct Server {
@@ -42,7 +59,7 @@ struct Shared {
     port: u16,
     stop: AtomicBool,
     next_client: AtomicU64,
-    page: Mutex<(String, String)>,
+    pages: Mutex<Vec<PageInfo>>,
     clients: Mutex<HashMap<u64, Client>>,
     commands: mpsc::SyncSender<Command>,
 }
@@ -54,10 +71,10 @@ struct Client {
     endpoint: Option<Endpoint>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Endpoint {
     Browser,
-    Page,
+    Page(String),
 }
 
 impl Server {
@@ -77,7 +94,11 @@ impl Server {
             port,
             stop: AtomicBool::new(false),
             next_client: AtomicU64::new(1),
-            page: Mutex::new(("mgbrowser".into(), "about:blank".into())),
+            pages: Mutex::new(vec![PageInfo {
+                id: "page-1".into(),
+                title: "mgbrowser".into(),
+                url: "about:blank".into(),
+            }]),
             clients: Mutex::new(HashMap::new()),
             commands: send,
         });
@@ -105,14 +126,19 @@ impl Server {
     /// Direct page connections are attached before their first CDP command.
     /// HTTP discovery and browser-level sockets do not attach a page themselves.
     pub fn page_client_ids(&self) -> Vec<u64> {
+        self.page_clients().into_iter().map(|(id, _)| id).collect()
+    }
+
+    pub fn page_clients(&self) -> Vec<(u64, String)> {
         self.shared
             .clients
             .lock()
             .map(|clients| {
                 clients
                     .iter()
-                    .filter_map(|(&id, client)| {
-                        (client.endpoint == Some(Endpoint::Page)).then_some(id)
+                    .filter_map(|(&id, client)| match &client.endpoint {
+                        Some(Endpoint::Page(target)) => Some((id, target.clone())),
+                        _ => None,
                     })
                     .collect()
             })
@@ -155,9 +181,52 @@ impl Server {
     }
 
     pub fn update_page(&self, title: &str, url: &str) {
-        if let Ok(mut page) = self.shared.page.lock() {
-            *page = (bounded_text(title, 4096), bounded_text(url, 16 * 1024));
+        let _ = self.update_pages(&[PageInfo {
+            id: "page-1".into(),
+            title: bounded_text(title, 4096),
+            url: bounded_text(url, 16 * 1024),
+        }]);
+    }
+
+    /// Replace discovery atomically and close direct sockets for removed pages.
+    pub fn update_pages(&self, pages: &[PageInfo]) -> Result<(), String> {
+        if pages.len() > MAX_TARGETS
+            || pages.iter().enumerate().any(|(index, page)| {
+                target_number(&page.id).is_none()
+                    || pages[..index].iter().any(|previous| previous.id == page.id)
+            })
+        {
+            return Err("CDP requires at most 16 unique page-N target IDs".into());
         }
+        let mut published = self
+            .shared
+            .pages
+            .lock()
+            .map_err(|_| "Page metadata lock failed")?;
+        *published = pages
+            .iter()
+            .map(|page| PageInfo {
+                id: page.id.clone(),
+                title: bounded_text(&page.title, 4096),
+                url: bounded_text(&page.url, 16 * 1024),
+            })
+            .collect();
+        // Holding the metadata lock prevents a removed target from completing
+        // its handshake concurrently with this reconciliation.
+        let mut clients = self
+            .shared
+            .clients
+            .lock()
+            .map_err(|_| "Client metadata lock failed")?;
+        clients.retain(|_, client| {
+            let stale = matches!(&client.endpoint, Some(Endpoint::Page(target))
+                if !published.iter().any(|page| &page.id == target));
+            if stale {
+                let _ = client.socket.shutdown(Shutdown::Both);
+            }
+            !stale
+        });
+        Ok(())
     }
 }
 
@@ -175,7 +244,7 @@ impl Drop for Server {
     }
 }
 
-fn bounded_text(text: &str, limit: usize) -> String {
+pub(crate) fn bounded_text(text: &str, limit: usize) -> String {
     let mut end = text.len().min(limit);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -383,12 +452,24 @@ fn handle_client(
             "Discovery requests cannot have bodies",
         );
     }
-    let websocket = match request.path.as_str() {
-        "/devtools/page/page-1" => Some(false),
-        "/devtools/browser/browser-1" => Some(true),
-        _ => None,
-    };
-    if let Some(browser) = websocket {
+    let target = request
+        .path
+        .strip_prefix("/devtools/page/")
+        .map(str::to_owned);
+    let browser = request.path == "/devtools/browser/browser-1";
+    if browser || target.is_some() {
+        let pages = shared
+            .pages
+            .lock()
+            .map_err(|_| "Page metadata lock failed")?;
+        if !browser && !pages.iter().any(|page| Some(&page.id) == target.as_ref()) {
+            return http_response(
+                &mut socket,
+                404,
+                "Not Found",
+                "Unknown or closed page target",
+            );
+        }
         let mut builder = tungstenite::http::Request::builder()
             .method("GET")
             .uri(&request.path);
@@ -424,9 +505,10 @@ fn handle_client(
             connection.endpoint = Some(if browser {
                 Endpoint::Browser
             } else {
-                Endpoint::Page
+                Endpoint::Page(target.clone().unwrap())
             });
         }
+        drop(pages);
         tungstenite::handshake::server::write_response(&mut socket, &response)
             .map_err(|error| error.to_string())?;
         socket
@@ -440,37 +522,48 @@ fn handle_client(
             .max_frame_size(Some(MAX_COMMAND));
         let websocket =
             WebSocket::from_partially_read(socket, request.tail, Role::Server, Some(config));
-        return websocket_loop(websocket, shared, client, browser, output, queued_bytes);
+        return websocket_loop(
+            websocket,
+            shared,
+            client,
+            browser,
+            target,
+            output,
+            queued_bytes,
+        );
     }
-    let page = shared
-        .page
+    let pages = shared
+        .pages
         .lock()
         .map_err(|_| "Page metadata lock failed")?
         .clone();
     let address = format!("127.0.0.1:{}", shared.port);
-    let body = match request.path.as_str() {
-        "/json/version" => json!({
-            "Browser": format!("mgbrowser/{}", env!("CARGO_PKG_VERSION")),
-            "Protocol-Version": "1.3",
-            "User-Agent": crate::net::USER_AGENT,
-            "webSocketDebuggerUrl": format!("ws://{address}/devtools/browser/browser-1"),
-            "mgbrowserProtocol": "Experimental CDP subset; no Chromium or V8 engine",
-        }),
-        "/json" | "/json/list" => json!([{
-            "id": "page-1", "type": "page", "title": page.0, "url": page.1,
+    let body =
+        match request.path.as_str() {
+            "/json/version" | "/json/version/" => json!({
+                "Browser": format!("mgbrowser/{}", env!("CARGO_PKG_VERSION")),
+                "Protocol-Version": "1.3",
+                "User-Agent": crate::net::USER_AGENT,
+                "webSocketDebuggerUrl": format!("ws://{address}/devtools/browser/browser-1"),
+                "mgbrowserProtocol": "Experimental CDP subset; no Chromium or V8 engine",
+            }),
+            "/json" | "/json/list" => {
+                json!(pages.iter().map(|page| json!({
+            "id": page.id, "type": "page", "title": page.title, "url": page.url,
             "description": "mgbrowser experimental HTML-flow page",
-            "webSocketDebuggerUrl": format!("ws://{address}/devtools/page/page-1"),
-        }]),
-        "/json/protocol" => {
-            return http_response(
-                &mut socket,
-                200,
-                "OK",
-                include_str!("../../../docs/cdp-protocol.json"),
-            );
-        }
-        _ => return http_response(&mut socket, 404, "Not Found", "Unknown debugging endpoint"),
-    };
+            "webSocketDebuggerUrl": format!("ws://{address}/devtools/page/{}", page.id),
+        })).collect::<Vec<_>>())
+            }
+            "/json/protocol" => {
+                return http_response(
+                    &mut socket,
+                    200,
+                    "OK",
+                    include_str!("../../../docs/cdp-protocol.json"),
+                );
+            }
+            _ => return http_response(&mut socket, 404, "Not Found", "Unknown debugging endpoint"),
+        };
     http_response(&mut socket, 200, "OK", &body.to_string())
 }
 
@@ -499,6 +592,7 @@ fn websocket_loop(
     shared: &Shared,
     client: u64,
     browser: bool,
+    target: Option<String>,
     output: mpsc::Receiver<String>,
     queued_bytes: Arc<AtomicU64>,
 ) -> Result<(), String> {
@@ -527,6 +621,7 @@ fn websocket_loop(
                     .try_send(Command {
                         client,
                         browser,
+                        target: target.clone(),
                         message,
                     })
                     .map_err(|_| "Debugging command queue full")?;
@@ -558,6 +653,71 @@ fn websocket_loop(
 mod tests {
     use super::*;
     use tungstenite::client::IntoClientRequest;
+
+    #[test]
+    fn multiple_direct_endpoints_keep_target_identity_and_close_without_retargeting() {
+        let server = Server::bind(0).unwrap();
+        let pages = [
+            PageInfo {
+                id: "page-1".into(),
+                title: "First".into(),
+                url: "https://first.invalid/".into(),
+            },
+            PageInfo {
+                id: "page-7".into(),
+                title: "Second".into(),
+                url: "https://second.invalid/".into(),
+            },
+        ];
+        server.update_pages(&pages).unwrap();
+        let host = format!("Host: 127.0.0.1:{}\r\n", server.port());
+        let response = http(&server, "GET", "/json/list", &host);
+        let listed: Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 2);
+        assert_eq!(listed[1]["id"], "page-7");
+        assert_eq!(listed[1]["url"], "https://second.invalid/");
+        let stream = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (mut socket, _) = tungstenite::client(
+            format!("ws://127.0.0.1:{}/devtools/page/page-7", server.port()),
+            stream,
+        )
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({"id":1,"method":"DOM.getDocument"})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+        let queued = command(&server);
+        assert!(!queued.browser);
+        assert_eq!(queued.target.as_deref(), Some("page-7"));
+        assert!(
+            server
+                .page_clients()
+                .iter()
+                .any(|(_, target)| target == "page-7")
+        );
+        assert!(
+            server
+                .update_pages(&[pages[0].clone(), pages[0].clone()])
+                .is_err()
+        );
+        server.update_pages(&pages[..1]).unwrap();
+        assert!(socket.read().is_err());
+        assert!(server.page_clients().is_empty());
+        let response = http(&server, "GET", "/devtools/page/page-7", &host);
+        assert!(response.starts_with("HTTP/1.1 404"));
+        let response = http(&server, "GET", "/json/list", &host);
+        let listed: Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["id"], "page-1");
+    }
 
     fn http(server: &Server, method: &str, path: &str, headers: &str) -> String {
         let mut socket =
@@ -607,6 +767,11 @@ mod tests {
                 server.port()
             )
         );
+        let version_slash = http(&server, "GET", "/json/version/", &host);
+        assert!(version_slash.starts_with("HTTP/1.1 200"));
+        let version_slash: Value =
+            serde_json::from_str(version_slash.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(version_slash, version);
         for path in ["/json", "/json/list"] {
             let response = http(&server, "GET", path, &host);
             let pages: Value =

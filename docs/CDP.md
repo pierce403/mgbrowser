@@ -1,12 +1,12 @@
 # Browser control protocol
 
-mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The first implementation is a bounded subset for one page. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
+mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The implementation is a bounded subset with stable targets for existing tabs. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
 
-The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. The browser now has an opt-in [original JavaScript subset](JAVASCRIPT.md), but no persistent remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). There is no Runtime domain in the advertised subset.
+The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Production opt-in page scripts use the restricted [Boa page execution lane](BOA.md), but expose no remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline. There is no Runtime domain in the advertised subset.
 
 ## Connection and scope
 
-Remote debugging is opt-in. The transport binds to `127.0.0.1`, with an explicitly selected port or port zero for an available port. Discovery exposes `/json/version`, `/json/list` (also `/json`), and `/json/protocol`. The browser endpoint is `/devtools/browser/browser-1`; the sole page endpoint is `/devtools/page/page-1`. These discovery conventions follow the [official CDP endpoint documentation](https://chromedevtools.github.io/devtools-protocol/).
+Remote debugging is opt-in. The transport binds to `127.0.0.1`, with an explicitly selected port or port zero for an available port. Discovery exposes `/json/version` (also `/json/version/`), `/json/list` (also `/json`), and `/json/protocol`. The browser endpoint is `/devtools/browser/browser-1`; `/json/list` supplies each live tab's permanent `/devtools/page/page-N` endpoint. The original tab remains `page-1`. These discovery conventions follow the [official CDP endpoint documentation](https://chromedevtools.github.io/devtools-protocol/).
 
 ```sh
 cargo run --locked -- --remote-debugging-port 9222 https://www.google.com/
@@ -30,7 +30,24 @@ link work, obtain current IDs with DOM commands; never reuse IDs across navigati
 Keep mouse press/release in one batch. This simple page client does not manage
 flattened sessions; the journey regression below verifies those separately.
 
-A page WebSocket talks directly to its page. A browser WebSocket attaches to `page-1` with `Target.attachToTarget` and `flatten: true`; subsequent page commands include the returned `sessionId` at the top level. Responses and page events retain that session identifier. Domain enablement belongs to each connection/session. Detachment invalidates that session without closing the visible page. See the [Target domain](https://chromedevtools.github.io/devtools-protocol/tot/Target/).
+A page WebSocket talks directly to its permanent page target, never the currently focused tab. A browser WebSocket attaches to a discovered target with `Target.attachToTarget` and `flatten: true`; subsequent page commands include the returned `sessionId` at the top level. Responses and page events retain that session identifier. Domain enablement, pending mouse presses, and navigation replies belong to each connection/session and its target. Protocol detachment invalidates that session without closing the visible page. See the [Target domain](https://chromedevtools.github.io/devtools-protocol/tot/Target/).
+
+Moving a tab between panes/windows preserves its target and sessions. Closing it
+fails pending navigation replies, emits `Target.detachedFromTarget` for attached
+browser sessions, and closes its direct page sockets. A replacement tab gets a
+new ID. Inactive tabs remain addressable. `Target.getTargetInfo` without a target
+uses the direct/attached page; on an unattached browser socket it requires an
+explicit `targetId` when zero or multiple pages exist. No automatic attach,
+target creation/closure/activation, or target-discovery event subscription is
+implemented: poll the real target list and attach explicitly.
+
+Embedding hosts call `BrowserCdp::tick_pages(&mut [(&str, &mut Browser)])` with
+all live tabs, not just visible panes. It returns an error before processing
+commands if IDs are duplicate, recycled, out of allocation order, noncanonical
+`page-N`, or exceed 16 live targets. IDs are monotonically allocated and must
+remain bound to the same Browser payload. The original `tick(&mut Browser)`
+wrapper retains the single `page-1` embedding contract. Transport client, queue,
+message, and per-client attached-session limits are unchanged.
 
 The endpoint grants control of this browser session to local clients. The transport checks loopback Host values; an Origin must be absent or the same loopback HTTP origin and port. Other web origins are rejected. It limits clients, message sizes, pending commands, and output queues; an oversized or stalled client is disconnected. It is not a remote hosting service or an authentication mechanism for other local users.
 
@@ -54,7 +71,7 @@ the local `/script-loop` fuel error is separately checked before onward navigati
 
 `Browser.getVersion` identifies mgbrowser and reports `jsVersion: "mgbrowser-js/0.1-experimental"`. This identifies the bundled partial interpreter, not whether script execution is enabled for a document. Protocol fields have their ordinary [Browser-domain meanings](https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-getVersion).
 
-The page implementation uses one top-level frame, real navigation, the actual parser tree, existing editable controls, and the software raster. It does not introduce a second HTML renderer or a JavaScript interpretation shortcut. There are no additional tabs, frames, workers, browser contexts, emulation, full CSS inspection, touch gestures, or downloads. `Page.navigate` requires an absolute HTTP(S) URL, accepts only the sole frame, and delays its reply until completion. Transport failures and superseded navigations return `errorText`; HTTP error responses still represent delivered documents. `Page.reload` acknowledges initiation, with completion reported through enabled events. Frame metadata separates the fragment-free `url` from optional `urlFragment`, which includes its leading `#`.
+Each page target uses one top-level frame, real navigation, the actual parser tree, existing editable controls, and the software raster. It does not introduce a second HTML renderer or a JavaScript interpretation shortcut. There are no subframes, worker targets, browser contexts, emulation, full CSS inspection, touch gestures, or downloads. `Page.navigate` requires an absolute HTTP(S) URL, accepts only that target's `frame-N`, and delays its reply until completion. Transport failures and superseded navigations return `errorText`; HTTP error responses still represent delivered documents. `Page.reload` acknowledges initiation, with completion reported through enabled events. Frame metadata separates the fragment-free `url` from optional `urlFragment`, which includes its leading `#`.
 
 `DOM.getDocument` reads the bounded parser arena and implicitly enables DOM events. The default depth is one; `0..256` and `-1` are accepted, with `-1` requesting the available subtree. The serialized root is limited to 4 MiB. Node IDs expire on document replacement; node operations accept `nodeId`, without backend-ID or Runtime-object alternatives. Attributes use alternating names and values. The selector subset supports tag/universal selectors, IDs, classes, attribute presence/equality, compounds, and whitespace descendants. Other selector syntax returns an error. A missing `querySelector` match returns zero. The wire objects follow the [DOM domain](https://chromedevtools.github.io/devtools-protocol/tot/DOM/).
 
@@ -62,8 +79,10 @@ The page implementation uses one top-level frame, real navigation, the actual pa
 
 Page coordinates exclude the native toolbar and status strip and remain logical
 CSS pixels regardless of display size. At scale `s`, a protocol point `(x, y)`
-maps to native canvas `(x*s, (y+108)*s)` with integer raster rounding. The logical
-page height excludes 108 toolbar and 29 status pixels. Screenshots crop that
+maps to native canvas `(x*s, (y+64)*s)` with integer raster rounding for the
+single-page window. A visible tab strip/pane origin adds its native host offset;
+CDP coordinates remain target-local and never include it. The logical page height excludes 64 toolbar and 29 status
+pixels since v0.7.1's compact toolbar. Screenshots crop that
 viewport in **physical** pixels and encode PNG, with the unchanged 7 MiB encoded
 output limit. CSS layout/visual viewport fields stay logical; deprecated device-
 pixel fields scale with the output. Visual `scale` and `zoom` remain 1: there is
@@ -100,6 +119,23 @@ Unknown methods return `-32601`; invalid or unsupported parameters return `-3260
 
 ## Acceptance and continued development
 
+The multi-target regressions use independent local WebSocket connections and
+two real Browser values with equal navigation generations and DOM epochs. They
+verify discovery, direct/attached routing, DOM/input isolation, reordered host
+enumeration, target-specific events and replies, close/detach cancellation, and
+rejected ID reuse. They do not establish ordinary Playwright attachment or
+browser-context/Runtime support.
+
+Build `workspace_cdp_smoke`, then run
+`bash tools/workspace-cdp-smoke.sh /absolute/path/to/mgbrowser` against the
+packaged and public-installed binary. It uses native tab creation, detachment
+and closure alongside actual WebSocket discovery/attachment/input to check
+retained edits, stable routes and closed-target rejection on an owned display.
+
+Ordinary Playwright 1.58.2 currently fails during attachment, before any locator
+or page operation. See [the actual pinned baseline and acceptance command](PLAYWRIGHT.md).
+The Rust client below is not a substitute for that independent-client gate.
+
 Reproduce the local journey in three terminals. Start the fixture service:
 
 ```sh
@@ -126,7 +162,7 @@ The full-protocol direction is staged around real browser capabilities:
 
 1. Freeze the advertised subset and add independent protocol/client fixtures. Validate every advertised method, optional parameter, result, event, and error path. Pin a reviewed upstream schema revision for future changes; tip-of-tree changes are not automatically adopted.
 2. Add real frame/target lifecycles, navigation history, cancellation, Network request/response/error events, resource bodies, and more accurate layout/DOM inspection as their browser implementations mature.
-3. Expand the project's own Rust JavaScript engine and web bindings, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Internal retained page realms now support bounded later activation, but expose no remote Runtime context. Execution and isolation tests precede compatibility claims.
+3. Expand the Boa-backed Rust execution facade and web bindings, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Internal retained page realms now support bounded later activation, but expose no remote Runtime context. Execution and isolation tests precede compatibility claims.
 4. Connect actual style/compositing and platform features to CSS, DOMSnapshot, Accessibility, Emulation, storage, workers, profiling, tracing, and the remaining relevant domains. Maintain an explicit inventory of unsupported platform-specific features.
 5. Run pinned external clients and DevTools frontend versions against documented workflows. Claim compatibility per client/version/workflow only after observed success; retain the full protocol as the longer-term goal.
 

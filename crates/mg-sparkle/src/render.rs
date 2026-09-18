@@ -49,6 +49,9 @@ pub struct Frame {
     pub hits: Vec<Hit>,
     pub boxes: Vec<LayoutBox>,
     pub content_height: i32,
+    /// Bounded diagnostics from this frame's actual style/layout pass. Resource
+    /// loading and script execution have separate reports owned by their callers.
+    pub diagnostics: crate::style::StyleDiagnostics,
 }
 
 /// Render a document without a window, network service, or JavaScript execution.
@@ -71,27 +74,52 @@ pub fn render_scaled(
     controls: &Controls<'_>,
     scale: f32,
 ) -> Frame {
+    let mut diagnostics = crate::style::StyleDiagnostics::default();
     let styled = !document.stylesheets.is_empty()
         || !document.resources.is_empty()
         || document.nodes.iter().any(|node| node.has("style"));
     if styled {
-        match crate::style::compute_styles(
+        match crate::style::compute_styles_with_diagnostics(
             document,
             &document.stylesheets,
             (viewport.width as f32, viewport.height as f32),
+            &mut diagnostics,
         ) {
             Ok(styles) => {
                 match crate::styled_layout::render_scaled(
                     document, fonts, viewport, controls, styles, scale,
                 ) {
-                    Some(frame) => return frame,
-                    None => eprintln!("Styled layout limit reached; using readable-flow fallback"),
+                    Some(mut frame) => {
+                        frame.diagnostics = diagnostics;
+                        return frame;
+                    }
+                    None => {
+                        eprintln!("Styled layout limit reached; using readable-flow fallback");
+                        diagnostics.record(
+                            "layout-fallback",
+                            format_args!(
+                                "Styled layout limit reached; using readable-flow fallback"
+                            ),
+                            format_args!("{}", document.base_url),
+                            None,
+                            None,
+                        );
+                    }
                 }
             }
-            Err(error) => eprintln!("Styles unavailable; using readable-flow fallback: {error}"),
+            Err(error) => {
+                eprintln!("Styles unavailable; using readable-flow fallback: {error}");
+                diagnostics.record(
+                    "style-fallback",
+                    format_args!("Styles unavailable; using readable-flow fallback: {error}"),
+                    format_args!("{}", document.base_url),
+                    None,
+                    None,
+                );
+            }
         }
     }
-    Renderer {
+    let mut frame = Renderer {
         document,
         fonts,
         width: viewport.width,
@@ -104,7 +132,9 @@ pub fn render_scaled(
         boxes: Vec::new(),
         scale,
     }
-    .paint()
+    .paint();
+    frame.diagnostics = diagnostics;
+    frame
 }
 struct Renderer<'a> {
     document: &'a Document,
@@ -265,6 +295,7 @@ impl Renderer<'_> {
             hits: self.hits,
             boxes: self.boxes,
             content_height,
+            diagnostics: Default::default(),
         }
     }
     fn hit(&mut self, x: i32, y: i32, w: u32, h: u32, action: Action) {

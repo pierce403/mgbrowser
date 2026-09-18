@@ -12,6 +12,13 @@ pub(super) struct ScrollMotion {
 impl Browser {
     /// Queue a wheel delta in logical pixels. Call `advance_scroll` before painting.
     pub fn wheel_scroll_by(&mut self, amount: i32) {
+        if amount == 0 {
+            return;
+        }
+        if self.devtools.open {
+            self.inspector_scroll(amount.signum() * 3);
+            return;
+        }
         self.wheel_scroll_at(amount, Instant::now());
     }
 

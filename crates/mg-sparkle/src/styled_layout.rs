@@ -18,6 +18,24 @@ const MAX_DEPTH: usize = 256;
 const MAX_EXTENT: f32 = 1_000_000.0;
 const MAX_TEXT_RUN: usize = 16_384;
 
+// Unlike percentage margins and padding, vertical sizes use the containing
+// block's definite content height. An auto-height ancestor breaks this chain.
+fn height_length(length: Length, containing_height: Option<f32>) -> Option<f32> {
+    match length {
+        Length::Auto => None,
+        Length::Px(value) => Some(value),
+        Length::Percent(value) => containing_height.map(|height| value * height),
+    }
+    .map(|height| height.clamp(0.0, MAX_EXTENT))
+}
+
+fn constrain_height(style: &ComputedStyle, height: f32, containing_height: Option<f32>) -> f32 {
+    let maximum = height_length(style.max_height, containing_height).unwrap_or(MAX_EXTENT);
+    let minimum = height_length(style.min_height, containing_height).unwrap_or(0.0);
+    // CSS min-height wins if the minimum exceeds the maximum.
+    height.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT)
+}
+
 #[derive(Clone, Copy, Default, Debug)]
 struct Rect {
     x: f32,
@@ -185,13 +203,33 @@ pub(crate) fn render_scaled(
             rgb: 0xffffff,
             alpha: 1.0,
         });
-    let height = layout.block(0, 0.0, 0.0, viewport.width as f32, None, 0).1;
+    let height = layout
+        .block(
+            0,
+            0.0,
+            0.0,
+            viewport.width as f32,
+            Some(viewport.height as f32),
+            None,
+            0,
+        )
+        .1;
     if layout.exhausted
         || layout.scene.paints.len() >= MAX_OPS
         || layout.scene.boxes.len() >= MAX_OPS
     {
         return None;
     }
+    // Explicit block heights can be smaller than their visible contents. Keep
+    // that laid-out overflow reachable even when html/body has height:100%.
+    let height = layout
+        .scene
+        .boxes
+        .iter()
+        .fold(height, |height, rect| {
+            height.max(rect.y as f32 + rect.height as f32)
+        })
+        .clamp(0.0, MAX_EXTENT);
     let mut canvas = Canvas::new_scaled(viewport.width, viewport.height, background.rgb, scale);
     let mut decoded = HashMap::new();
     let mut decoded_bytes = 0usize;
@@ -345,6 +383,7 @@ pub(crate) fn render_scaled(
         hits,
         boxes: layout.scene.boxes,
         content_height: height.ceil().max(0.0) as i32,
+        diagnostics: Default::default(),
     })
 }
 
@@ -529,11 +568,19 @@ impl Layout<'_, '_> {
                 url.into()
             })
     }
-    fn replaced_size(&mut self, id: usize, basis: f32) -> (f32, f32) {
+    fn replaced_size(
+        &mut self,
+        id: usize,
+        basis: f32,
+        containing_height: Option<f32>,
+    ) -> (f32, f32) {
         let width = self.styles[id].width.resolve(basis);
-        let height = self.styles[id].height.resolve(basis);
+        let height = height_length(self.styles[id].height, containing_height);
         if let (Some(width), Some(height)) = (width, height) {
-            return (width.clamp(0.0, MAX_EXTENT), height.clamp(0.0, MAX_EXTENT));
+            return (
+                width.clamp(0.0, MAX_EXTENT),
+                constrain_height(&self.styles[id], height, containing_height),
+            );
         }
         let image_url = self.image_url(id);
         if self.document.nodes[id].tag == "img"
@@ -597,17 +644,18 @@ impl Layout<'_, '_> {
         if node.tag != "img" {
             return (
                 width.unwrap_or(default_w).clamp(0.0, MAX_EXTENT),
-                height.unwrap_or(default_h).clamp(0.0, MAX_EXTENT),
+                constrain_height(s, height.unwrap_or(default_h), containing_height),
             );
         }
         let ratio = default_w / default_h.max(1.0);
+        let used_height = constrain_height(
+            s,
+            height.unwrap_or_else(|| width.map_or(default_h, |w| w / ratio.max(0.001))),
+            containing_height,
+        );
         (
-            width
-                .unwrap_or_else(|| height.map_or(default_w, |h| h * ratio))
-                .clamp(0.0, MAX_EXTENT),
-            height
-                .unwrap_or_else(|| width.map_or(default_h, |w| w / ratio.max(0.001)))
-                .clamp(0.0, MAX_EXTENT),
+            width.unwrap_or(used_height * ratio).clamp(0.0, MAX_EXTENT),
+            used_height,
         )
     }
     fn intrinsic(&mut self, id: usize, depth: usize) -> Intrinsic {
@@ -636,7 +684,7 @@ impl Layout<'_, '_> {
             };
             Intrinsic { min, max }
         } else if matches!(node.tag.as_str(), "img" | "input" | "button" | "textarea") {
-            let (w, _) = self.replaced_size(id, 0.0);
+            let (w, _) = self.replaced_size(id, 0.0, None);
             Intrinsic { min: w, max: w }
         } else if matches!(s.display, Display::Table | Display::InlineTable) {
             let (mins, maxs) = self.table_columns(id, depth + 1);
@@ -776,6 +824,7 @@ impl Layout<'_, '_> {
         x: f32,
         y: f32,
         available: f32,
+        containing_height: Option<f32>,
         forced: Option<f32>,
         depth: usize,
     ) -> (f32, f32) {
@@ -836,21 +885,34 @@ impl Layout<'_, '_> {
         let content_x = bx + padding[3];
         let content_y = by + padding[0];
         let content_w = (width - horizontal).max(0.0);
+        let specified_height = height_length(s.height, containing_height)
+            .map(|height| constrain_height(&s, height, containing_height));
+        // The synthetic document represents the initial containing block.
+        // Minimum/maximum height alone must not make an auto height definite.
+        let child_height = if id == 0 {
+            containing_height
+        } else {
+            specified_height
+        };
         let content_h = if is_table {
-            self.layout_table(id, content_x, content_y, content_w, depth + 1)
+            self.layout_table(id, content_x, content_y, content_w, child_height, depth + 1)
         } else if matches!(
             self.document.nodes[id].tag.as_str(),
             "img" | "input" | "button" | "textarea"
         ) {
-            self.replaced(id, content_x, content_y, content_w).1
+            self.replaced(id, content_x, content_y, content_w, containing_height)
+                .1
         } else {
-            self.flow(id, content_x, content_y, content_w, depth + 1)
+            self.flow(id, content_x, content_y, content_w, child_height, depth + 1)
         };
-        let h = content_h
-            .max(s.height.resolve(available).unwrap_or(0.0))
-            .max(s.min_height.resolve(available).unwrap_or(0.0))
-            + padding[0]
-            + padding[2];
+        // Table and cell heights remain minimums for their contents. Ordinary
+        // blocks can overflow their specified height without enlarging it.
+        let used_height = if is_table || s.display == Display::TableCell {
+            content_h.max(specified_height.unwrap_or(0.0))
+        } else {
+            specified_height.unwrap_or(content_h)
+        };
+        let h = constrain_height(&s, used_height, containing_height) + padding[0] + padding[2];
         let h = h.clamp(0.0, MAX_EXTENT);
         let rect = Rect {
             x: bx,
@@ -893,7 +955,15 @@ impl Layout<'_, '_> {
             }
         }
     }
-    fn layout_table(&mut self, id: usize, x: f32, y: f32, width: f32, depth: usize) -> f32 {
+    fn layout_table(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        width: f32,
+        containing_height: Option<f32>,
+        depth: usize,
+    ) -> f32 {
         let (mut min, mut max) = self.table_columns(id, depth + 1);
         let rows = self.table(id).rows.clone();
         let spacing = self.table_spacing(id);
@@ -951,11 +1021,13 @@ impl Layout<'_, '_> {
                     h: 0.0,
                 },
             );
-            let mut height = self.styles[row]
-                .height
-                .resolve(width)
-                .unwrap_or(0.0)
-                .max(0.0);
+            let row_height = height_length(self.styles[row].height, containing_height)
+                .map(|height| constrain_height(&self.styles[row], height, containing_height));
+            let mut height = constrain_height(
+                &self.styles[row],
+                row_height.unwrap_or(0.0),
+                containing_height,
+            );
             let mut ranges = Vec::new();
             for cell in cells {
                 let left = x
@@ -967,7 +1039,7 @@ impl Layout<'_, '_> {
                     .sum::<f32>()
                     + spacing[0] * (cell.span - 1) as f32;
                 let start = self.scene.mark();
-                let (_, h) = self.block(cell.node, left, top, cw, Some(cw), depth + 1);
+                let (_, h) = self.block(cell.node, left, top, cw, row_height, Some(cw), depth + 1);
                 height = height.max(h);
                 ranges.push((cell.node, start, self.scene.mark(), h, left, cw));
             }
@@ -1090,7 +1162,15 @@ impl Layout<'_, '_> {
             }
         }
     }
-    fn flow(&mut self, id: usize, x: f32, y: f32, width: f32, depth: usize) -> f32 {
+    fn flow(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        width: f32,
+        containing_height: Option<f32>,
+        depth: usize,
+    ) -> f32 {
         let mut tokens = Vec::new();
         for child in self.document.nodes[id].children.clone() {
             self.tokens(child, &mut tokens, depth + 1);
@@ -1108,18 +1188,21 @@ impl Layout<'_, '_> {
                 }
                 Token::Block(child) => {
                     if !line.is_empty() {
-                        top += self.line(id, x, top, width, &line, used, depth + 1);
+                        top +=
+                            self.line(id, x, top, width, containing_height, &line, used, depth + 1);
                         line.clear();
                     }
                     used = 0.0;
                     pending_space = None;
-                    top += self.block(child, x, top, width, None, depth + 1).1;
+                    top += self
+                        .block(child, x, top, width, containing_height, None, depth + 1)
+                        .1;
                 }
                 Token::Break => {
                     top += if line.is_empty() {
                         self.line_height(id)
                     } else {
-                        self.line(id, x, top, width, &line, used, depth + 1)
+                        self.line(id, x, top, width, containing_height, &line, used, depth + 1)
                     };
                     line.clear();
                     used = 0.0;
@@ -1129,7 +1212,9 @@ impl Layout<'_, '_> {
                     let tw = match &token {
                         Token::Word { width, .. } => *width,
                         Token::Gap(w) => *w,
-                        Token::Box(child) => self.intrinsic(*child, depth + 1).max.min(width),
+                        Token::Box(child) => {
+                            self.inline_box_width(*child, width, containing_height, depth + 1)
+                        }
                         _ => 0.0,
                     };
                     let sw = pending_space.map_or(0.0, |(_, w)| w);
@@ -1138,7 +1223,8 @@ impl Layout<'_, '_> {
                         WhiteSpace::NoWrap | WhiteSpace::Pre
                     );
                     if !nowrap && !line.is_empty() && used + sw + tw > width {
-                        top += self.line(id, x, top, width, &line, used, depth + 1);
+                        top +=
+                            self.line(id, x, top, width, containing_height, &line, used, depth + 1);
                         line.clear();
                         used = 0.0;
                         pending_space = None;
@@ -1156,9 +1242,26 @@ impl Layout<'_, '_> {
             }
         }
         if !line.is_empty() {
-            top += self.line(id, x, top, width, &line, used, depth + 1);
+            top += self.line(id, x, top, width, containing_height, &line, used, depth + 1);
         }
         top - y
+    }
+    fn inline_box_width(
+        &mut self,
+        id: usize,
+        width: f32,
+        containing_height: Option<f32>,
+        depth: usize,
+    ) -> f32 {
+        if self.document.nodes[id].tag == "img" && self.styles[id].width == Length::Auto {
+            // A definite percentage height can change an image's auto width.
+            // Use that same width for wrapping/alignment and for painting.
+            let (w, _) = self.replaced_size(id, width, containing_height);
+            let (m, p) = self.edges(id, width);
+            w + m[1] + m[3] + p[1] + p[3]
+        } else {
+            self.intrinsic(id, depth).max.min(width)
+        }
     }
     fn line(
         &mut self,
@@ -1166,6 +1269,7 @@ impl Layout<'_, '_> {
         x: f32,
         y: f32,
         width: f32,
+        containing_height: Option<f32>,
         tokens: &[Token],
         used: f32,
         depth: usize,
@@ -1185,7 +1289,7 @@ impl Layout<'_, '_> {
                     ascent = ascent.max(self.styles[*node].font_size);
                 }
                 Token::Box(child) => {
-                    let (_, h) = self.replaced_size(*child, width);
+                    let (_, h) = self.replaced_size(*child, width, containing_height);
                     let (m, p) = self.edges(*child, width);
                     height = height.max(h + m[0] + m[2] + p[0] + p[2]);
                 }
@@ -1226,10 +1330,10 @@ impl Layout<'_, '_> {
                         self.document.nodes[*child].tag.as_str(),
                         "img" | "input" | "button" | "textarea"
                     ) {
-                        self.replaced(*child, left, y, width)
+                        self.replaced(*child, left, y, width, containing_height)
                     } else {
                         let w = self.intrinsic(*child, depth + 1).max.min(width);
-                        self.block(*child, left, y, w, Some(w), depth + 1)
+                        self.block(*child, left, y, w, containing_height, Some(w), depth + 1)
                     };
                     if h < height {
                         self.scene.shift(start, 0.0, height - h);
@@ -1241,8 +1345,15 @@ impl Layout<'_, '_> {
         }
         height
     }
-    fn replaced(&mut self, id: usize, x: f32, y: f32, basis: f32) -> (f32, f32) {
-        let (w, h) = self.replaced_size(id, basis);
+    fn replaced(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        basis: f32,
+        containing_height: Option<f32>,
+    ) -> (f32, f32) {
+        let (w, h) = self.replaced_size(id, basis, containing_height);
         let (m, p) = self.edges(id, basis);
         let r = Rect {
             x: x + m[3],
@@ -1618,15 +1729,15 @@ mod tests {
             budget: 2_000_000,
             exhausted: false,
         };
-        assert_eq!(layout.replaced_size(ids[0], 200.0), (18.0, 18.0));
-        assert_eq!(layout.replaced_size(ids[1], 200.0), (18.0, 18.0));
+        assert_eq!(layout.replaced_size(ids[0], 200.0, None), (18.0, 18.0));
+        assert_eq!(layout.replaced_size(ids[1], 200.0, None), (18.0, 18.0));
         assert_eq!(layout.natural_images.len(), 1);
         assert!(
             layout
                 .natural_images
                 .contains_key("https://example.test/shared.svg")
         );
-        assert_eq!(layout.replaced_size(ids[2], 200.0), (0.0, 0.0));
+        assert_eq!(layout.replaced_size(ids[2], 200.0, None), (0.0, 0.0));
         assert_eq!(layout.natural_images.len(), 1);
     }
 

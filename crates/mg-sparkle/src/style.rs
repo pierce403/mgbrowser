@@ -13,6 +13,10 @@ use selectors::context::{
 use selectors::matching::{ElementSelectorFlags, VisitedHandlingMode};
 use selectors::{Element, OpaqueElement};
 use std::hash::{Hash, Hasher};
+use std::{
+    cell::RefCell,
+    fmt::{self, Write},
+};
 use style::applicable_declarations::{ApplicableDeclarationBlock, ApplicableDeclarationList};
 use style::context::{CascadeInputs, QuirksMode, SharedStyleContext, TreeCountingCaches};
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
@@ -31,6 +35,128 @@ use style::{Atom, LocalName, Namespace};
 use stylo_dom::ElementState;
 type BorrowedLocalName = <SelectorImpl as selectors::parser::SelectorImpl>::BorrowedLocalName;
 type BorrowedNamespace = <SelectorImpl as selectors::parser::SelectorImpl>::BorrowedNamespaceUrl;
+
+/// One bounded diagnostic from the actual CSS computation/rendering pass.
+/// Parser positions are one-based within a stylesheet or style attribute, not
+/// the enclosing HTML file; columns count UTF-16 code units.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StyleDiagnostic {
+    pub kind: &'static str,
+    pub message: String,
+    pub source: String,
+    pub node: Option<usize>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    /// A message/source field was shortened; its text includes `[truncated]`.
+    pub truncated: bool,
+}
+
+/// At most 64 entries, with 512-byte messages and 256-byte sources. `omitted`
+/// counts additional diagnostics, saturating rather than growing storage.
+/// These are parse errors and selected known renderer gaps, not an exhaustive
+/// CSS support/conformance report. Collection never changes rendering policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StyleDiagnostics {
+    pub entries: Vec<StyleDiagnostic>,
+    pub omitted: usize,
+}
+
+impl StyleDiagnostics {
+    pub const MAX_ENTRIES: usize = 64;
+    pub const MAX_MESSAGE_BYTES: usize = 512;
+    pub const MAX_SOURCE_BYTES: usize = 256;
+
+    pub(crate) fn record(
+        &mut self,
+        kind: &'static str,
+        message: fmt::Arguments<'_>,
+        source: fmt::Arguments<'_>,
+        node: Option<usize>,
+        location: Option<cssparser::SourceLocation>,
+    ) {
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.omitted = self.omitted.saturating_add(1);
+            if matches!(kind, "style-fallback" | "layout-fallback") {
+                // The reason a whole rendering path failed must not disappear
+                // behind a full buffer of earlier unsupported-property notices.
+                self.entries.pop();
+            } else {
+                return;
+            }
+        }
+        let (message, message_cut) = bounded_diagnostic_text(message, Self::MAX_MESSAGE_BYTES);
+        let (source, source_cut) = bounded_diagnostic_text(source, Self::MAX_SOURCE_BYTES);
+        self.entries.push(StyleDiagnostic {
+            kind,
+            message,
+            source,
+            node,
+            line: location.map(|p| p.line.saturating_add(1)),
+            column: location.map(|p| p.column),
+            truncated: message_cut || source_cut,
+        });
+    }
+}
+
+// Format directly into capped storage: a malformed declaration can contain a
+// very large token, so formatting first and truncating later is insufficient.
+fn bounded_diagnostic_text(args: fmt::Arguments<'_>, max: usize) -> (String, bool) {
+    const MARKER: &str = "[truncated]";
+    struct Text {
+        value: String,
+        limit: usize,
+        cut: bool,
+    }
+    impl Write for Text {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            let available = self.limit.saturating_sub(self.value.len());
+            let mut end = text.len().min(available);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.value.push_str(&text[..end]);
+            if end < text.len() {
+                self.cut = true;
+                Err(fmt::Error)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let mut text = Text {
+        value: String::with_capacity(max),
+        limit: max.saturating_sub(MARKER.len()),
+        cut: false,
+    };
+    let _ = text.write_fmt(args);
+    if text.cut {
+        text.value.push_str(MARKER);
+    }
+    (text.value, text.cut)
+}
+
+struct CssReporter<'a, 'b> {
+    diagnostics: &'a RefCell<&'b mut StyleDiagnostics>,
+    label: &'a str,
+    node: Option<usize>,
+}
+
+impl style::error_reporting::ParseErrorReporter for CssReporter<'_, '_> {
+    fn report_error(
+        &self,
+        url: &UrlExtraData,
+        location: cssparser::SourceLocation,
+        error: style::error_reporting::ContextualParseError,
+    ) {
+        self.diagnostics.borrow_mut().record(
+            "css-parse",
+            format_args!("{error}"),
+            format_args!("{}: {}", self.label, url.as_str()),
+            self.node,
+            Some(location),
+        );
+    }
+}
 
 /// A CSS length whose containing-block percentage is resolved during layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -776,6 +902,7 @@ fn parsed_declarations(
     css: &str,
     url: &UrlExtraData,
     lock: &SharedRwLock,
+    reporter: Option<&dyn style::error_reporting::ParseErrorReporter>,
 ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
     if css.is_empty() {
         return None;
@@ -784,7 +911,7 @@ fn parsed_declarations(
         style::properties::parse_style_attribute(
             css,
             url,
-            None,
+            reporter,
             QuirksMode::NoQuirks,
             CssRuleType::Style,
         ),
@@ -880,6 +1007,18 @@ pub fn compute_styles(
     sheets: &[StylesheetSource],
     viewport: (f32, f32),
 ) -> Result<Vec<ComputedStyle>, String> {
+    compute_styles_with_diagnostics(document, sheets, viewport, &mut StyleDiagnostics::default())
+}
+
+/// Compute the same style snapshot, retaining bounded parser and unsupported-
+/// renderer diagnostics. Errors leave any already-collected entries available.
+pub fn compute_styles_with_diagnostics(
+    document: &Document,
+    sheets: &[StylesheetSource],
+    viewport: (f32, f32),
+    diagnostics: &mut StyleDiagnostics,
+) -> Result<Vec<ComputedStyle>, String> {
+    let diagnostics = RefCell::new(diagnostics);
     if document.nodes.is_empty() || document.nodes.len() > 50_000 {
         return Err("style DOM node bound exceeded".into());
     }
@@ -941,8 +1080,17 @@ pub fn compute_styles(
                 .iter()
                 .map(|(name, _)| name.as_str().into())
                 .collect(),
-            inline: parsed_declarations(node.attr("style").unwrap_or(""), &url_data, &lock),
-            hints: parsed_declarations(&presentation_hints(document, id), &url_data, &lock),
+            inline: parsed_declarations(
+                node.attr("style").unwrap_or(""),
+                &url_data,
+                &lock,
+                Some(&CssReporter {
+                    diagnostics: &diagnostics,
+                    label: "style attribute",
+                    node: Some(id),
+                }),
+            ),
+            hints: parsed_declarations(&presentation_hints(document, id), &url_data, &lock, None),
             data: ElementDataWrapper::default(),
         })
         .collect();
@@ -970,45 +1118,68 @@ pub fn compute_styles(
         pointer,
     );
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
-    let sheet = |css: &str, base: UrlExtraData, origin: Origin, media_text: &str| {
-        let mut context = style::parser::ParserContext::new(
-            origin,
-            &base,
-            None,
-            style_traits::ParsingMode::DEFAULT,
-            QuirksMode::NoQuirks,
-            Default::default(),
-            None,
-            None,
-            Default::default(),
-        );
-        let mut input = cssparser::ParserInput::new(media_text);
-        let media = style::media_queries::MediaList::parse(
-            &mut context,
-            &mut cssparser::Parser::new(&mut input),
-        );
-        DocumentStyleSheet(Arc::new(Stylesheet::from_str(
-            css,
-            base,
-            origin,
-            Arc::new(lock.wrap(media)),
-            lock.clone(),
-            None,
-            None,
-            QuirksMode::NoQuirks,
-            AllowImportRules::No,
-        )))
-    };
+    let sheet =
+        |css: &str,
+         base: UrlExtraData,
+         origin: Origin,
+         media_text: &str,
+         reporter: Option<&dyn style::error_reporting::ParseErrorReporter>| {
+            let mut context = style::parser::ParserContext::new(
+                origin,
+                &base,
+                None,
+                style_traits::ParsingMode::DEFAULT,
+                QuirksMode::NoQuirks,
+                Default::default(),
+                reporter,
+                None,
+                Default::default(),
+            );
+            let mut input = cssparser::ParserInput::new(media_text);
+            let media = style::media_queries::MediaList::parse(
+                &mut context,
+                &mut cssparser::Parser::new(&mut input),
+            );
+            DocumentStyleSheet(Arc::new(Stylesheet::from_str(
+                css,
+                base,
+                origin,
+                Arc::new(lock.wrap(media)),
+                lock.clone(),
+                None,
+                reporter,
+                QuirksMode::NoQuirks,
+                AllowImportRules::No,
+            )))
+        };
     stylist.append_stylesheet(
-        sheet(USER_AGENT_CSS, url_data.clone(), Origin::UserAgent, ""),
+        sheet(
+            USER_AGENT_CSS,
+            url_data.clone(),
+            Origin::UserAgent,
+            "",
+            None,
+        ),
         &lock.read(),
     );
-    for source in sheets {
+    for (index, source) in sheets.iter().enumerate() {
         let base = url::Url::parse(&source.base_url)
             .map(UrlExtraData::from)
             .unwrap_or_else(|_| url_data.clone());
+        let label = format!("stylesheet {}", index + 1);
+        let reporter = CssReporter {
+            diagnostics: &diagnostics,
+            label: &label,
+            node: None,
+        };
         stylist.append_stylesheet(
-            sheet(&source.css, base, Origin::Author, &source.media),
+            sheet(
+                &source.css,
+                base,
+                Origin::Author,
+                &source.media,
+                Some(&reporter),
+            ),
             &lock.read(),
         );
     }
@@ -1084,12 +1255,68 @@ pub fn compute_styles(
             // Inactive fallback content is not overrideable by author CSS.
             snapshot.display = Display::None;
         }
+        report_unsupported(
+            &computed,
+            &snapshot,
+            id,
+            &document.base_url,
+            &mut diagnostics.borrow_mut(),
+        );
         admit_snapshot(&mut snapshot_bytes, &output[id], &snapshot)?;
         output[id] = snapshot;
         node.data().data.borrow_mut().styles.primary = Some(computed.clone());
         values[id] = computed;
     }
     Ok(output)
+}
+
+fn report_unsupported(
+    values: &ComputedValues,
+    rendered: &ComputedStyle,
+    node: usize,
+    source: &str,
+    diagnostics: &mut StyleDiagnostics,
+) {
+    use style::values::{computed::Display as D, generics::box_::PositionProperty};
+    use style_traits::ToCss;
+    let box_style = values.get_box();
+    if rendered.display == Display::None {
+        return;
+    }
+    if rendered.display == Display::Block && box_style.display != D::Block {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!(
+                "CSS display: {} is not implemented; using block layout",
+                box_style.display.to_css_string()
+            ),
+            format_args!("{source}"),
+            Some(node),
+            None,
+        );
+    }
+    if box_style.position != PositionProperty::Static {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!(
+                "CSS position: {} is not implemented; using normal flow",
+                box_style.position.to_css_string()
+            ),
+            format_args!("{source}"),
+            Some(node),
+            None,
+        );
+    }
+    use style::values::specified::box_::Overflow;
+    if box_style.overflow_x != Overflow::Visible || box_style.overflow_y != Overflow::Visible {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS overflow-x: {}; overflow-y: {} are not implemented for element clipping/scrolling", box_style.overflow_x.to_css_string(), box_style.overflow_y.to_css_string()),
+            format_args!("{source}"),
+            Some(node),
+            None,
+        );
+    }
 }
 
 fn plain_length(value: &style::values::computed::LengthPercentage) -> Length {

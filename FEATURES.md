@@ -28,7 +28,7 @@ No account/personalization or general web compatibility claim. See docs/DESKTOP_
 
 ## F-024 : Pinned Playwright browser control
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -46,6 +46,11 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Target identity survives switching/detachment; stale/closed targets reject.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
+The pinned, unmodified playwright-core 1.58.2 probe is checked in under
+tools/playwright. The published v0.7.2 baseline fails attachment and does not
+reach locators. See docs/PLAYWRIGHT.md. A passing custom CDP client is not a
+substitute for this acceptance gate.
+
 ## F-023 : Detachable tabs and left/right page groups
 
 Stability: in-progress
@@ -62,11 +67,15 @@ See docs/DESKTOP_NEXT.md for input, restart and automation boundaries.
 
 ### Test criteria
 
-- [ ] Stable ownership, transactional moves, bounds and close/focus repair tests.
-- [ ] Native new/switch/close/reorder/detach/redock/left-right docking preserves live state.
-- [ ] Scaled focus/drag/input, independent workers and shared host preferences remain correct.
-- [ ] Multi-target CDP stays attached to the named page across placement changes.
+- [x] Stable ownership, transactional moves, bounds and close/focus repair tests.
+- [x] Native new/switch/close/reorder/detach/redock/left-right docking preserves live state.
+- [x] Scaled focus/drag/input, independent workers and shared host preferences remain correct.
+- [x] Multi-target CDP stays attached to the named page across placement changes.
 - [ ] Existing native/embedding/resource checks, release and public installation pass.
+
+Packaged model/native evidence is recorded in the 2026-09-17 log:
+tmp/tabs-smoke.TWaUYF, tmp/workspace-cdp-smoke.LO6EE8 and
+tmp/workspace-restart.m3hnUF. Exact-commit CI/release and public repeats remain required.
 
 ## F-022 : Native inspection and compatibility diagnostics
 
@@ -81,13 +90,18 @@ F-004 painted DOM/input, F-005 CSS, F-013 optional chrome, F-017/F-018 appearanc
 Right-click Inspect element and keyboard toggle open a bounded read-only native
 Elements/Diagnostics overlay. Retain real source/error details and explicit
 truncation. This is not Chrome DevTools, a JS debugger/evaluator or a full CSS audit.
+See docs/INSPECTOR.md for controls, diagnostic scope and native acceptance.
 
 ### Test criteria
 
-- [ ] Actual clicked node, ancestor/attribute/text/box inspection and stale selection rejection.
-- [ ] Bounded CSS parse/source errors, unsupported layout and resource/script diagnostics.
-- [ ] Panel input isolation, compact/scaled light/dark native checks and unchanged closed page.
+- [x] Actual clicked node, ancestor/attribute/text/box inspection and stale selection rejection.
+- [x] Bounded CSS parse/source errors, unsupported layout and resource/script diagnostics.
+- [x] Panel input isolation, compact/scaled light/dark native checks and unchanged closed page.
 - [ ] No-chrome/worker/old tests preserved; release and public installer checks pass.
+
+Packaged Inspector/native evidence: 2026-09-17 log, tmp/inspector-smoke.KESU59.
+Chassis 100 tests and independent no-chrome embedding pass. Exact-commit
+CI/release and public repeats remain required.
 
 ## F-021 : Smooth wheel scrolling
 

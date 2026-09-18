@@ -260,7 +260,11 @@ impl Browser {
                 }
             }
             let note = if self.restart_available {
-                "Reopens page. Unsaved edits and"
+                if self.restart_tab_count > 1 {
+                    "Reopens all tab URLs. Layout, edits,"
+                } else {
+                    "Reopens page. Unsaved edits and"
+                }
             } else if compact {
                 "Restart after updating. Escape closes."
             } else {
@@ -280,7 +284,11 @@ impl Browser {
                     &mut self.fonts,
                     x + 16,
                     y + if compact { 153 } else { 214 },
-                    "memory-only cookies will be lost.",
+                    if self.restart_tab_count > 1 {
+                        "cookies and history will be lost."
+                    } else {
+                        "memory-only cookies will be lost."
+                    },
                     13.,
                     palette.muted,
                 );

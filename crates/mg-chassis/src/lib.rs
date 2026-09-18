@@ -4,6 +4,7 @@ pub mod cdp;
 mod cdp_browser;
 #[cfg(feature = "chrome")]
 mod chrome;
+mod devtools;
 pub mod net;
 pub mod resources;
 mod scale;
@@ -52,6 +53,9 @@ enum Action {
     Update,
     Restart,
     CloseMenu,
+    InspectElement,
+    InspectorSection(bool),
+    InspectorScroll(bool),
     Address,
     Back,
     Forward,
@@ -97,6 +101,7 @@ struct PendingEvent {
     input: SessionInput,
 }
 pub struct Browser {
+    devtools: devtools::State,
     menu_open: bool,
     about_open: bool,
     settings_open: bool,
@@ -122,6 +127,7 @@ pub struct Browser {
     update_requested: bool,
     restart_available: bool,
     restart_requested: bool,
+    restart_tab_count: usize,
     chrome: bool,
     session: net::Session,
     fonts: Fonts,
@@ -264,10 +270,24 @@ impl Browser {
         self.dirty = true;
     }
     fn modal_open(&self) -> bool {
-        self.menu_open || self.about_open || self.settings_open || self.bookmarks_open
+        self.menu_open
+            || self.about_open
+            || self.settings_open
+            || self.bookmarks_open
+            || self.devtools.visible()
     }
     fn modal_actions(&self) -> Vec<Action> {
-        if self.bookmarks_open {
+        if self.devtools.context.is_some() {
+            vec![Action::InspectElement, Action::CloseMenu]
+        } else if self.devtools.open {
+            vec![
+                Action::InspectorSection(false),
+                Action::InspectorSection(true),
+                Action::CloseMenu,
+                Action::InspectorScroll(false),
+                Action::InspectorScroll(true),
+            ]
+        } else if self.bookmarks_open {
             let start = self.bookmark_page * self.bookmark_rows();
             let mut actions = Vec::new();
             for i in start..(start + self.bookmark_rows()).min(self.bookmarks.len()) {
@@ -306,6 +326,8 @@ impl Browser {
     }
     fn modal_action(&self, action: &Action) -> bool {
         match action {
+            Action::InspectElement => self.devtools.context.is_some(),
+            Action::InspectorSection(_) | Action::InspectorScroll(_) => self.devtools.open,
             Action::Menu | Action::CloseMenu => true,
             Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
             Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
@@ -379,6 +401,16 @@ impl Browser {
     pub fn take_restart_request(&mut self) -> bool {
         std::mem::take(&mut self.restart_requested)
     }
+    /// Host-supplied scope of a restart; no tab ownership belongs to Chassis.
+    pub fn set_restart_tab_count(&mut self, count: usize) {
+        let count = count.max(1);
+        if self.restart_tab_count != count {
+            self.restart_tab_count = count;
+            if self.about_open {
+                self.dirty = true;
+            }
+        }
+    }
     fn update_button_action(&self) -> Action {
         if self.restart_available {
             Action::Restart
@@ -422,8 +454,18 @@ impl Browser {
         self.bookmarks.iter().any(|b| b.url == self.page_url)
     }
     pub fn new(fonts: Fonts, scripts: Arc<dyn scripts::ScriptRuntime>) -> Self {
+        Self::new_with_session(fonts, scripts, net::Session::default())
+    }
+    /// Compose a page with a host-selected HTTP/cookie session. Tabs may share
+    /// a cloned network session, but each page still needs its own script service.
+    pub fn new_with_session(
+        fonts: Fonts,
+        scripts: Arc<dyn scripts::ScriptRuntime>,
+        session: net::Session,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
+            devtools: devtools::State::default(),
             chrome: cfg!(feature = "chrome"),
             menu_open: false,
             about_open: false,
@@ -450,7 +492,8 @@ impl Browser {
             update_requested: false,
             restart_available: false,
             restart_requested: false,
-            session: net::Session::default(),
+            restart_tab_count: 1,
+            session,
             fonts,
             width: 1100,
             height: 820,
@@ -530,6 +573,7 @@ impl Browser {
             return;
         }
         self.generation += 1;
+        self.devtools.new_navigation();
         self.resource_generation
             .store(self.generation, Ordering::Relaxed);
         if let Err(error) = self.child_pool.set_generation(self.generation) {
@@ -691,19 +735,21 @@ impl Browser {
                                     } else if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
-                                    Self::script_summary(&startup.reply)
+                                    self.script_summary(&startup.reply)
                                 }
                                 Err(error) => {
                                     if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
                                     eprintln!("SCRIPT_REJECTED {error:?}");
+                                    self.devtools.record("JavaScript rejected", &error);
                                     format!("JS rejected; original document retained: {error}")
                                 }
                             }
                         }
                         Some(Err(error)) => {
                             eprintln!("SCRIPT_ERROR {error:?}");
+                            self.devtools.record("JavaScript worker", &error);
                             format!("JS worker failed: {error}")
                         }
                         None => "JavaScript disabled".into(),
@@ -748,6 +794,9 @@ impl Browser {
                         self.document.stylesheets.len(),
                         self.document.resource_warnings.len()
                     );
+                    for warning in &self.document.resource_warnings {
+                        self.devtools.record("Resource", warning);
+                    }
                     eprintln!(
                         "LOADED {} HTTP {} title={:?} items={} forms={}",
                         self.address,
@@ -758,6 +807,7 @@ impl Browser {
                     );
                 }
                 Err(error) => {
+                    self.devtools.record("Navigation", &error);
                     load_error = Some(error.clone());
                     self.page_mime = "text/html".into();
                     self.status = format!("Load failed: {error}");
@@ -793,7 +843,10 @@ impl Browser {
         }
         self.poll_page_session();
     }
-    fn script_summary(reply: &SessionReply) -> String {
+    fn script_summary(&mut self, reply: &SessionReply) -> String {
+        for diagnostic in &reply.errors {
+            self.devtools.record("JavaScript", diagnostic);
+        }
         if let Some(report) = &reply.boa
             && let Ok(json) = serde_json::to_string(report)
         {
@@ -905,6 +958,7 @@ impl Browser {
             })
     }
     fn block_session(&mut self, error: &str) {
+        self.devtools.record("JavaScript session", error);
         if let Some(session) = &self.page_session {
             session.cancel();
         }
@@ -1119,7 +1173,7 @@ impl Browser {
             // Later failed transactions are atomic from the parent's point of
             // view. Diagnostics survive, but the previous accepted document,
             // edit versions, focus, and CDP epoch remain unchanged.
-            let _ = Self::script_summary(&reply);
+            let _ = self.script_summary(&reply);
             self.block_session("Realm became fatal or closed; previous page retained");
             return;
         }
@@ -1129,7 +1183,7 @@ impl Browser {
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
         }
-        let _ = Self::script_summary(&reply);
+        let _ = self.script_summary(&reply);
         self.status = format!("Page event completed · {} diagnostics", reply.errors.len());
         eprintln!(
             "PAGE_EVENT_APPLIED sequence={} revision={} click_canceled={:?} submit_canceled={:?}",
@@ -1312,6 +1366,12 @@ impl Browser {
             self.bookmarks_open = false;
         }
         match action {
+            Action::InspectElement => self.open_inspector(),
+            Action::InspectorSection(diagnostics) => {
+                self.devtools.diagnostics = diagnostics;
+                self.devtools.row = 0;
+            }
+            Action::InspectorScroll(next) => self.inspector_scroll(if next { 6 } else { -6 }),
             Action::Bookmarks => {
                 self.bookmarks_open = true;
                 self.menu_open = false;
@@ -1416,6 +1476,7 @@ impl Browser {
                 }
             }
             Action::CloseMenu => {
+                self.devtools.close();
                 self.about_open = false;
                 self.menu_open = false;
                 self.settings_open = false;
@@ -1548,6 +1609,23 @@ impl Browser {
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
         self.stop_scroll();
+        if self.chrome && !alt && (sym == 0xffc9 || (ctrl && shift && matches!(sym, 0x69 | 0x49))) {
+            self.toggle_devtools();
+            return;
+        }
+        if self.devtools.visible() {
+            if self.devtools.open && matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
+                self.inspector_scroll(match sym {
+                    0xff52 => -1,
+                    0xff54 => 1,
+                    0xff55 => -6,
+                    _ => 6,
+                });
+            } else {
+                self.modal_key(sym, shift);
+            }
+            return;
+        }
         if ctrl && !alt {
             let scale_action = match sym {
                 0x2b | 0x3d => Some(Action::ScaleUp),
@@ -1738,6 +1816,7 @@ impl Browser {
             &controls,
             scale,
         );
+        self.devtools.rendering = frame.diagnostics;
         self.content_height = frame.content_height + top;
         let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
         if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
@@ -1753,6 +1832,8 @@ impl Browser {
                 rect
             })
             .collect();
+        self.devtools.painted_epoch = self.dom_epoch;
+        self.devtools.invalidate_selection(self.dom_epoch);
         self.hits = frame
             .hits
             .into_iter()
@@ -1797,6 +1878,7 @@ impl Browser {
         #[cfg(feature = "chrome")]
         if self.chrome {
             self.paint_chrome(&mut canvas);
+            self.paint_devtools(&mut canvas);
         }
         self.dirty = false;
         canvas
@@ -2784,6 +2866,7 @@ pub enum Key {
     PageUp,
     PageDown,
     Reload,
+    DeveloperTools,
 }
 
 /// Existing fixture-journey controls used by the desktop acceptance harness.
@@ -2880,6 +2963,7 @@ impl Browser {
     }
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {
+        self.devtools.close();
         self.stop_scroll();
         self.chrome = enabled && cfg!(feature = "chrome");
         self.restart_requested = false;
@@ -2929,6 +3013,7 @@ impl Browser {
             Key::PageUp => 0xff55,
             Key::PageDown => 0xff56,
             Key::Reload => 0xffc2,
+            Key::DeveloperTools => 0xffc9,
         };
         self.key(sym, ctrl, shift, alt);
     }

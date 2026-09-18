@@ -20,7 +20,7 @@
     },
     {
       "domain": "Target",
-      "description": "One page target. Browser connections can attach using flattened sessions; no target creation, workers, or browser contexts.",
+      "description": "Stable targets for existing native tabs, including inactive tabs. Browser connections can attach using flattened sessions; no auto-attach, target mutation commands, workers, or browser contexts.",
       "types": [
         { "id": "TargetID", "type": "string" },
         { "id": "SessionID", "type": "string" },
@@ -40,18 +40,19 @@
       "commands": [
         {
           "name": "getTargets",
-          "description": "Return the sole available page; target filters are unsupported.",
+          "description": "Return all current native page targets; target filters are unsupported. Moving a tab preserves its target ID; closed IDs are never reused.",
           "returns": [ { "name": "targetInfos", "type": "array", "items": { "$ref": "TargetInfo" } } ]
         },
         {
           "name": "getTargetInfo",
+          "description": "Return the specified target or the direct/attached page. An unattached browser connection with zero or multiple pages must specify targetId.",
           "experimental": true,
           "parameters": [ { "name": "targetId", "$ref": "TargetID", "optional": true } ],
           "returns": [ { "name": "targetInfo", "$ref": "TargetInfo" } ]
         },
         {
           "name": "attachToTarget",
-          "description": "Attach to the existing page. This subset requires flatten=true; nested message sessions are unsupported.",
+          "description": "Attach to an existing page target. This subset requires flatten=true; nested message sessions are unsupported.",
           "parameters": [
             { "name": "targetId", "$ref": "TargetID" },
             { "name": "flatten", "type": "boolean" }
@@ -75,6 +76,7 @@
         },
         {
           "name": "detachedFromTarget",
+          "description": "Emitted on explicit session detach or when the native tab closes. Pending navigation replies fail and detached sessions never retarget another tab.",
           "experimental": true,
           "parameters": [ { "name": "sessionId", "$ref": "SessionID" } ]
         }
@@ -137,7 +139,7 @@
         { "name": "disable", "description": "Disable Page notifications for this connection or session." },
         {
           "name": "navigate",
-          "description": "Navigate to an absolute HTTP(S) URL of at most 16 KiB. The response waits for navigation completion; transport failure or supersession produces errorText. frameId, when present, must be frame-1.",
+          "description": "Navigate to an absolute HTTP(S) URL of at most 16 KiB. The response waits for navigation completion; transport failure or supersession produces errorText. frameId, when present, must identify this target's top-level frame-N (frame-1 for page-1).",
           "parameters": [
             { "name": "url", "type": "string" },
             { "name": "frameId", "$ref": "FrameId", "optional": true }

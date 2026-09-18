@@ -14,6 +14,7 @@ const MAX_CSS: usize = 256 * 1024;
 const MAX_IMAGE: usize = 512 * 1024;
 const MAX_TOTAL: usize = 2 * 1024 * 1024;
 const MAX_WARNINGS: usize = 32;
+const MAX_WARNING_BYTES: usize = 1024;
 const RESOURCE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Populate source-ordered author CSS and small image resources while keeping
@@ -37,6 +38,7 @@ pub fn load(
         requests: 0,
         bytes: 0,
         warnings: Vec::new(),
+        omitted_warnings: 0,
     };
     let mut image_urls = Vec::new();
     let mut css_cache = HashMap::<String, usize>::new();
@@ -50,8 +52,19 @@ pub fn load(
         }
         let sheet = match request {
             StylesheetRequest::Inline(sheet) => {
-                if sheet.css.len() > MAX_CSS || !loader.admit(sheet.css.len()) {
-                    loader.warn("Inline stylesheet exceeds resource size budget".into());
+                if sheet.css.len() > MAX_CSS {
+                    loader.warn(format!(
+                        "Inline stylesheet exceeds resource size budget: sheet {} at {} has {} bytes, limit {MAX_CSS}",
+                        index + 1, label(&sheet.base_url), sheet.css.len()
+                    ));
+                    continue;
+                }
+                if !loader.admit(sheet.css.len()) {
+                    loader.warn(format!(
+                        "Inline stylesheet {} at {} skipped after total budget rejection",
+                        index + 1,
+                        label(&sheet.base_url)
+                    ));
                     continue;
                 }
                 sheet
@@ -75,15 +88,17 @@ pub fn load(
                     };
                     if mime(&response.content_type) != "text/css" {
                         loader.warn(format!(
-                            "Stylesheet has unsupported content type: {}",
-                            response.content_type
+                            "Stylesheet has unsupported content type: {} at {}",
+                            label(&response.content_type),
+                            label(&url)
                         ));
                         continue;
                     }
                     let css = match String::from_utf8(response.body) {
                         Ok(css) => css,
                         Err(_) => {
-                            loader.warn("Stylesheet is not UTF-8; skipped".into());
+                            loader
+                                .warn(format!("Stylesheet is not UTF-8; skipped: {}", label(&url)));
                             continue;
                         }
                     };
@@ -100,7 +115,10 @@ pub fn load(
         };
         let (urls, imports) = css_image_urls(&sheet.css);
         if imports {
-            loader.warn("CSS @import is not loaded in this preview".into());
+            loader.warn(format!(
+                "CSS @import is not loaded in this preview: {}",
+                label(&sheet.base_url)
+            ));
         }
         for value in urls {
             if image_urls.len() < MAX_REQUESTS * 2 {
@@ -134,7 +152,11 @@ pub fn load(
             break;
         }
         let Ok(mut url) = Url::parse(&base).and_then(|base| base.join(reference.trim())) else {
-            loader.warn("Invalid image resource URL; skipped".into());
+            loader.warn(format!(
+                "Invalid image resource URL; skipped: {} at {}",
+                label(&reference),
+                label(&base)
+            ));
             continue;
         };
         url.set_fragment(None);
@@ -150,8 +172,9 @@ pub fn load(
             "image/png" | "image/gif" | "image/svg+xml"
         ) {
             loader.warn(format!(
-                "Unsupported page image type: {}",
-                response.content_type
+                "Unsupported page image type: {} at {}",
+                label(&response.content_type),
+                label(&url)
             ));
             continue;
         }
@@ -163,7 +186,34 @@ pub fn load(
             },
         );
     }
+    if loader.omitted_warnings > 0 {
+        // Retain the existing count bound while making overflow visible.
+        if loader.warnings.len() == MAX_WARNINGS {
+            loader.warnings.pop();
+            loader.omitted_warnings = loader.omitted_warnings.saturating_add(1);
+        }
+        loader.warnings.push(format!(
+            "{} additional resource diagnostics omitted (limit {MAX_WARNINGS})",
+            loader.omitted_warnings
+        ));
+    }
     document.resource_warnings = loader.warnings;
+}
+
+fn bounded_text(value: &str, limit: usize) -> String {
+    const MARKER: &str = "[truncated]";
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit.saturating_sub(MARKER.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{MARKER}", &value[..end])
+}
+
+fn label(value: &str) -> String {
+    bounded_text(value, 384)
 }
 
 fn mime(value: &str) -> String {
@@ -183,12 +233,19 @@ struct Loader<'a, F: Fn() -> bool> {
     requests: usize,
     bytes: usize,
     warnings: Vec<String>,
+    omitted_warnings: usize,
 }
 
 impl<F: Fn() -> bool> Loader<'_, F> {
     fn warn(&mut self, text: String) {
-        if self.warnings.len() < MAX_WARNINGS && !self.warnings.contains(&text) {
+        let text = bounded_text(&text, MAX_WARNING_BYTES);
+        if self.warnings.contains(&text) {
+            return;
+        }
+        if self.warnings.len() < MAX_WARNINGS {
             self.warnings.push(text);
+        } else {
+            self.omitted_warnings = self.omitted_warnings.saturating_add(1);
         }
     }
 
@@ -242,13 +299,19 @@ impl<F: Fn() -> bool> Loader<'_, F> {
             Ok(response) => {
                 self.admit(response.body.len());
                 self.warn(format!(
-                    "Resource returned HTTP {}; skipped",
-                    response.status
+                    "Resource returned HTTP {}; skipped: {}",
+                    response.status,
+                    label(url)
                 ));
                 None
             }
             Err(error) => {
-                self.warn(format!("Resource unavailable: {error}"));
+                self.warn(format!(
+                    "Resource unavailable: {} at {} (byte limit {})",
+                    label(&error),
+                    label(url),
+                    limit.min(MAX_TOTAL - self.bytes)
+                ));
                 None
             }
         }
@@ -603,6 +666,7 @@ mod tests {
             requests: 0,
             bytes: 0,
             warnings: Vec::new(),
+            omitted_warnings: 0,
         };
         assert!(loader.fetch("http://127.0.0.1:1/never", MAX_CSS).is_none());
         assert_eq!(loader.requests, 0);
@@ -614,5 +678,47 @@ mod tests {
         loader.requests = MAX_REQUESTS;
         assert!(loader.fetch("http://127.0.0.1:1/never", MAX_CSS).is_none());
         assert_eq!(loader.requests, MAX_REQUESTS);
+    }
+
+    #[test]
+    fn resource_diagnostics_keep_limits_sources_and_omission_visible() {
+        let mut doc = mg_sparkle::document::parse(
+            &format!("<style>{}</style>", " ".repeat(MAX_CSS + 1)),
+            "https://example.test/page",
+        );
+        load(
+            &Session::new(),
+            &mut doc,
+            "https://example.test/page",
+            || false,
+        );
+        assert!(doc.stylesheets.is_empty());
+        let warning = &doc.resource_warnings[0];
+        assert!(warning.contains("sheet 1"));
+        assert!(warning.contains("https://example.test/page"));
+        assert!(warning.contains("262145 bytes, limit 262144"));
+
+        let session = Session::new();
+        let mut loader = Loader {
+            session: &session,
+            page_url: "https://example.test/",
+            cancelled: &|| false,
+            deadline: Instant::now(),
+            requests: 0,
+            bytes: 0,
+            warnings: Vec::new(),
+            omitted_warnings: 0,
+        };
+        let large = "é".repeat(MAX_WARNING_BYTES);
+        loader.warn(large.clone());
+        loader.warn(large);
+        assert_eq!(loader.warnings.len(), 1);
+        assert!(loader.warnings[0].ends_with("[truncated]"));
+        assert!(loader.warnings[0].len() <= MAX_WARNING_BYTES);
+        for index in 0..40 {
+            loader.warn(format!("Missing resource {index}"));
+        }
+        assert_eq!(loader.warnings.len(), MAX_WARNINGS);
+        assert_eq!(loader.omitted_warnings, 9);
     }
 }

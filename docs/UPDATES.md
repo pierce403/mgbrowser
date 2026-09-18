@@ -39,10 +39,11 @@ and a retryable button. A newer version already installed by another window or
 the public installer is recognized locally when checking, before contacting
 GitHub. No restart button appears for failed checks or an already-current build.
 
-Restart reopens the last loaded HTTP(S) URL with a fresh GET, or example.com if
-no page has loaded. Unsubmitted address edits, form/POST state, memory-only cookies,
+The v0.8.0 workspace restart reopens committed HTTP(S) tab URLs with fresh GETs
+in one window, or example.com for a tab without a committed page. Earlier builds
+reopen only the loaded single-page URL. Unsubmitted address edits, form/POST state, memory-only cookies,
 history, scroll and JavaScript state are not restored. The panel warns before
-the click. Saved bookmarks/theme/size and scripting/automatic-update preferences
+the click; pane and window placement are also not restored. Saved bookmarks/theme/size and scripting/automatic-update preferences
 are retained. Debug ports and automated-journey flags are not replayed.
 Older releases still require a manual restart once to obtain this button.
 

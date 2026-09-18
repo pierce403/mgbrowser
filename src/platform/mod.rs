@@ -70,7 +70,8 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff1b => Key::Escape,
         0xff0d => Key::Enter,
         0xff08 => Key::Backspace,
-        0xff09 => Key::Tab,
+        // X11 commonly supplies ISO_Left_Tab for Shift+Tab, not the Tab keysym.
+        0xff09 | 0xfe20 => Key::Tab,
         0xff51 => Key::Left,
         0xff52 => Key::Up,
         0xff53 => Key::Right,
@@ -78,6 +79,7 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
         0xffc2 => Key::Reload,
+        0xffc9 => Key::DeveloperTools,
         _ => {
             let code = if sym & 0xff000000 == 0x01000000 {
                 sym & 0xffffff
@@ -141,5 +143,11 @@ mod tests {
         assert!(matches!(translate_keysym(0xff52), Some(Key::Up)));
         assert!(matches!(translate_keysym(0xff53), Some(Key::Right)));
         assert!(matches!(translate_keysym(0xff54), Some(Key::Down)));
+        assert!(matches!(translate_keysym(0xff09), Some(Key::Tab)));
+        assert!(matches!(translate_keysym(0xfe20), Some(Key::Tab)));
+        assert!(matches!(
+            translate_keysym(0xffc9),
+            Some(Key::DeveloperTools)
+        ));
     }
 }

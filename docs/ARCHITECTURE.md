@@ -30,6 +30,13 @@ The same navigation and form services remain usable without that UI. Services
 can become internal modules or smaller crates later without adding more public
 component brands now.
 
+The native read-only Inspector is also optional Chassis chrome. Hosts forward
+right-clicks to `context_menu_at` using logical coordinates and F12 to
+`Key::DeveloperTools`. Selection is tied to the painted document epoch. Sparkle
+returns bounded style/layout diagnostics in `Frame`; Chassis combines those with
+resource and script failures. Inspection does not enable scripting or a debug
+port and is unavailable when chrome is disabled. See [Inspector](INSPECTOR.md).
+
 Chassis's chrome accepts `ThemePreference` and a host-supplied `ColorScheme`.
 Theme selection does not recolor Sparkle's page pixels. The desktop host alone
 owns XDG preference persistence, Rust D-Bus portal discovery and the X11 window
@@ -65,6 +72,15 @@ unchanged worker, page-image and encoded-screenshot budgets.
   host executable, so that executable must dispatch `--script-worker` and
   `--script-session` before initializing fonts, networking or a window.
 
+The desktop composition lives in `src/desktop.rs`; `src/main.rs` dispatches the
+command line and worker modes. `src/workspace.rs` is a display-independent owner
+of live Chassis instances with stable tab/window/pane identities. Moving a tab
+changes placement, not its Browser or worker. Native windows each show at most
+two equal-width groups; preferences, bookmarks, network session and updater are
+host-shared. The 16-tab/four-window cap is not an aggregate page-memory quota.
+`BrowserCdp::tick_pages` receives every live tab, including hidden pages, under
+stable target IDs. Neither switching nor detaching changes a target's identity.
+
 Chassis fences navigation generations and validates returned DOM/default actions.
 The platform service owns child processes, isolation, cumulative accounting,
 cancellation and bounded reaping. `DisabledScripts` returns an explicit error
@@ -77,7 +93,8 @@ Original protocol/allocation assertions remain in the explicit legacy test lane.
 The host owns render dimensions and the resulting pixel allocation. Chassis
 emits update/restart requests only after explicit UI actions; the host authorizes
 restart readiness and owns executable replacement/relaunch. Engines never launch
-an updated application. Restart reopens the committed URL with fresh session state.
+an updated application. Restart reopens committed tab URLs in one window with
+fresh session state; it does not preserve pane placement, forms or history.
 
 Chassis clamps its viewport to the existing desktop bounds. Direct Sparkle callers must
 choose dimensions appropriate to their own resource limits. A page surface is

@@ -24,7 +24,7 @@ locations and unchanged page pixels when closed. Preserve no-chrome embedding.
 
 ## Live tab workspace: T-020 / F-023
 
-Proposed interaction: ordinary tab groups that detach into native windows and
+The v0.8.0 candidate implements ordinary tab groups that detach into native windows and
 dock into left/right groups within a window. At most two visible groups per window,
 16 tabs and four windows initially. The user was asked whether side-by-side pages
 or desktop-managed window tiling was intended; this is the provisional former
@@ -33,25 +33,30 @@ interpretation, not vertical tab strips or arbitrary nested tiling.
 One registry owns each Browser exactly once. Moving a tab moves that same live
 object, retaining its form edits, history, scroll, document and isolated realm.
 Each tab has its own LinuxScripts service. The host owns shared preferences,
-bookmarks and one updater. Window creation failure and canceled drags cannot lose
-a tab. Closing a loading/scripted tab cancels/reaps its work; other tabs survive.
+bookmarks and one updater. Existing navigation and script limits remain per tab/
+worker: the workspace's 16-tab cap is not a whole-browser memory or CPU quota.
+Window creation failure and canceled drags cannot lose
+a tab. Closing a tab invalidates stale loading results and cancels/reaps its
+script child; existing HTTP threads finish under bounded transport timeouts,
+not immediate socket cancellation. Other tabs survive.
 Restart reopens committed URLs with fresh sessions in one window, explicitly
 discarding pane placement, unsaved forms, cookies and history.
 
 Acceptance: new/switch/close/reorder, Ctrl+T/W/Tab, detach/redock and left/right
 drop previews through native input; state preservation; correct focused-pane
 input at 100/125/200%; transactional failures and caps; final-window exit only.
-CDP must stay bound to stable tab identities, never silently follow the active tab.
-An initial host integration may explicitly refuse additional tabs with remote
-debugging enabled until multi-target routing is implemented. That is not full
-completion of the tab/automation integration gate.
+CDP stays bound to stable tab identities, never silently following the active tab.
+The candidate exposes all live tabs through discovery and explicit attachment;
+moving a tab retains its target and closing it invalidates that target's routes.
+Automatic attachment and protocol-driven target creation/closure remain absent.
 
 ## Pinned Playwright acceptance: T-021 / F-024
 
 Use unmodified Playwright APIs and a pinned client, initially playwright-core
 1.58.2. Record protocol traffic against owned local fixtures. The present CDP
-server is not compatible: HTTP attachment also needs the trailing-slash discovery
-path, followed by real auto-attach/target lifecycles, frame lifecycle and Runtime
+server is not compatible. The candidate fixes trailing-slash discovery, but the
+pinned probe still fails at `Target.setAutoAttach` over both HTTP and WebSocket.
+It needs real auto-attach/target lifecycles, frame lifecycle and Runtime
 contexts/handles. Locator evaluation needs the DOM APIs used by the injected
 script, not merely successful initialization replies.
 
@@ -65,7 +70,8 @@ Playwright assertions to treat an unsupported method as success.
 
 ## Google News desktop reading: T-022 / F-025
 
-First target: signed-out, scripts-disabled desktop reading at 1280x800 and
+User confirmed this first milestone on 2026-09-17: a faithful signed-out reading
+page first, interactions later. Target scripts-disabled desktop reading at 1280x800 and
 1024x768. Use identical actual HTML/assets in Mg and a reference browser, then
 fresh live navigation. Require recognizable header/briefing/story groups,
 readable metadata and thumbnails, no overlapping critical content, aligned

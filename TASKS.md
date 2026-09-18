@@ -1,8 +1,9 @@
 # Work queue
 
 2026-09-17 active: requested desktop/automation/Google News work, separately gated
-in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). Finish the already-green v0.7.2
-publication/public acceptance first, then:
+in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). v0.7.2 publication and public
+acceptance are complete. The v0.8.0 candidate now targets native inspection and
+the first bounded tab workspace, with the remaining gates kept separate:
 
 1. **T-019 / F-022:** right-click native Inspector and bounded useful diagnostics.
 2. **T-020 / F-023:** live tabs, detach/redock and left/right groups with stable identities.

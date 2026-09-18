@@ -2,7 +2,22 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.7.2 Experimental Preview
+## v0.8.0 Experimental Preview
+
+Right-click a page and choose **Inspect element**, or press **F12** /
+**Ctrl+Shift+I**. The native read-only inspector shows DOM attributes, text and
+painted bounds, plus bounded CSS, resource and script diagnostics. This is not
+the Chrome DevTools frontend or a JavaScript debugger. [Inspector guide](docs/INSPECTOR.md).
+
+**Ctrl+T** opens a blank tab; **Ctrl+W** closes the current tab, and
+**Ctrl+Tab / Ctrl+Shift+Tab** switches tabs. Drag tabs to reorder, detach into
+native windows or form left/right page groups. Moves preserve the live page,
+including form edits and its script realm. Initial limits: 16 tabs, four windows
+and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
+
+**Playwright compatibility and faithful Google News rendering are unfinished.**
+Stable CDP targets and a failing pinned-client acceptance test are foundations,
+not a claim that ordinary Playwright locators work.
 
 Wheel scrolling now eases over 150 ms. Repeated input accumulates and reversing
 responds immediately; clicks, keys and navigation stop motion at the visible
@@ -11,9 +26,10 @@ touchpad support or a guarantee of 60 fps on the software renderer.
 
 About shows download progress with received bytes and percentage when the server
 provides a total size. After an update installs, **Menu > About > Restart now** immediately launches the
-updated binary and reopens the loaded URL. Saved settings/bookmarks and the
+updated binary and reopens committed tab URLs in one window. Saved settings/bookmarks and the
 scripting preference carry over; unsaved edits, cookies and browsing history do
-not. Restart is always your choice, never forced. [Update details](docs/UPDATES.md).
+not; pane/window placement is not restored. Restart is always your choice,
+never forced. [Update details](docs/UPDATES.md).
 
 The single-row navigation bar groups **Back, Forward, Refresh and Bookmark** to
 the left of the URL, with a **hamburger menu** on the right. The redundant browser/
@@ -40,10 +56,11 @@ own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
 backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
 
 The size-optimized, symbol-stripped release stays within older builds' unchanged
-8 MiB updater limit. This release changes browser controls, not web compatibility.
+8 MiB updater limit. A percentage-height correction also fixes oversized elements;
+it does not establish general CSS or Google News compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded in the [dated work log](memory/logs/2026-09-16.md).
+installation receipts are recorded in the [dated work log](memory/logs/2026-09-17.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -93,6 +110,8 @@ See [updater behavior and trust](docs/UPDATES.md).
   Images support PNG, first-frame GIF and a small static SVG shape/path subset.
   Unsupported or blocked images remain placeholders. Dynamic resources are not fetched.
 - Linux X11/XWayland is the supported GUI target. Cookies are memory-only.
+- Navigation and script budgets apply per tab/worker, not as a whole-workspace
+  memory or CPU quota. Ordinary Playwright and Google News remain unsupported.
 - The restricted JavaScript worker is **not a sandbox for the browser as a whole**.
 - Do not use this release for banking, sensitive authenticated browsing, or
   arbitrary hostile websites.
@@ -103,7 +122,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.7.2.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.8.0.md) for manual install and uninstall.
 
 ## Components
 

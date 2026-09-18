@@ -25,6 +25,23 @@ See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
 Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
 
+The v0.8.0 candidate adds right-click **Inspect element**, **F12** and
+**Ctrl+Shift+I**. The native read-only Elements/Diagnostics panel shows painted
+DOM identity and bounded CSS/resource/script errors. Escape closes it; wheel
+and arrow/Page Up/Page Down keys scroll the panel without affecting the page.
+This is not the Chrome DevTools frontend or a JavaScript debugger.
+See [Inspector controls and acceptance](INSPECTOR.md).
+
+Ctrl+T opens a blank tab, Ctrl+W closes the active tab and Ctrl+Tab /
+Ctrl+Shift+Tab selects the next/previous tab in its group. The tab strip appears
+once tabs are used. Drag within a strip to reorder, outside a window to detach,
+or to a window's left/right page edge to form side-by-side groups. Dropping onto
+another strip docks into that group; Escape cancels a drag. The same live page
+and script realm move without a reload. Limits: 16 tabs, four native windows,
+two equal-width groups per window, no divider resizing or saved workspace layout.
+Closing a window closes its tabs; the last window closes the application.
+See [workspace scope and acceptance](DESKTOP_NEXT.md).
+
 Since v0.7.2, wheel steps ease over 150 ms and repeated steps accumulate.
 Reversing responds from the visible position. Clicking, keys (including Escape),
 menus, navigation, resize and size changes stop animation. Keyboard and CDP
@@ -42,8 +59,10 @@ Menu > Check for updates or `mgbrowser --update` checks and installs manually.
 Installed builds check on startup and daily; restart to run the installed update.
 About shows received bytes and a progress bar while downloading: a percentage
 when the server supplies a size, otherwise an activity segment without a guessed
-percentage. Verification/installation is a separate stage. Once installed, About offers **Restart now**. It reopens the loaded URL using
-the new executable; unsaved edits, cookies and history are lost. Restart is optional.
+percentage. Verification/installation is a separate stage. Once installed, About
+offers **Restart now**. It reopens committed tab URLs in one fresh window using
+the new executable; unsaved edits, cookies, history and pane placement are lost.
+Blank tabs reopen example.com. Restart is optional.
 `--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
 See [update behavior and trust](UPDATES.md), including persistent opt-out.
 

@@ -55,7 +55,11 @@ the real desktop DPI to test this. Keep logical layout/input distinct from
 physical glyph rasterization, uploads and screenshots; check compact dialogs
 and stale presses after reflow. Preserve 1x and resource assertions. Native
 acceptance must wait for completed paints, not just the earlier LOADED log or
-window geometry. Inspect actual screenshots; repeat with the public-installed
+window geometry. Repeated identical old frames are not proof that a requested
+new paint finished. After opening a panel, changing its section or resizing,
+wait for the requested visible controls/content as well as frame stability;
+a background-color pixel alone can accept an empty resized surface.
+Inspect actual screenshots; repeat with the public-installed
 binary after release. Screen-global X11 DPI is not per-monitor Wayland scaling.
 
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
@@ -76,6 +80,10 @@ window after a missing-path spawn failure, then launch the replacement path,
 reopen the committed URL with preserved preferences and exit the old process.
 This fixture is not proof of a real future version; public update/install and
 checksum checks remain separate. Inspect the ready/retry dialog screenshots.
+For tab-workspace changes, also run tools/workspace-restart-smoke.sh against
+packaged/public bytes: native Check/Restart must relaunch all committed URLs
+with literal arguments in one fresh window and exit the old process. This uses
+the same synthetic local installed-newer approach, not a release-server proof.
 For download progress, preserve transport tests for exact body bytes, unknown
 lengths, chunk framing, redirects, limits and truncation. Inspect the About bar
 at compact and scaled sizes in both themes; a received-byte count is not an
@@ -106,6 +114,21 @@ not permission for direct platform APIs or native browser backends in Sparkle.
 The driver exercises application input handlers in a real window; state that distinction when independent desktop input was not performed. A successful local fixture proves that path only. For an authorized live-site journey, use the site's actual form fields/links and ordinary cookies/redirects; record the exact failing stage and response. Never count a placeholder, interstitial link, fabricated result, or another service as completing the requested site journey.
 
 For CDP changes, read docs/CDP.md and docs/cdp-protocol.json. Run the external Rust examples/cdp_journey.rs client against an owned native browser with --remote-debugging-port=0 and the loopback fixture server; docs/CDP.md gives commands and CI reproduces them under Xvfb. This proves public WebSocket behavior independently of App hooks. Verify schema/discovery, session and stale-node errors, actual form query/result destination, viewport PNG dimensions and rendered output. Keep local endpoint ports/process identities explicit and stop only test processes you started. Use the implemented protocol subset; an unsupported Runtime command is not authorization to substitute another browser engine.
+
+For native inspection, build inspector_smoke and run tools/inspector-smoke.sh
+against the packaged and public-installed binary. Check actual right-click
+selection, input isolation, fresh navigation and real CSS/resource/script
+diagnostics in compact/scaled light/dark views. For tabs, build tabs_smoke and
+run tools/tabs-smoke.sh with its owned display/profile/server. Preserve actual
+form edits, history and script realms across detach/redock; verify focused-pane
+input and last-window-only exit. Model tests alone do not prove native routing.
+Multi-target CDP must retain the named page across moves and reject closed
+targets; it must never follow whichever tab is active. Build workspace_cdp_smoke
+and run tools/workspace-cdp-smoke.sh on the supplied packaged/public binary to
+verify native creation/detachment/closure through actual protocol routes.
+Run the unmodified pinned
+client in tools/playwright before claiming Playwright compatibility: a passing
+Rust CDP journey or successful attachment is insufficient.
 
 For script changes, read docs/JAVASCRIPT.md. Keep live execution in the restricted worker; run the language/DOM tests and actual worker isolation selftest before an authorized live page. Use --enable-scripts with /script-redirect and /script-home on the local fixture server: the form must be created by real script execution, then usable through normal input and the external CDP client. Exercise /script-loop, verify a bounded error with readable content, and navigate onward in the same browser over CDP. CI reproduces these local checks. Source/projection rejection must retain the original no-script fallback and discard proposed navigation. Passing authored fixtures or syscall-denial probes is not full ECMAScript conformance or whole-browser sandbox assurance.
 
