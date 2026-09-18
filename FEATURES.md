@@ -8,7 +8,7 @@ GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gat
 
 ## F-025 : Google News desktop reading
 
-Stability: planned
+Stability: in-progress
 
 ### Dependencies
 
@@ -18,11 +18,17 @@ F-005 layout/resources, F-022 diagnostics and reviewed bounded resource profiles
 
 Signed-out, scripts-disabled real Google News desktop reading first.
 No account/personalization or general web compatibility claim. See docs/DESKTOP_NEXT.md.
+The v0.9.0 reading increment adds bounded flex/grid, positioning/clipping,
+inline SVG, gradients, fit-content and reviewed JPEG/foreign-image loading.
+Saved HN screenshots and geometry remain byte-identical. Same-input News
+comparison has readable story columns/thumbnails, but font/icon/corner gaps,
+script-dependent placeholders and destination fallbacks prevent a full fidelity
+claim. Keep this feature in-progress until its broader criteria are satisfied.
 
 ### Test criteria
 
 - [ ] Same-input desktop comparison: recognizable header, briefing, story groups and thumbnails.
-- [ ] Fresh live page, aligned scroll/click, actual served link navigation and Back.
+- [x] Fresh packaged live page, aligned scroll/click, actual served link navigation and Back; topic destination fallback remains explicit.
 - [ ] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
 - [ ] Versioned release and public installer/native verification.
 
@@ -580,7 +586,7 @@ F-003.
 
 The documented static MVP HTML/CSS subset supports cascade/inheritance, block and inline flow, wrapped UTF-8 text, box styling and PNG images.
 
-Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled: PNG, first-frame GIF and a restricted static SVG shape/path subset. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
+Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled: PNG, JPEG, first-frame GIF and a restricted static SVG shape/path subset. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
 
 ### Test Criteria
 
@@ -589,10 +595,13 @@ Font parsing, shaping and rasterization use Rust implementations without native 
 - [ ] Unsupported/corrupt image fixtures display a placeholder and preserve surrounding document layout and alt text.
 - [ ] Resolved font/image features contain no native implementations or implicit codec fallback.
 
-Current increment: rustybuzz/fontdue regular/bold faces, standalone Rust Stylo
-computed CSS, bounded generic table/inline layout and same-origin PNG/GIF/SVG
-resources under F-014. Focused tests do not satisfy the full planned fixture
-corpus or general CSS compatibility. F-005 remains in progress.
+Current increment: rustybuzz/fontdue regular/bold faces, standalone Rust
+Stylo computed CSS and bounded generic table/inline layout under F-014.
+v0.9.0 adds the reviewed
+Taffy flex/grid adapter, positioned/clipped painting, inline SVG, two-stop linear
+backgrounds and JPEG/credential-free foreign HTTPS images for F-025. Focused
+tests do not satisfy the full planned fixture corpus or general CSS compatibility.
+F-005 remains in progress; F-025 records the separate reading/release gates.
 
 ## F-006 : Reproducible autoresearch evaluator
 
@@ -866,7 +875,7 @@ F-003 and F-004 initially; broader browser capabilities for eventual full protoc
 
 ### Properties
 
-Opt-in, loopback-only CDP controls the actual native browser. The first subset covers discovery, one page/target, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
+Opt-in, loopback-only CDP controls the actual native browser. The subset covers discovery, stable per-tab targets, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Native tab moves retain target identity; closed targets reject requests. Protocol-driven creation/closing and auto-attachment remain unsupported. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
 
 ### Test Criteria
 

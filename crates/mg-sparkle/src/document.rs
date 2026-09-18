@@ -807,6 +807,20 @@ fn build_tree(source: &str) -> Vec<Node> {
             break;
         }
         let parent = *stack.last().unwrap();
+        // SVG uses foreign-content self-closing syntax. Ordinary HTML keeps
+        // ignoring '/>', including inside the SVG foreignObject integration
+        // point. This narrow namespace boundary is not a full HTML5 tree builder.
+        let svg_context = tag == "svg"
+            || stack
+                .iter()
+                .rev()
+                .find_map(|id| match nodes[*id].tag.as_str() {
+                    "svg" => Some(true),
+                    "foreignobject" => Some(false),
+                    _ => None,
+                })
+                .unwrap_or(false);
+        let svg_self_closing = svg_context && inside.trim_end().ends_with('/');
         let id = nodes.len();
         let attributes = attributes(&inside[name_end..]);
         nodes.push(Node {
@@ -830,7 +844,7 @@ fn build_tree(source: &str) -> Vec<Node> {
             } else {
                 source.len()
             };
-        } else if !is_void(&tag) {
+        } else if !is_void(&tag) && !svg_self_closing {
             // HTML self-closing syntax does not close ordinary HTML elements.
             stack.push(id);
         }
@@ -1354,6 +1368,7 @@ fn decode_entities(source: &str) -> String {
                 "quot" | "QUOT" => Some('"'),
                 "apos" => Some('\''),
                 "nbsp" => Some('\u{a0}'),
+                "deg" => Some('°'),
                 "copy" => Some('©'),
                 "reg" => Some('®'),
                 "trade" => Some('™'),
@@ -1611,6 +1626,10 @@ mod tests {
     #[test]
     fn common_entities_and_invalid_numeric_references() {
         assert_eq!(
+            decode_entities("83&deg; / 53&deg; &unknown;"),
+            "83° / 53° &unknown;"
+        );
+        assert_eq!(
             decode_entities("a &amp; &lt; &#x1F980; &#169; &#0; &#xD800; &#128; &unknown;"),
             "a & < 🦀 © � � € &unknown;"
         );
@@ -1618,6 +1637,37 @@ mod tests {
             decode_entities("literal & and &amp; &#xnot;"),
             "literal & and & &#xnot;"
         );
+    }
+
+    #[test]
+    fn svg_shape_self_closing_preserves_siblings_without_changing_html_slashes() {
+        let doc = parse(
+            "<svg viewBox='0 0 24 24'><path d='M0 0L4 4'/><circle cx=8 cy=8 r=2 /></svg><div id=html/><span>inside</span></div><p>after</p>",
+            "https://example.test/",
+        );
+        let svg = doc.query_selector(0, "svg").unwrap().unwrap();
+        let tags: Vec<_> = doc.nodes[svg]
+            .children
+            .iter()
+            .map(|&id| doc.nodes[id].tag.as_str())
+            .collect();
+        assert_eq!(tags, ["path", "circle"]);
+        assert!(
+            doc.nodes[svg]
+                .children
+                .iter()
+                .all(|&id| doc.nodes[id].children.is_empty())
+        );
+        let span = doc.query_selector(0, "span").unwrap().unwrap();
+        assert_eq!(doc.nodes[doc.nodes[span].parent].tag, "div");
+        let nested = parse(
+            "<svg><foreignObject><div/><span>HTML</span></div></foreignObject><path/></svg>",
+            "https://example.test/",
+        );
+        let span = nested.query_selector(0, "span").unwrap().unwrap();
+        assert_eq!(nested.nodes[nested.nodes[span].parent].tag, "div");
+        let path = nested.query_selector(0, "path").unwrap().unwrap();
+        assert_eq!(nested.nodes[nested.nodes[path].parent].tag, "svg");
     }
 
     #[test]

@@ -1,138 +1,193 @@
 # Google News: signed-out desktop reading
 
-T-022 / F-025, authorized 2026-09-17. Status: planned, not accepted.
-This records observations and a proposed implementation sequence. Taffy, JPEG
-and expanded resource policies are not adopted by this document or v0.8.0.
+T-022 / F-025, authorized 2026-09-17. Status: **in-progress, not accepted**.
+The implementation below is the v0.9.0 reading increment, absent from v0.8.0.
+Packaged native acceptance passes; exact-commit remote CI, publication and
+public-install gates are being completed. Full visual fidelity remains open.
 
-## Goal and observed baseline
+## Scope and implemented contract
 
-Render the actual signed-out, scripts-disabled page faithfully at 1280x800 and
-1024x768: recognizable header, briefing, story groups, metadata and thumbnails,
-without overlapping critical content. Then verify scrolling, one actual served
-topic/story link and Back. Search, account actions and personalization come later.
-Use ordinary verified HTTPS. Consent/challenges are reported boundaries, not
-permission to impersonate another browser or replace the page with invented news.
+Render the actual signed-out, scripts-disabled page at 1280x800 and 1024x768:
+recognizable header, briefing, story groups, metadata and thumbnails, without
+overlapping critical content. Verify scrolling, an actual served link and Back.
+Search, accounts and personalization are later work. Ordinary verified HTTPS
+only: consent/challenges are boundaries, not permission to impersonate another
+browser or substitute invented news.
 
-Fresh Mg observation on 2026-09-17: HTTP 200 at
-`https://news.google.com/home?hl=en-US&gl=US&ceid=US:en`, 1,849,110 bytes,
-31 links, six admitted stylesheets and 22 resource warnings. The inspected first
-screen has overlapping header/menu text, expanded weather and missing thumbnails.
-Local receipts: `tmp/desktop-google-news-live.log` and the matching `.png`.
-These ignored artifacts are local evidence, not files distributed with this doc.
+- Standalone Stylo computes typed flex/grid properties with its grid preference
+  explicitly enabled before parsing. Taffy 0.14.0 supplies flex/grid geometry
+  through borrowed Mg style/document views, not another DOM or browser engine.
+  Mg retains text shaping, block/table flow, painting and hit testing.
+- Paint-free content/natural-size measurements share the existing wrapping and
+  cumulative work budget. Pass-local caches do not survive document changes.
+  Anonymous text, `display:contents`, flex order/shrink/wrap/gaps and bounded
+  numeric repeat/minmax/fr grids are implemented, including 8/4-column spans.
+- Relative, absolute and fixed positioning, ancestor rectangular overflow clips,
+  viewport overflow propagation and numeric stacking ancestry use final geometry
+  for paint, inspector boxes and hits. Fixed boxes do not grow scroll extent.
+  Element overflow auto/scroll renders at its initial offset with rectangular
+  clipping and an explicit unsupported-scrolling diagnostic, including flex/grid.
+  There are no element scrollbars or element-scroll input/state guarantees.
+- `width:fit-content` is explicit, not silently treated as auto. Block sizing
+  clamps available content width between intrinsic minima/maxima; flex/grid use
+  Taffy's keyword. Opposing positioned insets do not stretch it like auto width.
+  Numeric constraints and box edges apply once. `fit-content()` and unrepresented
+  sizing/calc values remain unsupported, with bounded diagnostics and fallback.
+- `min-width:fit-content` and `max-width:fit-content` constrain ordinary,
+  positioned and replaced boxes and flex items using bounded measurements.
+  Definite replaced-element height transfers through the natural aspect ratio;
+  box edges apply once and the minimum wins over a conflicting maximum.
+  Grid items needing an unresolved
+  grid-area width remain explicitly rejected, not measured against a guessed
+  whole-grid width. The functional `fit-content(...)` form remains unsupported.
+- PNG/GIF/JPEG and bounded external/inline SVG use the reviewed Rust decoders.
+  Inline SVG preserves computed currentColor/fill/stroke and the actual CSS
+  viewport's viewBox aspect behavior. Structured buttons paint their real DOM
+  contents; text-only buttons retain the existing native control path.
+- A bounded two-stop linear-background slice is implemented. This is not full
+  CSS: rounded corners, arbitrary gradients and full SVG remain unsupported.
 
-An earlier saved response contains a 1,227,493-byte main inline stylesheet,
-rejected by the existing 256 KiB per-sheet loader limit. The main HTML fits the
-unchanged 8 MiB navigation limit. A sampled same-origin attachment redirects to
-gstatic and is JPEG: both the current origin policy and codec allowlist reject it.
-Changing news responses account for differences between capture counts.
+See [DEPENDENCIES.md](DEPENDENCIES.md) for the pinned source/features/licenses.
+Taffy defaults are disabled; only std/flexbox/grid are enabled. The locked graph
+uses arrayvec 0.7.8 and smallvec 1.16.0. image 0.25.10 adds only JPEG beside PNG/GIF,
+using zune-jpeg 0.5.15 / zune-core 0.5.3. Rust 1.91.1 remains the toolchain.
+There is no C/C++ codec/layout fallback, downloaded font backend or new JS path.
 
-## Structural blockers, not just missing stylesheet admission
+## Resource and execution bounds
 
-- Header `.gb_Td`, briefing `.UJdj6` and story rows `.LU3Rqb` use flex layout.
-- Main `.IKXQhd` and briefing `.XhbDsd` use 12-column
-  `repeat(12,minmax(0,1fr))` grids. `.TDaRVd` spans eight columns and `.RzhCVe`
-  spans four. Flex alone cannot reproduce the first-screen structure.
-- Current Stylo preferences reject grid during parsing. Supporting it requires
-  deliberate `layout.grid.enabled` initialization and typed computed properties,
-  not just adding a layout dependency.
-- Header/navigation use fixed positioning. Collapsed weather uses absolute
-  positioning inside a zero-width wrapper and ancestor `overflow:hidden`.
-  Painting, hit testing and scroll extent must all respect those relationships.
-- Real thumbnails, branding/inline SVG, clipping and text/entity details need
-  comparison against the actual assets. Do not draw site-specific replacements.
+The loader permits one sheet to consume the existing shared 2 MiB CSS/image
+budget, instead of the old 256 KiB partition. Source order, duplicate charging,
+16 sheets, 32 requests and the 10-second scheduling deadline remain unchanged.
+CSS background-image discovery precedes DOM images and retains the 64-candidate
+bound. Style computation separately admits at most 2 MiB combined CSS/media text
+and 8 MiB owned snapshot data, including expanded grid vectors.
 
-An earlier scratch render admitted all seven original inline sheets directly to
-the style engine: 1,266,936 CSS bytes within its existing 2 MiB admission limit.
-This bypassed the production loader and fetched no assets or scripts. The generic
-percentage-height correction reduced the same input's 1280px content height from
-9,522 to 4,406 pixels; the inspected output still fails the reading goal.
-Receipts: `tmp/google-news-{full-css,height-fixed}-experiment.log` and screenshots.
-The observed roughly 70 MiB peak process RSS is a measurement, not a memory quota.
+Stylesheets remain same-origin, including redirects. Images may cross origins
+only over verified HTTPS; policy runs before each request/redirect connection.
+After the first origin crossing, neither Cookie sending nor Set-Cookie storage
+resumes on that image chain, even if it returns to the page origin. URL userinfo
+is rejected. Same-origin HTTP images on HTTP pages are allowed, but an image
+chain cannot downgrade after HTTPS. No imports, external scripts, downloaded
+fonts or data-URL expansion is included. TLS verification is unchanged.
 
-## Candidate dependency and adapter evidence
+- Layout: 2,000,000 shared work steps, 200,000 scene operations/boxes, depth 256,
+  16,384 characters per text node, finite extents bounded to 1,000,000px.
+- Formatting: 512 participants per context, 128 tracks per axis, 16 MiB total
+  live scratch. Grid placement work is prepaid against both its 1,000,000-step
+  preflight bound and the remaining shared budget. There are at most 512
+  positioned nodes. Rejected passes discard their partial scene/cache results.
+- Content measurements: at most 8,192 entries in each pass-local intrinsic/height
+  cache; hits still consume work. No failed measurement is cached as a size.
+- Images: 512 KiB source, 2048px maximum side, 1,048,576 decoded/target pixels,
+  8 MiB raster-decoder allocation allowance; paint cache 128 entries and 16 MiB.
+- Inline SVG: depth 32, 2,048 nodes, 32 KiB per attribute name/value, 512 KiB serialized
+  source; pass-local source cache 128 entries and 2 MiB. Only admitted simple
+  shapes/metadata are serialized. Embedded images, references, event/style
+  attributes, SVG text, file/network resolvers and foreign content are rejected.
+- Style diagnostics: 64 entries, 512-byte messages and 256-byte sources, with
+  truncation/omission reported. Resource warnings retain 32 entries of 1,024 bytes.
 
-The ignored `tmp/taffy-adapter-probe.T8K6A5/` prototype used already-downloaded
-Taffy 0.14.0 with defaults disabled and `std,flexbox,grid`, plus reviewed
-arrayvec 0.7.8 and smallvec 1.16.1. Offline Rust 1.91.1 debug/release runs passed.
-Taffy declares MIT and Rust 1.71 minimum; preserve its license text on adoption.
-The probe borrowed one source arena with cache/layout side tables, not a second
-DOM. Its synthetic monospace measurement is not Mg shaping or News compatibility.
+These are admission/cache/work bounds, not hard CPU containment or a sandbox for
+the browser. The restricted script-worker boundary and all prior limits remain.
 
-- Fixed 280x168 thumbnail plus text: at width 680, text occupies 384x80;
-  shrinking to 420 makes text 124x240; wrapping at 560 places it at y184.
-- Twelve-column grid at width 1040: eight-column group width 688, four-column
-  group width 336, gap 16. Nested cards gain height when narrowed to width 920.
-- Cold nine-node grid: 143 child-layout calls, 39 text measurements, 66 cache
-  hits. Identical warm flex: one cache hit and no text measurement.
-- Changing text without invalidation returns stale geometry. Returning a failure
-  sentinel can leave partial cached results: reject the whole pass and discard
-  its caches/scene. Callback counts do not bound every internal algorithm loop.
-- Measured per-node types: Cache 368 bytes, paired Layout records 152 bytes,
-  full Style 552 bytes. Do not blindly duplicate them across the whole DOM.
+## Current evidence: 2026-09-18
 
-Existing image 0.25.10's opt-in JPEG feature was separately reviewed with
-zune-jpeg 0.5.15 / zune-core 0.5.3, Rust 1.75 minimum and MIT/Apache-2.0/Zlib
-license options. A captured 19,622-byte JPEG decoded as 280x168 in the isolated
-probe. That does not enable JPEG in the browser. Follow [DEPENDENCIES.md](DEPENDENCIES.md).
+A fresh ordinary HTTP 200 capture, `tmp/news-live.qhKyqo`, contains 1,852,460 HTML
+bytes, 942 DOM nodes, seven admitted sheets (1,305,432 CSS bytes), 14 DOM images
+and 20 resources (59,187 bytes). Three resource warnings remain: the foreign font
+sheet, a data-URL background SVG and one image exceeding 512 KiB. No live scripts
+were executed. The capture records resource/source/artifact identities.
 
-## Smallest production migration
+Its saved production-resource replay after the fit-content correction,
+`tmp/news-replay.55ltWA`, has no layout fallback at 1280x800 or 1024x768, at scroll 0
+and 600. All four frames contain 939 boxes; heights are 1838 and 1946 respectively.
+Measured render time is 294..329ms, not a guaranteed performance bound. The source
+identity remained unchanged during that replay. The fresh response's ten visible
+`.vr1PYe` wrappers use `width:fit-content`; that exact conversion loss is fixed.
+An unrelated hidden `calc(100% + 4px)` value remains unsupported.
 
-1. Extract paint-free measurement without changing layout behavior. Reuse
-   `Fonts::width_weight` and `css_line_height` in `paint.rs`. In
-   `styled_layout.rs`, share `tokens`/`flow`/`line` wrapping and line metrics;
-   preserve existing whitespace, baseline approximation and rounding.
-   `intrinsic` already includes CSS sizing and box edges: expose content-only
-   measurements so Taffy does not count those edges twice. Separate natural
-   replaced sizes and table height measurement from final scene emission.
-2. Add typed flex properties in `style.rs` and a private low-level adapter.
-   Borrow Mg identities; represent anonymous inline runs and `display:contents`
-   deliberately. Dispatch new flex contexts only: retain old block/table paths.
-   Use bounded, pass-local measurement caches first, not persistent invalidation.
-3. Add bounded grid tracks, repeat/minmax/fr, spans and intrinsic auto rows, with
-   the explicit Stylo preference. Charge owned track vectors in style accounting.
-4. Add relative/absolute/fixed containing blocks, insets, ordered paint and
-   rectangular ancestor clips. Taffy does not supply Mg's clipping or painter.
-   Emit paint, inspector boxes and hits once from final geometry. Fixed boxes
-   must not receive ordinary scroll subtraction or inflate document height.
-   Press/release and activation must resolve the same topmost target.
-5. Integrate reviewed stylesheet/image policy and JPEG separately, then compare
-   the real page. Unsupported sizing, calc or layout must remain diagnostic,
-   not silently become zero or claim successful support.
+Same-input [HN](HACKER_NEWS.md) 1024/1280 PNGs, complete box/hit logs and 1,211px
+content height remain byte-identical to the pre-migration baseline, including
+the fit-content slice. Its five public-render tests and adapter test pass;
+the focused release run passes 179 tests including existing layout/height/image
+assertions. These are local regression results, not final CI or release evidence.
 
-## Resource and regression gates
+The separate matched-input reference checkpoint uses saved capture
+`tmp/news-live.w7wMzV` and `tmp/news-reference.cH2GEM`: captured resources only,
+disabled scripts/network, recorded URL transport rewrites and the same DejaVu
+regular/bold fonts. Reference height is 1826 versus Mg 1838 at 1280; both are 1946
+at 1024. A 15px reference scrollbar gutter explains 7.5px of horizontal centering.
+Dimensions alone do not establish fidelity. That pre-correction frame stacked
+header cells incorrectly. The final slice adds one anonymous row for pure-cell
+containers using the existing table measurement/painter; mixed ordinary/table
+content remains explicitly unsupported. Final replay evidence follows separately.
+Rounded corners, embedded SVG images, downloaded fonts and literal icon-font
+names such as `chevron_right` remain visual gaps. No text-to-icon substitutions
+are used. Missing weather pictures and Local News placeholders also occur in
+the scripts-disabled reference, and are not invented browser content.
 
-Keep 2,000,000 layout work steps, 200,000 scene operations/boxes, depth 256,
-16,384 characters per text node, finite extents and all existing assertions.
-Charge repeated measurement cumulatively; review a bounded scratch-memory
-profile and expanded grid-track admission before dependency adoption. A callback
-budget is not hard CPU containment. TLS and worker isolation stay unchanged.
+An owned native Xvfb/private-profile checkpoint followed the actual served Top
+stories link and pressed Back: all three responses were HTTP 200. The topic and
+changed homepage triggered readable-flow fallback for unrepresented layout
+values. Fresh homepage replay now passes, but this does not identify every value
+in the earlier topic/Back responses. That checkpoint did not satisfy the final
+native link/Back gate; the later packaged result is recorded below.
+Ignored receipts are local evidence, not distributed fixtures or release assets.
 
-Review a larger per-sheet CSS allowance against the existing 2 MiB aggregate,
-not an unbounded cap increase. Preserve source ordering, duplicate charging,
-request counts, deadlines and visible rejection. Cross-origin image requests
-need an explicit HTTPS/redirect/credential policy: do not reuse page cookies or
-accept third-party cookies incidentally. Validate policy before each redirect's
-socket is opened, and test both initial-request and redirect rejection.
-Retain 512 KiB image source, 2048-side/1,048,576-pixel and decoded-cache bounds.
-JPEG MIME/decoder admission, malformed input and dimension rejection need tests.
-No external scripts, downloaded fonts or general resource expansion is implied.
+The later native homepage in `tmp/news-native-final.eGUsLQ` has 970 nodes, not the
+942-node saved response above. Its additional topic-chip strip uses
+`max-width:fit-content`, an independently confirmed conversion loss at node807.
+The new constraint implementation covers that case; final fresh verification
+must still pass. This illustrates why identical-input replay is not a substitute
+for current native behavior. The scratch driver also hit the topic DOM's 4 MiB
+CDP response bound; requesting depth3 fixes evidence collection without changing
+the browser's limit. The same chip strip's flex child uses overflow-x:scroll;
+static initial-offset clipping is now consistent with ordinary block flow, while
+the unsupported-scrolling diagnostic remains. This does not enable chip-strip
+scroll controls or other page interactions. The only remaining visible snapshot
+loss was its child node813's `min-width:fit-content`, now implemented too. The
+exact 970-node native DOM then renders without fallback in a 227ms release
+diagnostic replay (933 boxes, 114 hits, height1766), without fetched assets. This
+is not a replacement for final fresh native screenshots. Hidden node866's mixed
+calculation remains unsupported. HN release/debug PNGs and complete geometry/hit
+logs still match byte-for-byte. Fourteen fit-sizing and eight boundary tests
+pass release, including the independently reproduced SVG ratio correction.
 
-## Acceptance and stop condition
+Final packaged v0.9.0 native checkpoint: `tmp/news-native-candidate.mk3Nzp`.
+The fresh signed-out homepage, its actual Top stories destination and Back all
+returned HTTP200. Home and Back rendered styled without fallback; page scrolling
+and the actual anchor's CDP mouse coordinates aligned, and Back used native X11
+toolbar input. Root inspected home, offset600 and Back screenshots. The topic
+destination still falls back at node335 for an unrepresented positioned value;
+that is a documented destination limit, not a styled-topic success. The complete
+archive is8,275,877 bytes, below the unchanged8MiB updater ceiling. Final public
+tagged bytes and installer still require separate verification.
 
-- Preserve same-input [HN](HACKER_NEWS.md) screenshots, box/hit lists and content
-  height at 1024/1280 after measurement extraction and each layout increment.
-  The prior percentage-height change preserved those outputs byte-for-byte;
-  this is not evidence that the proposed Taffy integration will do so.
-- Test flex shrink/wrap, mixed text/table/replaced leaves, 8/4-span grids,
-  nested auto-height cards, clipping, fixed-header scroll and overlapping links.
-  Check fractional widths and 100/125/200% input/paint alignment.
-- Compare identical real News HTML/CSS/assets in Mg and a reference browser with
-  matching viewport/fonts/scale, including the first screen and scrolled content.
-  Then separately repeat fresh live load, actual served link navigation and Back.
-- Retain style/image/table/percentage-height tests, dependency/component guards,
-  styled/no-chrome embedding, normal CI, and packaged/public installer acceptance.
-  User-visible delivery requires a new release, not merely a source push.
+## Historical baseline and migration evidence
 
-Static acceptance does not complete Playwright, JSPLAN, Google search or the
-formal Linux MVP. External scripts, fetch/XHR, timers, account actions and full
-interactive News remain later gates. Stop this milestone at faithful reading.
+The 2026-09-17 live baseline was HTTP 200, 1,849,110 bytes, 31 links, six admitted
+sheets and 22 warnings (`tmp/desktop-google-news-live.log`/`.png`). Its first
+screen overlapped and lacked thumbnails. A 1,227,493-byte main sheet exceeded the
+old 256 KiB per-sheet allowance; a same-origin image redirected to foreign JPEG,
+which the old policy/codec set rejected. These blockers are now implemented,
+not outstanding dependency proposals. Response counts vary with real news.
+
+An earlier scratch-only CSS admission bypass, without fetched assets/scripts,
+reduced height from 9,522 to 4,406px after the percentage-height fix but still failed
+reading acceptance. The isolated `tmp/taffy-adapter-probe.T8K6A5/` validated
+measured flex and 12-column grid mechanics, cache invalidation and allocation
+costs. Its synthetic text and smallvec 1.16.1 were prototype inputs, not production
+compatibility evidence. Production uses real Mg measurement and the locked graph.
+
+## Remaining acceptance and stop condition
+
+Matched-input first-screen/scrolled comparison and fresh packaged home/link/Back
+checks now pass their narrow reading/navigation scope. Preserve HN identity and
+existing style/image/table/height tests, dependency/component and embedding
+guards, normal CI and packaged/public installer acceptance. F-025 stays
+in-progress: fonts/icons/corners, live response variation, topic fallback and
+interactive behavior remain open. Publication does not remove those limits.
+
+Static reading does not complete Playwright, JSPLAN, Google search or the formal
+Linux MVP. External scripts, fetch/XHR, timers, accounts and full interactive News
+remain later gates. Stop this milestone at faithful signed-out reading.

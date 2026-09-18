@@ -1607,6 +1607,8 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png 0.18.1",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1753,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "mg-browser"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64",
  "flate2",
@@ -1774,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "mg-butane"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -1784,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "mg-chassis"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64",
  "flate2",
@@ -1803,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "mg-sparkle"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "app_units",
  "atomic_refcell",
@@ -1822,7 +1824,9 @@ dependencies = [
  "serde_json",
  "stylo",
  "stylo_dom",
+ "stylo_static_prefs",
  "stylo_traits",
+ "taffy",
  "url",
 ]
 
@@ -2926,6 +2930,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "slotmap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "small_btree"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3220,6 +3233,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "taffy"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99"
+dependencies = [
+ "arrayvec",
+ "serde",
+ "slotmap",
+ "smallvec",
 ]
 
 [[package]]
@@ -4078,6 +4103,21 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
+]
 
 [[package]]
 name = "zvariant"

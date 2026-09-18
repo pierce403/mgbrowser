@@ -1,5 +1,5 @@
 //! Bounded, Rust-only page images. No image resolver may read files or fetch URLs.
-//! PNG, the first GIF frame, and a deliberately small SVG shape subset are supported.
+//! PNG, JPEG, the first GIF frame, and a small SVG shape subset are supported.
 use crate::paint::Canvas;
 use std::io::Cursor;
 
@@ -39,8 +39,11 @@ pub fn decode(
         return svg(bytes, width, height);
     }
     let format = image::guess_format(bytes).map_err(|e| format!("Unsupported image: {e}"))?;
-    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Gif) {
-        return Err("Only PNG, GIF and simple SVG page images are supported".into());
+    if !matches!(
+        format,
+        image::ImageFormat::Png | image::ImageFormat::Gif | image::ImageFormat::Jpeg
+    ) {
+        return Err("Only PNG, JPEG, GIF and simple SVG page images are supported".into());
     }
     let reader = || {
         let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
@@ -209,18 +212,19 @@ pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
     {
         return;
     }
+    let (clip_left, clip_top, clip_right, clip_bottom) = canvas.physical_clip_bounds();
     let left = canvas
         .physical_edge(i64::from(x))
-        .clamp(0, i64::from(canvas.width));
+        .clamp(i64::from(clip_left), i64::from(clip_right));
     let right = canvas
         .physical_edge(i64::from(x) + i64::from(image.width))
-        .clamp(0, i64::from(canvas.width));
+        .clamp(i64::from(clip_left), i64::from(clip_right));
     let top = canvas
         .physical_edge(i64::from(y))
-        .clamp(0, i64::from(canvas.height));
+        .clamp(i64::from(clip_top), i64::from(clip_bottom));
     let bottom = canvas
         .physical_edge(i64::from(y) + i64::from(image.height))
-        .clamp(0, i64::from(canvas.height));
+        .clamp(i64::from(clip_top), i64::from(clip_bottom));
     let scale = f64::from(canvas.scale());
     for sy in top..bottom {
         let source_y = ((sy as f64 + 0.5) / scale - f64::from(y))
@@ -283,6 +287,55 @@ mod tests {
                 0xffffff, 0xffffff, 0xff0000, 0xff0000, 0xffffff, 0xffffff, 0xffffff, 0xffffff
             ]
         );
+    }
+
+    #[test]
+    fn image_alpha_blit_obeys_nested_canvas_clips_without_resampling_changes() {
+        let image = RasterImage {
+            width: 4,
+            height: 3,
+            pixels: [11, 80, 160, 128].repeat(12),
+        };
+        for scale in [1.0, 1.25, 2.0] {
+            let mut reference = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            blit(&mut reference, &image, -1, 1);
+            let mut clipped = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            let full = clipped.intersect_clip(-2, 0, 5, 5);
+            let outer = clipped.intersect_clip(1, 2, 5, 2);
+            let bounds = clipped.physical_clip_bounds();
+            blit(&mut clipped, &image, -1, 1);
+            let mut changed = 0;
+            for y in 0..clipped.height {
+                for x in 0..clipped.width {
+                    let index = (y * clipped.width + x) as usize;
+                    let inside = x >= bounds.0 && x < bounds.2 && y >= bounds.1 && y < bounds.3;
+                    let expected = if inside {
+                        reference.pixels[index]
+                    } else {
+                        0xffffff
+                    };
+                    assert_eq!(clipped.pixels[index], expected);
+                    changed += usize::from(clipped.pixels[index] != 0xffffff);
+                }
+            }
+            assert!(changed > 0);
+            clipped.restore_clip(outer);
+            clipped.intersect_clip(i32::MAX, i32::MAX, u32::MAX, u32::MAX);
+            let before = clipped.pixels.clone();
+            blit(&mut clipped, &image, -1, 1);
+            blit(&mut clipped, &image, i32::MIN, i32::MIN);
+            assert_eq!(clipped.pixels, before);
+            clipped.restore_clip(full);
+            assert_eq!(
+                clipped.physical_clip_bounds(),
+                (0, 0, clipped.width, clipped.height)
+            );
+            let mut explicit_full = Canvas::new_scaled(8, 6, 0xffffff, scale);
+            explicit_full.intersect_clip(0, 0, 8, 6);
+            blit(&mut explicit_full, &image, -1, 1);
+            assert_eq!(explicit_full.pixels, reference.pixels);
+            assert_eq!(image.pixels.len(), 48);
+        }
     }
 
     #[test]
@@ -351,6 +404,99 @@ mod tests {
             .unwrap();
         let image = decode(&gif, "image/gif", None, None).unwrap();
         assert!(image.pixels.chunks_exact(4).all(|rgba| rgba[3] == 0));
+    }
+
+    fn authored_jpeg() -> Vec<u8> {
+        let pixels = image::RgbImage::from_pixel(8, 4, image::Rgb([80, 120, 160]));
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 95)
+            .encode_image(&pixels)
+            .unwrap();
+        encoded
+    }
+
+    #[test]
+    fn jpeg_rgb_and_grayscale_decode_and_preserve_bounded_aspect_ratio() {
+        let encoded = authored_jpeg();
+        for (width, height, expected) in [
+            (None, None, (8, 4)),
+            (Some(4), None, (4, 2)),
+            (None, Some(8), (16, 8)),
+            (Some(3), Some(5), (3, 5)),
+        ] {
+            let decoded = decode(&encoded, "image/jpeg", width, height).unwrap();
+            assert_eq!((decoded.width, decoded.height), expected);
+            assert_eq!(decoded.pixels.len(), (expected.0 * expected.1 * 4) as usize);
+            for pixel in decoded.pixels.chunks_exact(4) {
+                for (actual, expected) in pixel[..3].iter().zip([80u8, 120, 160]) {
+                    assert!(actual.abs_diff(expected) <= 3);
+                }
+                assert_eq!(pixel[3], 255);
+            }
+        }
+        let mut gray = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut gray, 95)
+            .encode(&[128; 8], 4, 2, image::ExtendedColorType::L8)
+            .unwrap();
+        let decoded = decode(&gray, "image/jpeg", None, None).unwrap();
+        assert_eq!((decoded.width, decoded.height), (4, 2));
+        assert!(decoded.pixels.chunks_exact(4).all(|rgba| rgba[0] == rgba[1]
+            && rgba[1] == rgba[2]
+            && rgba[0].abs_diff(128) <= 2
+            && rgba[3] == 255));
+    }
+
+    #[test]
+    fn jpeg_malformed_source_and_output_bounds_remain_fail_closed() {
+        let encoded = authored_jpeg();
+        for malformed in [
+            &encoded[..2],
+            &encoded[..32],
+            b"\xff\xd8\xff\xd9".as_slice(),
+        ] {
+            assert!(decode(malformed, "image/jpeg", None, None).is_err());
+        }
+        let mut too_large = encoded.clone();
+        too_large.resize(MAX_SOURCE + 1, 0);
+        assert_eq!(
+            decode(&too_large, "image/jpeg", None, None).unwrap_err(),
+            "Image source exceeds 512 KiB"
+        );
+        assert!(decode(&encoded, "image/jpeg", Some(MAX_SIDE + 1), None).is_err());
+        assert!(decode(&encoded, "image/jpeg", Some(MAX_SIDE), Some(MAX_SIDE)).is_err());
+        assert!(
+            decode(&encoded, "image/jpeg", Some(0), None)
+                .unwrap()
+                .pixels
+                .is_empty()
+        );
+
+        // Header dimensions are checked before allocating/decompressing pixels.
+        let sof = encoded
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xc0])
+            .unwrap();
+        for (width, height) in [(2049u16, 4u16), (1025, 1024)] {
+            let mut dimensions = encoded.clone();
+            dimensions[sof + 5..sof + 7].copy_from_slice(&height.to_be_bytes());
+            dimensions[sof + 7..sof + 9].copy_from_slice(&width.to_be_bytes());
+            let error = decode(&dimensions, "image/jpeg", None, None).unwrap_err();
+            assert_eq!(
+                error,
+                if width > MAX_SIDE as u16 {
+                    // ImageReader rejects its explicit maximum side first.
+                    "Image size exceeds limit"
+                } else {
+                    // Both sides fit, but Mg's independent total-pixel cap rejects.
+                    "Image dimensions exceed the small-image limit"
+                }
+            );
+        }
+        assert!(
+            decode(b"BMnot-enabled", "image/bmp", None, None)
+                .unwrap_err()
+                .contains("Only PNG, JPEG, GIF")
+        );
     }
 
     #[test]

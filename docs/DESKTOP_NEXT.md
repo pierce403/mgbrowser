@@ -72,8 +72,9 @@ Playwright assertions to treat an unsupported method as success.
 ## Google News desktop reading: T-022 / F-025
 
 See [GOOGLE_NEWS.md](GOOGLE_NEWS.md) for the refreshed live baseline, bounded
-prototype evidence and staged production/resource review. This remains planned;
-the document does not adopt dependencies or claim first-screen compatibility.
+prototype evidence and production/resource review. v0.9.0 implements a bounded
+reading increment using reviewed Taffy/JPEG dependencies. F-025 remains
+in-progress because visual gaps and destination/interactive limits remain.
 
 User confirmed this first milestone on 2026-09-17: a faithful signed-out reading
 page first, interactions later. Target scripts-disabled desktop reading at 1280x800 and
@@ -87,16 +88,16 @@ Consent/challenge responses, if encountered, are a reported boundary.
 Earlier baseline 2026-09-17: ordinary HTTPS returns HTTP 200 and server-rendered stories.
 Actual Mg load: about 1.85 MB HTML, 987 nodes, 32 links, nine small admitted
 stylesheets, zero images. The main inline sheet is 1,227,493 bytes, rejected by
-the existing 256 KiB per-sheet cap. The first screen has overlapping menus and
+the then-existing 256 KiB per-sheet cap. The first screen had overlapping menus and
 expanded weather that pushes stories down. Main HTML's 8 MiB limit is sufficient.
-One same-origin thumbnail redirects to gstatic and is JPEG: the current resource
-origin policy and PNG/GIF/SVG-only decoders both reject it.
+One same-origin thumbnail redirected to gstatic and was JPEG: the old resource
+origin policy and PNG/GIF/SVG-only decoders both rejected it.
 
-Prerequisites need deliberate review: a bounded large-stylesheet profile; generic
-flex/grid/position/overflow layout; cross-origin subresource and cookie policy;
-Rust-only JPEG; inline SVG/icon/clip details. Taffy is a layout candidate, not an
-adopted dependency. Keep pure-Rust source/feature/license review and malformed-
-input/resource tests before adoption. Do not simply remove limits to fit a site.
+The migration now includes bounded large-sheet admission, flex/grid/position/
+overflow layout, reviewed foreign HTTPS image/cookie policy, Rust-only JPEG,
+simple inline SVG, fit-content and two-stop backgrounds. Pure-Rust source/
+feature/license checks and malformed-input/resource tests remain mandatory.
+Aggregate/request/deadline caps were preserved, not removed to fit the site.
 
 Search, account actions, personalization and full interactive Google News are
 later gates. Current script-document admission is 1 MiB and external scripts,

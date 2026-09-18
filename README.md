@@ -2,7 +2,16 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.8.0 Experimental Preview
+## v0.9.0 Experimental Preview
+
+Google News reading is substantially improved: bounded flex/grid layout,
+positioned headers, clipping, inline SVG and JPEG thumbnails now render the
+signed-out briefing and story columns. Rust Taffy supplies flex/grid sizing;
+Mg still owns the DOM, measurement, painting and input. This is a reading-first
+increment, not full News compatibility: author fonts, rounded corners and some
+icons are missing; topic destinations can still fall back to readable flow.
+Search, menus, account actions and personalization remain later work.
+[Reading scope and evidence](docs/GOOGLE_NEWS.md).
 
 Right-click a page and choose **Inspect element**, or press **F12** /
 **Ctrl+Shift+I**. The native read-only inspector shows DOM attributes, text and
@@ -15,11 +24,11 @@ native windows or form left/right page groups. Moves preserve the live page,
 including form edits and its script realm. Initial limits: 16 tabs, four windows
 and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
 
-**Playwright compatibility and faithful Google News rendering are unfinished.**
+**Ordinary Playwright compatibility remains unfinished.**
 Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
-[signed-out News reading plan](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
+[signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 
 Wheel scrolling now eases over 150 ms. Repeated input accumulates and reversing
 responds immediately; clicks, keys and navigation stop motion at the visible
@@ -58,11 +67,11 @@ own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
 backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
 
 The size-optimized, symbol-stripped release stays within older builds' unchanged
-8 MiB updater limit. A percentage-height correction also fixes oversized elements;
-it does not establish general CSS or Google News compatibility.
+8 MiB updater limit. Layout and resource limits remain explicit; this does not
+establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded in the [dated work log](memory/logs/2026-09-17.md).
+installation receipts are recorded in the [dated work log](memory/logs/2026-09-18.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -96,8 +105,9 @@ See [updater behavior and trust](docs/UPDATES.md).
 - System size reads screen-global X11 desktop DPI, with 100% fallback. This is
   whole-browser sizing, not per-site page zoom or per-monitor Wayland scaling.
   Images retain their existing decoded resolution and limits.
-- Hacker News desktop rendering is the narrow target. Mobile layouts, general
-  destination compatibility and account actions are not acceptance claims.
+- Hacker News and signed-out Google News desktop reading are narrow targets.
+  News still has font/icon/corner differences and destination fallbacks. Mobile
+  layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
 - Boa-backed JavaScript integration is incomplete and disabled by default;
   use `--enable-scripts` to opt in. External scripts, modules, timers, fetch/XHR
@@ -107,13 +117,15 @@ See [updater behavior and trust](docs/UPDATES.md).
   outstanding/cumulative worker allocation requests. This is not GC/RSS
   measurement or complete cooperative budgeting; native work retains final
   OS/parent containment. Active detached listeners persist until removal/teardown.
-- Full CSS is not implemented: no flex/grid or general positioning. Resource
-  loading is bounded and same-origin only; no CSS imports or downloaded fonts.
-  Images support PNG, first-frame GIF and a small static SVG shape/path subset.
-  Unsupported or blocked images remain placeholders. Dynamic resources are not fetched.
+- Full CSS is not implemented. Flex/grid, positioning and stacking are bounded
+  subsets; rounded corners, transforms and independently scrolling elements are
+  not implemented. Stylesheets remain same-origin with no imports or downloaded
+  fonts. PNG, JPEG, first-frame GIF and restricted static SVG images are supported;
+  foreign HTTPS images are fetched without cookies. Unsupported or blocked images
+  remain placeholders. Dynamic resources are not fetched.
 - Linux X11/XWayland is the supported GUI target. Cookies are memory-only.
 - Navigation and script budgets apply per tab/worker, not as a whole-workspace
-  memory or CPU quota. Ordinary Playwright and Google News remain unsupported.
+  memory or CPU quota. Ordinary Playwright remains unsupported.
 - The restricted JavaScript worker is **not a sandbox for the browser as a whole**.
 - Do not use this release for banking, sensitive authenticated browsing, or
   arbitrary hostile websites.
@@ -124,7 +136,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.8.0.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.0.md) for manual install and uninstall.
 
 ## Components
 
@@ -260,7 +272,7 @@ browser API and storage-ownership work is needed.
 
 Own the browser's integration and original components, reusing reviewed Rust crates where useful. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
 
-TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS; Boa supplies page JavaScript; fonts, PNG/GIF and restricted SVG use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS/images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --features legacy-test-engine --all-targets` for modern and preserved-baseline tests. Full CSS and broad browser compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
+TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS, Taffy sizes bounded flex/grid contexts and Boa supplies page JavaScript. Fonts, PNG/JPEG/GIF and restricted SVG use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS and policy-checked images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --features legacy-test-engine --all-targets` for modern and preserved-baseline tests. Full CSS and broad browser compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
 
 ## Website development
 

@@ -65,7 +65,7 @@ This graph does not enter the browser release. Features are the union of selecte
 | litemap | 0.8.3 | Unicode-3.0 |  |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |  |
 | memchr | 2.8.3 | Unlicense OR MIT |  |
-| mg-butane | 0.8.0 | Apache-2.0 |  |
+| mg-butane | 0.9.0 | Apache-2.0 |  |
 | mg-jsplan-probe | 0.1.0 | Apache-2.0 |  |
 | num-bigint | 0.5.1 | MIT OR Apache-2.0 |  |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |  |

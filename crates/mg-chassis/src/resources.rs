@@ -1,8 +1,9 @@
 //! Small, bounded author stylesheet and image loading. No external scripts,
-//! imports, fonts, data URLs, or cross-origin automatic requests are enabled.
+//! imports, fonts or data URLs are enabled. Stylesheets remain same-origin;
+//! cross-origin HTTPS images are credential-free, including later redirects.
 //! All fetches use the browser session's verified Rust TLS transport.
 
-use crate::net::{Response, Session};
+use crate::net::{ResourceKind, Response, Session};
 use mg_sparkle::document::{Document, ResourceData, StylesheetRequest, StylesheetSource};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -10,9 +11,11 @@ use url::Url;
 
 const MAX_SHEETS: usize = 16;
 const MAX_REQUESTS: usize = 32;
-const MAX_CSS: usize = 256 * 1024;
 const MAX_IMAGE: usize = 512 * 1024;
 const MAX_TOTAL: usize = 2 * 1024 * 1024;
+// A single stylesheet may consume the existing shared 2 MiB resource budget.
+// This changes its partition, not the aggregate, request, sheet or time bounds.
+const MAX_CSS: usize = MAX_TOTAL;
 const MAX_WARNINGS: usize = 32;
 const MAX_WARNING_BYTES: usize = 1024;
 const RESOURCE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,7 +86,8 @@ pub fn load(
                         media,
                     }
                 } else {
-                    let Some(response) = loader.fetch(&url, MAX_CSS) else {
+                    let Some(response) = loader.fetch(&url, MAX_CSS, ResourceKind::Stylesheet)
+                    else {
                         continue;
                     };
                     if mime(&response.content_type) != "text/css" {
@@ -164,12 +168,12 @@ pub fn load(
         if !seen.insert(url.clone()) {
             continue;
         }
-        let Some(response) = loader.fetch(&url, MAX_IMAGE) else {
+        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Image) else {
             continue;
         };
         if !matches!(
             mime(&response.content_type).as_str(),
-            "image/png" | "image/gif" | "image/svg+xml"
+            "image/png" | "image/gif" | "image/jpeg" | "image/svg+xml"
         ) {
             loader.warn(format!(
                 "Unsupported page image type: {} at {}",
@@ -270,7 +274,7 @@ impl<F: Fn() -> bool> Loader<'_, F> {
         }
     }
 
-    fn fetch(&mut self, url: &str, limit: usize) -> Option<Response> {
+    fn fetch(&mut self, url: &str, limit: usize, kind: ResourceKind) -> Option<Response> {
         if self.stopped() {
             return None;
         }
@@ -288,6 +292,7 @@ impl<F: Fn() -> bool> Loader<'_, F> {
             self.page_url,
             limit.min(MAX_TOTAL - self.bytes),
             self.deadline,
+            kind,
         ) {
             Ok(response) if (200..300).contains(&response.status) => {
                 if self.stopped() || !self.admit(response.body.len()) {
@@ -483,8 +488,19 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
-    fn server(
-        replies: Vec<(&'static str, &'static str, &'static str)>,
+    fn server<S: AsRef<str> + Send + 'static>(
+        replies: Vec<(S, S, S)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        server_with_lengths(
+            replies
+                .into_iter()
+                .map(|(status, mime, body)| (status, mime, body, None))
+                .collect(),
+        )
+    }
+
+    fn server_with_lengths<S: AsRef<str> + Send + 'static>(
+        replies: Vec<(S, S, S, Option<usize>)>,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -492,7 +508,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut paths = Vec::new();
-            for (status, content_type, body) in replies {
+            for (status, content_type, body, declared_length) in replies {
+                let (status, content_type, body) =
+                    (status.as_ref(), content_type.as_ref(), body.as_ref());
                 let mut socket = loop {
                     assert!(Instant::now() < deadline, "Missing resource request");
                     match listener.accept() {
@@ -517,7 +535,7 @@ mod tests {
                         break;
                     }
                 }
-                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", declared_length.unwrap_or(body.len())).unwrap();
             }
             paths
         });
@@ -668,7 +686,15 @@ mod tests {
             warnings: Vec::new(),
             omitted_warnings: 0,
         };
-        assert!(loader.fetch("http://127.0.0.1:1/never", MAX_CSS).is_none());
+        assert!(
+            loader
+                .fetch(
+                    "http://127.0.0.1:1/never",
+                    MAX_CSS,
+                    ResourceKind::Stylesheet
+                )
+                .is_none()
+        );
         assert_eq!(loader.requests, 0);
         assert!(loader.admit(MAX_TOTAL));
         assert!(!loader.admit(1));
@@ -676,8 +702,108 @@ mod tests {
         loader.deadline = Instant::now() + Duration::from_secs(1);
         loader.bytes = 0;
         loader.requests = MAX_REQUESTS;
-        assert!(loader.fetch("http://127.0.0.1:1/never", MAX_CSS).is_none());
+        assert!(
+            loader
+                .fetch(
+                    "http://127.0.0.1:1/never",
+                    MAX_CSS,
+                    ResourceKind::Stylesheet
+                )
+                .is_none()
+        );
         assert_eq!(loader.requests, MAX_REQUESTS);
+    }
+
+    #[test]
+    fn stylesheet_partition_uses_existing_total_not_old_256_kib_slice() {
+        let css = format!("/*{}*/a{{color:red}}", " ".repeat(300 * 1024));
+        let (base, worker) = server(vec![("200 OK".into(), "text/css".into(), css.clone())]);
+        let mut doc = parse("<link rel=stylesheet href=/large.css>", &base);
+        load(&Session::new(), &mut doc, &base, || false);
+        assert_eq!(doc.stylesheets.len(), 1);
+        assert_eq!(doc.stylesheets[0].css, css);
+        assert!(doc.resource_warnings.is_empty());
+        assert_eq!(worker.join().unwrap(), ["/large.css"]);
+
+        // Inline sheets use the same partition, while a retained duplicate
+        // still consumes its own share of the unchanged aggregate allowance.
+        let mut doc = parse(&format!("<style>{css}</style>"), "https://example.test/");
+        load(&Session::new(), &mut doc, "https://example.test/", || false);
+        assert_eq!(doc.stylesheets.len(), 1);
+        assert_eq!(doc.stylesheets[0].css, css);
+        assert!(doc.resource_warnings.is_empty());
+    }
+
+    #[test]
+    fn one_full_css_budget_stops_further_sheets_and_images_without_io() {
+        let css = " ".repeat(MAX_TOTAL);
+        let (base, worker) = server(vec![("200 OK".into(), "text/css".into(), css.clone())]);
+        let mut doc = parse(
+            "<link rel=stylesheet href=/all.css><link rel=stylesheet href=/all.css><link rel=stylesheet href=/never.css><img src=/never.jpg>",
+            &base,
+        );
+        load(&Session::new(), &mut doc, &base, || false);
+        assert_eq!(doc.stylesheets.len(), 1);
+        assert_eq!(doc.stylesheets[0].css.len(), MAX_TOTAL);
+        assert!(doc.resources.is_empty());
+        assert!(
+            doc.resource_warnings
+                .iter()
+                .any(|w| w.contains("2 MiB total"))
+        );
+        assert_eq!(worker.join().unwrap(), ["/all.css"]);
+    }
+
+    #[test]
+    fn retained_css_duplicates_and_inline_sources_share_aggregate_budget() {
+        let css = " ".repeat(MAX_TOTAL / 2 + 1);
+        let (base, worker) = server(vec![("200 OK".into(), "text/css".into(), css.clone())]);
+        let mut doc = parse(
+            &format!(
+                "<link rel=stylesheet href=/half.css><link rel=stylesheet href=/half.css><style>{css}</style>"
+            ),
+            &base,
+        );
+        load(&Session::new(), &mut doc, &base, || false);
+        assert_eq!(doc.stylesheets.len(), 1);
+        assert_eq!(doc.stylesheets[0].css.len(), MAX_TOTAL / 2 + 1);
+        assert!(
+            doc.resource_warnings
+                .iter()
+                .any(|w| w.contains("2 MiB total"))
+        );
+        assert_eq!(worker.join().unwrap(), ["/half.css"]);
+    }
+
+    #[test]
+    fn jpeg_mime_is_admitted_but_image_byte_cap_is_unchanged() {
+        // Resource loading retains encoded bytes; Sparkle independently validates
+        // and decodes them. Deliberately malformed bytes prove no decoder runs here.
+        let (base, worker) = server(vec![("200 OK", "image/jpeg; charset=binary", "not a jpeg")]);
+        let mut doc = parse("<img src=/thumb.jpg>", &base);
+        load(&Session::new(), &mut doc, &base, || false);
+        assert_eq!(
+            doc.resources[&format!("{base}/thumb.jpg")].bytes,
+            b"not a jpeg"
+        );
+        assert!(doc.resource_warnings.is_empty());
+        assert_eq!(worker.join().unwrap(), ["/thumb.jpg"]);
+
+        // An oversized declared length must reject before waiting for or
+        // allocating its body. Do not race a large fixture write against the
+        // browser correctly closing the connection after reading these headers.
+        let (base, worker) =
+            server_with_lengths(vec![("200 OK", "image/jpeg", "", Some(MAX_IMAGE + 1))]);
+        let mut doc = parse("<img src=/too-large.jpg>", &base);
+        load(&Session::new(), &mut doc, &base, || false);
+        assert!(doc.resources.is_empty());
+        assert!(
+            doc.resource_warnings
+                .iter()
+                .any(|w| w.contains("Response body exceeds 524288 byte limit")
+                    && w.contains("byte limit 524288"))
+        );
+        assert_eq!(worker.join().unwrap(), ["/too-large.jpg"]);
     }
 
     #[test]
@@ -696,7 +822,7 @@ mod tests {
         let warning = &doc.resource_warnings[0];
         assert!(warning.contains("sheet 1"));
         assert!(warning.contains("https://example.test/page"));
-        assert!(warning.contains("262145 bytes, limit 262144"));
+        assert!(warning.contains("2097153 bytes, limit 2097152"));
 
         let session = Session::new();
         let mut loader = Loader {

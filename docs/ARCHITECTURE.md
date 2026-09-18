@@ -17,11 +17,27 @@ provides the web-facing host bindings around Butane. Its standalone rendering
 API accepts a document, font data, viewport and control state, and returns pixels,
 layout boxes and hit regions in page-relative coordinates. It does not create a
 window, fetch resources or start a worker. Sparkle uses standalone Rust Stylo for
-CSS computation and its own block/inline/table layout; it receives stylesheet
-source and bounded image bytes through Document, not a network callback. PNG/GIF
-and restricted SVG decoding remain Rust-only. Chassis owns same-origin resource
-fetching, navigation-generation cancellation and download budgets. Neither
-resource bytes nor new fetch capabilities are passed into the script worker.
+CSS computation and its own block/inline/table layout. v0.9.0 adds a bounded
+low-level Rust Taffy adapter for flex/grid geometry, borrowing
+the same DOM and font measurements. Mg still owns scene construction, clipping,
+positioned stacking, painting and input geometry. It receives stylesheet source
+and bounded image bytes through Document, not a network callback. PNG/JPEG/GIF
+and restricted SVG decoding remain Rust-only. Chassis owns resource fetching,
+navigation-generation cancellation and download budgets. Stylesheets remain
+same-origin; image chains stop sending/storing cookies at their first origin
+crossing, including later redirects back. They cannot downgrade after HTTPS.
+Neither resource bytes nor new fetch capabilities
+are passed into the script worker.
+
+The new layout work is not a full CSS engine or hard render-time sandbox. Limits
+include 2,000,000 shared work steps, 200,000 scene operations, depth 256 and bounded
+pass-local caches. Taffy contexts admit at most 512 participants with charged
+16 MiB live scratch and bounded implicit grid growth. Numeric positioned stacking
+contexts are bounded to 512; transform/opacity/isolation contexts are not modeled.
+Simple inline SVG serialization adds at most 128 sources/2 MiB per pass, with each
+source still limited to 512 KiB before the existing resolver-disabled decoder.
+Image decode/cache limits and the script process boundary are unchanged. See
+[News reading acceptance](GOOGLE_NEWS.md) for development and release evidence.
 
 Chassis composes the services needed to browse. Its `chrome` Cargo feature draws
 the current single-row toolbar/address field and status area. A host can disable it

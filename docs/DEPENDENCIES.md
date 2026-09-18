@@ -32,7 +32,8 @@ This browser is a testing and research project, not a production browser. The us
 | Font parsing/rasterization | fontdue 0.9, defaults disabled; Rust ttf-parser transitively | No FreeType, CoreText, DirectWrite or other native font backend. |
 | Text shaping | rustybuzz 0.20 with std and defaults disabled | Rust shaping implementation, no HarfBuzz C bindings. |
 | CSS computation | stylo 0.21.0, defaults disabled, servo feature only; imported as style | Rust selector/cascade/computed-value engine, with Mg DOM adapter. No Gecko, SpiderMonkey or Servo browser embedding. Python 3 is build-time code generation only. |
-| Images | image 0.25, defaults disabled, png and gif only; resvg 0.45.1 defaults disabled; roxmltree 0.20.0 | Rust PNG/GIF and bounded SVG paths. No default codec bundle, native fallback, SVG text/system fonts, embedded raster images or file resolver. |
+| Flex/grid geometry | taffy 0.14.0, defaults disabled, std/flexbox/grid only | v0.9.0 Mg adapter borrows computed styles and document identities. No Taffy tree/parser, native layout backend or replacement browser engine. |
+| Images | image 0.25.10, defaults disabled, png/gif/jpeg only; resvg 0.45.1 defaults disabled; roxmltree 0.20.0 | Rust PNG/GIF/JPEG and bounded SVG paths; JPEG added in v0.9.0. No default codec bundle, native fallback, SVG text/system fonts, embedded raster images or file resolver. |
 | HTTP and URLs | Own HTTP/1.1 transport, std sockets, url 2; webpki-roots 1 for public trust anchors | No external fetch process or native TLS client. Certificate and hostname verification remain enabled. |
 | HTTP compression | flate2 1, defaults disabled, rust_backend only | Rust gzip/deflate decoding with a separate decoded-body limit. |
 | Session cookies | Own memory-only jar; psl 2 and httpdate 1 | Public-suffix and expiry parsing use Rust crates. No persistent or imported browser cookies. |
@@ -45,6 +46,78 @@ This browser is a testing and research project, not a production browser. The us
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### News formatting and JPEG: v0.9.0, reviewed 2026-09-17/18
+
+The production manifests and lockfile now adopt the following reviewed inputs
+for T-022 / F-025. This records source/features/licenses and admission policy,
+not full Google News compatibility. These changes are absent from v0.8.0.
+See [GOOGLE_NEWS.md](GOOGLE_NEWS.md)
+for the separate rendering, regression, real-page and publication gates.
+
+- `taffy = 0.14.0` uses `default-features = false` and only `std`, `flexbox`,
+  `grid`; `grid` also activates `alloc`. The selected graph resolves
+  `arrayvec = 0.7.8` and the already-shared `smallvec = 1.16.0`, not the
+  isolated prototype's 1.16.1. Taffy's tree, CSS parser, block/float layout,
+  calc, detailed-layout and content-size features are not enabled. Mg keeps
+  its DOM, style computation, block/table/text measurement and software painter;
+  borrowed trait views and pass-local geometry/cache state integrate the new
+  algorithms. Taffy itself does not supply painting, clipping, hit testing,
+  scrolling, a browser event loop or resource containment.
+- Taffy's declared MSRV is Rust 1.71 and its license is MIT. The published
+  0.14.0 archive omits the license text: packaging uses the reviewed upstream
+  `tools/licenses/taffy-0.14.0-MIT.txt` only when name, version, license and
+  archive VCS revision `77f385683c1d698c91a23a259f87fdddf26925fb` match.
+  Other unreviewed missing texts still fail. arrayvec/smallvec retain their
+  MIT OR Apache-2.0 declarations; all applicable notices remain in the package.
+- The additional direct `stylo_static_prefs = 0.21.0` dependency was already
+  in the lock graph and remains MPL-2.0. Mg initializes only
+  `layout.grid.enabled` before parsing sheets or attributes. No other
+  preference is enabled. Typed snapshots preserve flex/grid inputs, checked
+  numeric placement and at most 128 expanded template tracks per axis. Owned track
+  storage is charged to the existing 8 MiB snapshot-heap admission bound;
+  text inheritance does not clone these non-inherited grid vectors.
+- `image = 0.25.10` adds only its `jpeg` feature beside PNG/GIF. It resolves
+  `zune-jpeg = 0.5.15` and `zune-core = 0.5.3`. image's zune-jpeg edge enables
+  that crate's defaults: `std`, `x86` and `neon`; architecture-specific paths
+  are target-gated. On Linux x86_64 the decoder can use runtime-checked Rust
+  SIMD intrinsics, including `unsafe` Rust, with scalar Rust paths. This is
+  not a claim of entirely safe Rust. The reviewed manifests/sources introduce
+  no C/C++ codec, FFI codec library, native compiler helper or decoder build
+  script. image declares Rust 1.88 and MIT OR Apache-2.0; both zune crates
+  declare Rust 1.75 and MIT OR Apache-2.0 OR Zlib. Rust 1.91.1 remains the
+  project toolchain. Existing PNG/GIF/SVG restrictions and native-fallback
+  prohibitions remain unchanged.
+
+The source review covers these pinned archives and their active Linux x86_64
+normal/build features, not every upstream line or every target. The production
+[license inventory](DEPENDENCY_LICENSES.md) is generated from the actual lock
+graph, separately from `docs/jsplan/`'s historical research inventory. Reproduce
+it with `python3 tools/license-inventory.py tmp/THIRD_PARTY_LICENSES.txt docs/DEPENDENCY_LICENSES.md`.
+The full generated text includes the Taffy fallback and all zune license texts;
+dependency/component guards and product acceptance remain distinct checks.
+
+The resource changes repartition the existing shared 2 MiB CSS/image loading
+budget: a single stylesheet can now use up to 2 MiB instead of 256 KiB, without
+raising the aggregate. Source order and retained duplicate charging remain;
+the 16-sheet, 32-request and 10-second scheduling limits are unchanged. Style
+computation independently retains its 2 MiB combined CSS/media-text admission.
+There is no CSS-import, external-script, downloaded-font or data-URL expansion.
+
+Stylesheets remain same-origin, including redirects. Images may cross origins
+only over verified HTTPS; policy is checked before each request/redirect opens
+a socket. The first origin crossing permanently suppresses Cookie sending and
+Set-Cookie storage for the rest of that image chain, even if it returns to the
+page origin. URL userinfo is rejected. Same-origin HTTP images remain allowed
+for HTTP pages, but an image chain cannot downgrade after visiting HTTPS.
+Certificate/hostname checks, redirect limits and bounded transport remain intact.
+
+JPEG uses the existing 512 KiB image-source cap, 2048-pixel maximum side,
+1,048,576-pixel maximum decoded/target area and 8 MiB decoder allocation
+allowance. The decoded paint cache remains capped at 128 entries and 16 MiB.
+Malformed or oversized images retain the readable placeholder; no native or
+external-process fallback is introduced. These are bounded admission/cache
+policies, not whole-browser memory isolation or a security/conformance guarantee.
 
 ### Desktop appearance: 2026-09-16, v0.5.0
 
@@ -141,8 +214,12 @@ presentation hints below author rules. Typed computed values feed Mg's own
 bounded block/inline/table layout and Rust painter. The small Mg user-agent sheet
 is not a full browser UA sheet or a quirks/standards-mode implementation. Imports,
 animations, pseudo-element boxes, visited history, hover/focus state and shadow
-DOM are absent. Gradients, mixed length/percentage calculations, intrinsic sizing
-and background cover/contain are not represented by this renderer contract.
+DOM are absent. Two-stop linear backgrounds are supported; other gradients,
+mixed length/percentage calculations and background cover/contain remain
+unrepresented. The News adapter adds measured intrinsic minimum-width and
+width:fit-content constraints, plus min/max-width:fit-content for ordinary/positioned/
+replaced boxes and flex items, not general intrinsic sizing support. Unresolved
+grid-item max-fit area sizing and functional fit-content(...) remain rejected.
 Font-relative metric queries use fallback metrics; glyph shaping/rasterization
 still uses the existing Rust font path.
 

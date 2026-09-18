@@ -1,14 +1,20 @@
 # Work queue
 
-2026-09-17 active: remaining automation/Google News work, separately gated
+2026-09-18 active: remaining automation/Google News work, separately gated
 in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). The native desktop increment
 has shipped; do not conflate its release with these unfinished gates:
 
-1. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
+1. **T-022 / F-025:** faithful signed-out Google News reading first, interactions
+   later, as the user confirmed. See docs/GOOGLE_NEWS.md for the bounded migration.
+   Flex/grid, positioning, clipping, inline SVG, fit-content, gradients and
+   JPEG/credential-free HTTPS images pass focused tests. Saved News renders at
+   1024/1280 without fallback; HN pixels/geometry remain byte-identical.
+   Packaged fresh home/scroll/link/Back passes; the topic remains readable-flow
+   fallback. Finish exact-commit CI/release/public-install gates for v0.9.0 before further
+   compatibility work. Full News fidelity remains open: fonts, corner/icon
+   differences, dynamic content and destination fallbacks are explicit limits.
+2. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
    Public v0.8.0 still fails client initialization. See docs/PLAYWRIGHT.md.
-2. **T-022 / F-025:** faithful signed-out Google News reading first, interactions
-   later, as the user confirmed. See docs/GOOGLE_NEWS.md for measured blockers
-   and the proposed migration. Preserve existing budgets and Rust-only policy.
 
 Do not conflate these with the unfinished Google search or full JSPLAN/MVP gates.
 

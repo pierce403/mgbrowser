@@ -195,6 +195,214 @@ pub enum Display {
     TableColumnGroup,
     ListItem,
     Contents,
+    Flex,
+    InlineFlex,
+    Grid,
+    InlineGrid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+    Clip,
+    Auto,
+    Scroll,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlexWrap {
+    NoWrap,
+    Wrap,
+    WrapReverse,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FlexBasis {
+    Auto,
+    Content,
+    Length(Length),
+}
+
+/// Intrinsic inline-size constraints need Mg's content measurement before a
+/// numeric minimum is passed to the formatting engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntrinsicSize {
+    MinContent,
+    MaxContent,
+    FitContent,
+}
+
+/// Alignment keywords remain distinct until the formatting context resolves them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignKeyword {
+    Auto,
+    Normal,
+    Start,
+    End,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Left,
+    Right,
+    Baseline,
+    LastBaseline,
+    Stretch,
+    SelfStart,
+    SelfEnd,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    AnchorCenter,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignSafety {
+    Default,
+    Safe,
+    Unsafe,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Alignment {
+    pub keyword: AlignKeyword,
+    pub safety: AlignSafety,
+    pub legacy: bool,
+}
+impl Alignment {
+    pub const fn new(keyword: AlignKeyword) -> Self {
+        Self {
+            keyword,
+            safety: AlignSafety::Default,
+            legacy: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridLine {
+    Auto,
+    Line(i16),
+    Span(u16),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrackBreadth {
+    Auto,
+    MinContent,
+    MaxContent,
+    Length(Length),
+    Fr(f32),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrackSize {
+    Breadth(TrackBreadth),
+    MinMax(TrackBreadth, TrackBreadth),
+}
+
+/// Integer repeats are flattened after checking their expanded length. Empty
+/// template vectors mean `none`; empty implicit vectors mean the initial `auto`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GridStyle {
+    pub template_rows: Vec<TrackSize>,
+    pub template_columns: Vec<TrackSize>,
+    pub auto_rows: Vec<TrackSize>,
+    pub auto_columns: Vec<TrackSize>,
+    pub auto_flow: GridAutoFlow,
+}
+pub const MAX_GRID_TRACKS: usize = 128;
+
+/// Typed layout inputs, not a claim that every represented value is rendered.
+/// This stays independent of the private layout implementation and its types.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutStyle {
+    pub box_sizing: BoxSizing,
+    /// The width keyword, not the fit-content() sizing function. Its intrinsic
+    /// content size remains distinct from numeric/auto `ComputedStyle::width`.
+    pub width_fit_content: bool,
+    pub max_width_fit_content: bool,
+    pub min_width_intrinsic: Option<IntrinsicSize>,
+    pub position: Position,
+    /// Physical top, right, bottom, left offsets.
+    pub inset: [Length; 4],
+    /// Horizontal and vertical overflow, respectively.
+    pub overflow: [Overflow; 2],
+    pub z_index: Option<i32>,
+    pub order: i32,
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: FlexBasis,
+    /// Row and column gaps. Normal resolves to zero for flex/grid, not columns.
+    pub gap: [Length; 2],
+    pub align_content: Alignment,
+    pub justify_content: Alignment,
+    pub align_items: Alignment,
+    pub justify_items: Alignment,
+    pub align_self: Alignment,
+    pub justify_self: Alignment,
+    pub grid_row: [GridLine; 2],
+    pub grid_column: [GridLine; 2],
+    pub grid: Option<Box<GridStyle>>,
+    /// Conversion lost a value (for example calc or a named grid line). The
+    /// adapter must reject this snapshot, not interpret its fallback as support.
+    pub unsupported: bool,
+}
+impl Default for LayoutStyle {
+    fn default() -> Self {
+        let normal = Alignment::new(AlignKeyword::Normal);
+        let auto = Alignment::new(AlignKeyword::Auto);
+        Self {
+            box_sizing: BoxSizing::ContentBox,
+            width_fit_content: false,
+            max_width_fit_content: false,
+            min_width_intrinsic: None,
+            position: Position::Static,
+            inset: [Length::Auto; 4],
+            overflow: [Overflow::Visible; 2],
+            z_index: None,
+            order: 0,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::NoWrap,
+            flex_grow: 0.,
+            flex_shrink: 1.,
+            flex_basis: FlexBasis::Auto,
+            gap: [Length::Px(0.); 2],
+            align_content: normal,
+            justify_content: normal,
+            align_items: normal,
+            justify_items: normal,
+            align_self: auto,
+            justify_self: auto,
+            grid_row: [GridLine::Auto; 2],
+            grid_column: [GridLine::Auto; 2],
+            grid: None,
+            unsupported: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,12 +452,64 @@ pub struct BackgroundImage {
     pub height: Length,
 }
 
+/// Rectangular background painting/positioning areas. Non-rectangular clipping
+/// must not silently become a border-box fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackgroundBox {
+    Border,
+    Padding,
+    Content,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientDirection {
+    /// CSS radians: zero points up, positive angles rotate clockwise.
+    Angle(f32),
+    /// Signs towards a CSS corner; the used angle depends on the image aspect.
+    Corner { right: bool, bottom: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    /// Unspecified first/last stops are represented as 0%/100%.
+    pub position: Length,
+}
+
+/// One non-repeating, two-stop sRGB linear gradient. No heap-owned source,
+/// raster surface or unbounded stop list is retained by this snapshot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearGradient {
+    pub direction: GradientDirection,
+    pub stops: [GradientStop; 2],
+    pub origin: BackgroundBox,
+    pub clip: BackgroundBox,
+    /// Background tiling, distinct from repeating-linear-gradient().
+    pub repeat: [bool; 2],
+}
+
+/// Solid SVG paint after the CSS cascade. Color alpha includes the respective
+/// fill/stroke opacity, but not group opacity. Paint servers/context paint must
+/// be rejected by the bounded icon serializer, never replaced with black.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SvgPaint {
+    None,
+    Color(Color),
+    Unsupported,
+}
+
 /// Computed properties consumed by the bounded block/inline/table renderer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
+    pub layout: LayoutStyle,
     pub color: Color,
     pub background_color: Color,
+    pub background_clip: BackgroundBox,
+    pub background_gradient: Option<LinearGradient>,
+    pub svg_fill: SvgPaint,
+    pub svg_stroke: SvgPaint,
     pub font_size: f32,
     pub font_weight: u16,
     pub font_families: Vec<String>,
@@ -284,8 +544,13 @@ impl Default for ComputedStyle {
         let black = Color { rgb: 0, alpha: 1.0 };
         Self {
             display: Display::Inline,
+            layout: LayoutStyle::default(),
             color: black,
             background_color: Color { rgb: 0, alpha: 0.0 },
+            background_clip: BackgroundBox::Border,
+            background_gradient: None,
+            svg_fill: SvgPaint::Color(black),
+            svg_stroke: SvgPaint::None,
             font_size: 16.0,
             font_weight: 400,
             font_families: vec!["sans-serif".to_owned()],
@@ -310,6 +575,51 @@ impl Default for ComputedStyle {
             border_spacing: [2.0; 2],
             background_images: Vec::new(),
         }
+    }
+}
+
+impl ComputedStyle {
+    // Preserve the existing text-style convention without ever cloning an
+    // element's non-inherited grid container allocation into a text node.
+    fn clone_with_layout(&self, layout: LayoutStyle) -> Self {
+        Self {
+            display: self.display,
+            layout,
+            color: self.color,
+            background_color: self.background_color,
+            background_clip: self.background_clip,
+            background_gradient: self.background_gradient,
+            svg_fill: self.svg_fill,
+            svg_stroke: self.svg_stroke,
+            font_size: self.font_size,
+            font_weight: self.font_weight,
+            font_families: self.font_families.clone(),
+            line_height: self.line_height,
+            underline: self.underline,
+            margin: self.margin,
+            padding: self.padding,
+            border_width: self.border_width,
+            border_color: self.border_color,
+            width: self.width,
+            height: self.height,
+            min_width: self.min_width,
+            min_height: self.min_height,
+            max_width: self.max_width,
+            max_height: self.max_height,
+            text_align: self.text_align,
+            vertical_align: self.vertical_align,
+            white_space: self.white_space,
+            visible: self.visible,
+            pointer_events: self.pointer_events,
+            border_collapse: self.border_collapse,
+            border_spacing: self.border_spacing,
+            background_images: self.background_images.clone(),
+        }
+    }
+}
+impl Clone for ComputedStyle {
+    fn clone(&self) -> Self {
+        self.clone_with_layout(self.layout.clone())
     }
 }
 
@@ -350,7 +660,8 @@ const MAX_STYLE_URL_BYTES: usize = 4096;
 const MAX_FONT_NAME_BYTES: usize = 256;
 
 fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
-    value.font_families.capacity() * std::mem::size_of::<String>()
+    layout_heap_bytes(&value.layout)
+        + value.font_families.capacity() * std::mem::size_of::<String>()
         + value.background_images.capacity() * std::mem::size_of::<BackgroundImage>()
         + value
             .font_families
@@ -364,14 +675,33 @@ fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
             .sum::<usize>()
 }
 
+fn layout_heap_bytes(value: &LayoutStyle) -> usize {
+    value.grid.as_ref().map_or(0, |grid| {
+        std::mem::size_of::<GridStyle>()
+            + [
+                &grid.template_rows,
+                &grid.template_columns,
+                &grid.auto_rows,
+                &grid.auto_columns,
+            ]
+            .iter()
+            .map(|tracks| tracks.capacity() * std::mem::size_of::<TrackSize>())
+            .sum::<usize>()
+    })
+}
+
 fn admit_snapshot(
     total: &mut usize,
     old: &ComputedStyle,
     new: &ComputedStyle,
 ) -> Result<(), String> {
+    admit_snapshot_bytes(total, snapshot_heap_bytes(old), snapshot_heap_bytes(new))
+}
+
+fn admit_snapshot_bytes(total: &mut usize, old: usize, new: usize) -> Result<(), String> {
     let next = total
-        .checked_sub(snapshot_heap_bytes(old))
-        .and_then(|bytes| bytes.checked_add(snapshot_heap_bytes(new)))
+        .checked_sub(old)
+        .and_then(|bytes| bytes.checked_add(new))
         .filter(|&bytes| bytes <= MAX_SNAPSHOT_HEAP_BYTES)
         .ok_or("computed style snapshot bound exceeded")?;
     *total = next;
@@ -999,6 +1329,105 @@ fn presentation_hints(document: &Document, id: usize) -> String {
     css
 }
 
+/// Parse one SVG presentation value before serializing it into a declaration.
+/// Parsing the entire value prevents an attribute from injecting declarations,
+/// `!important`, or another rule. No other SVG attributes become CSS here.
+fn svg_presentation_hints(
+    node: &Node,
+    id: usize,
+    url: &UrlExtraData,
+    source: &str,
+    diagnostics: &mut StyleDiagnostics,
+) -> String {
+    use style::parser::Parse;
+    use style::values::specified::{Color as SpecifiedColor, SVGOpacity, SVGPaint};
+    use style_traits::ToCss;
+    let context = style::parser::ParserContext::new(
+        Origin::Author,
+        url,
+        None,
+        style_traits::ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        Default::default(),
+        None,
+        None,
+        Default::default(),
+    );
+    let mut css = String::new();
+    for name in [
+        "color",
+        "fill",
+        "stroke",
+        "fill-opacity",
+        "stroke-opacity",
+        "display",
+        "visibility",
+    ] {
+        let Some(value) = node.attr(name) else {
+            continue;
+        };
+        let canonical = if value.len() <= 1024 {
+            let value = value.trim();
+            let keyword = ["inherit", "initial", "unset", "revert", "revert-layer"]
+                .into_iter()
+                .find(|keyword| value.eq_ignore_ascii_case(keyword));
+            if let Some(keyword) = keyword {
+                Some(keyword.to_owned())
+            } else {
+                let mut input = cssparser::ParserInput::new(value);
+                let mut parser = cssparser::Parser::new(&mut input);
+                if name == "display" {
+                    parser
+                        .parse_entirely(|parser| {
+                            style::properties::longhands::display::parse(&context, parser)
+                        })
+                        .ok()
+                        .map(|value| value.to_css_string())
+                } else if name == "visibility" {
+                    parser
+                        .parse_entirely(|parser| {
+                            style::properties::longhands::visibility::parse(&context, parser)
+                        })
+                        .ok()
+                        .map(|value| value.to_css_string())
+                } else if name == "color" {
+                    parser
+                        .parse_entirely(|parser| SpecifiedColor::parse(&context, parser))
+                        .ok()
+                        .map(|value| value.to_css_string())
+                } else if matches!(name, "fill" | "stroke") {
+                    parser
+                        .parse_entirely(|parser| SVGPaint::parse(&context, parser))
+                        .ok()
+                        .map(|value| value.to_css_string())
+                } else {
+                    parser
+                        .parse_entirely(|parser| SVGOpacity::parse(&context, parser))
+                        .ok()
+                        .map(|value| value.to_css_string())
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(value) = canonical {
+            css.push_str(name);
+            css.push(':');
+            css.push_str(&value);
+            css.push(';');
+        } else {
+            diagnostics.record(
+                "css-parse",
+                format_args!("Invalid or oversized SVG presentation attribute {name}; ignored"),
+                format_args!("{source} [SVG presentation attribute]"),
+                Some(id),
+                None,
+            );
+        }
+    }
+    css
+}
+
 /// Compute a fresh static style snapshot with no network or script capability.
 /// Stylesheets must be supplied in document order, including inline style blocks.
 /// CSS imports, animations, pseudo-element boxes and visited history are absent.
@@ -1018,6 +1447,10 @@ pub fn compute_styles_with_diagnostics(
     viewport: (f32, f32),
     diagnostics: &mut StyleDiagnostics,
 ) -> Result<Vec<ComputedStyle>, String> {
+    static PREFERENCES: std::sync::Once = std::sync::Once::new();
+    PREFERENCES.call_once(|| {
+        stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+    });
     let diagnostics = RefCell::new(diagnostics);
     if document.nodes.is_empty() || document.nodes.len() > 50_000 {
         return Err("style DOM node bound exceeded".into());
@@ -1044,12 +1477,19 @@ pub fn compute_styles_with_diagnostics(
     // The parser/worker normally validate topology. Check the adapter boundary too.
     let mut order = Vec::with_capacity(document.nodes.len());
     let mut seen = vec![false; document.nodes.len()];
+    let mut svg_contexts = vec![false; document.nodes.len()];
     let mut pending = vec![(0usize, 0usize)];
     while let Some((id, depth)) = pending.pop() {
         if id >= seen.len() || seen[id] || depth > 256 {
             return Err("invalid style DOM topology".into());
         }
         seen[id] = true;
+        // Same bounded foreign-content boundary as the HTML parser. Children
+        // of foreignObject return to HTML, until a nested svg starts anew.
+        svg_contexts[id] = document.nodes[id].tag == "svg"
+            || id != 0
+                && svg_contexts[document.nodes[id].parent]
+                && document.nodes[document.nodes[id].parent].tag != "foreignobject";
         order.push(id);
         for &child in document.nodes[id].children.iter().rev() {
             if child >= document.nodes.len() || document.nodes[child].parent != id {
@@ -1090,7 +1530,19 @@ pub fn compute_styles_with_diagnostics(
                     node: Some(id),
                 }),
             ),
-            hints: parsed_declarations(&presentation_hints(document, id), &url_data, &lock, None),
+            hints: {
+                let mut hints = presentation_hints(document, id);
+                if svg_contexts[id] {
+                    hints.push_str(&svg_presentation_hints(
+                        node,
+                        id,
+                        &url_data,
+                        &document.base_url,
+                        &mut diagnostics.borrow_mut(),
+                    ));
+                }
+                parsed_declarations(&hints, &url_data, &lock, None)
+            },
             data: ElementDataWrapper::default(),
         })
         .collect();
@@ -1204,8 +1656,14 @@ pub fn compute_styles_with_diagnostics(
             values[id] = values[parent_id].clone();
             // Admit before cloning: inherited strings must not amplify a small
             // stylesheet by the number of text nodes in the arena.
-            admit_snapshot(&mut snapshot_bytes, &output[id], &output[parent_id])?;
-            output[id] = output[parent_id].clone();
+            let inherited_bytes = snapshot_heap_bytes(&output[parent_id])
+                - layout_heap_bytes(&output[parent_id].layout);
+            admit_snapshot_bytes(
+                &mut snapshot_bytes,
+                snapshot_heap_bytes(&output[id]),
+                inherited_bytes,
+            )?;
+            output[id] = output[parent_id].clone_with_layout(LayoutStyle::default());
             continue;
         }
         let mut declarations = ApplicableDeclarationList::new();
@@ -1251,6 +1709,29 @@ pub fn compute_styles_with_diagnostics(
             &mut tree_caches,
         );
         let mut snapshot = renderer_style(&computed)?;
+        if svg_contexts[id] {
+            for (property, paint) in [("fill", snapshot.svg_fill), ("stroke", snapshot.svg_stroke)]
+            {
+                if paint == SvgPaint::Unsupported {
+                    diagnostics.borrow_mut().record("css-unsupported",
+                        format_args!("SVG {property} paint server, context paint, or context opacity is not supported by the bounded inline icon renderer"),
+                        format_args!("{}", document.base_url), Some(id), None);
+                }
+            }
+        }
+        let remaining = MAX_SNAPSHOT_HEAP_BYTES
+            .checked_sub(snapshot_bytes)
+            .and_then(|n| n.checked_add(snapshot_heap_bytes(&output[id])))
+            .and_then(|n| n.checked_sub(snapshot_heap_bytes(&snapshot)))
+            .ok_or("computed style snapshot bound exceeded")?;
+        snapshot.layout = renderer_layout(
+            &computed,
+            snapshot.display,
+            remaining,
+            id,
+            &document.base_url,
+            &mut diagnostics.borrow_mut(),
+        )?;
         if document.scripting_enabled() && node.node().tag == "noscript" {
             // Inactive fallback content is not overrideable by author CSS.
             snapshot.display = Display::None;
@@ -1277,12 +1758,68 @@ fn report_unsupported(
     source: &str,
     diagnostics: &mut StyleDiagnostics,
 ) {
-    use style::values::{computed::Display as D, generics::box_::PositionProperty};
+    use style::values::computed::Display as D;
     use style_traits::ToCss;
     let box_style = values.get_box();
     if rendered.display == Display::None {
         return;
     }
+    let border = values.get_border();
+    if [
+        &border.border_top_left_radius,
+        &border.border_top_right_radius,
+        &border.border_bottom_right_radius,
+        &border.border_bottom_left_radius,
+    ]
+    .iter()
+    .any(|radius| {
+        [&radius.0.width.0, &radius.0.height.0]
+            .iter()
+            .any(|value| !matches!(plain_length(value), Length::Px(0.) | Length::Percent(0.)))
+    }) {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS nonzero border-radius is not implemented; backgrounds, borders and clipping use square corners"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    let background = values.get_background();
+    if rendered.background_clip == BackgroundBox::Unsupported {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS background-clip requires non-rectangular clipping, which is not implemented; background color omitted"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    if rendered.background_gradient.is_none()
+        && background
+            .background_image
+            .0
+            .iter()
+            .any(|image| matches!(image, style::values::generics::image::Image::Gradient(_)))
+    {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS gradient omitted: only one modern non-repeating two-stop sRGB linear gradient with bounded plain lengths/percentages, auto size, zero position, scroll attachment and rectangular clipping is implemented"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    if !rendered.background_images.is_empty()
+        && background
+            .background_clip
+            .0
+            .iter()
+            .any(|clip| background_box(*clip) != BackgroundBox::Border)
+    {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS non-default background-clip on URL image layers is not implemented by the legacy image-background path"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    // Represented formatting contexts are implemented by the bounded layout
+    // adapter. Rejected snapshots and actual layout failures report their own
+    // specific reasons; admitting a display value alone is not success.
     if rendered.display == Display::Block && box_style.display != D::Block {
         diagnostics.record(
             "css-unsupported",
@@ -1295,11 +1832,11 @@ fn report_unsupported(
             None,
         );
     }
-    if box_style.position != PositionProperty::Static {
+    if rendered.layout.position == Position::Sticky {
         diagnostics.record(
             "css-unsupported",
             format_args!(
-                "CSS position: {} is not implemented; using normal flow",
+                "CSS position: {} is not implemented; using normal flow without sticky offsets",
                 box_style.position.to_css_string()
             ),
             format_args!("{source}"),
@@ -1307,11 +1844,51 @@ fn report_unsupported(
             None,
         );
     }
-    use style::values::specified::box_::Overflow;
-    if box_style.overflow_x != Overflow::Visible || box_style.overflow_y != Overflow::Visible {
+    if matches!(
+        rendered.layout.position,
+        Position::Absolute | Position::Fixed
+    ) {
+        for (axis, before, after) in [("horizontal", 3, 1), ("vertical", 0, 2)] {
+            if rendered.layout.inset[before] == Length::Auto
+                && rendered.layout.inset[after] == Length::Auto
+            {
+                diagnostics.record(
+                    "css-unsupported",
+                    format_args!("CSS position: {} has both {axis} insets auto; hypothetical static position is not implemented; using containing-block start", box_style.position.to_css_string()),
+                    format_args!("{source}"), Some(node), None,
+                );
+            }
+        }
+    }
+    if let Some(z) = rendered.layout.z_index {
         diagnostics.record(
             "css-unsupported",
-            format_args!("CSS overflow-x: {}; overflow-y: {} are not implemented for element clipping/scrolling", box_style.overflow_x.to_css_string(), box_style.overflow_y.to_css_string()),
+            format_args!("CSS z-index: {z} uses limited positioned paint ordering; full stacking contexts and negative layers behind normal flow are not implemented"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    if rendered.display == Display::TableCell
+        && rendered
+            .layout
+            .overflow
+            .iter()
+            .any(|value| *value != Overflow::Visible)
+    {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS table-cell overflow clipping is not implemented by the legacy automatic-table path"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    if rendered
+        .layout
+        .overflow
+        .iter()
+        .any(|value| matches!(value, Overflow::Auto | Overflow::Scroll))
+    {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS overflow-x: {}; overflow-y: {} require element scrolling, which is not implemented", box_style.overflow_x.to_css_string(), box_style.overflow_y.to_css_string()),
             format_args!("{source}"),
             Some(node),
             None,
@@ -1330,6 +1907,470 @@ fn plain_length(value: &style::values::computed::LengthPercentage) -> Length {
     else {
         Length::Auto
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MappingFailure {
+    Unsupported(&'static str),
+    Limit(&'static str),
+}
+type Mapping<T> = Result<T, MappingFailure>;
+
+fn layout_length(value: &style::values::computed::LengthPercentage) -> Mapping<Length> {
+    let result = if let Some(px) = value.to_length() {
+        Length::Px(px.px())
+    } else if let Some(percent) = value.to_percentage() {
+        Length::Percent(percent.0)
+    } else {
+        return Err(MappingFailure::Unsupported("mixed calc lengths"));
+    };
+    match result {
+        Length::Px(v) | Length::Percent(v) if v.is_finite() => Ok(result),
+        _ => Err(MappingFailure::Limit("non-finite computed layout length")),
+    }
+}
+fn layout_size(value: &style::values::computed::Size) -> Mapping<Length> {
+    use style::values::computed::Size;
+    match value {
+        Size::Auto => Ok(Length::Auto),
+        Size::LengthPercentage(v) => layout_length(&v.0),
+        _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
+    }
+}
+fn layout_inset(value: &style::values::computed::Inset) -> Mapping<Length> {
+    use style::values::computed::Inset;
+    match value {
+        Inset::Auto => Ok(Length::Auto),
+        Inset::LengthPercentage(v) => layout_length(v),
+        _ => Err(MappingFailure::Unsupported("anchor positioning")),
+    }
+}
+fn layout_gap(
+    value: &style::values::computed::length::NonNegativeLengthPercentageOrNormal,
+) -> Mapping<Length> {
+    use style::values::generics::length::LengthPercentageOrNormal;
+    match value {
+        LengthPercentageOrNormal::Normal => Ok(Length::Px(0.)),
+        LengthPercentageOrNormal::LengthPercentage(v) => layout_length(&v.0),
+    }
+}
+fn alignment(flags: style::values::specified::align::AlignFlags) -> Alignment {
+    use style::values::specified::align::AlignFlags as F;
+    let keyword = match flags.value() {
+        F::AUTO => AlignKeyword::Auto,
+        F::NORMAL => AlignKeyword::Normal,
+        F::START => AlignKeyword::Start,
+        F::END => AlignKeyword::End,
+        F::FLEX_START => AlignKeyword::FlexStart,
+        F::FLEX_END => AlignKeyword::FlexEnd,
+        F::CENTER => AlignKeyword::Center,
+        F::LEFT => AlignKeyword::Left,
+        F::RIGHT => AlignKeyword::Right,
+        F::BASELINE => AlignKeyword::Baseline,
+        F::LAST_BASELINE => AlignKeyword::LastBaseline,
+        F::STRETCH => AlignKeyword::Stretch,
+        F::SELF_START => AlignKeyword::SelfStart,
+        F::SELF_END => AlignKeyword::SelfEnd,
+        F::SPACE_BETWEEN => AlignKeyword::SpaceBetween,
+        F::SPACE_AROUND => AlignKeyword::SpaceAround,
+        F::SPACE_EVENLY => AlignKeyword::SpaceEvenly,
+        _ => AlignKeyword::AnchorCenter,
+    };
+    Alignment {
+        keyword,
+        safety: if flags.contains(F::SAFE) {
+            AlignSafety::Safe
+        } else if flags.contains(F::UNSAFE) {
+            AlignSafety::Unsafe
+        } else {
+            AlignSafety::Default
+        },
+        legacy: flags.contains(F::LEGACY),
+    }
+}
+fn layout_overflow(value: style::values::specified::box_::Overflow) -> Overflow {
+    use style::values::specified::box_::Overflow as O;
+    match value {
+        O::Visible => Overflow::Visible,
+        O::Hidden => Overflow::Hidden,
+        O::Clip => Overflow::Clip,
+        O::Auto => Overflow::Auto,
+        O::Scroll => Overflow::Scroll,
+    }
+}
+fn grid_line(value: &style::values::computed::GridLine) -> Mapping<GridLine> {
+    if !value.ident.0.is_empty() {
+        return Err(MappingFailure::Unsupported("named grid placement"));
+    }
+    if value.is_auto() {
+        return Ok(GridLine::Auto);
+    }
+    let n = value.line_num;
+    if n == 0 || n.unsigned_abs() as usize > MAX_GRID_TRACKS || value.is_span && n < 0 {
+        return Err(MappingFailure::Limit(
+            "computed grid line/span bound exceeded",
+        ));
+    }
+    Ok(if value.is_span {
+        GridLine::Span(n as u16)
+    } else {
+        GridLine::Line(n as i16)
+    })
+}
+fn track_breadth(value: &style::values::computed::TrackBreadth) -> Mapping<TrackBreadth> {
+    use style::values::generics::grid::TrackBreadth as B;
+    Ok(match value {
+        B::Auto => TrackBreadth::Auto,
+        B::MinContent => TrackBreadth::MinContent,
+        B::MaxContent => TrackBreadth::MaxContent,
+        B::Breadth(v) => TrackBreadth::Length(layout_length(v)?),
+        B::Flex(v) if v.0.is_finite() && v.0 >= 0. => TrackBreadth::Fr(v.0),
+        B::Flex(_) => return Err(MappingFailure::Limit("non-finite computed grid fraction")),
+    })
+}
+fn track_size(value: &style::values::computed::TrackSize) -> Mapping<TrackSize> {
+    use style::values::generics::grid::TrackSize as T;
+    Ok(match value {
+        T::Breadth(v) => TrackSize::Breadth(track_breadth(v)?),
+        T::Minmax(min, max) => TrackSize::MinMax(track_breadth(min)?, track_breadth(max)?),
+        T::FitContent(_) => return Err(MappingFailure::Unsupported("fit-content grid tracks")),
+    })
+}
+fn template_count(value: &style::values::computed::GridTemplateComponent) -> Mapping<usize> {
+    use style::values::generics::grid::{
+        GridTemplateComponent as G, RepeatCount, TrackListValue as V,
+    };
+    let tracks = match value {
+        G::None => return Ok(0),
+        G::TrackList(tracks) => tracks,
+        _ => return Err(MappingFailure::Unsupported("subgrid or masonry")),
+    };
+    if tracks.line_names.iter().any(|names| !names.is_empty()) {
+        return Err(MappingFailure::Unsupported("named grid lines"));
+    }
+    let mut count = 0usize;
+    for value in tracks.values.iter() {
+        let amount = match value {
+            V::TrackSize(_) => 1,
+            V::TrackRepeat(repeat) => {
+                if repeat.line_names.iter().any(|names| !names.is_empty()) {
+                    return Err(MappingFailure::Unsupported("named repeated grid lines"));
+                }
+                let RepeatCount::Number(n) = repeat.count else {
+                    return Err(MappingFailure::Unsupported(
+                        "auto-fill/auto-fit grid repeats",
+                    ));
+                };
+                if n <= 0 {
+                    return Err(MappingFailure::Limit("invalid computed grid repeat"));
+                }
+                (n as usize)
+                    .checked_mul(repeat.track_sizes.len())
+                    .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?
+            }
+        };
+        count = count
+            .checked_add(amount)
+            .filter(|n| *n <= MAX_GRID_TRACKS)
+            .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?;
+    }
+    Ok(count)
+}
+fn template_tracks(
+    value: &style::values::computed::GridTemplateComponent,
+    count: usize,
+) -> Mapping<Vec<TrackSize>> {
+    use style::values::generics::grid::{
+        GridTemplateComponent as G, RepeatCount, TrackListValue as V,
+    };
+    let mut result = Vec::with_capacity(count);
+    if let G::TrackList(tracks) = value {
+        for value in tracks.values.iter() {
+            match value {
+                V::TrackSize(v) => result.push(track_size(v)?),
+                V::TrackRepeat(repeat) => {
+                    let RepeatCount::Number(n) = repeat.count else {
+                        unreachable!("preflighted repeat")
+                    };
+                    for _ in 0..n {
+                        for v in repeat.track_sizes.iter() {
+                            result.push(track_size(v)?);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+fn grid_style(
+    position: &style::properties::style_structs::Position,
+    remaining: usize,
+) -> Mapping<Box<GridStyle>> {
+    use style::values::computed::{GridAutoFlow as F, GridTemplateAreas};
+    if !matches!(position.grid_template_areas, GridTemplateAreas::None) {
+        return Err(MappingFailure::Unsupported("named grid areas"));
+    }
+    let rows = template_count(&position.grid_template_rows)?;
+    let columns = template_count(&position.grid_template_columns)?;
+    let auto_rows = position.grid_auto_rows.0.len();
+    let auto_columns = position.grid_auto_columns.0.len();
+    if auto_rows > MAX_GRID_TRACKS || auto_columns > MAX_GRID_TRACKS {
+        return Err(MappingFailure::Limit(
+            "computed implicit grid track bound exceeded",
+        ));
+    }
+    let bytes = (rows + columns + auto_rows + auto_columns)
+        .checked_mul(std::mem::size_of::<TrackSize>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<GridStyle>()))
+        .filter(|n| *n <= remaining)
+        .ok_or(MappingFailure::Limit(
+            "computed style snapshot bound exceeded",
+        ))?;
+    let _ = bytes; // Admission above precedes every owned grid-vector allocation.
+    let implicit =
+        |tracks: &style::values::computed::ImplicitGridTracks| -> Mapping<Vec<TrackSize>> {
+            let mut output = Vec::with_capacity(tracks.0.len());
+            for track in tracks.0.iter() {
+                output.push(track_size(track)?);
+            }
+            Ok(output)
+        };
+    let flow = position.grid_auto_flow;
+    let auto_flow = match (flow.contains(F::COLUMN), flow.contains(F::DENSE)) {
+        (false, false) => GridAutoFlow::Row,
+        (false, true) => GridAutoFlow::RowDense,
+        (true, false) => GridAutoFlow::Column,
+        (true, true) => GridAutoFlow::ColumnDense,
+    };
+    Ok(Box::new(GridStyle {
+        template_rows: template_tracks(&position.grid_template_rows, rows)?,
+        template_columns: template_tracks(&position.grid_template_columns, columns)?,
+        auto_rows: implicit(&position.grid_auto_rows)?,
+        auto_columns: implicit(&position.grid_auto_columns)?,
+        auto_flow,
+    }))
+}
+
+struct LayoutReporter<'a> {
+    diagnostics: &'a mut StyleDiagnostics,
+    node: usize,
+    source: &'a str,
+    unsupported: bool,
+}
+impl LayoutReporter<'_> {
+    fn convert<T>(&mut self, property: &str, value: Mapping<T>, fallback: T) -> Result<T, String> {
+        match value {
+            Ok(value) => Ok(value),
+            Err(MappingFailure::Limit(message)) => Err(message.into()),
+            Err(MappingFailure::Unsupported(message)) => {
+                self.unsupported = true;
+                self.diagnostics.record("css-unsupported",
+                    format_args!("CSS {property}: {message} are not represented by the layout snapshot; retaining fallback"),
+                    format_args!("{}", self.source), Some(self.node), None);
+                Ok(fallback)
+            }
+        }
+    }
+}
+
+fn renderer_layout(
+    values: &ComputedValues,
+    display: Display,
+    remaining: usize,
+    node: usize,
+    source: &str,
+    diagnostics: &mut StyleDiagnostics,
+) -> Result<LayoutStyle, String> {
+    use style::properties::longhands::{
+        aspect_ratio, box_sizing, contain, direction, flex_direction, flex_wrap, writing_mode,
+    };
+    use style::values::generics::{box_::PositionProperty, flex::FlexBasis as B, position::ZIndex};
+    let p = values.get_position();
+    let b = values.get_box();
+    let mut report = LayoutReporter {
+        diagnostics,
+        node,
+        source,
+        unsupported: false,
+    };
+    let mut output = LayoutStyle {
+        box_sizing: match p.box_sizing {
+            box_sizing::computed_value::T::ContentBox => BoxSizing::ContentBox,
+            box_sizing::computed_value::T::BorderBox => BoxSizing::BorderBox,
+        },
+        position: match b.position {
+            PositionProperty::Static => Position::Static,
+            PositionProperty::Relative => Position::Relative,
+            PositionProperty::Absolute => Position::Absolute,
+            PositionProperty::Fixed => Position::Fixed,
+            PositionProperty::Sticky => Position::Sticky,
+        },
+        overflow: [layout_overflow(b.overflow_x), layout_overflow(b.overflow_y)],
+        z_index: match p.z_index {
+            ZIndex::Auto => None,
+            ZIndex::Integer(n) => Some(n),
+        },
+        order: p.order,
+        flex_direction: match p.flex_direction {
+            flex_direction::computed_value::T::Row => FlexDirection::Row,
+            flex_direction::computed_value::T::RowReverse => FlexDirection::RowReverse,
+            flex_direction::computed_value::T::Column => FlexDirection::Column,
+            flex_direction::computed_value::T::ColumnReverse => FlexDirection::ColumnReverse,
+        },
+        flex_wrap: match p.flex_wrap {
+            flex_wrap::computed_value::T::Nowrap => FlexWrap::NoWrap,
+            flex_wrap::computed_value::T::Wrap => FlexWrap::Wrap,
+            flex_wrap::computed_value::T::WrapReverse => FlexWrap::WrapReverse,
+        },
+        flex_grow: p.flex_grow.0,
+        flex_shrink: p.flex_shrink.0,
+        flex_basis: report.convert(
+            "flex-basis",
+            match &p.flex_basis {
+                B::Content => Ok(FlexBasis::Content),
+                B::Size(value) => layout_size(value).map(|v| {
+                    if v == Length::Auto {
+                        FlexBasis::Auto
+                    } else {
+                        FlexBasis::Length(v)
+                    }
+                }),
+            },
+            FlexBasis::Auto,
+        )?,
+        align_content: alignment(p.align_content.primary()),
+        justify_content: alignment(p.justify_content.primary()),
+        align_items: alignment(p.align_items.0),
+        justify_items: alignment(p.justify_items.computed.0.0),
+        align_self: alignment(p.align_self.0),
+        justify_self: alignment(p.justify_self.0),
+        ..LayoutStyle::default()
+    };
+    // Preserve a truthful fallback for layout-affecting state absent from the
+    // renderer contract. This is not an exhaustive CSS support inventory.
+    let inherited = values.get_inherited_box();
+    for (name, differs, reason) in [
+        (
+            "direction",
+            inherited.direction != direction::get_initial_value(),
+            "non-default direction",
+        ),
+        (
+            "writing-mode",
+            inherited.writing_mode != writing_mode::get_initial_value(),
+            "non-horizontal writing modes",
+        ),
+        (
+            "contain",
+            b.contain != contain::get_initial_value(),
+            "CSS containment semantics",
+        ),
+        (
+            "aspect-ratio",
+            p.aspect_ratio != aspect_ratio::get_initial_value(),
+            "CSS preferred aspect ratios",
+        ),
+    ] {
+        if differs {
+            report.convert(name, Err(MappingFailure::Unsupported(reason)), ())?;
+        }
+    }
+    if !output.flex_grow.is_finite() || !output.flex_shrink.is_finite() {
+        return Err("non-finite computed flex factor".into());
+    }
+    for (slot, (name, value)) in output.inset.iter_mut().zip([
+        ("top", &p.top),
+        ("right", &p.right),
+        ("bottom", &p.bottom),
+        ("left", &p.left),
+    ]) {
+        *slot = report.convert(name, layout_inset(value), Length::Auto)?;
+    }
+    for (slot, (name, value)) in output
+        .gap
+        .iter_mut()
+        .zip([("row-gap", &p.row_gap), ("column-gap", &p.column_gap)])
+    {
+        *slot = report.convert(name, layout_gap(value), Length::Px(0.))?;
+    }
+    use style::values::computed::Size;
+    output.width_fit_content = matches!(p.width, Size::FitContent);
+    if !output.width_fit_content {
+        report.convert("width", layout_size(&p.width), Length::Auto)?;
+    }
+    for (name, value) in [("height", &p.height), ("min-height", &p.min_height)] {
+        report.convert(name, layout_size(value), Length::Auto)?;
+    }
+    output.min_width_intrinsic = match p.min_width {
+        Size::MinContent => Some(IntrinsicSize::MinContent),
+        Size::MaxContent => Some(IntrinsicSize::MaxContent),
+        Size::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert("min-width", layout_size(&p.min_width), Length::Auto)?;
+            None
+        }
+    };
+    for (name, value) in [("max-width", &p.max_width), ("max-height", &p.max_height)] {
+        use style::values::computed::MaxSize;
+        if name == "max-width" && matches!(value, MaxSize::FitContent) {
+            output.max_width_fit_content = true;
+            continue;
+        }
+        report.convert(
+            name,
+            match value {
+                MaxSize::None => Ok(Length::Auto),
+                MaxSize::LengthPercentage(v) => layout_length(&v.0),
+                _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
+            },
+            Length::Auto,
+        )?;
+    }
+    let margin = values.get_margin();
+    for (name, value) in [
+        ("margin-top", &margin.margin_top),
+        ("margin-right", &margin.margin_right),
+        ("margin-bottom", &margin.margin_bottom),
+        ("margin-left", &margin.margin_left),
+    ] {
+        use style::values::computed::Margin;
+        report.convert(
+            name,
+            match value {
+                Margin::Auto => Ok(Length::Auto),
+                Margin::LengthPercentage(v) => layout_length(v),
+                _ => Err(MappingFailure::Unsupported("anchor margin")),
+            },
+            Length::Auto,
+        )?;
+    }
+    let padding = values.get_padding();
+    for (name, value) in [
+        ("padding-top", &padding.padding_top),
+        ("padding-right", &padding.padding_right),
+        ("padding-bottom", &padding.padding_bottom),
+        ("padding-left", &padding.padding_left),
+    ] {
+        report.convert(name, layout_length(&value.0), Length::Px(0.))?;
+    }
+    for (slot, (name, value)) in output.grid_row.iter_mut().zip([
+        ("grid-row-start", &p.grid_row_start),
+        ("grid-row-end", &p.grid_row_end),
+    ]) {
+        *slot = report.convert(name, grid_line(value), GridLine::Auto)?;
+    }
+    for (slot, (name, value)) in output.grid_column.iter_mut().zip([
+        ("grid-column-start", &p.grid_column_start),
+        ("grid-column-end", &p.grid_column_end),
+    ]) {
+        *slot = report.convert(name, grid_line(value), GridLine::Auto)?;
+    }
+    if matches!(display, Display::Grid | Display::InlineGrid) {
+        output.grid = report.convert("grid-template", grid_style(p, remaining).map(Some), None)?;
+    }
+    output.unsupported = report.unsupported;
+    Ok(output)
 }
 
 fn size_length(value: &style::values::computed::Size) -> Length {
@@ -1362,6 +2403,135 @@ fn absolute_color(color: &style::color::AbsoluteColor) -> Color {
             | byte(color.components.2),
         alpha: color.alpha.clamp(0.0, 1.0),
     }
+}
+
+fn background_box(value: style::values::specified::background::BackgroundClip) -> BackgroundBox {
+    use style::values::specified::background::BackgroundClip as B;
+    match value {
+        B::BorderBox => BackgroundBox::Border,
+        B::PaddingBox => BackgroundBox::Padding,
+        B::ContentBox => BackgroundBox::Content,
+        _ => BackgroundBox::Unsupported,
+    }
+}
+
+/// Convert only the explicitly implemented background slice. This is a fixed
+/// two-stop read of Stylo's actual computed values, not CSS string reparsing.
+fn renderer_gradient(values: &ComputedValues) -> Option<LinearGradient> {
+    use style::properties::longhands::{background_attachment, background_origin};
+    use style::values::computed::image::LineDirection;
+    use style::values::generics::background::BackgroundSize;
+    use style::values::generics::image::{
+        Gradient, GradientCompatMode, GradientFlags, GradientItem, Image,
+    };
+    use style::values::generics::length::LengthPercentageOrAuto;
+    use style::values::specified::background::BackgroundRepeatKeyword as Repeat;
+    use style::values::specified::position::{
+        HorizontalPositionKeyword as H, VerticalPositionKeyword as V,
+    };
+    let background = values.get_background();
+    let [Image::Gradient(gradient)] = background.background_image.0.as_ref() else {
+        return None;
+    };
+    let Gradient::Linear {
+        direction,
+        color_interpolation_method,
+        items,
+        flags,
+        compat_mode,
+    } = &**gradient
+    else {
+        return None;
+    };
+    if *compat_mode != GradientCompatMode::Modern
+        || flags.contains(GradientFlags::REPEATING)
+        || color_interpolation_method.space != style::color::ColorSpace::Srgb
+        || items.len() != 2
+    {
+        return None;
+    }
+    let size = background.background_size.0.first()?;
+    if !matches!(
+        size,
+        BackgroundSize::ExplicitSize {
+            width: LengthPercentageOrAuto::Auto,
+            height: LengthPercentageOrAuto::Auto
+        }
+    ) {
+        return None;
+    }
+    for position in [
+        background.background_position_x.0.first()?,
+        background.background_position_y.0.first()?,
+    ] {
+        if !matches!(plain_length(position), Length::Px(0.) | Length::Percent(0.)) {
+            return None;
+        }
+    }
+    if *background.background_attachment.0.first()?
+        != background_attachment::single_value::computed_value::T::Scroll
+    {
+        return None;
+    }
+    let clip = background_box(*background.background_clip.0.first()?);
+    if clip == BackgroundBox::Unsupported {
+        return None;
+    }
+    let origin = match background.background_origin.0.first()? {
+        background_origin::single_value::computed_value::T::BorderBox => BackgroundBox::Border,
+        background_origin::single_value::computed_value::T::PaddingBox => BackgroundBox::Padding,
+        background_origin::single_value::computed_value::T::ContentBox => BackgroundBox::Content,
+    };
+    let repeat = background.background_repeat.0.first()?;
+    let repeats = |value| match value {
+        Repeat::Repeat => Some(true),
+        Repeat::NoRepeat => Some(false),
+        _ => None,
+    };
+    let repeat = [repeats(repeat.0)?, repeats(repeat.1)?];
+    let direction = match *direction {
+        LineDirection::Angle(angle) => {
+            let radians = angle.radians();
+            if !radians.is_finite() {
+                return None;
+            }
+            GradientDirection::Angle(radians.rem_euclid(std::f32::consts::TAU))
+        }
+        LineDirection::Horizontal(H::Left) => GradientDirection::Angle(std::f32::consts::PI * 1.5),
+        LineDirection::Horizontal(H::Right) => {
+            GradientDirection::Angle(std::f32::consts::FRAC_PI_2)
+        }
+        LineDirection::Vertical(V::Top) => GradientDirection::Angle(0.),
+        LineDirection::Vertical(V::Bottom) => GradientDirection::Angle(std::f32::consts::PI),
+        LineDirection::Corner(horizontal, vertical) => GradientDirection::Corner {
+            right: horizontal == H::Right,
+            bottom: vertical == V::Bottom,
+        },
+    };
+    let text = values.get_inherited_text();
+    let stop = |index: usize| {
+        let (color, position) = match &items[index] {
+            GradientItem::SimpleColorStop(color) => (color, Length::Percent(index as f32)),
+            GradientItem::ComplexColorStop { color, position } => (color, plain_length(position)),
+            GradientItem::InterpolationHint(_) => return None,
+        };
+        if !matches!(position, Length::Px(value) | Length::Percent(value) if value.is_finite() && value.abs() <= 1_000_000.)
+        {
+            return None;
+        }
+        let color = absolute_color(&color.resolve_to_absolute(&text.color));
+        if !color.alpha.is_finite() {
+            return None;
+        }
+        Some(GradientStop { color, position })
+    };
+    Some(LinearGradient {
+        direction,
+        stops: [stop(0)?, stop(1)?],
+        origin,
+        clip,
+        repeat,
+    })
 }
 
 fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
@@ -1409,6 +2579,10 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         D::Contents => Display::Contents,
         D::Inline => Display::Inline,
         D::InlineBlock => Display::InlineBlock,
+        D::Flex => Display::Flex,
+        D::InlineFlex => Display::InlineFlex,
+        D::Grid => Display::Grid,
+        D::InlineGrid => Display::InlineGrid,
         D::Table => Display::Table,
         D::InlineTable => Display::InlineTable,
         D::TableRowGroup => Display::TableRowGroup,
@@ -1426,6 +2600,28 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
     let color = absolute_color(&text.color);
     let resolve_color = |value: &style::values::computed::Color| {
         absolute_color(&value.resolve_to_absolute(&text.color))
+    };
+    let svg = values.get_inherited_svg();
+    let svg_paint = |paint: &style::values::computed::SVGPaint,
+                     opacity: style::values::computed::SVGOpacity| {
+        use style::values::computed::{SVGOpacity, SVGPaintKind};
+        let SVGOpacity::Opacity(opacity) = opacity else {
+            return SvgPaint::Unsupported;
+        };
+        if !opacity.is_finite() {
+            return SvgPaint::Unsupported;
+        }
+        match &paint.kind {
+            SVGPaintKind::None => SvgPaint::None,
+            SVGPaintKind::Color(value) => {
+                let mut color = resolve_color(value);
+                color.alpha *= opacity.clamp(0.0, 1.0);
+                SvgPaint::Color(color)
+            }
+            SVGPaintKind::PaintServer(_)
+            | SVGPaintKind::ContextFill
+            | SVGPaintKind::ContextStroke => SvgPaint::Unsupported,
+        }
     };
     let line_height = match font.line_height {
         LineHeight::Normal => None,
@@ -1529,8 +2725,20 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
     }
     Ok(ComputedStyle {
         display,
+        layout: LayoutStyle::default(),
         color,
         background_color: resolve_color(&background.background_color),
+        background_clip: background
+            .background_clip
+            .0
+            .get(
+                background.background_image.0.len().saturating_sub(1)
+                    % background.background_clip.0.len().max(1),
+            )
+            .map_or(BackgroundBox::Border, |value| background_box(*value)),
+        background_gradient: renderer_gradient(values),
+        svg_fill: svg_paint(&svg.fill, svg.fill_opacity),
+        svg_stroke: svg_paint(&svg.stroke, svg.stroke_opacity),
         font_size,
         font_weight: font.font_weight.value().round() as u16,
         font_families,

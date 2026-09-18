@@ -81,14 +81,16 @@ Wayland scaling or independent page zoom. See [sizing details](APPEARANCE.md).
 ## What it renders
 
 HTML uses our bounded tokenizer/tree builder. Styled documents use Rust Stylo for
-computed CSS and our tree-based block/inline/table layout; unstyled or rejected
-documents retain the simple readable flow projection. Rustybuzz shapes text and
-fontdue rasterizes regular/bold faces. Chassis downloads same-origin linked CSS,
-PNG/GIF and small static SVG images under explicit budgets. Unsupported resources
-show placeholders and warnings; no cross-origin assets, CSS imports or downloaded
-fonts. Full CSS, flex/grid, general positioning and font fallback/bidi layout are
-not implemented. The [Hacker News desktop scope](HACKER_NEWS.md) is intentionally
-narrow. Boa-backed page JavaScript is available only with
+computed CSS and our tree-based block/inline/table layout, with bounded Rust Taffy
+flex/grid sizing. Unstyled or rejected documents retain readable flow.
+Rustybuzz shapes text and fontdue rasterizes regular/bold faces. Chassis downloads
+same-origin linked CSS and policy-checked PNG/JPEG/GIF/restricted static SVG images.
+After an image chain crosses origin, it sends/stores no cookies on later hops,
+including redirects back. Unsupported resources produce
+placeholders and warnings; no CSS imports or downloaded fonts. Full CSS, general
+positioning/stacking, font fallback and bidi layout remain incomplete. The
+[Hacker News desktop scope](HACKER_NEWS.md) and [News reading scope](GOOGLE_NEWS.md)
+are intentionally narrow. Boa-backed page JavaScript is available only with
 `--enable-scripts`; see below. None of this implies modern-web compatibility.
 
 HTTP(S) uses our own HTTP/1.1 transport and the selected experimental RustCrypto

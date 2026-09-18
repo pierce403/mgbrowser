@@ -1,5 +1,5 @@
 #[test]
-fn png_and_gif_roundtrip_and_disabled_codecs() {
+fn enabled_rust_image_codecs_decode_and_other_codecs_remain_disabled() {
     let pixels = image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]));
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(pixels.clone())
@@ -21,8 +21,24 @@ fn png_and_gif_roundtrip_and_disabled_codecs() {
         image::load_from_memory(gif.get_ref()).unwrap().into_rgba8(),
         pixels
     );
+    // JPEG is deliberately enabled through the reviewed Rust decoder. Use a
+    // uniform grayscale fixture so its lossy transform has an exact result.
+    let jpeg_pixels = image::RgbImage::from_pixel(8, 8, image::Rgb([128, 128, 128]));
+    let mut jpeg = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(jpeg_pixels.clone())
+        .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory_with_format(jpeg.get_ref(), image::ImageFormat::Jpeg)
+            .unwrap()
+            .into_rgb8(),
+        jpeg_pixels
+    );
+    assert!(matches!(
+        image::load_from_memory_with_format(b"invalid JPEG", image::ImageFormat::Jpeg),
+        Err(image::ImageError::Decoding(_))
+    ));
     for format in [
-        image::ImageFormat::Jpeg,
         image::ImageFormat::WebP,
         image::ImageFormat::Tiff,
         image::ImageFormat::Avif,

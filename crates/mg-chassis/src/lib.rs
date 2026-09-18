@@ -1525,9 +1525,13 @@ impl Browser {
     fn click(&mut self, x: i32, y: i32) {
         let _ = self.click_checked(x, y);
     }
+    fn topmost_hit(&self, x: i32, y: i32) -> Option<usize> {
+        self.hits.iter().rposition(|hit| hit.contains(x, y))
+    }
     fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
         self.stop_scroll();
-        if let Some(hit) = self.hits.iter().rev().find(|h| h.contains(x, y)) {
+        if let Some(index) = self.topmost_hit(x, y) {
+            let hit = &self.hits[index];
             // Input may arrive between opening a popup and its first paint.
             // Reject stale page/chrome hit regions even in that interval.
             if self.modal_open() && !self.modal_action(&hit.action) {
@@ -2992,8 +2996,8 @@ impl Browser {
     }
     pub fn pointer_up(&mut self, x: i32, y: i32) {
         if let Some((px, py)) = self.pointer_press.take() {
-            let press = self.hits.iter().position(|hit| hit.contains(px, py));
-            let release = self.hits.iter().position(|hit| hit.contains(x, y));
+            let press = self.topmost_hit(px, py);
+            let release = self.topmost_hit(x, y);
             if press.is_some() && press == release {
                 self.click(x, y);
             }
@@ -3045,6 +3049,79 @@ fn test_app() -> Browser {
         Fonts::from_bytes(std::fs::read(path).unwrap()).unwrap(),
         Arc::new(scripts::DisabledScripts),
     )
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    fn overlapping_links() -> Browser {
+        let mut app = test_app();
+        // Hit order is paint order. Unsupported schemes let us observe native
+        // navigation activation without creating any network connection.
+        for (x, target) in [(0, "bottom"), (50, "top")] {
+            app.hit(
+                x,
+                100,
+                100,
+                50,
+                Action::Link {
+                    node: x as usize,
+                    href: format!("invalid://{target}"),
+                },
+            );
+        }
+        app
+    }
+
+    #[test]
+    fn native_pointer_activates_only_the_same_topmost_link() {
+        for (press, release, target) in [
+            (25, 25, Some("bottom")),
+            (75, 75, Some("top")),
+            (75, 125, Some("top")),
+            (125, 75, Some("top")),
+            (25, 75, None),
+            (75, 25, None),
+            (25, 125, None),
+            (200, 75, None),
+            (75, 200, None),
+        ] {
+            let mut app = overlapping_links();
+            app.pointer_down(press, 110);
+            app.pointer_up(release, 110);
+            assert!(app.pointer_press.is_none());
+            if let Some(target) = target {
+                assert_eq!(app.address, format!("invalid://{target}"));
+                assert_eq!(app.history, [app.address.clone()]);
+            } else {
+                assert!(app.history.is_empty(), "press {press}, release {release}");
+                assert!(!app.loading);
+            }
+        }
+
+        let mut app = overlapping_links();
+        app.click_checked(75, 110).unwrap();
+        assert_eq!(app.address, "invalid://top");
+    }
+
+    #[test]
+    fn native_pointer_cancellation_keeps_overlapping_links_inactive() {
+        for cancel in [
+            Browser::cancel_pointer_input,
+            |app: &mut Browser| app.wheel_scroll_by(100),
+            |app: &mut Browser| app.resize(800, 600),
+        ] {
+            let mut app = overlapping_links();
+            app.content_height = 3000;
+            app.pointer_down(75, 110);
+            cancel(&mut app);
+            assert!(app.pointer_press.is_none());
+            app.pointer_up(75, 110);
+            assert!(app.history.is_empty());
+            assert!(!app.loading);
+        }
+    }
 }
 
 #[cfg(all(test, feature = "chrome"))]

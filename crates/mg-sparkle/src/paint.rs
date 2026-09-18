@@ -9,12 +9,23 @@ use std::collections::HashMap;
 const GLYPH_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const GLYPH_CACHE_ENTRIES: usize = 4096;
 
+/// Opaque saved physical clip. Callers own nesting tokens; Canvas allocates no
+/// clip stack. Restore on the same surface to recover its previous exact bounds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanvasClip {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+}
+
 pub struct Canvas {
     /// Physical output pixels. All painting coordinates remain logical pixels.
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u32>,
     scale: f32,
+    clip: CanvasClip,
 }
 
 impl Canvas {
@@ -48,6 +59,12 @@ impl Canvas {
             height,
             pixels: vec![bg & 0x00ff_ffff; len],
             scale,
+            clip: CanvasClip {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            },
         }
     }
 
@@ -60,20 +77,69 @@ impl Canvas {
         (logical as f64 * f64::from(self.scale)).round() as i64
     }
 
-    /// Fill the intersection with the canvas, including negative coordinates.
+    /// Intersect with a logical rectangle and return the previous clip for
+    /// caller-owned restoration. Edges are converted once using the same
+    /// rounding as rectangles. Empty/outside/extreme rectangles remain empty;
+    /// they cannot wrap or expand the current clip.
+    pub fn intersect_clip(&mut self, x: i32, y: i32, w: u32, h: u32) -> CanvasClip {
+        let previous = self.clip;
+        let edge_x = |value| self.physical_edge(value).clamp(0, i64::from(self.width)) as u32;
+        let edge_y = |value| self.physical_edge(value).clamp(0, i64::from(self.height)) as u32;
+        let left = previous.left.max(edge_x(i64::from(x)));
+        let top = previous.top.max(edge_y(i64::from(y)));
+        let right = previous
+            .right
+            .min(edge_x(i64::from(x) + i64::from(w)))
+            .max(left);
+        let bottom = previous
+            .bottom
+            .min(edge_y(i64::from(y) + i64::from(h)))
+            .max(top);
+        self.clip = CanvasClip {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        previous
+    }
+
+    /// Restore a saved clip without allocating or reconverting logical edges.
+    /// A token from another surface is clamped to this canvas for safe bounds.
+    pub fn restore_clip(&mut self, clip: CanvasClip) {
+        self.clip = CanvasClip {
+            left: clip.left.min(self.width),
+            top: clip.top.min(self.height),
+            right: clip.right.min(self.width),
+            bottom: clip.bottom.min(self.height),
+        };
+    }
+
+    /// Active physical half-open `(left, top, right, bottom)` bounds. Custom
+    /// pixel loops must respect these as well as the surface allocation.
+    pub fn physical_clip_bounds(&self) -> (u32, u32, u32, u32) {
+        (
+            self.clip.left,
+            self.clip.top,
+            self.clip.right,
+            self.clip.bottom,
+        )
+    }
+
+    /// Fill the intersection with the active clip, including negative coordinates.
     pub fn rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: u32) {
-        let left = self
-            .physical_edge(i64::from(x))
-            .clamp(0, i64::from(self.width)) as usize;
-        let top = self
-            .physical_edge(i64::from(y))
-            .clamp(0, i64::from(self.height)) as usize;
-        let right = self
-            .physical_edge(i64::from(x) + i64::from(w))
-            .clamp(0, i64::from(self.width)) as usize;
-        let bottom = self
-            .physical_edge(i64::from(y) + i64::from(h))
-            .clamp(0, i64::from(self.height)) as usize;
+        let left =
+            self.physical_edge(i64::from(x))
+                .clamp(i64::from(self.clip.left), i64::from(self.clip.right)) as usize;
+        let top =
+            self.physical_edge(i64::from(y))
+                .clamp(i64::from(self.clip.top), i64::from(self.clip.bottom)) as usize;
+        let right =
+            self.physical_edge(i64::from(x) + i64::from(w))
+                .clamp(i64::from(self.clip.left), i64::from(self.clip.right)) as usize;
+        let bottom =
+            self.physical_edge(i64::from(y) + i64::from(h))
+                .clamp(i64::from(self.clip.top), i64::from(self.clip.bottom)) as usize;
         let color = color & 0x00ff_ffff;
         for row in top..bottom {
             let start = row * self.width as usize;
@@ -100,14 +166,12 @@ impl Canvas {
             let top = ((baseline - glyph.y_offset) * self.scale).round() as i64
                 - i64::from(metrics.ymin)
                 - metrics.height as i64;
-            let from_x = left.max(0).min(i64::from(self.width));
-            let from_y = top.max(0).min(i64::from(self.height));
+            let from_x = left.clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+            let from_y = top.clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
             let to_x = (left + metrics.width as i64)
-                .max(0)
-                .min(i64::from(self.width));
+                .clamp(i64::from(self.clip.left), i64::from(self.clip.right));
             let to_y = (top + metrics.height as i64)
-                .max(0)
-                .min(i64::from(self.height));
+                .clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
             for screen_y in from_y..to_y {
                 let source_row = (screen_y - top) as usize * metrics.width;
                 let target_row = screen_y as usize * self.width as usize;
@@ -354,6 +418,150 @@ mod tests {
         assert_eq!(Canvas::new_scaled(8, 4, 0, f32::MIN_POSITIVE).scale(), 0.75);
         assert!(std::panic::catch_unwind(|| Canvas::new_scaled(u32::MAX, 0, 0, 3.0)).is_err());
         assert!(std::panic::catch_unwind(|| Canvas::new(u32::MAX, u32::MAX, 0)).is_err());
+    }
+
+    #[test]
+    fn nested_rectangular_clips_round_once_and_restore_exactly() {
+        for scale in [1.0, 1.25, 2.0] {
+            let mut canvas = Canvas::new_scaled(16, 12, 0xffffff, scale);
+            let full = canvas.intersect_clip(-2, 2, 10, 8);
+            let outer = canvas.physical_clip_bounds();
+            assert_eq!(
+                outer,
+                (
+                    0,
+                    canvas.physical_edge(2) as u32,
+                    canvas.physical_edge(8) as u32,
+                    canvas.physical_edge(10) as u32
+                )
+            );
+            let saved_outer = canvas.intersect_clip(4, -2, 12, 8);
+            let nested = canvas.physical_clip_bounds();
+            assert_eq!(
+                nested,
+                (
+                    canvas.physical_edge(4) as u32,
+                    canvas.physical_edge(2) as u32,
+                    canvas.physical_edge(8) as u32,
+                    canvas.physical_edge(6) as u32
+                )
+            );
+            canvas.rect(i32::MIN, i32::MIN, u32::MAX, u32::MAX, 0x123456);
+            for y in 0..canvas.height {
+                for x in 0..canvas.width {
+                    let inside = x >= nested.0 && x < nested.2 && y >= nested.1 && y < nested.3;
+                    assert_eq!(
+                        canvas.pixels[(y * canvas.width + x) as usize],
+                        if inside { 0x123456 } else { 0xffffff }
+                    );
+                }
+            }
+            canvas.restore_clip(saved_outer);
+            assert_eq!(canvas.physical_clip_bounds(), outer);
+            canvas.restore_clip(full);
+            assert_eq!(
+                canvas.physical_clip_bounds(),
+                (0, 0, canvas.width, canvas.height)
+            );
+            canvas.rect(0, 0, 16, 12, 0xabcdef);
+            assert!(canvas.pixels.iter().all(|&pixel| pixel == 0xabcdef));
+        }
+    }
+
+    #[test]
+    fn empty_extreme_and_foreign_clip_tokens_cannot_escape_surface() {
+        for scale in [1.0, 1.25, 2.0] {
+            let mut canvas = Canvas::new_scaled(16, 12, 0xffffff, scale);
+            for (x, y, w, h) in [
+                (i32::MIN, i32::MIN, 1, 1),
+                (i32::MAX, i32::MAX, u32::MAX, u32::MAX),
+                (0, 0, 0, 12),
+                (0, 0, 16, 0),
+            ] {
+                let restore = canvas.intersect_clip(x, y, w, h);
+                canvas.rect(0, 0, 16, 12, 0);
+                assert!(canvas.pixels.iter().all(|&pixel| pixel == 0xffffff));
+                canvas.restore_clip(restore);
+            }
+            let restore = canvas.intersect_clip(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
+            assert_eq!(
+                canvas.physical_clip_bounds(),
+                (0, 0, canvas.width, canvas.height)
+            );
+            canvas.restore_clip(restore);
+
+            let mut large = Canvas::new_scaled(30, 30, 0, scale);
+            large.intersect_clip(25, 25, 5, 5);
+            let foreign = large.intersect_clip(0, 0, 1, 1);
+            canvas.restore_clip(foreign);
+            assert_eq!(
+                canvas.physical_clip_bounds(),
+                (canvas.width, canvas.height, canvas.width, canvas.height)
+            );
+            canvas.rect(0, 0, 16, 12, 0);
+            assert!(canvas.pixels.iter().all(|&pixel| pixel == 0xffffff));
+        }
+        let mut empty = Canvas::new(0, 0, 0);
+        let saved = empty.intersect_clip(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
+        empty.rect(0, 0, 4, 4, 0);
+        empty.restore_clip(saved);
+        assert!(empty.pixels.is_empty());
+    }
+
+    #[test]
+    fn text_clip_preserves_exact_glyph_coverage_inside_and_background_outside() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for scale in [1.0, 1.25, 2.0] {
+            let mut reference = Canvas::new_scaled(160, 40, 0xfedcba, scale);
+            reference.text(&mut fonts, 1, 1, "Magnesium", 22.0, 0x123456);
+            let mut explicit_full = Canvas::new_scaled(160, 40, 0xfedcba, scale);
+            explicit_full.intersect_clip(0, 0, 160, 40);
+            explicit_full.text(&mut fonts, 1, 1, "Magnesium", 22.0, 0x123456);
+            assert_eq!(explicit_full.pixels, reference.pixels);
+
+            let mut clipped = Canvas::new_scaled(160, 40, 0xfedcba, scale);
+            let full = clipped.intersect_clip(9, 7, 31, 9);
+            let bounds = clipped.physical_clip_bounds();
+            clipped.text(&mut fonts, 1, 1, "Magnesium", 22.0, 0x123456);
+            let mut changed = 0;
+            for y in 0..clipped.height {
+                for x in 0..clipped.width {
+                    let index = (y * clipped.width + x) as usize;
+                    let inside = x >= bounds.0 && x < bounds.2 && y >= bounds.1 && y < bounds.3;
+                    let expected = if inside {
+                        reference.pixels[index]
+                    } else {
+                        0xfedcba
+                    };
+                    assert_eq!(clipped.pixels[index], expected);
+                    changed += usize::from(clipped.pixels[index] != 0xfedcba);
+                }
+            }
+            assert!(changed > 0);
+            clipped.intersect_clip(9, 7, 0, 9);
+            let before = clipped.pixels.clone();
+            clipped.text(&mut fonts, 1, 1, "Magnesium", 22.0, 0);
+            assert_eq!(clipped.pixels, before);
+            clipped.restore_clip(full);
+            clipped.text(&mut fonts, 1, 1, "Magnesium", 22.0, 0x123456);
+            // Text outside the old clip is now visible; blending is intentionally
+            // cumulative, so only compare pixels outside the old clipped region.
+            for y in 0..clipped.height {
+                for x in 0..clipped.width {
+                    if x < bounds.0 || x >= bounds.2 || y < bounds.1 || y >= bounds.3 {
+                        let index = (y * clipped.width + x) as usize;
+                        assert_eq!(clipped.pixels[index], reference.pixels[index]);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

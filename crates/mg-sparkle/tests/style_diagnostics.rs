@@ -78,7 +78,7 @@ fn parse_errors_identify_sheet_and_attribute_without_losing_neighboring_styles()
 #[test]
 fn unsupported_computed_properties_report_actual_fallback_and_node() {
     let document = parse(
-        "<div id=flex style='display:flex;position:absolute;overflow:hidden'>Text</div><div id=grid style='display:grid'>Grid</div>",
+        "<div id=legacy style='display:flow-root;position:sticky;overflow:auto'>Text</div><div id=absolute style='position:absolute;z-index:-1'>Positioned</div>",
         "https://example.test/",
     );
     let mut report = StyleDiagnostics::default();
@@ -89,14 +89,16 @@ fn unsupported_computed_properties_report_actual_fallback_and_node() {
         &mut report,
     )
     .unwrap();
-    let flex = document.query_selector(0, "#flex").unwrap().unwrap();
-    let grid = document.query_selector(0, "#grid").unwrap().unwrap();
-    assert_eq!(styles[flex].display, Display::Block);
-    assert_eq!(styles[grid].display, Display::Block);
+    let legacy = document.query_selector(0, "#legacy").unwrap().unwrap();
+    let absolute = document.query_selector(0, "#absolute").unwrap().unwrap();
+    assert_eq!(styles[legacy].display, Display::Block);
     for (node, text) in [
-        (flex, "display: flex"),
-        (flex, "position: absolute"),
-        (flex, "overflow-x: hidden"),
+        (legacy, "display: flow-root"),
+        (legacy, "position: sticky"),
+        (legacy, "overflow-x: auto"),
+        (absolute, "both horizontal insets auto"),
+        (absolute, "both vertical insets auto"),
+        (absolute, "CSS z-index: -1"),
     ] {
         let diagnostic = report
             .entries
@@ -104,19 +106,96 @@ fn unsupported_computed_properties_report_actual_fallback_and_node() {
             .find(|d| d.node == Some(node) && d.message.contains(text))
             .unwrap_or_else(|| panic!("missing {text}: {report:?}"));
         assert_eq!(diagnostic.kind, "css-unsupported");
+        assert_eq!(diagnostic.source, document.base_url);
         assert_eq!((diagnostic.line, diagnostic.column), (None, None));
     }
-    // The current Stylo preference profile rejects grid during parsing, before
-    // it can become a computed value. Report that real error, not a fabricated
-    // renderer fallback or an incidental preference change.
-    let rejected_grid = report
-        .entries
-        .iter()
-        .find(|d| d.node == Some(grid) && d.message.contains("display:grid"))
-        .unwrap();
-    assert_eq!(rejected_grid.kind, "css-parse");
-    assert_eq!(rejected_grid.line, Some(1));
+    assert_eq!(report.entries.len(), 6);
+    assert_eq!(report.omitted, 0);
+    assert!(!report.entries.iter().any(|d| d.kind == "css-parse"));
     assert_eq!(frame(&document).diagnostics, report);
+}
+
+#[test]
+fn implemented_layout_paths_do_not_report_obsolete_fallbacks() {
+    let document = parse(
+        "<div style='display:flex;overflow:hidden;width:120px'><span>Flex</span></div><div style='display:grid;grid-template-columns:30px 40px;overflow:clip'><span>Grid</span></div><div style='position:relative;left:2px'>Relative</div><div style='position:absolute;left:0;top:100px'>Absolute</div><div style='position:fixed;right:0;bottom:0'>Fixed</div>",
+        "https://example.test/",
+    );
+    let mut report = StyleDiagnostics::default();
+    compute_styles_with_diagnostics(&document, &document.stylesheets, (320., 240.), &mut report)
+        .unwrap();
+    assert!(report.entries.is_empty(), "{report:?}");
+    let rendered = frame(&document);
+    assert_eq!(rendered.diagnostics, report);
+    assert!(rendered.content_height > 0);
+}
+
+#[test]
+fn rounded_corner_gap_is_node_scoped_bounded_and_does_not_change_square_paint() {
+    let html = |radius: &str| {
+        format!(
+            "<div id=card style='width:40px;height:20px;background:red;border-radius:{radius}'></div>"
+        )
+    };
+    let square = parse(&html("0"), "https://example.test/");
+    let rounded = parse(&html("18px"), "https://example.test/");
+    let baseline = frame(&square);
+    let diagnosed = frame(&rounded);
+    assert_eq!(baseline.canvas.pixels, diagnosed.canvas.pixels);
+    assert_eq!(baseline.boxes, diagnosed.boxes);
+    assert_eq!(
+        format!("{:?}", baseline.hits),
+        format!("{:?}", diagnosed.hits)
+    );
+    assert!(baseline.diagnostics.entries.is_empty());
+    let node = rounded.query_selector(0, "#card").unwrap().unwrap();
+    assert_eq!(diagnosed.diagnostics.entries.len(), 1);
+    let diagnostic = &diagnosed.diagnostics.entries[0];
+    assert_eq!(diagnostic.kind, "css-unsupported");
+    assert_eq!(diagnostic.node, Some(node));
+    assert_eq!(diagnostic.source, rounded.base_url);
+    assert!(diagnostic.message.contains("border-radius"));
+    assert!(diagnostic.message.contains("square corners"));
+    let many = parse(
+        &"<div style='border-radius:50%'></div>".repeat(100),
+        "https://example.test/",
+    );
+    let mut report = StyleDiagnostics::default();
+    compute_styles_with_diagnostics(&many, &many.stylesheets, (320., 240.), &mut report).unwrap();
+    assert_eq!(report.entries.len(), StyleDiagnostics::MAX_ENTRIES);
+    assert_eq!(report.omitted, 100 - StyleDiagnostics::MAX_ENTRIES);
+}
+
+#[test]
+fn legacy_table_cell_clipping_boundary_is_explicit_without_changing_table_output() {
+    let html = |overflow: &str| {
+        format!(
+            "<table style='border-spacing:0'><tr><td id=cell style='overflow:{overflow};font-size:13.328125px'><a href='/next'>Title <span style='font-size:10.671875px'>domain.example</span></a></td><td>Other</td></tr></table>"
+        )
+    };
+    let visible = parse(&html("visible"), "https://example.test/");
+    let clipped = parse(&html("hidden"), "https://example.test/");
+    let id = clipped.query_selector(0, "#cell").unwrap().unwrap();
+    let baseline = frame(&visible);
+    let diagnosed = frame(&clipped);
+    assert_eq!(baseline.canvas.pixels, diagnosed.canvas.pixels);
+    assert_eq!(baseline.boxes, diagnosed.boxes);
+    assert_eq!(baseline.content_height, diagnosed.content_height);
+    let hits = |f: &Frame| {
+        f.hits
+            .iter()
+            .map(|h| (h.x, h.y, h.w, h.h, h.action.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(hits(&baseline), hits(&diagnosed));
+    assert!(baseline.diagnostics.entries.is_empty());
+    assert_eq!(diagnosed.diagnostics.entries.len(), 1);
+    let diagnostic = &diagnosed.diagnostics.entries[0];
+    assert_eq!(diagnostic.kind, "css-unsupported");
+    assert_eq!(diagnostic.node, Some(id));
+    assert_eq!(diagnostic.source, clipped.base_url);
+    assert!(diagnostic.message.contains("table-cell overflow clipping"));
+    assert_eq!((diagnostic.line, diagnostic.column), (None, None));
 }
 
 #[test]

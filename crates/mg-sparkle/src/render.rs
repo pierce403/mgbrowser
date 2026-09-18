@@ -77,7 +77,10 @@ pub fn render_scaled(
     let mut diagnostics = crate::style::StyleDiagnostics::default();
     let styled = !document.stylesheets.is_empty()
         || !document.resources.is_empty()
-        || document.nodes.iter().any(|node| node.has("style"));
+        || document
+            .nodes
+            .iter()
+            .any(|node| node.has("style") || node.tag == "svg");
     if styled {
         match crate::style::compute_styles_with_diagnostics(
             document,
@@ -89,19 +92,35 @@ pub fn render_scaled(
                 match crate::styled_layout::render_scaled(
                     document, fonts, viewport, controls, styles, scale,
                 ) {
-                    Some(mut frame) => {
+                    Ok(mut frame) => {
+                        diagnostics.omitted = diagnostics
+                            .omitted
+                            .saturating_add(frame.diagnostics.omitted);
+                        for entry in frame.diagnostics.entries.drain(..) {
+                            if diagnostics.entries.len()
+                                < crate::style::StyleDiagnostics::MAX_ENTRIES
+                            {
+                                diagnostics.entries.push(entry);
+                            } else {
+                                diagnostics.omitted = diagnostics.omitted.saturating_add(1);
+                            }
+                        }
                         frame.diagnostics = diagnostics;
                         return frame;
                     }
-                    None => {
-                        eprintln!("Styled layout limit reached; using readable-flow fallback");
+                    Err(failure) => {
+                        eprintln!(
+                            "Styled layout unavailable at node {:?}: {}; using readable-flow fallback",
+                            failure.node, failure.reason
+                        );
                         diagnostics.record(
                             "layout-fallback",
                             format_args!(
-                                "Styled layout limit reached; using readable-flow fallback"
+                                "Styled layout unavailable: {}; using readable-flow fallback",
+                                failure.reason
                             ),
                             format_args!("{}", document.base_url),
-                            None,
+                            failure.node,
                             None,
                         );
                     }
@@ -344,6 +363,44 @@ pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> 
 #[cfg(test)]
 mod scale_tests {
     use super::*;
+
+    #[test]
+    fn bare_inline_svg_uses_the_same_renderer_as_an_empty_stylesheet() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let svg = "<svg width='10' height='10'><rect width='10' height='10' fill='red'/></svg>";
+        let plain = crate::document::parse(svg, "https://fixture.example/");
+        let styled =
+            crate::document::parse(&format!("<style></style>{svg}"), "https://fixture.example/");
+        let viewport = Viewport {
+            width: 100,
+            height: 100,
+            scroll: 0,
+        };
+        let a = render(&plain, &mut fonts, viewport, &Controls::default());
+        let b = render(&styled, &mut fonts, viewport, &Controls::default());
+        assert_eq!(
+            a.canvas
+                .pixels
+                .iter()
+                .filter(|&&pixel| pixel == 0xff0000)
+                .count(),
+            100
+        );
+        assert_eq!(a.canvas.pixels, b.canvas.pixels);
+        assert_eq!(a.content_height, b.content_height);
+        assert!(!a.boxes.is_empty());
+        assert!(!a.diagnostics.entries.iter().any(|d| matches!(
+            d.kind,
+            "image-unsupported" | "layout-fallback" | "style-fallback"
+        )));
+    }
 
     #[test]
     fn scaled_styled_and_fallback_frames_keep_logical_layout_and_hits() {

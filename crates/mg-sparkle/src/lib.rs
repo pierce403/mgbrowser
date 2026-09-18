@@ -1,7 +1,9 @@
 //! Sparkle: an original, experimental web document and rendering engine.
 //! Hosts provide fonts, networking, surfaces and process isolation.
 pub mod document;
+mod gradient;
 pub mod images;
+mod inline_svg;
 pub mod js_browser;
 pub mod page_session;
 pub mod paint;

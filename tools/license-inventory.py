@@ -68,6 +68,11 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
             if vcs["git"]["sha1"] != BOA_ARCHIVE_OMISSIONS[key]:
                 raise SystemExit(f"Unreviewed Boa license source revision: {key}")
             fallback = LICENSE_INPUTS / "boa-0.22-MIT.txt"
+        elif key == ("taffy", "0.14.0") and package["license"] == "MIT":
+            vcs = json.loads((root / ".cargo_vcs_info.json").read_text())
+            if vcs["git"]["sha1"] != "77f385683c1d698c91a23a259f87fdddf26925fb":
+                raise SystemExit(f"Unreviewed Taffy license source revision: {key}")
+            fallback = LICENSE_INPUTS / "taffy-0.14.0-MIT.txt"
         else:
             raise SystemExit(f"No license text found: {package['name']} ({root})")
         out.append(f"\n--- Reviewed upstream text: {fallback.name} ---\n{fallback.read_text()}\n")

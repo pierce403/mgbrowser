@@ -174,10 +174,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.8.0 | Apache-2.0 |
-| mg-butane | 0.8.0 | Apache-2.0 |
-| mg-chassis | 0.8.0 | Apache-2.0 |
-| mg-sparkle | 0.8.0 | Apache-2.0 |
+| mg-browser | 0.9.0 | Apache-2.0 |
+| mg-butane | 0.9.0 | Apache-2.0 |
+| mg-chassis | 0.9.0 | Apache-2.0 |
+| mg-sparkle | 0.9.0 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
@@ -309,6 +309,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | syn | 3.0.5 | MIT OR Apache-2.0 |
 | synstructure | 0.13.2 | MIT |
 | synstructure | 0.14.0 | MIT |
+| taffy | 0.14.0 | MIT |
 | tag_ptr | 0.1.0 | Unlicense OR MIT |
 | tap | 1.0.1 | MIT |
 | thin-vec | 0.2.19 | MIT OR Apache-2.0 |
@@ -375,6 +376,8 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | zerovec | 0.11.8 | Unicode-3.0 |
 | zerovec-derive | 0.11.6 | Unicode-3.0 |
 | zmij | 1.0.23 | MIT |
+| zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib |
+| zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
 | zvariant | 5.15.0 | MIT |
 | zvariant_derive | 5.15.0 | MIT |
 | zvariant_utils | 4.2.0 | MIT |
