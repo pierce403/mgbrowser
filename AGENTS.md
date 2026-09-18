@@ -2,6 +2,15 @@
 
 ## Purpose and responsibilities
 
+Current authorized request (2026-09-17): native right-click element inspection
+and useful CSS/resource/JavaScript diagnostics; live detachable tabs and left/right
+page groups; pinned Playwright control; and signed-out Google News desktop reading.
+Track the separate acceptance gates in docs/DESKTOP_NEXT.md and FEATURES.md.
+Do not equate CDP attachment with locator support or static news rendering with
+working account/personalization features. Finish each user-visible increment
+through the standing release policy. Existing worker/security/resource assertions
+remain in force; any new resource profile requires an explicit documented review.
+
 Completed request (2026-09-16): T-015 / F-018 shipped as v0.6.0 at
 `363065dc17b51d8159d3434b74e393686bdc9d99`. System follows effective X11 DPI;
 saved 75..300% sizing and Ctrl+plus/minus/0 scale controls and pages together,

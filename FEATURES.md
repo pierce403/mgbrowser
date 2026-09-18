@@ -6,9 +6,92 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
-## F-021 : Smooth wheel scrolling
+## F-025 : Google News desktop reading
+
+Stability: planned
+
+### Dependencies
+
+F-005 layout/resources, F-022 diagnostics and reviewed bounded resource profiles.
+
+### Properties
+
+Signed-out, scripts-disabled real Google News desktop reading first.
+No account/personalization or general web compatibility claim. See docs/DESKTOP_NEXT.md.
+
+### Test criteria
+
+- [ ] Same-input desktop comparison: recognizable header, briefing, story groups and thumbnails.
+- [ ] Fresh live page, aligned scroll/click, actual served link navigation and Back.
+- [ ] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
+- [ ] Versioned release and public installer/native verification.
+
+## F-024 : Pinned Playwright browser control
+
+Stability: planned
+
+### Dependencies
+
+F-011 truthful CDP, F-023 stable tab targets, isolated Runtime/DOM support.
+
+### Properties
+
+Unmodified pinned Playwright client: attachment is not locator compatibility.
+Unsupported commands and browser capabilities must fail explicitly.
+
+### Test criteria
+
+- [ ] Actual client connects and enumerates/creates/selects/closes stable page targets.
+- [ ] Navigation/title, locator fill/click, real result, screenshot and error reporting pass.
+- [ ] Target identity survives switching/detachment; stale/closed targets reject.
+- [ ] Packaged/public release journey and all existing resource/isolation gates pass.
+
+## F-023 : Detachable tabs and left/right page groups
 
 Stability: in-progress
+
+### Dependencies
+
+F-013 host boundaries, F-018 sizing, F-011 target routing, F-015 restart/update.
+
+### Properties
+
+Move live page ownership across bounded tab groups/windows, not reconstructed URLs.
+At most two groups per window; fresh isolated script service per tab.
+See docs/DESKTOP_NEXT.md for input, restart and automation boundaries.
+
+### Test criteria
+
+- [ ] Stable ownership, transactional moves, bounds and close/focus repair tests.
+- [ ] Native new/switch/close/reorder/detach/redock/left-right docking preserves live state.
+- [ ] Scaled focus/drag/input, independent workers and shared host preferences remain correct.
+- [ ] Multi-target CDP stays attached to the named page across placement changes.
+- [ ] Existing native/embedding/resource checks, release and public installation pass.
+
+## F-022 : Native inspection and compatibility diagnostics
+
+Stability: in-progress
+
+### Dependencies
+
+F-004 painted DOM/input, F-005 CSS, F-013 optional chrome, F-017/F-018 appearance.
+
+### Properties
+
+Right-click Inspect element and keyboard toggle open a bounded read-only native
+Elements/Diagnostics overlay. Retain real source/error details and explicit
+truncation. This is not Chrome DevTools, a JS debugger/evaluator or a full CSS audit.
+
+### Test criteria
+
+- [ ] Actual clicked node, ancestor/attribute/text/box inspection and stale selection rejection.
+- [ ] Bounded CSS parse/source errors, unsupported layout and resource/script diagnostics.
+- [ ] Panel input isolation, compact/scaled light/dark native checks and unchanged closed page.
+- [ ] No-chrome/worker/old tests preserved; release and public installer checks pass.
+
+## F-021 : Smooth wheel scrolling
+
+Stability: stable
 
 ### Dependencies
 
@@ -25,11 +108,19 @@ Software paint cost still limits frame rate. Optional chrome remains optional.
 
 ### Test criteria
 
-- [ ] Deterministic intermediate/end positions, coalescing, reversal and bounds.
-- [ ] Click/keyboard/modal/navigation/geometry cancellation and painted hit alignment.
-- [ ] Native packaged wheel shows intermediate frames, settles and reverses at 100/200%.
-- [ ] Existing resource/worker/native/CDP and independent no-chrome gates pass.
-- [ ] Exact-commit CI/Pages, release and fresh public install/native verification.
+- [x] Deterministic intermediate/end positions, coalescing, reversal and bounds.
+- [x] Click/keyboard/modal/navigation/geometry cancellation and painted hit alignment.
+- [x] Native packaged wheel shows intermediate frames, settles and reverses at 100/200%.
+- [x] Existing resource/worker/native/CDP and independent no-chrome gates pass.
+- [x] Exact-commit CI/Pages, release and fresh public install/native verification.
+
+Published v0.7.2 at 16043b103a6565d8761daf860405a0661d09a9db. Rust CI
+35170104655, JSPLAN 35170104581, Pages 35170104644 and release 35302978982
+pass. Public checksum/install/reinstall, worker/session/Boa, desktop/icons,
+actual v0.7.1 GUI upgrade and Restart now into v0.7.2 pass. The public binary
+repeats native theme/scale/toolbar/bookmark checks and intermediate wheel frames
+at 100/200%. Receipts and inspected screenshots are in the 2026-09-17 log.
+This adds wheel easing, not precision touchpad/fling or a frame-rate guarantee.
 
 ## F-020 : Update progress, explicit restart and compact toolbar
 

@@ -1,9 +1,25 @@
 # Work queue
 
-2026-09-16 active: **T-018 / F-021**, smooth wheel scrolling. Implement bounded
-150 ms easing, responsive reversal and input/navigation cancellation; retain
-immediate keyboard/CDP scrolling and existing resource/worker assertions.
-Publish v0.7.2 and verify the public installer and native animation.
+2026-09-17 active: requested desktop/automation/Google News work, separately gated
+in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). Finish the already-green v0.7.2
+publication/public acceptance first, then:
+
+1. **T-019 / F-022:** right-click native Inspector and bounded useful diagnostics.
+2. **T-020 / F-023:** live tabs, detach/redock and left/right groups with stable identities.
+3. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
+4. **T-022 / F-025:** reviewed static Google News desktop reading, then separately
+   scoped interaction gaps. Preserve old worker/resource assertions and Rust-only policy.
+
+Do not conflate these with the unfinished Google search or full JSPLAN/MVP gates.
+
+2026-09-17 complete: **T-018 / F-021 shipped as v0.7.2**, release commit
+`16043b103a6565d8761daf860405a0661d09a9db`. Wheel easing, reversal and input/
+navigation cancellation pass deterministic and native 100/200% checks; keyboard/
+CDP scrolling remains immediate. Exact Rust/JSPLAN/Pages/release gates and public
+checksum/install/reinstall/worker/session/Boa/desktop/icons pass. Actual v0.7.1
+GUI upgrade and Restart now reopen the page in v0.7.2. Public native theme,
+scale, toolbar/bookmarks and smooth traces pass. No scrolling release gates
+remain. See the dated log; continue only the newly requested work above.
 
 2026-09-16 complete: **T-017 / F-020 shipped as v0.7.1**, release commit
 `8d8ad5654950d7f720c427aa4a396ec93927af5f`. About shows download progress and
