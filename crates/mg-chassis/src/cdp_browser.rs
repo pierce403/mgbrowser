@@ -1154,6 +1154,62 @@ mod tests {
         .0
     }
 
+    fn read_wire(
+        socket: &mut tungstenite::WebSocket<TcpStream>,
+    ) -> Result<tungstenite::Message, tungstenite::Error> {
+        // Server::send queues output for the transport thread. The short socket
+        // timeout is a polling interval, not a delivery or closure deadline.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "CDP message or closure timed out"
+            );
+            match socket.read() {
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
+
+    #[test]
+    fn wire_receive_waits_beyond_a_single_poll_without_dropping_messages() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let sender = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            std::thread::sleep(Duration::from_millis(120));
+            for text in ["first", "second"] {
+                socket
+                    .send(tungstenite::Message::Text(text.into()))
+                    .unwrap();
+            }
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut socket = tungstenite::client(format!("ws://{address}/"), stream)
+            .unwrap()
+            .0;
+        socket
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(40)))
+            .unwrap();
+        assert_eq!(
+            read_wire(&mut socket).unwrap().into_text().unwrap(),
+            "first"
+        );
+        assert_eq!(
+            read_wire(&mut socket).unwrap().into_text().unwrap(),
+            "second"
+        );
+        assert!(read_wire(&mut socket).is_err());
+        sender.join().unwrap();
+    }
+
     fn rpc_pages(
         cdp: &mut BrowserCdp,
         pages: &mut [(&str, &mut App)],
@@ -1281,15 +1337,15 @@ mod tests {
         });
         cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
         let cancelled: Value =
-            serde_json::from_str(&browser.read().unwrap().into_text().unwrap()).unwrap();
+            serde_json::from_str(&read_wire(&mut browser).unwrap().into_text().unwrap()).unwrap();
         assert_eq!(cancelled["id"], 99);
         assert_eq!(cancelled["sessionId"], session);
         assert_eq!(cancelled["error"]["message"], "Target closed");
         let detached: Value =
-            serde_json::from_str(&browser.read().unwrap().into_text().unwrap()).unwrap();
+            serde_json::from_str(&read_wire(&mut browser).unwrap().into_text().unwrap()).unwrap();
         assert_eq!(detached["method"], "Target.detachedFromTarget");
         assert_eq!(detached["params"]["sessionId"], session);
-        assert!(direct.read().is_err());
+        assert!(read_wire(&mut direct).is_err());
         let stale = rpc_pages(
             &mut cdp,
             &mut [("page-1", &mut first)],
@@ -1368,7 +1424,8 @@ mod tests {
         let mut received = Vec::new();
         for _ in 0..5 {
             received.push(
-                serde_json::from_str::<Value>(&seven.read().unwrap().into_text().unwrap()).unwrap(),
+                serde_json::from_str::<Value>(&read_wire(&mut seven).unwrap().into_text().unwrap())
+                    .unwrap(),
             );
         }
         assert_eq!(received[0]["params"]["frameId"], "frame-7");
@@ -1388,7 +1445,7 @@ mod tests {
         first.generation = 4;
         cdp.flush_page_events("page-1", &mut first);
         let aborted: Value =
-            serde_json::from_str(&one.read().unwrap().into_text().unwrap()).unwrap();
+            serde_json::from_str(&read_wire(&mut one).unwrap().into_text().unwrap()).unwrap();
         assert_eq!(aborted["id"], "page-1");
         assert_eq!(aborted["result"]["frameId"], "frame-1");
         assert!(
