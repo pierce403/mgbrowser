@@ -1,9 +1,9 @@
 # Google News: signed-out desktop reading
 
 T-022 / F-025, authorized 2026-09-17. Status: **in-progress, not accepted**.
-The implementation below is the v0.9.0 reading increment, absent from v0.8.0.
-Packaged native acceptance passes; exact-commit remote CI, publication and
-public-install gates are being completed. Full visual fidelity remains open.
+The implementation below shipped in v0.9.0, absent from v0.8.0. Exact-commit
+remote CI, publication, public installation and fresh public-binary News
+navigation pass. Full visual fidelity remains open.
 
 ## Scope and implemented contract
 
@@ -162,6 +162,22 @@ destination still falls back at node335 for an unrepresented positioned value;
 that is a documented destination limit, not a styled-topic success. The complete
 archive is8,275,877 bytes, below the unchanged8MiB updater ceiling. Final public
 tagged bytes and installer still require separate verification.
+
+Public v0.9.0 receipt: tag commit `7b5fecac59c167442a330e2a4822b153073fc69b`,
+Rust35326867514, JSPLAN35326867508, Pages35326867490 and release35328880780
+all pass. The public archive is8,271,015 bytes; SHA-256 is
+`7769562d7f0943ccf7beec0deea647f2a02ac45e9412998260f949f8dc33962f`.
+The exact website command installs/reinstalls that release, including verified
+version/commit, worker/session/Boa execution, desktop/icons and Apache NOTICE.
+
+The fresh public-installed native journey `tmp/news-public-native.wjEpO0`
+passes home, its actual Top stories link and native toolbar Back, all HTTP200.
+Home and Back stay styled without fallback; root inspected home, scroll600 and
+Back frames. Actual current stories/photos differ from the saved captures.
+The topic still falls back at positioned node335: this is not styled-topic or
+full News acceptance. Scripts remain disabled, with a private profile and owned
+Xvfb. CDP captures show page pixels; link/scroll use real public CDP input and
+Back uses native X11 input. This is not an ordinary Playwright journey.
 
 ## Historical baseline and migration evidence
 

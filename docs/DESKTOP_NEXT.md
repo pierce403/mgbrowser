@@ -72,8 +72,9 @@ Playwright assertions to treat an unsupported method as success.
 ## Google News desktop reading: T-022 / F-025
 
 See [GOOGLE_NEWS.md](GOOGLE_NEWS.md) for the refreshed live baseline, bounded
-prototype evidence and production/resource review. v0.9.0 implements a bounded
-reading increment using reviewed Taffy/JPEG dependencies. F-025 remains
+prototype evidence and production/resource review. v0.9.0 ships a bounded
+reading increment using reviewed Taffy/JPEG dependencies, with public installer,
+native home/link/Back and actual update/Restart verification. F-025 remains
 in-progress because visual gaps and destination/interactive limits remain.
 
 User confirmed this first milestone on 2026-09-17: a faithful signed-out reading

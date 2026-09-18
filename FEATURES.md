@@ -29,8 +29,8 @@ claim. Keep this feature in-progress until its broader criteria are satisfied.
 
 - [ ] Same-input desktop comparison: recognizable header, briefing, story groups and thumbnails.
 - [x] Fresh packaged live page, aligned scroll/click, actual served link navigation and Back; topic destination fallback remains explicit.
-- [ ] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
-- [ ] Versioned release and public installer/native verification.
+- [x] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
+- [x] Versioned release and public installer/native verification.
 
 ## F-024 : Pinned Playwright browser control
 
@@ -53,7 +53,7 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
 The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. Public v0.8.0 fixes discovery but still fails auto-attachment
+tools/playwright. Public v0.9.0 passes discovery but still fails auto-attachment
 and download-policy initialization, before title or locators. See
 docs/PLAYWRIGHT.md. A passing custom CDP client is not a substitute for this gate.
 

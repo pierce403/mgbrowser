@@ -77,6 +77,15 @@ The parallel `Browser.setDownloadBehavior` also returns `-32601`. The harness
 exits 1: no title, locator or later acceptance step ran. This fixes discovery,
 not Playwright control. Public-binary evidence: `tmp/playwright-acceptance-oqK1ep`.
 
+Public v0.9.0 was retested on 2026-09-18 from tag commit
+`7b5fecac59c167442a330e2a4822b153073fc69b`, binary SHA-256
+`5a9f9035ce0c5007a85158b9e24ee67e2a8743148e0f4f08922c27a71cc379fe`.
+The same unmodified1.58.2 client exits1: HTTP and WebSocket initialization both
+fail on `Target.setAutoAttach`; `Browser.setDownloadBehavior` also returns
+`-32601`. No title, locator, navigation or screenshot acceptance step completed.
+Evidence: `tmp/playwright-acceptance-EyB4vi`, `tmp/news-public-playwright.log`.
+The reading-layout release does not change this automation status.
+
 ## Required integration, not stub successes
 
 The pinned client's installed `lib/server/chromium/chromium.js` constructs the

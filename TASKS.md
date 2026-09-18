@@ -10,13 +10,23 @@ has shipped; do not conflate its release with these unfinished gates:
    JPEG/credential-free HTTPS images pass focused tests. Saved News renders at
    1024/1280 without fallback; HN pixels/geometry remain byte-identical.
    Packaged fresh home/scroll/link/Back passes; the topic remains readable-flow
-   fallback. Finish exact-commit CI/release/public-install gates for v0.9.0 before further
-   compatibility work. Full News fidelity remains open: fonts, corner/icon
+   fallback. This bounded increment shipped in v0.9.0; all release/public-install
+   gates pass. Full News fidelity remains open: fonts, corner/icon
    differences, dynamic content and destination fallbacks are explicit limits.
 2. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
-   Public v0.8.0 still fails client initialization. See docs/PLAYWRIGHT.md.
+   Public v0.9.0 still fails client initialization. See docs/PLAYWRIGHT.md.
 
 Do not conflate these with the unfinished Google search or full JSPLAN/MVP gates.
+
+2026-09-18 release complete: **v0.9.0 reading increment**, tag commit
+`7b5fecac59c167442a330e2a4822b153073fc69b`. Rust35326867514,
+JSPLAN35326867508, Pages35326867490 and release35328880780 pass. Public checksum,
+exact curl install/reinstall, worker/session/Boa, desktop/icons/NOTICE, all seven
+native suites, fresh live News home/link/Back and actual v0.8 GUI update/Restart
+with a no-op recheck pass. The topic still uses readable fallback. F-025 stays
+in-progress, as does F-024: the pinned public Playwright client fails before
+locators. See the dated log. Stop this release increment here; further reading
+fidelity precedes interactive News, following the user's chosen order.
 
 2026-09-17 complete: **T-019 / F-022 and T-020 / F-023 shipped as v0.8.0**,
 release commit `8b84604c83541beade431cfbedaa2dc449878011`. Read-only native
