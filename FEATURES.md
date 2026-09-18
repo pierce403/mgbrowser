@@ -47,13 +47,13 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
 The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. The published v0.7.2 baseline fails attachment and does not
-reach locators. See docs/PLAYWRIGHT.md. A passing custom CDP client is not a
-substitute for this acceptance gate.
+tools/playwright. Public v0.8.0 fixes discovery but still fails auto-attachment
+and download-policy initialization, before title or locators. See
+docs/PLAYWRIGHT.md. A passing custom CDP client is not a substitute for this gate.
 
 ## F-023 : Detachable tabs and left/right page groups
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -71,15 +71,17 @@ See docs/DESKTOP_NEXT.md for input, restart and automation boundaries.
 - [x] Native new/switch/close/reorder/detach/redock/left-right docking preserves live state.
 - [x] Scaled focus/drag/input, independent workers and shared host preferences remain correct.
 - [x] Multi-target CDP stays attached to the named page across placement changes.
-- [ ] Existing native/embedding/resource checks, release and public installation pass.
+- [x] Existing native/embedding/resource checks, release and public installation pass.
 
-Packaged model/native evidence is recorded in the 2026-09-17 log:
-tmp/tabs-smoke.TWaUYF, tmp/workspace-cdp-smoke.LO6EE8 and
-tmp/workspace-restart.m3hnUF. Exact-commit CI/release and public repeats remain required.
+Shipped in v0.8.0 at 8b84604c83541beade431cfbedaa2dc449878011. Exact-commit
+Rust/JSPLAN/Pages/release gates and public install pass. Public native repeats:
+tmp/tabs-smoke.ZeAoeU, tmp/workspace-cdp-smoke.Fozdg6 and
+tmp/workspace-restart.SToSEn. Actual v0.7.2 update/restart also passes.
+See the 2026-09-17 log for hashes, run IDs and bounded scope.
 
 ## F-022 : Native inspection and compatibility diagnostics
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -97,11 +99,13 @@ See docs/INSPECTOR.md for controls, diagnostic scope and native acceptance.
 - [x] Actual clicked node, ancestor/attribute/text/box inspection and stale selection rejection.
 - [x] Bounded CSS parse/source errors, unsupported layout and resource/script diagnostics.
 - [x] Panel input isolation, compact/scaled light/dark native checks and unchanged closed page.
-- [ ] No-chrome/worker/old tests preserved; release and public installer checks pass.
+- [x] No-chrome/worker/old tests preserved; release and public installer checks pass.
 
-Packaged Inspector/native evidence: 2026-09-17 log, tmp/inspector-smoke.KESU59.
-Chassis 100 tests and independent no-chrome embedding pass. Exact-commit
-CI/release and public repeats remain required.
+Shipped in v0.8.0 at 8b84604c83541beade431cfbedaa2dc449878011. All existing
+CI/embedding/worker gates and public installation pass. Public native Inspector
+light/dark 100/200% repeats pass in tmp/inspector-smoke.h6S3QS, including compact
+controls, real diagnostics, modal isolation and navigation invalidation.
+See the 2026-09-17 log. This does not complete Playwright or full CSS inspection.
 
 ## F-021 : Smooth wheel scrolling
 

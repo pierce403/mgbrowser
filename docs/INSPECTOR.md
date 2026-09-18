@@ -1,6 +1,6 @@
 # Native inspection
 
-The v0.8.0 candidate adds a read-only inspector built into mgbrowser. It does not
+v0.8.0 adds a read-only inspector built into mgbrowser. It does not
 require a remote-debugging port or enable page JavaScript.
 
 Right-click visible page content and choose **Inspect element**. **F12** or

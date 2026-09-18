@@ -1,8 +1,9 @@
 # Desktop inspection, workspaces and Google News
 
-Requested 2026-09-17. These are separate acceptance gates, not a claim that the
-current browser already supports them. Retain Rust-only implementation backends,
-verified HTTPS, restricted page execution and existing regression assertions.
+Requested 2026-09-17. Native inspection and the bounded tab workspace shipped in
+v0.8.0. Playwright and faithful Google News reading remain separate unfinished
+gates. Retain Rust-only implementation backends, verified HTTPS, restricted
+page execution and existing regression assertions.
 
 ## Native inspection and diagnostics: T-019 / F-022
 
@@ -24,7 +25,7 @@ locations and unchanged page pixels when closed. Preserve no-chrome embedding.
 
 ## Live tab workspace: T-020 / F-023
 
-The v0.8.0 candidate implements ordinary tab groups that detach into native windows and
+v0.8.0 implements ordinary tab groups that detach into native windows and
 dock into left/right groups within a window. At most two visible groups per window,
 16 tabs and four windows initially. The user was asked whether side-by-side pages
 or desktop-managed window tiling was intended; this is the provisional former
@@ -46,7 +47,7 @@ Acceptance: new/switch/close/reorder, Ctrl+T/W/Tab, detach/redock and left/right
 drop previews through native input; state preservation; correct focused-pane
 input at 100/125/200%; transactional failures and caps; final-window exit only.
 CDP stays bound to stable tab identities, never silently following the active tab.
-The candidate exposes all live tabs through discovery and explicit attachment;
+v0.8.0 exposes all live tabs through discovery and explicit attachment;
 moving a tab retains its target and closing it invalidates that target's routes.
 Automatic attachment and protocol-driven target creation/closure remain absent.
 
@@ -54,7 +55,7 @@ Automatic attachment and protocol-driven target creation/closure remain absent.
 
 Use unmodified Playwright APIs and a pinned client, initially playwright-core
 1.58.2. Record protocol traffic against owned local fixtures. The present CDP
-server is not compatible. The candidate fixes trailing-slash discovery, but the
+server is not compatible. v0.8.0 fixes trailing-slash discovery, but the
 pinned probe still fails at `Target.setAutoAttach` over both HTTP and WebSocket.
 It needs real auto-attach/target lifecycles, frame lifecycle and Runtime
 contexts/handles. Locator evaluation needs the DOM APIs used by the injected
@@ -70,6 +71,10 @@ Playwright assertions to treat an unsupported method as success.
 
 ## Google News desktop reading: T-022 / F-025
 
+See [GOOGLE_NEWS.md](GOOGLE_NEWS.md) for the refreshed live baseline, bounded
+prototype evidence and staged production/resource review. This remains planned;
+the document does not adopt dependencies or claim first-screen compatibility.
+
 User confirmed this first milestone on 2026-09-17: a faithful signed-out reading
 page first, interactions later. Target scripts-disabled desktop reading at 1280x800 and
 1024x768. Use identical actual HTML/assets in Mg and a reference browser, then
@@ -79,7 +84,7 @@ scroll/link input, one served topic/story navigation and Back. News changes;
 do not hardcode headlines, invent content or impersonate another browser.
 Consent/challenge responses, if encountered, are a reported boundary.
 
-Baseline 2026-09-17: ordinary HTTPS returns HTTP 200 and server-rendered stories.
+Earlier baseline 2026-09-17: ordinary HTTPS returns HTTP 200 and server-rendered stories.
 Actual Mg load: about 1.85 MB HTML, 987 nodes, 32 links, nine small admitted
 stylesheets, zero images. The main inline sheet is 1,227,493 bytes, rejected by
 the existing 256 KiB per-sheet cap. The first screen has overlapping menus and

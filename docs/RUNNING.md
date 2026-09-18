@@ -25,7 +25,7 @@ See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
 Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
 
-The v0.8.0 candidate adds right-click **Inspect element**, **F12** and
+v0.8.0 adds right-click **Inspect element**, **F12** and
 **Ctrl+Shift+I**. The native read-only Elements/Diagnostics panel shows painted
 DOM identity and bounded CSS/resource/script errors. Escape closes it; wheel
 and arrow/Page Up/Page Down keys scroll the panel without affecting the page.

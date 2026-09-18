@@ -18,6 +18,8 @@ and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
 **Playwright compatibility and faithful Google News rendering are unfinished.**
 Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
+[Playwright acceptance](docs/PLAYWRIGHT.md) and the
+[signed-out News reading plan](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 
 Wheel scrolling now eases over 150 ms. Repeated input accumulates and reversing
 responds immediately; clicks, keys and navigation stop motion at the visible

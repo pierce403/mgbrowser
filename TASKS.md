@@ -1,17 +1,27 @@
 # Work queue
 
-2026-09-17 active: requested desktop/automation/Google News work, separately gated
-in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). v0.7.2 publication and public
-acceptance are complete. The v0.8.0 candidate now targets native inspection and
-the first bounded tab workspace, with the remaining gates kept separate:
+2026-09-17 active: remaining automation/Google News work, separately gated
+in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). The native desktop increment
+has shipped; do not conflate its release with these unfinished gates:
 
-1. **T-019 / F-022:** right-click native Inspector and bounded useful diagnostics.
-2. **T-020 / F-023:** live tabs, detach/redock and left/right groups with stable identities.
-3. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
-4. **T-022 / F-025:** reviewed static Google News desktop reading, then separately
-   scoped interaction gaps. Preserve old worker/resource assertions and Rust-only policy.
+1. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
+   Public v0.8.0 still fails client initialization. See docs/PLAYWRIGHT.md.
+2. **T-022 / F-025:** faithful signed-out Google News reading first, interactions
+   later, as the user confirmed. See docs/GOOGLE_NEWS.md for measured blockers
+   and the proposed migration. Preserve existing budgets and Rust-only policy.
 
 Do not conflate these with the unfinished Google search or full JSPLAN/MVP gates.
+
+2026-09-17 complete: **T-019 / F-022 and T-020 / F-023 shipped as v0.8.0**,
+release commit `8b84604c83541beade431cfbedaa2dc449878011`. Read-only native
+Inspector/diagnostics and bounded live tabs, detach/redock and left/right groups
+pass actual public-binary input checks. Stable named CDP targets survive moves;
+closing rejects their routes. Exact Rust 35309250052, JSPLAN 35309249870,
+Pages 35309250006 and release 35310681040 succeed. Public checksum, exact curl
+install/reinstall, worker/session/Boa, desktop/icons and all native helpers pass.
+An actual v0.7.2 GUI update/Restart opens v0.8.0, then passes a no-op recheck.
+Multi-tab Restart restores URLs, not unsaved state or window/pane arrangement.
+No v0.8.0 release gates remain. See the dated log for receipts.
 
 2026-09-17 complete: **T-018 / F-021 shipped as v0.7.2**, release commit
 `16043b103a6565d8761daf860405a0661d09a9db`. Wheel easing, reversal and input/
