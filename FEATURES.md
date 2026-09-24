@@ -29,10 +29,14 @@ JSON report; known passes and runnable tests may not regress.
 
 - [x] Unmodified upstream files, full revision/SHA-256 inventory and licenses retained.
 - [x] Real Browser load/paint, exact pixel relations and explicit failed prerequisites.
-- [ ] Independent negative harness tests and baseline reproduction pass locally and in CI.
-- [ ] Exact-commit website displays current score and verified public result JSON.
+- [x] Independent negative harness tests and baseline reproduction pass locally and in CI.
+- [x] Exact-commit website displays current score and verified public result JSON.
 - [ ] Increase passing coverage and reduce unsupported prerequisites with reviewed changes.
 - [ ] Broader web-API/testharness and browser automation integration verified.
+
+Initial integration: a4e3692bc527b8f89814034a7dbc182254bc0aa3. Pages/WPT
+35940400295 passes. Public HTML matches the source and the public report names
+that exact clean commit, reproducing all 24 outcomes. See the 2026-09-23 log.
 
 ## F-025 : Google News desktop reading
 

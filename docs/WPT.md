@@ -174,6 +174,10 @@ verification policy.
 2. Diagnose failing supported cases using their original sources, screenshots
    and diagnostics. Implement general standards behavior, retain existing tests,
    manually tighten the ratchet and release each user-visible increment.
+   The first bounded candidate is genuine `width: max-content` support in the
+   style snapshot and layout paths. The failing reference depends on that sizing
+   keyword. Only after it renders without fallback can this unchanged reftest
+   establish whether flex-baseline behavior needs a separate correction.
 3. Reduce unsupported prerequisites deliberately: genuine XML/XHTML semantics,
    appropriate Ahem/font selection, then general script/testharness protocols
    under the existing worker and resource review. Do not rewrite tests to avoid

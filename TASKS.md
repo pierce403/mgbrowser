@@ -3,10 +3,12 @@
 2026-09-23 active: **T-023 / F-026: measurable WPT coverage** supersedes the
 remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md).
 
-1. Integrate the fixed upstream static-reftest pilot and publish its current
+1. **Complete:** integrate the fixed upstream static-reftest pilot and publish its current
    score on every commit: observed baseline 6 PASS, 1 FAIL, 17 UNSUPPORTED / 24.
    First milestone: immutable inputs/licenses, real Browser rendering, negative
    harness tests, frozen pass/support ratchet and fresh exact-commit Pages gate.
+   Shipped on main at a4e3692; Pages/WPT35940400295 and public score/JSON checks
+   pass. This is test infrastructure; the installed browser remains v0.9.0.
 2. Improve the frozen cohort without changing its assertions: the first real
    gap is `width: max-content` in the align-baseline reference, which triggers
    readable-flow fallback. Do not call this an isolated flex-baseline bug.
