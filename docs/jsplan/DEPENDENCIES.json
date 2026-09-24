@@ -3,7 +3,7 @@
   "scope": "research-only active normal/build graph",
   "target": "x86_64-unknown-linux-gnu",
   "manifest_sha256": "4aa612fe8bdf33112529ffd4bdc8f5de04fd0ba5451757e932401d08eb84e27a",
-  "lock_sha256": "86790875248b540387ee77525cd8d8039d24af2cd4554cdec653d53a065394c3",
+  "lock_sha256": "d2b236b87eda463ebdf767e00e38f4603edd9c6f6aa6920ac4a4f529a4591d65",
   "normal_build_tree": [
     "mg-jsplan-probe v0.1.0 (repository/experiments/jsplan) ",
     "|-- boa_engine v0.22.0 ",
@@ -286,7 +286,7 @@
     "|           `-- time-core v0.1.9 ",
     "|-- boa_gc v0.22.0 arrayvec,boa_string,thin-vec (*)",
     "|-- libc v0.2.189 default,std",
-    "|-- mg-butane v0.9.0 (repository/crates/mg-butane) ",
+    "|-- mg-butane v0.9.1 (repository/crates/mg-butane) ",
     "|   `-- serde v1.0.229 default,derive,rc,serde_derive,std (*)",
     "|-- serde v1.0.229 default,derive,rc,serde_derive,std (*)",
     "`-- serde_json v1.0.151 default,std (*)"
@@ -1702,7 +1702,7 @@
     },
     {
       "name": "mg-butane",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "source": "repository",
       "archive_sha256": null,
       "license": "Apache-2.0",

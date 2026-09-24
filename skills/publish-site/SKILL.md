@@ -14,6 +14,13 @@ Update the installer when its behavior needs to change; its latest-release URLs
 already follow each newly published release. Test reinstalls as well as clean
 installs. Do not move published tags or silently replace old release artifacts.
 
+Workspace version bumps also change the local mg-butane package consumed by
+the excluded experiments/jsplan workspace. Synchronize its Cargo.lock package
+version and regenerate its reviewed dependency-audit records, then run the
+locked research gates before pushing. Keep third-party versions/features and
+frozen outcome expectations unchanged. The production workspace build alone
+does not validate this separate lockfile; exact-commit JSPLAN CI must also pass.
+
 Read FEATURES.md and the latest work log. Update descriptive index.html content when direction changes, with no unsupported readiness claims. Compile tools/site.rs into tmp/site and run it to refresh the marked generated section; run tmp/site --check and git diff --check.
 
 For an authorized publication, commit and push, then inspect the Pages workflow for the intended SHA. Check the repository Pages API for custom domain and certificate state, and confirm HTTPS enforcement. Fetch https://mgbrowser.org without bypassing TLS validation and compare the full HTML against index.html. HTTP success alone does not establish visual quality; inspect in a browser when available and state any QA limit.
