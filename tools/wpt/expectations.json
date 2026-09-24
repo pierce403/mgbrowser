@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "corpus_sha256": "a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd",
+  "tests": [
+    "css/css-flexbox/align-baseline.html",
+    "css/css-flexbox/align-content-wrap-004.html",
+    "css/css-flexbox/align-content_center.html",
+    "css/css-flexbox/align-content_flex-end.html",
+    "css/css-flexbox/align-content_flex-start.html",
+    "css/css-flexbox/align-content_space-around.html",
+    "css/css-flexbox/align-content_space-between.html",
+    "css/css-flexbox/align-content_stretch.html",
+    "css/css-flexbox/align-items-006.html",
+    "css/css-flexbox/align-items-007.html",
+    "css/css-flexbox/align-items-008.html",
+    "css/css-flexbox/align-items-009.html",
+    "css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+    "css/css-flexbox/align-self-001.html",
+    "css/css-flexbox/align-self-002.html",
+    "css/css-flexbox/align-self-003.html",
+    "css/css-flexbox/align-self-004.html",
+    "css/css-flexbox/align-self-005.html",
+    "css/css-flexbox/align-self-007.html",
+    "css/css-flexbox/align-self-008.html",
+    "css/css-flexbox/align-self-009.html",
+    "css/css-flexbox/align-self-011.html",
+    "css/css-flexbox/align-self-012.html",
+    "css/css-flexbox/align-self-013.html"
+  ],
+  "required_passes": [
+    "css/css-flexbox/align-content_center.html",
+    "css/css-flexbox/align-content_flex-end.html",
+    "css/css-flexbox/align-content_flex-start.html",
+    "css/css-flexbox/align-content_space-around.html",
+    "css/css-flexbox/align-content_space-between.html",
+    "css/css-flexbox/align-content_stretch.html"
+  ],
+  "required_supported": [
+    "css/css-flexbox/align-baseline.html",
+    "css/css-flexbox/align-content_center.html",
+    "css/css-flexbox/align-content_flex-end.html",
+    "css/css-flexbox/align-content_flex-start.html",
+    "css/css-flexbox/align-content_space-around.html",
+    "css/css-flexbox/align-content_space-between.html",
+    "css/css-flexbox/align-content_stretch.html"
+  ]
+}

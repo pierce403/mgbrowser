@@ -4,6 +4,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/WPT.md`: pinned upstream static-reftest pilot, source-linked score,
+  regression ratchet and every-commit website measurement policy. Broader WPT
+  support remains open; selected static pixels are not JavaScript conformance.
+
 - `docs/APPEARANCE.md`: System/Light/Dark browser controls, persistent XDG
   preferences, desktop DPI sizing with manual overrides, Rust-only desktop
   discovery and isolated native acceptance.

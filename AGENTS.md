@@ -2,7 +2,22 @@
 
 ## Purpose and responsibilities
 
-Current authorized request (2026-09-17): native right-click element inspection
+Current authorized request (2026-09-23): integrate genuine pinned upstream Web
+Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and
+T-023 / F-026. Keep corpus/runner changes separate from engine changes scored
+against them; never hide failures, shrink denominators or relax security limits
+to improve the score. The first static reftest pilot is not full WPT, WebDriver
+or JavaScript testharness support. Browser feature fixes still require releases.
+
+Standing user instruction (2026-09-23): show current WPT scores on the website
+and update them at every commit. Run tools/wpt/run.py --update-score into a new
+ignored output directory, review the results, run tmp/site and commit the score
+and generated page. Pages rebuilds and reruns the selection with --check-score
+on every push/PR, then publishes that exact commit's report as wpt-results.json.
+Unchanged counts on a documentation commit are valid only after that fresh gate.
+Do not automatically rewrite expectations.json to accept regressions.
+
+Prior authorized request (2026-09-17): native right-click element inspection
 and useful CSS/resource/JavaScript diagnostics; live detachable tabs and left/right
 page groups; pinned Playwright control; and signed-out Google News desktop reading.
 User confirmed faithful reading first, with interactions as a later milestone.

@@ -1,6 +1,26 @@
 # Work queue
 
-2026-09-18 active: remaining automation/Google News work, separately gated
+2026-09-23 active: **T-023 / F-026: measurable WPT coverage** supersedes the
+remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md).
+
+1. Integrate the fixed upstream static-reftest pilot and publish its current
+   score on every commit: observed baseline 6 PASS, 1 FAIL, 17 UNSUPPORTED / 24.
+   First milestone: immutable inputs/licenses, real Browser rendering, negative
+   harness tests, frozen pass/support ratchet and fresh exact-commit Pages gate.
+2. Improve the frozen cohort without changing its assertions: the first real
+   gap is `width: max-content` in the align-baseline reference, which triggers
+   readable-flow fallback. Do not call this an isolated flex-baseline bug.
+3. Reduce unsupported coverage through reviewed general XML/font/script harness
+   prerequisites. The 17 unsupported tests remain visible, not counted as passes.
+4. Expand pinned cohorts and implement full testharness/WebDriver integration in
+   separate milestones. Keep worker/resource limits and old regressions; each
+   browser behavior improvement finishes with a verified public feature release.
+
+Goal: increase the absolute number of genuine upstream passes while preserving
+the existing passing and runnable sets. A selected-subset percentage is not a
+full WPT compatibility score. The general autoresearch executor remains planned.
+
+2026-09-18 deferred: remaining automation/Google News work, separately gated
 in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). The native desktop increment
 has shipped; do not conflate its release with these unfinished gates:
 

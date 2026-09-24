@@ -1,0 +1,2 @@
+# Preserve byte-exact upstream WPT fixtures, including their original whitespace.
+tools/wpt/upstream/** -text -whitespace

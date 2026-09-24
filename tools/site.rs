@@ -83,6 +83,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Website status is current.");
     }
+    let mut wpt = process::Command::new("python3");
+    wpt.arg("tools/wpt/site.py");
+    if !args.is_empty() {
+        wpt.arg("--check");
+    }
+    if !wpt.status()?.success() {
+        return Err("website WPT score validation failed".into());
+    }
     Ok(())
 }
 

@@ -84,6 +84,17 @@ mgbrowser https://example.com/
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
 · [Website](https://mgbrowser.org) · [Inspect installer](install.sh)
 
+### Web Platform Tests
+
+Current-source baseline: **6 pass, 1 fails, 17 unsupported out of 24 selected
+upstream reftests**. This is a pinned static CSS pilot, not the full WPT suite
+or a JavaScript conformance score. The tests use the real Rust navigation,
+resource-loading and painting code. [Method and commands](docs/WPT.md).
+The website reruns the selection before every commit's Pages deployment and
+publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
+The goal is more genuine passes, without hiding failures or losing old passes.
+This test-tooling addition does not change the installed v0.9.0 browser.
+
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
 needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable

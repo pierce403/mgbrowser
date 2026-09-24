@@ -3,3 +3,4 @@
 /experiments/jsplan/target/
 /.codex/
 /.agents/
+/tools/wpt/__pycache__/

@@ -5,6 +5,16 @@ description: Validate mgbrowser transport, document, paint and native interactio
 
 # Browser check
 
+For every commit, follow docs/WPT.md: run the pinned static pilot into a new
+ignored directory with tools/wpt/run.py --update-score, review its full result,
+then regenerate tmp/site and include the deterministic score and page. The
+runner rebuilds the Rust adapter; do not substitute an old executable. Preserve
+the exact corpus and manually reviewed pass/support ratchet when scoring engine
+changes. XML, fonts, scripting and other unsupported prerequisites stay visible
+in the denominator. Never count harness controls or readable fallback as WPT
+passes. Pages reruns --check-score on the exact commit, including docs-only work.
+This headless Browser lane does not replace native/public-release acceptance.
+
 For JSPLAN engine research, also read `experiments/jsplan/README.md` and
 `docs/jsplan/RESULTS.md`. Keep the experiment's workspace/lockfile separate from
 production. Build its release executable with Rust 1.91.1, run protocol and
