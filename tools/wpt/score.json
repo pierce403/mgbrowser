@@ -3,15 +3,15 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 1,
-    "PASS": 6,
+    "FAIL": 0,
+    "PASS": 7,
     "TIMEOUT": 0,
     "UNSUPPORTED": 17,
     "total": 24
   },
   "results": [
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/align-baseline.html"
     },
     {
@@ -109,6 +109,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "81ff8c251013b444506dfdfad729b5577b51cb6df55cce8524e0d41789c035e5",
+  "source_sha256": "34b49a42e1df1e36a2fc8c8ecd52f482d4d1dbf3bce826cc7f49db8277595bf8",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

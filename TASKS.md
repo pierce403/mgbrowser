@@ -9,9 +9,10 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    harness tests, frozen pass/support ratchet and fresh exact-commit Pages gate.
    Shipped on main at a4e3692; Pages/WPT35940400295 and public score/JSON checks
    pass. This is test infrastructure; the installed browser remains v0.9.0.
-2. Improve the frozen cohort without changing its assertions: the first real
-   gap is `width: max-content` in the align-baseline reference, which triggers
-   readable-flow fallback. Do not call this an isolated flex-baseline bug.
+2. **In release validation:** v0.9.1 fixes preferred `width: max-content` and
+   admitted single-line column baseline grouping. The unchanged pilot improves
+   to 7 PASS, 0 FAIL, 17 UNSUPPORTED / 24 locally. Finish exact-commit CI/Pages,
+   release, fresh public installation and native verification before handoff.
 3. Reduce unsupported coverage through reviewed general XML/font/script harness
    prerequisites. The 17 unsupported tests remain visible, not counted as passes.
 4. Expand pinned cohorts and implement full testharness/WebDriver integration in

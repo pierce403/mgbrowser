@@ -1305,6 +1305,41 @@ impl Layout<'_, '_> {
         basis: f32,
         containing_height: Option<f32>,
     ) -> (f32, f32) {
+        if self.styles[id].layout.width_max_content {
+            let natural = self.natural_replaced_size(id, true);
+            let intrinsic = self.replaced_intrinsic_width(id, basis, containing_height, natural);
+            let (_, padding) = self.edges(id, basis);
+            let s = &self.styles[id];
+            let (horizontal, vertical) =
+                if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                    (padding[1] + padding[3], padding[0] + padding[2])
+                } else {
+                    (0.0, 0.0)
+                };
+            // Keywords size content; numeric constraints use the declared box.
+            let maximum = s
+                .max_width
+                .resolve(basis)
+                .map_or(MAX_EXTENT, |v| (v - horizontal).max(0.0));
+            let minimum = s
+                .min_width
+                .resolve(basis)
+                .map_or(0.0, |v| (v - horizontal).max(0.0));
+            let width = intrinsic.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT);
+            let auto_height = if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
+                && natural.0 > 0.0
+            {
+                width * natural.1 / natural.0
+            } else {
+                natural.1
+            };
+            let height =
+                height_length(s.height, containing_height).unwrap_or(auto_height + vertical);
+            return (
+                width,
+                (constrain_height(s, height, containing_height) - vertical).max(0.0),
+            );
+        }
         if self.styles[id].layout.box_sizing == crate::style::BoxSizing::BorderBox {
             let (_, p) = self.edges(id, basis);
             let horizontal = p[1] + p[3];
@@ -1494,6 +1529,16 @@ impl Layout<'_, '_> {
         } else {
             0.0
         };
+        if s.layout.width_max_content {
+            // Descendants with this preferred width do not shrink their
+            // contribution to their longest word under a min-content query.
+            // Definite constraints still cap the contribution; the existing
+            // minimum handling below has precedence over this maximum.
+            if let Length::Px(maximum) = s.max_width {
+                result.max = result.max.min((maximum - sizing_edges).max(0.0));
+            }
+            result.min = result.max;
+        }
         if let Length::Px(width) = s.width {
             let width = (width - sizing_edges).max(0.0);
             result.min = result.min.max(width);
@@ -1753,7 +1798,7 @@ impl Layout<'_, '_> {
                 .resolve(available)
                 .map(|w| w + sizing_edges)
                 .unwrap_or_else(|| {
-                    if s.layout.width_fit_content {
+                    if s.layout.width_fit_content || s.layout.width_max_content {
                         let Some(i) = self.measure_content_intrinsic(id, depth + 1) else {
                             return 0.0;
                         };
@@ -1761,7 +1806,11 @@ impl Layout<'_, '_> {
                         // Intrinsic width keywords describe the content box,
                         // independently of box-sizing. Numeric min/max below
                         // still use the declared sizing box exactly once.
-                        i.max.min(i.min.max(stretch)) + horizontal
+                        if s.layout.width_max_content {
+                            i.max + horizontal
+                        } else {
+                            i.max.min(i.min.max(stretch)) + horizontal
+                        }
                     } else if is_table {
                         let i = self.intrinsic(id, depth + 1);
                         i.max.min(available).max(i.min)
@@ -2375,7 +2424,10 @@ impl Layout<'_, '_> {
         containing_height: Option<f32>,
         depth: usize,
     ) -> f32 {
-        if self.is_structured_button(id) {
+        if self.styles[id].layout.width_max_content && !self.is_replaced(id) {
+            self.block_layout::<false>(id, 0.0, 0.0, width, containing_height, None, depth + 1)
+                .0
+        } else if self.is_structured_button(id) {
             self.inline_button::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
         } else if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
@@ -2403,7 +2455,9 @@ impl Layout<'_, '_> {
         containing_height: Option<f32>,
         depth: usize,
     ) -> (f32, f32) {
-        let forced = if self.styles[id].width.resolve(width).is_some() {
+        let forced = if self.styles[id].width.resolve(width).is_some()
+            || self.styles[id].layout.width_max_content
+        {
             None
         } else {
             let outer = self.intrinsic(id, depth + 1).max.min(width);
@@ -2436,7 +2490,18 @@ impl Layout<'_, '_> {
                     ascent = ascent.max(self.styles[*node].font_size);
                 }
                 Token::Box(child) => {
-                    if self.is_structured_button(*child) {
+                    if self.styles[*child].layout.width_max_content && !self.is_replaced(*child) {
+                        let (_, h) = self.block_layout::<false>(
+                            *child,
+                            0.0,
+                            0.0,
+                            width,
+                            containing_height,
+                            None,
+                            depth + 1,
+                        );
+                        height = height.max(h);
+                    } else if self.is_structured_button(*child) {
                         let (_, h) = self.inline_button::<false>(
                             *child,
                             0.0,
@@ -2508,6 +2573,16 @@ impl Layout<'_, '_> {
                     };
                     let (w, h) = if self.is_replaced(*child) {
                         self.replaced::<EMIT>(*child, left, y, width, containing_height)
+                    } else if self.styles[*child].layout.width_max_content {
+                        self.block_layout::<EMIT>(
+                            *child,
+                            left,
+                            y,
+                            width,
+                            containing_height,
+                            None,
+                            depth + 1,
+                        )
                     } else if self.is_structured_button(*child) {
                         self.inline_button::<EMIT>(
                             *child,

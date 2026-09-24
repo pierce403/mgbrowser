@@ -386,6 +386,8 @@ impl CoreStyle for StyleView<'_> {
             Size {
                 width: if self.style.layout.width_fit_content {
                     Dimension::fit_content()
+                } else if self.style.layout.width_max_content {
+                    Dimension::max_content()
                 } else {
                     dimension(self.style.width)
                 },
@@ -437,9 +439,13 @@ impl CoreStyle for StyleView<'_> {
         }
     }
     fn aspect_ratio(&self) -> Option<f32> {
-        if self.item_box() {
+        if self.item_box() && !self.style.layout.width_max_content {
             self.natural_ratio
         } else {
+            // A max-content width must be measured, not synthesized from an
+            // opposite-axis border-box size before Taffy resolves the keyword.
+            // Mg's replaced measurement transfers the natural content ratio
+            // after subtracting padding/borders and preserves forced used sizes.
             None
         }
     }
@@ -926,6 +932,28 @@ mod tests {
         fn assert_copy<T: Copy>() {}
         assert_copy::<LeafStyle>();
         assert!(std::mem::size_of::<LeafStyle>() < std::mem::size_of::<taffy::Style>());
+    }
+
+    #[test]
+    fn max_content_replaced_width_is_measured_without_border_box_ratio_transfer() {
+        for sizing in ["content-box", "border-box"] {
+            let s = computed(&format!(
+                "width:max-content;height:74px;box-sizing:{sizing};padding:5px;border:2px solid"
+            ));
+            let view = StyleView::item(&s, Some(2.));
+            assert!(view.validate().is_ok());
+            assert_eq!(view.size().width, Dimension::max_content());
+            assert_eq!(view.size().height, Dimension::length(74.));
+            assert_eq!(view.aspect_ratio(), None);
+            assert!(view.is_compressible_replaced());
+            let leaf = LeafStyle::from(view);
+            assert_eq!(leaf.aspect_ratio(), None);
+            assert!(leaf.is_compressible_replaced());
+        }
+        for width in ["auto", "fit-content", "80px"] {
+            let s = computed(&format!("width:{width};height:74px;box-sizing:border-box"));
+            assert_eq!(StyleView::item(&s, Some(2.)).aspect_ratio(), Some(2.));
+        }
     }
 
     #[test]

@@ -17,6 +17,8 @@ use taffy::{
     geometry::{Line, Size},
 };
 
+mod column_baseline;
+
 const MAX_ITEMS: usize = 512;
 const MAX_TRACKS: usize = 128;
 const MAX_SCRATCH: usize = 16 * 1024 * 1024;
@@ -365,6 +367,7 @@ fn run_inner<const EMIT: bool>(
             return None;
         }
     }
+    let column_baseline = adapter.prepare_column_baseline(height)?;
     adapter.preflight()?;
     let input = LayoutInput {
         run_mode: if EMIT {
@@ -400,6 +403,9 @@ fn run_inner<const EMIT: bool>(
         return None;
     }
     if EMIT {
+        if column_baseline {
+            adapter.align_column_baseline(width.into_option())?;
+        }
         // Validate every final allocation before the first paint operation.
         for slot in &adapter.slots[1..] {
             let rect = slot.geometry;
@@ -1261,6 +1267,55 @@ mod tests {
                         .any(|rect| rect.node == box_id && rect.x > 10)
                 );
                 assert_eq!(layout.format_scratch, 0);
+            },
+        );
+    }
+
+    #[test]
+    fn column_baseline_work_is_bounded_before_scene_emission() {
+        with_layout(
+            "<div id=root style='display:flex;flex-direction:column;align-items:baseline'><div style='width:20px;height:10px'></div><div style='width:30px;height:10px'></div></div>",
+            |layout, id| {
+                // Admission consumes these five visits. The new baseline scan
+                // must reject before Taffy work, scene allocation, or painting.
+                layout.budget = 5;
+                assert!(
+                    run::<true>(
+                        layout,
+                        id,
+                        0.0,
+                        0.0,
+                        AvailableSpace::Definite(100.0),
+                        None,
+                        0
+                    )
+                    .is_none()
+                );
+                assert_eq!(
+                    layout.failure,
+                    Some((id, "column baseline alignment work budget exhausted"))
+                );
+                assert_eq!(layout.budget, 0);
+                assert_eq!(layout.format_scratch, 0);
+                assert_eq!(layout.scene.paints.capacity(), 0);
+                assert_eq!(layout.scene.boxes.capacity(), 0);
+                assert_eq!(layout.scene.hits.capacity(), 0);
+            },
+        );
+        with_layout(
+            "<div id=root style='display:flex;flex-direction:column;flex-wrap:wrap-reverse;align-items:baseline'><div style='width:20px;height:10px'></div><div style='width:30px;height:10px'></div></div>",
+            |layout, id| {
+                assert_eq!(
+                    run::<false>(layout, id, 0.0, 0.0, AvailableSpace::MaxContent, None, 0),
+                    Some(Size {
+                        width: 30.0,
+                        height: 20.0
+                    })
+                );
+                assert_eq!(layout.format_scratch, 0);
+                assert_eq!(layout.scene.paints.capacity(), 0);
+                assert_eq!(layout.scene.boxes.capacity(), 0);
+                assert_eq!(layout.scene.hits.capacity(), 0);
             },
         );
     }

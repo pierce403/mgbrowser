@@ -18,10 +18,13 @@ F-003/F-005 production rendering, immutable upstream inputs and truthful results
 
 Maximize genuine upstream passes without rewriting assertions, hiding failures,
 silently shrinking the denominator or weakening browser boundaries. Start with
-the pinned 24-test static flexbox reftest pilot in docs/WPT.md: 6 pass, 1 fails,
+the pinned 24-test static flexbox reftest pilot in docs/WPT.md: 7 pass, 0 fail,
 17 are explicitly unsupported. This does not implement full wptrunner,
 WebDriver, JavaScript testharness or broad web conformance. No production browser
-behavior or shipped version changes in the initial test-tooling contribution.
+behavior changed in the initial test-tooling contribution. The v0.9.1 candidate
+adds preferred max-content widths and admitted single-line column baselines;
+local unchanged-corpus results improve from six passes to seven. Release and
+public-installer verification are recorded separately in the dated log.
 Every commit reruns the pilot before Pages publishes its score and exact-commit
 JSON report; known passes and runnable tests may not regress.
 
@@ -31,6 +34,7 @@ JSON report; known passes and runnable tests may not regress.
 - [x] Real Browser load/paint, exact pixel relations and explicit failed prerequisites.
 - [x] Independent negative harness tests and baseline reproduction pass locally and in CI.
 - [x] Exact-commit website displays current score and verified public result JSON.
+- [x] First unchanged-cohort implementation gain: align-baseline passes locally without fallback.
 - [ ] Increase passing coverage and reduce unsupported prerequisites with reviewed changes.
 - [ ] Broader web-API/testharness and browser automation integration verified.
 

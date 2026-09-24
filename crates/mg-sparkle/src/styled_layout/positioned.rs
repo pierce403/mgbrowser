@@ -215,11 +215,12 @@ fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
     let width = if let Some(width) = style.width.resolve(containing.w) {
         sizing(width, horizontal)
     } else if !style.layout.width_fit_content
+        && !style.layout.width_max_content
         && let (Some(left), Some(right)) = (left, right)
     {
         (containing.w - left - right - margin[1] - margin[3]).max(horizontal)
     } else {
-        let intrinsic = if style.layout.width_fit_content {
+        let intrinsic = if style.layout.width_fit_content || style.layout.width_max_content {
             layout.measure_fit_content_intrinsic(
                 id,
                 containing.w,
@@ -240,7 +241,11 @@ fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
             - margin[3]
             - horizontal)
             .max(0.0);
-        intrinsic.max.min(available).max(intrinsic.min) + horizontal
+        if style.layout.width_max_content {
+            intrinsic.max + horizontal
+        } else {
+            intrinsic.max.min(available).max(intrinsic.min) + horizontal
+        }
     };
     let width = if style.layout.max_width_fit_content {
         let Some(intrinsic) = layout.measure_fit_content_intrinsic(

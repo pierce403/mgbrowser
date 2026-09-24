@@ -25,15 +25,28 @@ setup. Those tests remain in the 24-test denominator. Their source-derived
 classification is recalculated on every run; an ordinary rendering mismatch is
 not relabeled unsupported to improve the score.
 
-The first completed run reports **6 PASS, 1 FAIL and 17 UNSUPPORTED out of 24**,
-with no errors, timeouts or crashes. `align-baseline.html` fails because its
-reference uses unsupported `width: max-content`, causing the real layout path
-to fall back. This is not proof of an isolated flex-baseline bug;
-matching fallback pixels are not accepted as a
-pass. The authoritative current results are [score.json](../tools/wpt/score.json),
+The initial run reported **6 PASS, 1 FAIL and 17 UNSUPPORTED out of 24**.
+The v0.9.1 candidate reports **7 PASS, 0 FAIL and 17 UNSUPPORTED out of 24**,
+with no errors, timeouts or crashes. First, `align-baseline.html`'s reference
+required genuine `width: max-content` support. Removing its fallback then exposed
+a separate column baseline grouping error. Both fixes preserve the upstream
+files: test and reference now match exactly, without diagnostics. The ratchet
+adds this new pass while retaining every old test and supported prerequisite.
+The authoritative current results are [score.json](../tools/wpt/score.json),
 the website's **selected tests passing** count, and its
 [full report](https://mgbrowser.org/wpt-results.json).
 None is a percentage of the complete upstream suite or the installed release.
+
+The width correction covers ordinary, atomic-inline, flex/grid, replaced and
+positioned sizing while preserving forced flex widths, numeric constraints and
+box edges. The column correction is deliberately bounded: horizontal/LTR,
+proven single-line groups with identical participating left-margin values.
+Finite-height wrapped groups and unequal left-margin group sizing produce
+explicit layout diagnostics/fallback. Auto-margin and nonbaseline items do not
+join the group. Other writing modes, general baseline layout and full intrinsic
+sizing remain unsupported; resource limits and the restricted script path are
+unchanged. These are browser changes, so public release verification is required
+in addition to the source-linked WPT gate.
 
 The unmodified upstream HTML, CSS, SVG, font and license bytes are inventoried
 with lengths and SHA-256 hashes. Missing, changed or extra input files fail the
@@ -174,10 +187,9 @@ verification policy.
 2. Diagnose failing supported cases using their original sources, screenshots
    and diagnostics. Implement general standards behavior, retain existing tests,
    manually tighten the ratchet and release each user-visible increment.
-   The first bounded candidate is genuine `width: max-content` support in the
-   style snapshot and layout paths. The failing reference depends on that sizing
-   keyword. Only after it renders without fallback can this unchanged reftest
-   establish whether flex-baseline behavior needs a separate correction.
+   The first gain is genuine `width: max-content` support and admitted synthesized
+   column baselines. Seven tests now pass; retain them while adding prerequisites
+   for the seventeen unsupported tests, not just more hand-picked easy tests.
 3. Reduce unsupported prerequisites deliberately: genuine XML/XHTML semantics,
    appropriate Ahem/font selection, then general script/testharness protocols
    under the existing worker and resource review. Do not rewrite tests to avoid

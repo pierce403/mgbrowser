@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.9.0 Experimental Preview</title>
+<title>mgbrowser: v0.9.1 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -17,8 +17,8 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.0 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
-<p class="muted"><strong>Google News, reading first.</strong> Story columns, JPEG thumbnails, positioned headers and simple SVG now render. This is a bounded reading increment, not full News compatibility: fonts, some icons and interactions remain unfinished.</p>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.1 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<p class="muted"><strong>Measured standards progress.</strong> This update fixes intrinsic widths and supported column baseline alignment. The pinned WPT pilot and remaining unsupported tests are reported below, freshly measured on every commit.</p>
 <p class="muted">Right-click Inspect element or press F12 for diagnostics. Ctrl+T opens a tab; drag tabs into windows or left/right groups. Smooth scrolling, themes, sizing, bookmarks and update progress with Restart now remain.</p>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
@@ -30,15 +30,15 @@
 <section class="detail" id="wpt" aria-labelledby="wpt-title">
 <p class="eyebrow">Measured compatibility</p><h2 id="wpt-title">Web Platform Tests</h2>
 <!-- wpt-score:start -->
-<p class="wpt-score"><strong>6 / 24 selected tests passing</strong></p>
-<p>Fail: 1 · Unsupported: 17 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
+<p class="wpt-score"><strong>7 / 24 selected tests passing</strong></p>
+<p>Fail: 0 · Unsupported: 17 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
 <p class="muted">A pinned static-reftest pilot using the real Rust browser navigation, resource and rendering path. This is a selected subset, not the full Web Platform Tests suite or JavaScript testharness coverage. These are current-source measurements, not a score for the installed release.</p>
 <p>Pages reruns this selection and checks the recorded score before publishing a commit. Unsupported cases stay in the denominator.</p>
 <p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/WPT.md">Method and limitations ↗</a> · <a href="/wpt-results.json">Full results and tested commit ↗</a></p>
 <details><summary>Reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
 <p>Corpus SHA-256: <code class="wpt-fingerprint">a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd</code></p>
-<p>Browser source SHA-256: <code class="wpt-fingerprint">81ff8c251013b444506dfdfad729b5577b51cb6df55cce8524e0d41789c035e5</code></p>
+<p>Browser source SHA-256: <code class="wpt-fingerprint">34b49a42e1df1e36a2fc8c8ecd52f482d4d1dbf3bce826cc7f49db8277595bf8</code></p>
 </details>
 <!-- wpt-score:end -->
 </section>

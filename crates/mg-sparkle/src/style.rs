@@ -342,6 +342,8 @@ pub struct LayoutStyle {
     /// The width keyword, not the fit-content() sizing function. Its intrinsic
     /// content size remains distinct from numeric/auto `ComputedStyle::width`.
     pub width_fit_content: bool,
+    /// Preferred intrinsic maximum, without fit-content's available-space clamp.
+    pub width_max_content: bool,
     pub max_width_fit_content: bool,
     pub min_width_intrinsic: Option<IntrinsicSize>,
     pub position: Position,
@@ -378,6 +380,7 @@ impl Default for LayoutStyle {
         Self {
             box_sizing: BoxSizing::ContentBox,
             width_fit_content: false,
+            width_max_content: false,
             max_width_fit_content: false,
             min_width_intrinsic: None,
             position: Position::Static,
@@ -2296,7 +2299,8 @@ fn renderer_layout(
     }
     use style::values::computed::Size;
     output.width_fit_content = matches!(p.width, Size::FitContent);
-    if !output.width_fit_content {
+    output.width_max_content = matches!(p.width, Size::MaxContent);
+    if !output.width_fit_content && !output.width_max_content {
         report.convert("width", layout_size(&p.width), Length::Auto)?;
     }
     for (name, value) in [("height", &p.height), ("min-height", &p.min_height)] {
