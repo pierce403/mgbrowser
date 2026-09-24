@@ -8,11 +8,12 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    First milestone: immutable inputs/licenses, real Browser rendering, negative
    harness tests, frozen pass/support ratchet and fresh exact-commit Pages gate.
    Shipped on main at a4e3692; Pages/WPT35940400295 and public score/JSON checks
-   pass. This is test infrastructure; the installed browser remains v0.9.0.
-2. **In release validation:** v0.9.1 fixes preferred `width: max-content` and
+   pass. That tooling-only commit did not change the v0.9.0 browser binary.
+2. **Complete:** v0.9.1 fixes preferred `width: max-content` and
    admitted single-line column baseline grouping. The unchanged pilot improves
-   to 7 PASS, 0 FAIL, 17 UNSUPPORTED / 24 locally. Finish exact-commit CI/Pages,
-   release, fresh public installation and native verification before handoff.
+   to 7 PASS, 0 FAIL, 17 UNSUPPORTED / 24. Released at a89747f with exact-commit
+   Rust/JSPLAN/Pages/release gates, public checksum/install, native WPT equality,
+   Boa native/CDP journeys and actual v0.9.0 self-update/no-op checks verified.
 3. Reduce unsupported coverage through reviewed general XML/font/script harness
    prerequisites. The 17 unsupported tests remain visible, not counted as passes.
 4. Expand pinned cohorts and implement full testharness/WebDriver integration in
