@@ -1,5 +1,8 @@
 //! X11 host facilities. Engines do not depend on this crate.
+pub mod appearance;
+pub mod scaling;
 pub mod script_worker;
+pub mod worker_memory;
 
 use mg_chassis::{
     Key,
@@ -64,15 +67,19 @@ impl ScriptSession for script_worker::Session {
 /// Convert X11's key symbols at the platform boundary.
 pub fn translate_keysym(sym: u32) -> Option<Key> {
     Some(match sym {
+        0xff1b => Key::Escape,
         0xff0d => Key::Enter,
         0xff08 => Key::Backspace,
-        0xff09 => Key::Tab,
+        // X11 commonly supplies ISO_Left_Tab for Shift+Tab, not the Tab keysym.
+        0xff09 | 0xfe20 => Key::Tab,
         0xff51 => Key::Left,
         0xff52 => Key::Up,
+        0xff53 => Key::Right,
         0xff54 => Key::Down,
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
         0xffc2 => Key::Reload,
+        0xffc9 => Key::DeveloperTools,
         _ => {
             let code = if sym & 0xff000000 == 0x01000000 {
                 sym & 0xffffff
@@ -116,5 +123,36 @@ pub fn load_fonts() -> Result<Fonts, String> {
 fn load_font_path(path: &std::path::Path) -> Result<Fonts, String> {
     let bytes = std::fs::read(path)
         .map_err(|error| format!("Cannot read font {}: {error}", path.display()))?;
-    Fonts::from_bytes(bytes).map_err(|error| format!("Font {}: {error}", path.display()))
+    // Discover only known sibling files; parsing/shaping remains in Rust. Custom
+    // faces can explicitly supply their bold companion without a font service.
+    let bold_path = std::env::var_os("MGBROWSER_FONT_BOLD")
+        .map(std::path::PathBuf::from)
+        .or_else(|| match path.file_name()?.to_str()? {
+            "Arial.ttf" => Some(path.with_file_name("Arial Bold.ttf")),
+            "DejaVuSans.ttf" => Some(path.with_file_name("DejaVuSans-Bold.ttf")),
+            "LiberationSans-Regular.ttf" => Some(path.with_file_name("LiberationSans-Bold.ttf")),
+            _ => None,
+        });
+    let bold = bold_path.and_then(|path| std::fs::read(path).ok());
+    Fonts::from_bytes_with_bold(bytes, bold)
+        .map_err(|error| format!("Font {}: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_arrow_keysyms_reach_browser_controls() {
+        assert!(matches!(translate_keysym(0xff51), Some(Key::Left)));
+        assert!(matches!(translate_keysym(0xff52), Some(Key::Up)));
+        assert!(matches!(translate_keysym(0xff53), Some(Key::Right)));
+        assert!(matches!(translate_keysym(0xff54), Some(Key::Down)));
+        assert!(matches!(translate_keysym(0xff09), Some(Key::Tab)));
+        assert!(matches!(translate_keysym(0xfe20), Some(Key::Tab)));
+        assert!(matches!(
+            translate_keysym(0xffc9),
+            Some(Key::DeveloperTools)
+        ));
+    }
 }

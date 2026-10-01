@@ -4,11 +4,19 @@ Implemented bounded scope, 2026-09-07. Independent local worker, native and CDP
 acceptance is recorded in the daily log. This is not general platform compatibility;
 the Google result/destination goal remains open.
 
-One restricted child retains the original Runtime and DOM after startup. Real
+Since the v0.4.0 increment, one restricted child retains a Boa realm and the
+existing Rust DOM after startup. The original Runtime path remains an explicit
+test baseline, not a production fallback. Real
 native and external CDP input can deliver typed clicks and form submission to
 that same realm; scripts are never replayed to reconstruct state. The parent
 alone owns network requests, window input and navigation. The existing one-shot
 worker mode and its isolation selftests remain supported.
+
+Boa adds bounded Promise checkpoints after scripts/callbacks, native branded
+wrappers with weak caches, and traced listener roots. The underlying typed
+activation/default-action contract below is unchanged. Active detached-node
+listeners remain rooted until removal or realm teardown under the 32-slot and
+lifetime bounds; this is not full DOM ephemeron GC. See [BOA.md](BOA.md).
 
 ## Behavior
 
@@ -72,8 +80,13 @@ The old 2-second one-shot deadline does not become renewable. New session limits
 The 32 MiB wire allowance and retained lifetime are explicit new interaction
 policies, not claims of unchanged protocol capacity. Encoding, startup, transfer,
 decoding and projection validation count toward active time. Idle time does not.
-Keep existing cumulative runtime fuel/4 MiB allocation, DOM 4 MiB, node/depth,
-256 MiB address-space and one CPU-second limits. Do not reset any on input.
+The Boa page lane uses cumulative 1,000,000 opcodes, 4 MiB admitted source,
+256 pending/2,048 lifetime jobs and 32/64 MiB outstanding/cumulative requested
+System-allocation caps. These are not the original 4 MiB logical allocation
+phases, GC live heap or RSS. Original fuel/allocation assertions remain unchanged
+in the legacy test lane. DOM 4 MiB, node/depth, 256 MiB address-space and one
+CPU-second bounds remain. No cumulative counter resets on input. Native work
+without cooperative checks retains OS/parent containment; full P1 remains open.
 DOM allocation errors remain ordinary Host errors unless separately designed;
 they must not be described as typed runtime-fatal unwind behavior.
 
@@ -81,6 +94,10 @@ Use strict versioned, length-prefixed JSON envelopes with parent-issued generati
 session identity, monotonically increasing sequence and expected revision. Reject
 extra, stale, malformed, oversized, truncated or unsolicited replies. New input
 never carries scripts, replacement HTML, callback handles or network authority.
+Production protocol v2 requires a valid Boa profile report, including platform
+allocator counters. The explicit test-only legacy lane keeps v1 and the original
+allocation phases. Reports must stay cumulative; neither lane can impersonate
+the other's accounting or silently switch engines.
 
 A manager owns child and pipes and handles partial duplex I/O. Cancellation is
 nonblocking and wakes an idle manager promptly; Drop joins it and the child is
@@ -102,6 +119,11 @@ events. No CDP commands are added and Runtime.evaluate remains unsupported.
 
 ## Independent acceptance
 
+The Boa library replays all 20 original retained-event cases and adds real modern
+page/Promise and GC/root/re-entry/teardown tests. Public release, actual process
+and native/CDP evidence is recorded separately; a library pass does not imply it.
+The historical fixture acceptance contract follows and remains in force.
+
 Freeze a local handler-required fixture and run the old native binary before
 production changes. An anchor click must cancel a trap URL and read actual Unicode
 input; first submit cancels and mutates/moves controls; a second submit uses
@@ -115,4 +137,4 @@ version, stable arena validation, backpressure, stale reply, cancellation/reapin
 framing and aggregate resource tests. Review any changed exact browser-bootstrap
 allocation assertion against measured added registration cost; never change
 language-only checkpoints or caps just to make tests pass. Local success is not
-evidence of Google compatibility; only then run one bounded live checkpoint.
+evidence of Google compatibility. Google remains deferred for the Boa release.

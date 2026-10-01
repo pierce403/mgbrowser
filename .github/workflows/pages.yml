@@ -15,11 +15,25 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Validate generated status
+      - name: Run the pinned WPT selection for this commit
         run: |
           rustup toolchain install 1.91.1 --profile minimal
+          cargo +1.91.1 build --locked --example wpt_render
+          python3 -m unittest discover -s tools/wpt -p 'test_*.py'
+          python3 tools/wpt/run.py --check-score --output tmp/wpt-pages
+      - name: Retain WPT failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-failure-evidence
+          path: tmp/wpt-pages
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Validate generated status
+        run: |
           mkdir -p tmp
           rustc +1.91.1 --edition=2024 tools/site.rs -o tmp/site
           tmp/site --check
@@ -28,6 +42,7 @@ jobs:
         run: |
           mkdir -p tmp/public
           cp index.html CNAME .nojekyll install.sh tmp/public/
+          cp tmp/wpt-pages/report.json tmp/public/wpt-results.json
           mkdir -p tmp/public/assets
           cp assets/mgbrowser.svg tmp/public/assets/
           cp assets/mgbrowser-32.png assets/mgbrowser-256.png tmp/public/assets/

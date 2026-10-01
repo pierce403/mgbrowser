@@ -6,9 +6,469 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
-## F-013 : Reusable Mg component boundaries
+## F-026 : Upstream Web Platform Tests coverage
 
 Stability: in-progress
+
+### Dependencies
+
+F-003/F-005 production rendering, immutable upstream inputs and truthful results.
+
+### Properties
+
+Maximize genuine upstream passes without rewriting assertions, hiding failures,
+silently shrinking the denominator or weakening browser boundaries. Start with
+the pinned 24-test static flexbox reftest pilot in docs/WPT.md: 7 pass, 0 fail,
+17 are explicitly unsupported. This does not implement full wptrunner,
+WebDriver, JavaScript testharness or broad web conformance. No production browser
+behavior changed in the initial test-tooling contribution. The v0.9.1 release
+adds preferred max-content widths and admitted single-line column baselines;
+unchanged-corpus results improve from six passes to seven. Release and
+public-installer verification are recorded separately in the dated log.
+Every commit reruns the pilot before Pages publishes its score and exact-commit
+JSON report; known passes and runnable tests may not regress.
+
+### Test criteria
+
+- [x] Unmodified upstream files, full revision/SHA-256 inventory and licenses retained.
+- [x] Real Browser load/paint, exact pixel relations and explicit failed prerequisites.
+- [x] Independent negative harness tests and baseline reproduction pass locally and in CI.
+- [x] Exact-commit website displays current score and verified public result JSON.
+- [x] First unchanged-cohort gain: align-baseline passes locally, in CI and in the public v0.9.1 native binary without fallback.
+- [ ] Increase passing coverage and reduce unsupported prerequisites with reviewed changes.
+- [ ] Broader web-API/testharness and browser automation integration verified.
+
+Initial integration: a4e3692bc527b8f89814034a7dbc182254bc0aa3, verified by
+Pages/WPT35940400295 and its exact-commit public report. First gain released as
+v0.9.1 at a89747f927c83e4ae9715198b5b66437b9a6f422: Rust35942827577,
+JSPLAN35942827541, Pages/WPT35942827584 and release35944507465 pass.
+Fresh public install, native WPT/Boa and actual prior-version update receipts
+are in the 2026-09-23 log. Broader prerequisites above remain unfinished.
+
+## F-025 : Google News desktop reading
+
+Stability: in-progress
+
+### Dependencies
+
+F-005 layout/resources, F-022 diagnostics and reviewed bounded resource profiles.
+
+### Properties
+
+Signed-out, scripts-disabled real Google News desktop reading first.
+No account/personalization or general web compatibility claim. See docs/DESKTOP_NEXT.md.
+The v0.9.0 reading increment adds bounded flex/grid, positioning/clipping,
+inline SVG, gradients, fit-content and reviewed JPEG/foreign-image loading.
+Saved HN screenshots and geometry remain byte-identical. Same-input News
+comparison has readable story columns/thumbnails, but font/icon/corner gaps,
+script-dependent placeholders and destination fallbacks prevent a full fidelity
+claim. Keep this feature in-progress until its broader criteria are satisfied.
+
+### Test criteria
+
+- [ ] Same-input desktop comparison: recognizable header, briefing, story groups and thumbnails.
+- [x] Fresh packaged live page, aligned scroll/click, actual served link navigation and Back; topic destination fallback remains explicit.
+- [x] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
+- [x] Versioned release and public installer/native verification.
+
+## F-024 : Pinned Playwright browser control
+
+Stability: in-progress
+
+### Dependencies
+
+F-011 truthful CDP, F-023 stable tab targets, isolated Runtime/DOM support.
+
+### Properties
+
+Unmodified pinned Playwright client: attachment is not locator compatibility.
+Unsupported commands and browser capabilities must fail explicitly.
+
+### Test criteria
+
+- [ ] Actual client connects and enumerates/creates/selects/closes stable page targets.
+- [ ] Navigation/title, locator fill/click, real result, screenshot and error reporting pass.
+- [ ] Target identity survives switching/detachment; stale/closed targets reject.
+- [ ] Packaged/public release journey and all existing resource/isolation gates pass.
+
+The pinned, unmodified playwright-core 1.58.2 probe is checked in under
+tools/playwright. Public v0.9.0 passes discovery but still fails auto-attachment
+and download-policy initialization, before title or locators. See
+docs/PLAYWRIGHT.md. A passing custom CDP client is not a substitute for this gate.
+
+## F-023 : Detachable tabs and left/right page groups
+
+Stability: stable
+
+### Dependencies
+
+F-013 host boundaries, F-018 sizing, F-011 target routing, F-015 restart/update.
+
+### Properties
+
+Move live page ownership across bounded tab groups/windows, not reconstructed URLs.
+At most two groups per window; fresh isolated script service per tab.
+See docs/DESKTOP_NEXT.md for input, restart and automation boundaries.
+
+### Test criteria
+
+- [x] Stable ownership, transactional moves, bounds and close/focus repair tests.
+- [x] Native new/switch/close/reorder/detach/redock/left-right docking preserves live state.
+- [x] Scaled focus/drag/input, independent workers and shared host preferences remain correct.
+- [x] Multi-target CDP stays attached to the named page across placement changes.
+- [x] Existing native/embedding/resource checks, release and public installation pass.
+
+Shipped in v0.8.0 at 8b84604c83541beade431cfbedaa2dc449878011. Exact-commit
+Rust/JSPLAN/Pages/release gates and public install pass. Public native repeats:
+tmp/tabs-smoke.ZeAoeU, tmp/workspace-cdp-smoke.Fozdg6 and
+tmp/workspace-restart.SToSEn. Actual v0.7.2 update/restart also passes.
+See the 2026-09-17 log for hashes, run IDs and bounded scope.
+
+## F-022 : Native inspection and compatibility diagnostics
+
+Stability: stable
+
+### Dependencies
+
+F-004 painted DOM/input, F-005 CSS, F-013 optional chrome, F-017/F-018 appearance.
+
+### Properties
+
+Right-click Inspect element and keyboard toggle open a bounded read-only native
+Elements/Diagnostics overlay. Retain real source/error details and explicit
+truncation. This is not Chrome DevTools, a JS debugger/evaluator or a full CSS audit.
+See docs/INSPECTOR.md for controls, diagnostic scope and native acceptance.
+
+### Test criteria
+
+- [x] Actual clicked node, ancestor/attribute/text/box inspection and stale selection rejection.
+- [x] Bounded CSS parse/source errors, unsupported layout and resource/script diagnostics.
+- [x] Panel input isolation, compact/scaled light/dark native checks and unchanged closed page.
+- [x] No-chrome/worker/old tests preserved; release and public installer checks pass.
+
+Shipped in v0.8.0 at 8b84604c83541beade431cfbedaa2dc449878011. All existing
+CI/embedding/worker gates and public installation pass. Public native Inspector
+light/dark 100/200% repeats pass in tmp/inspector-smoke.h6S3QS, including compact
+controls, real diagnostics, modal isolation and navigation invalidation.
+See the 2026-09-17 log. This does not complete Playwright or full CSS inspection.
+
+## F-021 : Smooth wheel scrolling
+
+Stability: stable
+
+### Dependencies
+
+F-004 native input/navigation, F-018 logical/physical sizing, F-013 host boundaries.
+
+### Properties
+
+Native wheel steps ease over 150 ms with elapsed-time cubic ease-out. Repeated
+input accumulates toward a clamped target; reversal starts from visible position.
+Clicks/keys, menus, navigation, resizing and scale changes cancel motion.
+No idle animation redraws. Keyboard/CDP scrolling remains immediate. No new
+dependency, touchpad valuators, kinetic fling, compositor or page-engine change.
+Software paint cost still limits frame rate. Optional chrome remains optional.
+
+### Test criteria
+
+- [x] Deterministic intermediate/end positions, coalescing, reversal and bounds.
+- [x] Click/keyboard/modal/navigation/geometry cancellation and painted hit alignment.
+- [x] Native packaged wheel shows intermediate frames, settles and reverses at 100/200%.
+- [x] Existing resource/worker/native/CDP and independent no-chrome gates pass.
+- [x] Exact-commit CI/Pages, release and fresh public install/native verification.
+
+Published v0.7.2 at 16043b103a6565d8761daf860405a0661d09a9db. Rust CI
+35170104655, JSPLAN 35170104581, Pages 35170104644 and release 35302978982
+pass. Public checksum/install/reinstall, worker/session/Boa, desktop/icons,
+actual v0.7.1 GUI upgrade and Restart now into v0.7.2 pass. The public binary
+repeats native theme/scale/toolbar/bookmark checks and intermediate wheel frames
+at 100/200%. Receipts and inspected screenshots are in the 2026-09-17 log.
+This adds wheel easing, not precision touchpad/fling or a frame-rate guarantee.
+
+## F-020 : Update progress, explicit restart and compact toolbar
+
+Stability: stable
+
+### Dependencies
+
+F-015 verified updates/build identity and F-013 optional host-owned browser UX.
+
+### Properties
+
+After an installed update, About replaces its check button with Restart now.
+Download progress reports actual bytes with a percentage only for known lengths;
+unknown sizes show activity, and verification remains a separate stage.
+One toolbar row contains Back/Forward/Refresh/Bookmark, URL, then a right-hand
+hamburger menu. The redundant title row is removed; native window titles remain.
+The menu opens the same warning panel. Restart requires an explicit user action,
+launches the installation path rather than the running inode, then shuts down
+the old browser and workers. A spawn failure retains the old window for retry.
+The loaded URL and launch preferences carry over; session state does not.
+An already-installed newer version is recognized before querying GitHub.
+See docs/UPDATES.md. No engine or whole-browser sandbox changes.
+
+### Test criteria
+
+- [x] Known/unknown/truncated/redirect body progress and unchanged transport limits.
+- [x] Scaled/compact progress bar, state cleanup and right-hand menu interaction.
+- [x] Host readiness gates the button and request, including keyboard/compact UI.
+- [x] Installing during a pointer press cannot turn the old click into a restart.
+- [x] Native replaced-path launch, failed-spawn retry, reopened page and old exit.
+- [x] Existing component, worker, packaged and native/CDP regression gates pass.
+- [x] Exact-commit CI/Pages, versioned release and public installer/restart verified.
+
+Published v0.7.1 at 8d8ad5654950d7f720c427aa4a396ec93927af5f. Rust CI
+35164990594, JSPLAN 35164990612, Pages 35164990646 and release 35166215804 pass.
+Exact-commit checks: 1,395 debug and 1,295 selected release checks, all existing
+native/CDP journeys, packaged installer/updater and theme/scale checks. Public
+checksum, exact installer/reinstaller, worker/session/Boa, desktop/icons and
+actual v0.7.0 upgrade/no-op recheck pass. The public binary repeats native
+restart/failure-retry, toolbar/bookmark and full theme/scale acceptance. Download
+progress is tested with known/unknown framed bodies and rendered scaled/compact
+panels; no future public release is fabricated to claim a live GUI download.
+Screenshots are inspected and receipts are in the 2026-09-16 log. Scrolling
+remains fixed-step; this release adds no web-engine compatibility.
+
+## F-019 : Navigation toolbar and local bookmarks
+
+Stability: stable
+
+### Dependencies
+
+F-004 native navigation, F-013 optional Chassis chrome, F-017 themes, F-018 sizing.
+
+### Properties
+
+Back, Forward, Refresh and Bookmark precede the URL; the hamburger menu follows
+it since v0.7.1 (F-020). Selection covers only
+visible URL text. Refresh and bookmark act on the loaded page, not an unsubmitted
+address. A bounded local bookmark list supports add, open, remove and pagination;
+Ctrl+D toggles and Ctrl+Shift+O opens it. Host-owned atomic storage preserves
+malformed data and merges concurrent-window edits. No sync, folders or new web
+compatibility. See docs/BOOKMARKS.md.
+
+### Test criteria
+
+- [x] Text-only URL selection at 100/125/200% and history availability (v0.7.0 left menu; F-020 moves it right).
+- [x] Bookmark values, limits, persistence, deduplication, removal and file failures.
+- [x] Modal input isolation, compact pagination and no-chrome embedding preserved.
+- [x] Packaged native back/forward/refresh and bookmark add/open/remove/restart.
+- [x] Exact-commit CI/Pages, new GitHub Release and fresh public installer verified.
+
+Published v0.7.0 at 79488712b2228ba8080c53757e3e8f70a173b3fa. Rust CI
+35160797175, JSPLAN 35160797233, Pages 35160797223 and release 35161878680 pass.
+Local replay: 1,389 debug and 1,289 selected release checks, all existing native/
+CDP journeys and packaged installer/updater/appearance acceptance. Public bytes,
+checksum, exact curl install/reinstall, worker/session/Boa, desktop/icons and
+actual v0.6.0 self-update/no-op recheck pass. The public-installed executable
+passes native bookmark add/open/remove/restart, loaded-page refresh/history,
+URL-only selection and complete scale/theme acceptance; its dialog is visually
+inspected. Receipts are in the 2026-09-16 log. No broader web/MVP claim.
+
+## F-018 : Desktop-aware browser size
+
+Stability: stable
+
+### Dependencies
+
+F-013 host/render boundaries, F-017 Settings and F-012/F-015 release distribution.
+
+### Properties
+
+System size follows the desktop's effective X11 DPI, with 100% fallback.
+Settings offers saved manual sizes from 75% to 300%. Ctrl+plus/minus steps size;
+Ctrl+0 restores System. Controls and websites scale together. Text rasterizes
+at physical resolution, while layout, scroll and input stay in logical pixels.
+No toolkit bindings or page-engine/JavaScript compatibility additions.
+Discovery is screen-global, not per-monitor Wayland scaling; this does not
+implement independent page zoom. Existing image decode/cache limits remain.
+
+### Test Criteria
+
+- [x] Bounded desktop DPI discovery, correct priority/fallback and legacy settings migration.
+- [x] Sharp physical text, scaled rectangles/images and unchanged 1x rendering.
+- [x] Logical native/CDP input and physical screenshots remain aligned at fractional/2x scales.
+- [x] Native System/manual controls, shortcuts, resize, scroll and restart persistence pass.
+- [x] Existing component/resource/worker/native/CDP gates pass without weakened assertions.
+- [x] Exact-commit CI/Pages, versioned release and fresh public install/upgrade verified.
+
+Published v0.6.0 at 363065dc17b51d8159d3434b74e393686bdc9d99. Rust, JSPLAN,
+Pages and release workflows pass on that commit. The exact public installer,
+checksums, worker/session/Boa execution and desktop/icons pass. The downloaded
+binary repeats native System/manual scaling, 100/125/200% navigation, 125/200%
+CDP, persistence, compact dialogs, scrolling and 4K resize; frames inspected.
+Actual v0.5.0 self-update installs v0.6.0 and its selftests pass. Its additional
+already-current check was blocked by GitHub's exhausted anonymous API quota,
+not an installation failure; see docs/UPDATES.md and the dated evidence log.
+
+## F-017 : System, light and dark browser appearance
+
+Stability: stable
+
+### Dependencies
+
+F-013 optional chrome/host boundary and F-012/F-015 release distribution.
+
+### Properties
+
+Menu > Settings offers System (default), Light and Dark. Selection applies
+immediately and persists in the user's XDG configuration directory. System
+follows the Linux desktop settings portal's color-scheme preference, with a light
+fallback when unavailable. Browser controls/dialogs are themed; website colors
+and HTTP's red warning are unchanged. The host hints matching window decorations
+to supporting window managers. No native toolkit or page-engine changes.
+
+### Test Criteria
+
+- [x] Deterministic palette, modal input and unchanged page/no-chrome pixels.
+- [x] Bounded preference parsing, XDG paths, restart persistence and clear save errors.
+- [x] Native packaged UI follows an isolated desktop portal, with live changes,
+  explicit overrides, persistence and matching window hint.
+- [x] Existing workspace, component, dependency and native/CDP gates preserved.
+- [x] Exact-commit CI/Pages, versioned release and fresh public installer verified.
+
+Local acceptance on 2026-09-16 includes 9 focused theme checks in debug/release,
+independent no-chrome embedding, and the actual packaged executable controlled
+through native X11 input with a private Settings portal. Published v0.5.0 at
+8c457e04a8ce00dd8cf81802da35a054d3bad8ec: all exact-commit remote gates pass.
+The exact public installer and actual v0.4.1 self-update pass. The fresh public
+binary repeats native System/override/restart/portal-fallback acceptance, with
+unchanged page pixels and HTTP red warning. Both palettes are visually inspected;
+this desktop's real Dark preference is also verified without changing it.
+See the dated log for checksum, build identity and command receipts.
+
+## F-016 : Modern Butane JavaScript and embedding compatibility
+
+Stability: in-progress
+
+### Dependencies
+
+F-013 component boundaries; F-008/F-010 language and worker contracts;
+F-003/F-004/F-005 browser integration; F-011 for supported automation evidence.
+
+### Properties
+
+[JSPLAN.md](JSPLAN.md) specifies a proposed Boa-first pure-Rust reuse evaluation,
+modern language and React/Vue application gates, V8-inspired performance work,
+academic experiments and a separately tested V8 embedding adapter. Preserve
+explicit host capabilities and restricted execution. Language, browser behavior,
+API compatibility, binary ABI and performance claims require distinct evidence.
+The P0/narrow P1 comparison remains isolated and pinned. The subsequent user-
+authorized v0.4.0 increment adopts Boa 0.22 for actual opt-in inline page scripts,
+Promise checkpoints and retained DOM events, with no original-engine fallback.
+See [the process-v1 profile](docs/BOA.md) and the preserved
+[initial results](docs/jsplan/RESULTS.md). Full cooperative resource control,
+JSPLAN exit gates, JIT, full Test262 and browser framework compatibility remain
+open. Exact release and public-installer receipts belong in the dated work log.
+
+### Test Criteria
+
+- [x] Pinned selected Test262 baseline and explicit full/profile denominators,
+  capability exclusions and failure classifications; not full-suite conformance.
+- [x] Local Boa page tests verify modern inline scripts, Promise DOM mutation,
+  retained events, weak wrapper identity, callback re-entry and teardown under
+  an explicit process-contained profile; original tests and limits are preserved.
+- [ ] Recorded engine choice after dependency, license, host/rooting, budget and
+  restricted-worker evaluation, without a fallback engine executing page code.
+- [ ] Modern language, reclaimable memory and explicit bounded application profile.
+- [ ] External scripts/modules, scheduling and DOM integration pass selected WPT
+  and cancellation/origin/resource tests.
+- [ ] Pinned unmodified React/Vue app corpus passes real interaction and long-session
+  assertions with reproducible reference comparisons.
+- [ ] Performance changes show controlled compile/startup/runtime/memory/latency
+  evidence; any JIT has separate executable-memory and GC/deoptimization gates.
+- [ ] A named pinned external consumer passes the documented V8 source API subset;
+  broad binary compatibility is not inferred from this result.
+- [x] The bounded Boa increment and v0.4.1 packaging follow-up satisfy release/installer policy;
+  this does not complete the wider feature or its remaining adoption gates.
+
+Published 2026-09-16: v0.4.0 at
+7fe29669f25440cf82e1218e235aa745080874ff. Exact-commit Rust, JSPLAN and Pages plus
+the tagged release workflow pass. The exact public curl command installs and
+reinstalls the checksum-verified binary, whose real Boa worker/session tests,
+desktop/icons and two native/two external CDP journeys pass. An infinite script
+stops at the opcode budget, leaves readable fallback and permits onward browsing
+in the same process. These authored fixtures prove the bounded integration, not
+general website or framework compatibility. See the dated log for receipts.
+
+Packaging follow-up v0.4.1 is published at
+02b413f27e8ddce9b6408887317f08cd9b9b86b7 with all exact-commit gates green.
+Size-oriented compilation and stripped symbols keep the complete public archive
+at 7,240,140 bytes, below existing updaters' unchanged 8 MiB download ceiling.
+The exact public installer, modern worker/session and native/CDP checks pass;
+actual v0.3.0 and v0.4.0 binaries both upgrade themselves and then report no newer
+release. Engine source, dependency graph and resource assertions are unchanged.
+
+## F-015 : Self-updates and build identity
+
+Stability: stable
+
+### Dependencies
+
+F-012 distribution, F-013 host/chrome boundary and verified Rust HTTPS transport.
+
+### Properties
+
+Installed Linux browsers check for stable releases, verify tag-pinned downloads
+and SHA-256, test the new executable and atomically replace it without sudo or
+forced restart. Automatic checks can be disabled. Menu > About and --about show
+running version, compile time and commit. See docs/UPDATES.md for trust/limits.
+
+### Test Criteria
+
+- [x] Reject malformed versions, downgrade/prerelease, bad hashes and unsafe archives.
+- [x] Real packaged executable validates and replaces a temporary installation;
+  failures preserve its original bytes and concurrent updates are excluded.
+- [x] About/menu input and compile metadata verified, including a native screenshot.
+- [x] Existing workspace, component, worker and native/CDP regression gates pass.
+- [x] Exact-commit CI/Pages and v0.2.1 public release/installer verified.
+
+Verified 2026-09-16: v0.2.1 at 830c6ca4ede1ccd5c23d3b73ebfd89aca06729ef.
+Rust run 35095863499, Pages 35095863472 and release 35096862370 passed. Exact
+public curl install/reinstall, checksum, version/build metadata, worker selftest,
+desktop/icons and download links passed. The native Rust updater upgraded a
+temporary verified public v0.1.1 binary using actual public v0.2.1 assets, then
+performed a no-op recheck. This describes the documented experimental updater,
+not independent release signing or whole-browser security.
+
+## F-014 : Hacker News desktop rendering
+
+Stability: stable
+
+Verified 2026-09-16: v0.3.0 at e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9.
+Standalone Rust Stylo, bounded same-origin CSS/images and generic tree/table
+layout passed same-input desktop/full-page comparison, fresh live navigation,
+local and remote CI, release and public installation. Small raster/rounding
+differences and the narrow compatibility exclusions remain in docs/HACKER_NEWS.md.
+
+### Dependencies
+
+F-003, F-004 and a bounded subset of F-005 using the F-013 component boundaries.
+
+### Properties
+
+Faithful real Hacker News homepage rendering at desktop widths with scripts off:
+external CSS, cascade, nested tables, compact inline typography, colors and actual
+small SVG assets. Generic engine primitives, not site-specific painting. Scope
+and implementation order: docs/HACKER_NEWS.md. Google and mobile fidelity deferred.
+
+### Test Criteria
+
+- [x] Same-input/font desktop screenshots compared against a reference browser.
+- [x] Header, all story rows, wrapping, footer and scroll-adjusted links match.
+- [x] Fresh live homepage and ordinary navigation verified with scripts disabled.
+- [x] Focused primitive regressions and existing CI/native/CDP checks pass unchanged.
+- [x] Versioned release and fresh public installer verified with accurate site notes.
+
+Rust run 35105612390, Pages 35105612387 and release 35107029602 passed on the
+exact tagged commit. Public checksum/install/reinstall, worker selftest,
+desktop/icons, latest links and actual v0.2.1 self-update passed. The freshly
+installed public binary repeated the real HN scroll/More/comments/story/back and
+Ctrl+L journey. This does not complete F-005's broader corpus or F-007's MVP.
+
+## F-013 : Reusable Mg component boundaries
+
+Stability: stable
 
 ### Dependencies
 
@@ -30,15 +490,17 @@ V8/JSC, Blink/WebKit/Tauri drop-in APIs and ThermiteOS support remain future wor
 - [x] Original language, DOM, transport and actual worker regressions pass in the workspace.
 - [x] Component dependency guard rejects upward edges and window dependencies in reusable libraries.
 - [x] Native/CDP fixture journeys and exact-commit Rust/Pages checks pass for publication.
-- [ ] v0.2.0 release assets and the fresh public installer are verified.
+- [x] Component release assets and fresh public installer verified in v0.2.1,
+  superseding the unpublished v0.2.0 package.
 
 Local 2026-09-09 evidence: workspace debug and selected release suites passed;
 independent no-chrome form navigation, default-disabled isolation, PNG and font
 checks passed. Native static form/result navigation passed and frames were
 inspected. All 26 native/26 CDP journeys passed locally and in Rust run 34352084178 for
 a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Pages run 34352084185 passed for that
-commit, and public HTTPS index/installer bytes matched. The v0.2.0 binary release
-remains pending because this session has no authenticated tag-creation path.
+commit, and public HTTPS index/installer bytes matched. The former publication
+blocker was resolved on 2026-09-16: v0.2.1 includes this extraction and passed
+the public installer gates recorded under F-015. No v0.2.0 tag was published.
 
 ## F-012 : v0.1 experimental preview
 
@@ -129,6 +591,14 @@ journey. The destination frame was inspected. A user-level app launcher loads
 example.com over verified HTTPS. This is experimental source installation, not
 a published macOS binary or macOS script-isolation implementation.
 
+Current-source macOS refresh (2026-10-01): merged upstream v0.9.1 development
+through 6537de2, retaining its desktop/engine improvements. Locked arm64 release
+build, 1,549 portable tests (two ignored), independent no-chrome embedding and
+the unchanged WPT pilot pass. Accepted CDP/test sockets explicitly use blocking
+I/O with existing timeouts; Linux binary updates refuse unsupported hosts.
+XQuartz is absent on this validation host, so native windows/app installation
+were not reverified; the 2026-09-09 native evidence above is historical.
+
 ## F-004 : Static web navigation
 
 Stability: in-progress
@@ -169,7 +639,7 @@ F-003.
 
 The documented static MVP HTML/CSS subset supports cascade/inheritance, block and inline flow, wrapped UTF-8 text, box styling and PNG images.
 
-Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled, initially PNG only. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
+Font parsing, shaping and rasterization use Rust implementations without native font bindings. Image codecs are explicitly enabled: PNG, JPEG, first-frame GIF and a restricted static SVG shape/path subset. Unsupported/broken images retain alt text and a placeholder without preventing document rendering; no C decoder fallback.
 
 ### Test Criteria
 
@@ -178,7 +648,13 @@ Font parsing, shaping and rasterization use Rust implementations without native 
 - [ ] Unsupported/corrupt image fixtures display a placeholder and preserve surrounding document layout and alt text.
 - [ ] Resolved font/image features contain no native implementations or implicit codec fallback.
 
-Evidence: native frames use rustybuzz/fontdue and show image placeholders/alt text. No page-image downloading or full CSS cascade yet. Current dependency guard passes; this does not satisfy the full fixture corpus.
+Current increment: rustybuzz/fontdue regular/bold faces, standalone Rust
+Stylo computed CSS and bounded generic table/inline layout under F-014.
+v0.9.0 adds the reviewed
+Taffy flex/grid adapter, positioned/clipped painting, inline SVG, two-stop linear
+backgrounds and JPEG/credential-free foreign HTTPS images for F-025. Focused
+tests do not satisfy the full planned fixture corpus or general CSS compatibility.
+F-005 remains in progress; F-025 records the separate reading/release gates.
 
 ## F-006 : Reproducible autoresearch evaluator
 
@@ -222,13 +698,27 @@ Stability: in-progress
 
 ### Dependencies
 
-Own language/runtime, DOM integration and execution-boundary roadmap; now required for F-010 before a complete static MVP release.
+Reviewed Rust language/runtime, DOM integration and execution-boundary roadmap;
+required for F-010 before a complete static MVP release.
 
 ### Properties
 
-Original Rust lexer/parser/tree-walking interpreter with an explicit classic-script subset, bounded DOM capabilities and opt-in --enable-scripts. Inline scripts share a retained realm; startup and later click/submit mutations produce native controls and CDP-visible nodes without replay. A restricted Linux x86_64 child denies new file/network/process access and has cumulative logical, CPU, memory, active-wall and absolute-lifetime limits. Unsupported platforms fail closed. No embedded existing browser/runtime shortcut or ECMAScript conformance claim. The bounded interaction contract is in docs/PAGE_SESSIONS.md; broader events, timers and external scripts remain unsupported.
+Boa-backed Rust page execution with bounded DOM capabilities and opt-in
+--enable-scripts. Inline scripts, Promise checkpoints and later click/submit
+handlers share a retained realm and produce native/CDP-visible controls without
+replay. A restricted Linux x86_64 child denies new file/network/process access;
+docs/BOA.md specifies cumulative opcode/source/job and worker-allocation limits
+plus unchanged CPU/address-space/wall/lifetime containment. Unsupported platforms
+fail closed. This is not general ECMAScript/browser conformance. The original
+evaluator remains an explicit test baseline, not a production fallback. Broader
+events, timers, external scripts and modules remain unsupported.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
+
+The checked criteria and engineering history below preserve the original
+evaluator's verified baseline, not Boa resource/conformance claims. The explicit
+`legacy-test-engine` research lane retains those assertions and limits; it is not
+a production fallback. Current Boa acceptance is tracked in F-016 and docs/BOA.md.
 
 ### Test Criteria
 
@@ -438,7 +928,7 @@ F-003 and F-004 initially; broader browser capabilities for eventual full protoc
 
 ### Properties
 
-Opt-in, loopback-only CDP controls the actual native browser. The first subset covers discovery, one page/target, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
+Opt-in, loopback-only CDP controls the actual native browser. The subset covers discovery, stable per-tab targets, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Native tab moves retain target identity; closed targets reject requests. Protocol-driven creation/closing and auto-attachment remain unsupported. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
 
 ### Test Criteria
 

@@ -1,5 +1,6 @@
-//! Headless HTML-flow layout and painting in page-relative pixel coordinates.
-//! This preserves Mg's limited flow model; it is not a CSS layout implementation.
+//! Headless document rendering in page-relative pixel coordinates.
+//! Styled documents use the bounded DOM renderer; documents without author CSS
+//! or loaded images retain the historical readable-flow fallback.
 use crate::{
     document::{Document, Item},
     paint::{Canvas, Fonts},
@@ -48,6 +49,9 @@ pub struct Frame {
     pub hits: Vec<Hit>,
     pub boxes: Vec<LayoutBox>,
     pub content_height: i32,
+    /// Bounded diagnostics from this frame's actual style/layout pass. Resource
+    /// loading and script execution have separate reports owned by their callers.
+    pub diagnostics: crate::style::StyleDiagnostics,
 }
 
 /// Render a document without a window, network service, or JavaScript execution.
@@ -58,7 +62,83 @@ pub fn render(
     viewport: Viewport,
     controls: &Controls<'_>,
 ) -> Frame {
-    Renderer {
+    render_scaled(document, fonts, viewport, controls, 1.0)
+}
+
+/// Render at an output scale while keeping layout, hits and scrolling in logical
+/// pixels. Font outlines are rasterized at physical resolution by the Canvas.
+pub fn render_scaled(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    controls: &Controls<'_>,
+    scale: f32,
+) -> Frame {
+    let mut diagnostics = crate::style::StyleDiagnostics::default();
+    let styled = !document.stylesheets.is_empty()
+        || !document.resources.is_empty()
+        || document
+            .nodes
+            .iter()
+            .any(|node| node.has("style") || node.tag == "svg");
+    if styled {
+        match crate::style::compute_styles_with_diagnostics(
+            document,
+            &document.stylesheets,
+            (viewport.width as f32, viewport.height as f32),
+            &mut diagnostics,
+        ) {
+            Ok(styles) => {
+                match crate::styled_layout::render_scaled(
+                    document, fonts, viewport, controls, styles, scale,
+                ) {
+                    Ok(mut frame) => {
+                        diagnostics.omitted = diagnostics
+                            .omitted
+                            .saturating_add(frame.diagnostics.omitted);
+                        for entry in frame.diagnostics.entries.drain(..) {
+                            if diagnostics.entries.len()
+                                < crate::style::StyleDiagnostics::MAX_ENTRIES
+                            {
+                                diagnostics.entries.push(entry);
+                            } else {
+                                diagnostics.omitted = diagnostics.omitted.saturating_add(1);
+                            }
+                        }
+                        frame.diagnostics = diagnostics;
+                        return frame;
+                    }
+                    Err(failure) => {
+                        eprintln!(
+                            "Styled layout unavailable at node {:?}: {}; using readable-flow fallback",
+                            failure.node, failure.reason
+                        );
+                        diagnostics.record(
+                            "layout-fallback",
+                            format_args!(
+                                "Styled layout unavailable: {}; using readable-flow fallback",
+                                failure.reason
+                            ),
+                            format_args!("{}", document.base_url),
+                            failure.node,
+                            None,
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Styles unavailable; using readable-flow fallback: {error}");
+                diagnostics.record(
+                    "style-fallback",
+                    format_args!("Styles unavailable; using readable-flow fallback: {error}"),
+                    format_args!("{}", document.base_url),
+                    None,
+                    None,
+                );
+            }
+        }
+    }
+    let mut frame = Renderer {
         document,
         fonts,
         width: viewport.width,
@@ -69,8 +149,11 @@ pub fn render(
         select_all: controls.select_all,
         hits: Vec::new(),
         boxes: Vec::new(),
+        scale,
     }
-    .paint()
+    .paint();
+    frame.diagnostics = diagnostics;
+    frame
 }
 struct Renderer<'a> {
     document: &'a Document,
@@ -83,10 +166,11 @@ struct Renderer<'a> {
     select_all: bool,
     hits: Vec<Hit>,
     boxes: Vec<LayoutBox>,
+    scale: f32,
 }
 impl Renderer<'_> {
     fn paint(mut self) -> Frame {
-        let mut c = Canvas::new(self.width, self.height, BG);
+        let mut c = Canvas::new_scaled(self.width, self.height, BG, self.scale);
         let left = 32;
         let right = self.width as i32 - 38;
         let mut x = left;
@@ -230,6 +314,7 @@ impl Renderer<'_> {
             hits: self.hits,
             boxes: self.boxes,
             content_height,
+            diagnostics: Default::default(),
         }
     }
     fn hit(&mut self, x: i32, y: i32, w: u32, h: u32, action: Action) {
@@ -259,7 +344,7 @@ impl Renderer<'_> {
         }
     }
 }
-fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
+pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
     let chars: Vec<_> = text.chars().rev().take(512).collect();
     let mut low = 0;
     let mut high = chars.len();
@@ -273,4 +358,94 @@ fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> String {
         }
     }
     chars[..low].iter().rev().collect()
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn bare_inline_svg_uses_the_same_renderer_as_an_empty_stylesheet() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let svg = "<svg width='10' height='10'><rect width='10' height='10' fill='red'/></svg>";
+        let plain = crate::document::parse(svg, "https://fixture.example/");
+        let styled =
+            crate::document::parse(&format!("<style></style>{svg}"), "https://fixture.example/");
+        let viewport = Viewport {
+            width: 100,
+            height: 100,
+            scroll: 0,
+        };
+        let a = render(&plain, &mut fonts, viewport, &Controls::default());
+        let b = render(&styled, &mut fonts, viewport, &Controls::default());
+        assert_eq!(
+            a.canvas
+                .pixels
+                .iter()
+                .filter(|&&pixel| pixel == 0xff0000)
+                .count(),
+            100
+        );
+        assert_eq!(a.canvas.pixels, b.canvas.pixels);
+        assert_eq!(a.content_height, b.content_height);
+        assert!(!a.boxes.is_empty());
+        assert!(!a.diagnostics.entries.iter().any(|d| matches!(
+            d.kind,
+            "image-unsupported" | "layout-fallback" | "style-fallback"
+        )));
+    }
+
+    #[test]
+    fn scaled_styled_and_fallback_frames_keep_logical_layout_and_hits() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for style in ["", " style='font-size:17px;width:210px'"] {
+            let doc = crate::document::parse(
+                &format!(
+                    "<body{style}><p><a href='/next'>A longer link that wraps across several lines</a></p><form><input name=q value=test><button>Go</button></form></body>"
+                ),
+                "https://example.test/",
+            );
+            let viewport = Viewport {
+                width: 320,
+                height: 240,
+                scroll: 8,
+            };
+            let controls = Controls::default();
+            let original = render(&doc, &mut fonts, viewport, &controls);
+            assert!(!original.hits.is_empty());
+            assert!(!original.boxes.is_empty());
+            for scale in [1.0, 1.25, 2.0] {
+                let frame = render_scaled(&doc, &mut fonts, viewport, &controls, scale);
+                assert_eq!(frame.canvas.width, (320.0 * scale).round() as u32);
+                assert_eq!(frame.canvas.height, (240.0 * scale).round() as u32);
+                assert_eq!(frame.content_height, original.content_height);
+                assert_eq!(frame.boxes, original.boxes);
+                let hit_geometry = |frame: &Frame| {
+                    frame
+                        .hits
+                        .iter()
+                        .map(|hit| (hit.x, hit.y, hit.w, hit.h, hit.action.clone()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(hit_geometry(&frame), hit_geometry(&original));
+                if scale == 1.0 {
+                    assert_eq!(frame.canvas.pixels, original.canvas.pixels);
+                }
+            }
+        }
+    }
 }

@@ -49,7 +49,7 @@ impl Kind {
             Self::Submit => "submit",
         }
     }
-    fn parse(name: &str) -> Result<Self, String> {
+    pub(super) fn parse(name: &str) -> Result<Self, String> {
         match name {
             "DOMContentLoaded" => Ok(Self::DomReady),
             "load" => Ok(Self::Load),
@@ -58,7 +58,7 @@ impl Kind {
             _ => Err("Unsupported event type".into()),
         }
     }
-    fn property(name: &str) -> Option<Self> {
+    pub(super) fn property(name: &str) -> Option<Self> {
         match name {
             "onclick" => Some(Self::Click),
             "onsubmit" => Some(Self::Submit),
@@ -77,14 +77,14 @@ pub(super) struct Listener {
 }
 
 pub(super) struct EventRecord {
-    kind: Kind,
-    target: Target,
-    current: Option<Target>,
-    submitter: Option<usize>,
-    phase: u8,
-    canceled: bool,
-    stopped: bool,
-    immediate: bool,
+    pub(super) kind: Kind,
+    pub(super) target: Target,
+    pub(super) current: Option<Target>,
+    pub(super) submitter: Option<usize>,
+    pub(super) phase: u8,
+    pub(super) canceled: bool,
+    pub(super) stopped: bool,
+    pub(super) immediate: bool,
 }
 
 fn callable(value: &Value) -> bool {
@@ -249,7 +249,7 @@ impl BrowserHost {
         }
         Ok(Value::Undefined)
     }
-    fn new_event(
+    pub(super) fn new_event(
         &mut self,
         kind: Kind,
         target: Target,
@@ -318,7 +318,7 @@ impl BrowserHost {
         }
         Ok(Value::Undefined)
     }
-    fn connected_path(&self, mut node: usize) -> Result<([Target; 258], usize), String> {
+    pub(super) fn connected_path(&self, mut node: usize) -> Result<([Target; 258], usize), String> {
         let mut path = [Target::Window; 258];
         for depth in 0..=256 {
             let entry = self
@@ -338,7 +338,7 @@ impl BrowserHost {
         }
         Err("Event target depth limit exceeded".into())
     }
-    fn is_submitter(&self, id: usize) -> bool {
+    pub(super) fn is_submitter(&self, id: usize) -> bool {
         let Some(node) = self.document.nodes.get(id) else {
             return false;
         };
@@ -353,7 +353,7 @@ impl BrowserHost {
                 _ => false,
             }
     }
-    fn form_owner(&self, node: usize) -> Option<usize> {
+    pub(super) fn form_owner(&self, node: usize) -> Option<usize> {
         if let Some(name) = self.document.nodes[node].attr("form") {
             return self.find_connected(|n| n.tag == "form" && n.attr("id") == Some(name));
         }
@@ -363,7 +363,7 @@ impl BrowserHost {
             _ => None,
         })
     }
-    fn validate_input(&self, input: &SessionInput) -> Result<(), String> {
+    pub(super) fn validate_input(&self, input: &SessionInput) -> Result<(), String> {
         // Count the actual JSON escaping without creating a second source-sized
         // buffer. Transport additionally includes its envelope in this bound.
         serde_json::to_writer(EventSize(0), input)
@@ -604,6 +604,8 @@ impl PageRealm {
             errors: Vec::new(),
             scripts_executed: 0,
             allocations: Some(self.runtime.allocation_report()),
+            #[cfg(feature = "modern")]
+            boa: None,
             state: RealmState::Closed,
             acknowledgements: Vec::new(),
         };

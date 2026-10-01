@@ -13,7 +13,7 @@ jobs:
         run: |
           rustup toolchain install 1.91.1 --profile minimal
           sudo apt-get update
-          sudo apt-get install -y xvfb fonts-dejavu-core desktop-file-utils
+          sudo apt-get install -y xvfb fonts-dejavu-core desktop-file-utils dbus
       - name: Build locked release binary
         run: cargo +1.91.1 build --locked --release --bin mgbrowser
       - name: Package and verify the user payload
@@ -23,7 +23,15 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
-          cargo +1.91.1 build --locked --example journey_server
+          MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
+          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
+          bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/inspector-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/tabs-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/workspace-cdp-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          bash tools/workspace-restart-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           target/debug/examples/journey_server > tmp/release-fixture.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
@@ -31,7 +39,7 @@ jobs:
             if curl -fsS http://127.0.0.1:7878/ >/dev/null; then break; fi
             sleep 0.1
           done
-          timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-ast-arrays --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
+          timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
       - uses: actions/upload-artifact@v4
         with:
           name: release-payload

@@ -1,5 +1,27 @@
 # Rust dependency policy
 
+## Reusable Rust implementations: clarified 2026-09-16
+
+Existing Rust crates are acceptable for browser functionality, not just utility
+code. "From the ground up in Rust" does not require reimplementing an available
+Rust CSS parser, style engine, layout algorithm or decoder. Servo-origin crates
+such as Stylo are candidates, not automatically approved dependencies.
+
+The selected implementation and its active transitive dependencies must not bind
+to or compile C/C++ browser, JavaScript, font, image or crypto backends, whether
+dynamically or statically linked. Review the pinned target/features, source,
+build scripts, licenses and relevant tests before adoption; project reputation
+or a Rust API is not evidence that this boundary or our acceptance tests pass.
+Record build-time code generators separately from runtime implementations.
+The existing OS/std interface exception below remains unchanged.
+
+This permits scoped crate reuse, not an incidental whole-engine replacement.
+The policy clarification itself did not install Stylo; the separately authorized
+HN implementation adopted the configuration below. A subsequent explicit user
+request authorizes the Boa-backed page lane in [BOA.md](BOA.md), with its reviewed
+profile and separate release gates. The original evaluator remains a test
+baseline. Upstream tests complement, not replace, Mg integration/resource tests.
+
 ## Adopted 2026-09-07
 
 This browser is a testing and research project, not a production browser. The user explicitly accepts building on experimental rustls-rustcrypto, including the opportunity to discover and help resolve upstream bugs. This does not authorize weakening certificate/hostname validation or silently substituting native cryptography.
@@ -9,18 +31,208 @@ This browser is a testing and research project, not a production browser. The us
 | TLS | rustls 0.23 with explicit rustls-rustcrypto provider; provider revision 70f76c039e587192688af18a80d5d6435dedaf22 | Defaults disabled; std, TLS 1.2 and provider zeroization selected. No ring, aws-lc-rs, OpenSSL or native-tls fallback. |
 | Font parsing/rasterization | fontdue 0.9, defaults disabled; Rust ttf-parser transitively | No FreeType, CoreText, DirectWrite or other native font backend. |
 | Text shaping | rustybuzz 0.20 with std and defaults disabled | Rust shaping implementation, no HarfBuzz C bindings. |
-| Images | image 0.25, defaults disabled, png only | Explicit format allowlist. No automatic/default codec bundle or native fallback. |
+| CSS computation | stylo 0.21.0, defaults disabled, servo feature only; imported as style | Rust selector/cascade/computed-value engine, with Mg DOM adapter. No Gecko, SpiderMonkey or Servo browser embedding. Python 3 is build-time code generation only. |
+| Flex/grid geometry | taffy 0.14.0, defaults disabled, std/flexbox/grid only | v0.9.0 Mg adapter borrows computed styles and document identities. No Taffy tree/parser, native layout backend or replacement browser engine. |
+| Images | image 0.25.10, defaults disabled, png/gif/jpeg only; resvg 0.45.1 defaults disabled; roxmltree 0.20.0 | Rust PNG/GIF/JPEG and bounded SVG paths; JPEG added in v0.9.0. No default codec bundle, native fallback, SVG text/system fonts, embedded raster images or file resolver. |
 | HTTP and URLs | Own HTTP/1.1 transport, std sockets, url 2; webpki-roots 1 for public trust anchors | No external fetch process or native TLS client. Certificate and hostname verification remain enabled. |
 | HTTP compression | flate2 1, defaults disabled, rust_backend only | Rust gzip/deflate decoding with a separate decoded-body limit. |
 | Session cookies | Own memory-only jar; psl 2 and httpdate 1 | Public-suffix and expiry parsing use Rust crates. No persistent or imported browser cookies. |
 | Linux window | x11rb 0.13, defaults disabled, RustConnection | Rust X11 wire protocol over OS sockets, usable through X11/XWayland. No Xlib/XCB FFI or native toolkit rendering. |
+| Desktop appearance | zbus 5.19.0, defaults disabled, async-io and blocking-api; host only | Rust D-Bus protocol to the standard settings portal over the local session socket. No libdbus, GTK/Qt or native theme renderer. OS sockets/polling remain platform interfaces. |
 | Browser automation | tungstenite 0.28 with only handshake, serde/serde_json, base64 | Loopback-only plain WebSocket CDP. No native TLS, compression or renderer fallback. Rust SHA-1 is used for the standard WebSocket handshake, not TLS certificate trust. |
-| JavaScript | Own lexer, parser, evaluator and DOM bridge in Rust | No external parser, runtime, JIT, browser engine or native-language execution backend. Partial and opt-in, not ECMAScript conformance. |
+| JavaScript | Boa engine/GC 0.22.0, defaults disabled; engine fuzz feature for instruction accounting; Mg facade and DOM bridge | Rust parser/VM/GC, no C/C++ backend, JIT or production fallback. Page integration remains partial and opt-in. Original interpreter tests remain separate. |
 | Script worker controls | libc 0.2 Rust OS declarations; std process/pipes; existing serde_json | Linux x86_64 resource limits, descriptor closure and seccomp. Not a C font/image/crypto backend or replacement JavaScript engine. |
 
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### News formatting and JPEG: v0.9.0, reviewed 2026-09-17/18
+
+The production manifests and lockfile now adopt the following reviewed inputs
+for T-022 / F-025. This records source/features/licenses and admission policy,
+not full Google News compatibility. These changes are absent from v0.8.0.
+See [GOOGLE_NEWS.md](GOOGLE_NEWS.md)
+for the separate rendering, regression, real-page and publication gates.
+
+- `taffy = 0.14.0` uses `default-features = false` and only `std`, `flexbox`,
+  `grid`; `grid` also activates `alloc`. The selected graph resolves
+  `arrayvec = 0.7.8` and the already-shared `smallvec = 1.16.0`, not the
+  isolated prototype's 1.16.1. Taffy's tree, CSS parser, block/float layout,
+  calc, detailed-layout and content-size features are not enabled. Mg keeps
+  its DOM, style computation, block/table/text measurement and software painter;
+  borrowed trait views and pass-local geometry/cache state integrate the new
+  algorithms. Taffy itself does not supply painting, clipping, hit testing,
+  scrolling, a browser event loop or resource containment.
+- Taffy's declared MSRV is Rust 1.71 and its license is MIT. The published
+  0.14.0 archive omits the license text: packaging uses the reviewed upstream
+  `tools/licenses/taffy-0.14.0-MIT.txt` only when name, version, license and
+  archive VCS revision `77f385683c1d698c91a23a259f87fdddf26925fb` match.
+  Other unreviewed missing texts still fail. arrayvec/smallvec retain their
+  MIT OR Apache-2.0 declarations; all applicable notices remain in the package.
+- The additional direct `stylo_static_prefs = 0.21.0` dependency was already
+  in the lock graph and remains MPL-2.0. Mg initializes only
+  `layout.grid.enabled` before parsing sheets or attributes. No other
+  preference is enabled. Typed snapshots preserve flex/grid inputs, checked
+  numeric placement and at most 128 expanded template tracks per axis. Owned track
+  storage is charged to the existing 8 MiB snapshot-heap admission bound;
+  text inheritance does not clone these non-inherited grid vectors.
+- `image = 0.25.10` adds only its `jpeg` feature beside PNG/GIF. It resolves
+  `zune-jpeg = 0.5.15` and `zune-core = 0.5.3`. image's zune-jpeg edge enables
+  that crate's defaults: `std`, `x86` and `neon`; architecture-specific paths
+  are target-gated. On Linux x86_64 the decoder can use runtime-checked Rust
+  SIMD intrinsics, including `unsafe` Rust, with scalar Rust paths. This is
+  not a claim of entirely safe Rust. The reviewed manifests/sources introduce
+  no C/C++ codec, FFI codec library, native compiler helper or decoder build
+  script. image declares Rust 1.88 and MIT OR Apache-2.0; both zune crates
+  declare Rust 1.75 and MIT OR Apache-2.0 OR Zlib. Rust 1.91.1 remains the
+  project toolchain. Existing PNG/GIF/SVG restrictions and native-fallback
+  prohibitions remain unchanged.
+
+The source review covers these pinned archives and their active Linux x86_64
+normal/build features, not every upstream line or every target. The production
+[license inventory](DEPENDENCY_LICENSES.md) is generated from the actual lock
+graph, separately from `docs/jsplan/`'s historical research inventory. Reproduce
+it with `python3 tools/license-inventory.py tmp/THIRD_PARTY_LICENSES.txt docs/DEPENDENCY_LICENSES.md`.
+The full generated text includes the Taffy fallback and all zune license texts;
+dependency/component guards and product acceptance remain distinct checks.
+
+The resource changes repartition the existing shared 2 MiB CSS/image loading
+budget: a single stylesheet can now use up to 2 MiB instead of 256 KiB, without
+raising the aggregate. Source order and retained duplicate charging remain;
+the 16-sheet, 32-request and 10-second scheduling limits are unchanged. Style
+computation independently retains its 2 MiB combined CSS/media-text admission.
+There is no CSS-import, external-script, downloaded-font or data-URL expansion.
+
+Stylesheets remain same-origin, including redirects. Images may cross origins
+only over verified HTTPS; policy is checked before each request/redirect opens
+a socket. The first origin crossing permanently suppresses Cookie sending and
+Set-Cookie storage for the rest of that image chain, even if it returns to the
+page origin. URL userinfo is rejected. Same-origin HTTP images remain allowed
+for HTTP pages, but an image chain cannot downgrade after visiting HTTPS.
+Certificate/hostname checks, redirect limits and bounded transport remain intact.
+
+JPEG uses the existing 512 KiB image-source cap, 2048-pixel maximum side,
+1,048,576-pixel maximum decoded/target area and 8 MiB decoder allocation
+allowance. The decoded paint cache remains capped at 128 entries and 16 MiB.
+Malformed or oversized images retain the readable placeholder; no native or
+external-process fallback is introduced. These are bounded admission/cache
+policies, not whole-browser memory isolation or a security/conformance guarantee.
+
+### Desktop appearance: 2026-09-16, v0.5.0
+
+The desktop host pins MIT-licensed `zbus = 5.19.0` with default features disabled
+and only `async-io` / `blocking-api`. The selected Rust protocol/serialization
+implementation does not link libdbus, GTK or Qt. Its async I/O, polling, rustix
+and libc dependencies are OS interfaces, not browser/codec/crypto backends.
+The existing browser components do not acquire zbus or desktop-settings access.
+The worker dispatch still precedes desktop initialization, with unchanged script
+syscall permissions and execution paths. The host accepts only Unix session-bus
+addresses, excluding executable-launch and TCP transports for this service.
+
+The Linux normal/build graph, added manifests, build scripts and license texts
+are reviewed and inventoried in DEPENDENCY_LICENSES.md. async-io's build script
+probes Rust compiler support through autocfg; no C/C++ compiler or native library
+builder is introduced. Required regression, package-size and public-install
+checks accompany this addition. This is an integration/dependency review, not an
+audit of every upstream source line or a claim about other platforms.
+
+Primary references: [zbus](https://github.com/z-galaxy/zbus),
+[Settings portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html),
+[non-GTK X11 theme hint](https://docs.gtk.org/gdk3-x11/method.X11Window.set_theme_variant.html).
+
+### Boa page adoption: 2026-09-16, v0.4.0 increment
+
+`mg-butane::modern` uses exactly `boa_engine = 0.22.0` and `boa_gc = 0.22.0`,
+default features disabled. The engine's `fuzz` feature exposes cumulative opcode
+accounting; it does not select a fuzz runner or native backend. Sparkle names the
+same types directly because upstream GC/native-data derive macros require those
+crate names. No engine fork or upstream source patch is carried.
+
+The isolated [source/feature/license review](jsplan/DEPENDENCY_AUDIT.md) records
+the pinned engine. The combined production lock graph is independently guarded
+by `tools/check-dependencies.rs` and `tools/check-components.py`; dependency
+features are not inferred from the upstream project name. Reviewed `getrandom`,
+`time` and synchronization paths use OS primitives, not native JavaScript or
+crypto implementations. Direct `libc` use stays in the platform host; transitive
+versioned OS-only edges are enumerated by the component guard.
+
+Boa's MIT license option is preserved in the package's third-party license texts
+and source links; project code remains Apache-2.0. The new process-v1 allocation
+profile is requested-System-byte accounting, not GC live heap or RSS. Native
+parser/builtin/regex/GC work retains final CPU/address-space/parent containment;
+full cooperative resource-control acceptance remains open. See BOA.md for exact
+caps, retained lifecycle behavior and honest unsupported browser capabilities.
+Public release/installer verification remains a separate gate.
+
+### Stylo adoption review: 2026-09-16
+
+`mg-sparkle` pins `stylo`, `stylo_dom` and `stylo_traits` to 0.21.0,
+`selectors` to 0.40.0 and `cssparser` to 0.37.0. Stylo and its traits use
+`default-features = false, features = ["servo"]`. The locked Linux x86_64
+normal/build graph and the published manifests/build scripts were reviewed;
+the adapter builds with Rust 1.91.1. The existing prohibited-native-backend
+guard passes for the combined workspace. This is a target/feature review,
+not a security audit of all upstream code or a claim about every platform.
+
+The selected graph does not activate Gecko's `bindgen`/`mozbuild` path or include
+the Servo browser, SpiderMonkey, native fonts/codecs, or C/C++ compiler helpers.
+Stylo's `links = "servo_style_crate"` is build metadata: its selected build script
+generates Rust and does not compile or link a native style library. Its Python 3
+property generator uses the published crate's vendored Mako, TOML and MarkupSafe
+code; Python is needed to build, not to run the browser. Atom/preference build
+scripts also generate Rust. `stylo_malloc_size_of` exposes allocator-measurement
+callback types, but does not select a native allocator implementation, and Mg
+does not supply or call such callbacks. Transitive `libc` remains the existing
+OS-primitive exception, not an approved native browser backend. Stylo's reviewed
+incoming edges in Sparkle are `num_cpus 1.17.0 -> libc 0.2.189` (CPU affinity/count)
+and `parking_lot 0.12.5 -> parking_lot_core 0.9.12 -> libc 0.2.189`
+(Linux futex synchronization/errno). Stylo's CPU/locking dependencies are
+unconditional, and its atom crates also use `parking_lot` through `string_cache`.
+Direct Sparkle `libc` use remains prohibited. Component checks allow these
+versioned primitive paths and the separately reviewed Boa paths above; changes
+require a new review.
+
+Primary versioned source: [Stylo manifest](https://github.com/servo/stylo/blob/ff4af3d2878696da31818d09bec9e4290f1dbcfb/style/Cargo.toml),
+[build script](https://github.com/servo/stylo/blob/ff4af3d2878696da31818d09bec9e4290f1dbcfb/style/build.rs),
+[property generator](https://github.com/servo/stylo/blob/ff4af3d2878696da31818d09bec9e4290f1dbcfb/style/properties/build.py).
+Stylo is MPL-2.0; it is an unmodified third-party dependency, not relicensed
+under the project's Apache-2.0. Preserve its source/license notices and those of
+its dependencies when packaging; dependency upgrades require renewed review.
+
+The accompanying image change enables only `image`'s Rust GIF decoder in addition
+to PNG. `resvg = 0.45.1` has all default features disabled, so its `usvg` path
+does not activate text/system fonts, memory-mapped fonts or embedded raster
+decoders. `roxmltree = 0.20.0` validates a bounded SVG element/attribute allowlist
+before rendering; DTDs and both image resolvers are disabled. Unsupported SVG
+features are rejected, not delegated to a native library or external process.
+This configuration and its active graph passed the same dependency guard.
+
+The adapter performs a fresh static cascade over Mg's arena, including ordered
+author sheets, inline declarations, media queries, inheritance and generic HTML
+presentation hints below author rules. Typed computed values feed Mg's own
+bounded block/inline/table layout and Rust painter. The small Mg user-agent sheet
+is not a full browser UA sheet or a quirks/standards-mode implementation. Imports,
+animations, pseudo-element boxes, visited history, hover/focus state and shadow
+DOM are absent. Two-stop linear backgrounds are supported; other gradients,
+mixed length/percentage calculations and background cover/contain remain
+unrepresented. The News adapter adds measured intrinsic minimum-width and
+width:fit-content constraints, plus min/max-width:fit-content for ordinary/positioned/
+replaced boxes and flex items, not general intrinsic sizing support. Unresolved
+grid-item max-fit area sizing and functional fit-content(...) remain rejected.
+Font-relative metric queries use fallback metrics; glyph shaping/rasterization
+still uses the existing Rust font path.
+
+Style admission permits at most 50,000 arena nodes, depth 256, 64 sheets and
+2 MiB combined stylesheet/media text, with finite positive viewport dimensions.
+The renderer snapshot rejects more than eight background layers, 16 font families,
+4 KiB per resolved background URL, 256 bytes per family name, or 8 MiB of charged
+owned strings/vectors, including inherited text-node copies. It rejects overflow
+to readable fallback instead of truncating the cascade. These are input/output
+admission limits, not process isolation or a hard Stylo CPU/memory quota. Focused
+tests cover cascade/importance, selectors/inheritance, media parsing and ordering,
+presentation hints, background URL bases, malformed/oversized input, inactive
+`noscript` and snapshot amplification.
 
 The workspace assigns language work to mg-butane, document/layout/painting to
 mg-sparkle, and HTTP/TLS/cookies/CDP to mg-chassis. The mg-browser host supplies
@@ -34,9 +246,9 @@ shared in-memory cookies.
 
 On 2026-09-07, transport tests passed, including local trusted, unknown-issuer, and hostname-mismatch TLS handshakes, redirect/form behavior, response limits, and cookie scoping. Both sides of the local TLS tests use RustCrypto. The public DER fixtures were generated using OpenSSL's command-line tooling; neither the browser nor its tests call or link OpenSSL. Painter tests cover clipping, coverage blending, and text measurement/painting; the dependency smoke test separately covers PNG round-trip. These component checks are distinct from the dated native/CDP journey evidence.
 
-Ordinary Google homepage delivery and real form submission succeeded through the native window with verified TLS and session cookies. The initial script-disabled journey reached a JavaScript-required page. The later opt-in scripting attempt still failed: the search response returned HTTP 200 but unsupported script behavior left no rendered result links. The actual first-result/destination goal remains unmet. Separately, the authored local script-built form and destination journey passed through both native handlers and external CDP. See `JAVASCRIPT.md` and the dated log; fixture success is not Google compatibility. Full CSS and page-image fetching remain unimplemented; image elements show a text/alt placeholder.
+Ordinary Google homepage delivery and real form submission succeeded through the native window with verified TLS and session cookies. The initial script-disabled journey reached a JavaScript-required page. The later opt-in scripting attempt still failed: the search response returned HTTP 200 but unsupported script behavior left no rendered result links. The actual first-result/destination goal remains unmet. Separately, the authored local script-built form and destination journey passed through both native handlers and external CDP. See `JAVASCRIPT.md` and the dated log; fixture success is not Google compatibility. The HN slice adds bounded author stylesheet and image loading, not full CSS/image-format coverage; unsupported images retain a readable placeholder.
 
-The original interpreter runs eligible inline scripts, startup callbacks and bounded later click/submit handlers in one retained realm per document. Browser use requires `--enable-scripts` and a fresh restricted Linux x86_64 worker. The worker has an empty environment, closes inherited descriptors, installs seccomp/resource limits before reading page input, and returns bounded DOM/navigation data to the parent. Its direct libc dependency supplies Rust declarations for those operating-system calls; no native parser, interpreter, font, image or crypto implementation was added. External script loading and a general event loop are absent. Unsupported isolation fails closed; the renderer and network parent remain outside this boundary. Retention and cumulative lifetime/transaction/wire admission follow `PAGE_SESSIONS.md`.
+Boa runs eligible inline scripts, startup callbacks, Promise checkpoints and bounded later click/submit handlers in one retained realm per document. Browser use requires `--enable-scripts` and a fresh restricted Linux x86_64 worker. The worker has an empty environment, closes inherited descriptors, installs seccomp/resource limits before reading page input, and returns bounded DOM/navigation data to the parent. Its direct libc dependency supplies Rust declarations for those operating-system calls; no native parser, interpreter, font, image or crypto implementation was added. External script loading and a general event loop are absent. Unsupported isolation fails closed; the renderer and network parent remain outside this boundary. Retention and cumulative lifetime/transaction/wire admission follow `PAGE_SESSIONS.md`; modern engine/allocator accounting follows `BOA.md`.
 
 Requests have a 30-second deadline across HTTP redirects, an 8-second socket/DNS-wait budget per operation, eight HTTP redirects, 64 KiB request/header bounds, and separate 8 MiB encoded/decoded body bounds. The window currently permits two outstanding navigation workers and ignores stale completions. Superseded network operations continue until completion or timeout; cancellation does not interrupt sockets or the platform resolver. A resolver thread can outlive the caller's bounded wait. These transport limits do not constitute network-process isolation or a fully cancellable resource budget. Script workers separately have two cumulative active wall seconds, one CPU second and a 256 MiB address-space cap. Retained sessions also have a 300-second absolute lifetime, 64 transactions and 32 MiB aggregate wire admission; evaluator/DOM/protocol bounds are documented in `JAVASCRIPT.md` and `PAGE_SESSIONS.md`.
 
@@ -58,6 +270,13 @@ The browser must eventually show a broken-image placeholder and available alt te
 
 ## Upstream research evidence
 
+The isolated JSPLAN experiment has a separate locked Boa graph and
+[source/feature/license audit](jsplan/DEPENDENCY_AUDIT.md). It is excluded from
+the production workspace and release assets. The subsequent explicitly scoped
+v0.4.0 page integration has its own production dependency graph and resource
+contract above. The initial experiment's outcome counts are not a general
+browser-conformance or security claim.
+
 Record provider revision, Rust version, OS/architecture and a minimal local reproducer for failures. Distinguish provider failures from our integration mistakes; preserve failing fixtures when lawful and free of secrets. Report normal interoperability and correctness bugs through a separately authorized upstream contribution. Handle potential security findings responsibly; do not automatically publish exploit details or run offensive testing against third parties. No external issue submission or autonomous testing is configured by this policy.
 
-`python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The external locked dependency versions are unchanged by the component split.
+`python3 tools/check-components.py` checks the production package direction and rejects platform/window dependencies in the reusable engines. Independent no-default-feature builds verify Chassis without its toolbar. The historical component split did not change external dependencies; the later Stylo and Boa integrations have separate reviewed graphs.

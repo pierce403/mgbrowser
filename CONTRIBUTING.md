@@ -6,6 +6,12 @@ Open an issue to coordinate larger work, then submit a focused PR linked to a fe
 
 Use `AGENTS.md` for the workflow and `docs/AUTORESEARCH.md` for experiment design. Keep evaluator/corpus changes separate from engine changes scored against them. Never include credentials or captured private browsing data.
 
+For every commit, refresh the pinned WPT measurement and website score using
+[docs/WPT.md](docs/WPT.md). Pages rebuilds and reruns the cohort and refuses stale
+scores. Preserve known passes and runnable tests; update the expectation ratchet
+only after review, never automatically to hide a regression. A corpus expansion
+is a separate change with a new baseline, not a way to disguise a failed fix.
+
 Project-authored code, documentation and original artwork use Apache-2.0;
 see LICENSE and NOTICE. Contributions follow that project license. Preserve the
 licenses and notices of any third-party material. The original published

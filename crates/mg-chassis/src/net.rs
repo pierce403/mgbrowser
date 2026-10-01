@@ -37,6 +37,13 @@ pub struct Session {
     cookies: Arc<Mutex<CookieJar>>,
 }
 
+/// Automatic resource authority, separate from top-level navigation and updates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceKind {
+    Stylesheet,
+    Image,
+}
+
 impl Session {
     pub fn new() -> Self {
         Self::default()
@@ -52,7 +59,38 @@ impl Session {
         let mut config =
             crate::tls_client_config(roots).map_err(|e| format!("TLS configuration: {e}"))?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        submit_with_config(url, body, Arc::new(config), &self.cookies)
+        submit_with_config_policy(url, body, Arc::new(config), &self.cookies, false)
+    }
+
+    /// Bounded automatic request. Stylesheets stay same-origin; images may use
+    /// credential-free cross-origin HTTPS. Every redirect is checked before I/O.
+    pub(crate) fn fetch_resource(
+        &self,
+        url: &str,
+        page_url: &str,
+        max_body: usize,
+        deadline: Instant,
+        kind: ResourceKind,
+    ) -> Result<Response, String> {
+        let origin = Url::parse(page_url).map_err(|e| format!("Invalid resource origin: {e}"))?;
+        validate_url(&origin)?;
+        let roots =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        submit_with_limits(
+            url,
+            None,
+            Arc::new(config),
+            &self.cookies,
+            RequestLimits {
+                https_only: false,
+                origin: Some(origin),
+                resource_kind: kind,
+                max_body: max_body.min(MAX_BODY),
+                deadline,
+            },
+        )
     }
 }
 
@@ -66,23 +104,144 @@ pub fn submit(url: &str, body: Option<&str>) -> Result<Response, String> {
     Session::new().submit(url, body)
 }
 
+#[cfg(test)]
 fn submit_with_config(
     url: &str,
     body: Option<&str>,
     config: Arc<rustls::ClientConfig>,
     cookies: &Mutex<CookieJar>,
 ) -> Result<Response, String> {
+    submit_with_config_policy(url, body, config, cookies, false)
+}
+
+/// Isolated release transport: no browser cookies and HTTPS on every redirect.
+pub fn fetch_release(url: &str) -> Result<Response, String> {
+    fetch_release_with_progress(url, &mut |_, _| {})
+}
+
+/// Report received body bytes for a successful release response. Missing lengths
+/// remain unknown; redirects, TLS verification and response limits are unchanged.
+pub fn fetch_release_with_progress(
+    url: &str,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Response, String> {
+    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    submit_with_limits_progress(
+        url,
+        None,
+        Arc::new(config),
+        &Mutex::new(CookieJar::default()),
+        RequestLimits {
+            https_only: true,
+            origin: None,
+            resource_kind: ResourceKind::Stylesheet,
+            max_body: MAX_BODY,
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        },
+        progress,
+    )
+}
+
+fn submit_with_config_policy(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    https_only: bool,
+) -> Result<Response, String> {
+    submit_with_limits(
+        url,
+        body,
+        config,
+        cookies,
+        RequestLimits {
+            https_only,
+            origin: None,
+            resource_kind: ResourceKind::Stylesheet,
+            max_body: MAX_BODY,
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        },
+    )
+}
+
+struct RequestLimits {
+    https_only: bool,
+    origin: Option<Url>,
+    resource_kind: ResourceKind,
+    max_body: usize,
+    deadline: Instant,
+}
+
+fn submit_with_limits(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    limits: RequestLimits,
+) -> Result<Response, String> {
+    submit_with_limits_progress(url, body, config, cookies, limits, &mut |_, _| {})
+}
+
+fn submit_with_limits_progress(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    limits: RequestLimits,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Response, String> {
     let mut url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     let mut body = body;
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    // Image credentials never resume after the first origin crossing, even if
+    // a later redirect returns to the page's origin. HTTPS likewise never
+    // downgrades to the same-origin HTTP exception once visited.
+    let mut credentials_allowed = true;
+    let mut visited_https = false;
     for redirects in 0..=MAX_REDIRECTS {
         validate_url(&url)?;
-        let cookie_header = cookies
-            .lock()
-            .map_err(|_| "Cookie session lock failed")?
-            .header(&url);
-        let (head, bytes) = request(&url, body, config.clone(), deadline, &cookie_header)?;
-        {
+        if limits.https_only && url.scheme() != "https" {
+            return Err("Release download requires HTTPS, including redirects".into());
+        }
+        if let Some(origin) = &limits.origin {
+            let same_origin = origin.origin() == url.origin();
+            match limits.resource_kind {
+                ResourceKind::Stylesheet if !same_origin => {
+                    return Err(
+                        "Stylesheets are limited to the page origin, including redirects".into(),
+                    );
+                }
+                ResourceKind::Image => {
+                    if url.scheme() != "https" && (!same_origin || visited_https) {
+                        return Err(
+                            "Images require HTTPS across origins and cannot downgrade from HTTPS, including redirects".into(),
+                        );
+                    }
+                    credentials_allowed &= same_origin;
+                }
+                _ => {}
+            }
+        }
+        visited_https |= url.scheme() == "https";
+        let cookie_header = if credentials_allowed {
+            cookies
+                .lock()
+                .map_err(|_| "Cookie session lock failed")?
+                .header(&url)
+        } else {
+            String::new()
+        };
+        let (head, bytes) = request(
+            &url,
+            body,
+            config.clone(),
+            limits.deadline,
+            &cookie_header,
+            limits.max_body,
+            progress,
+        )?;
+        if credentials_allowed {
             let mut jar = cookies.lock().map_err(|_| "Cookie session lock failed")?;
             for (_, value) in head.headers.iter().filter(|(name, _)| name == "set-cookie") {
                 jar.store(&url, value);
@@ -115,7 +274,8 @@ fn submit_with_config(
             .header("content-type")
             .unwrap_or("application/octet-stream")
             .to_owned();
-        let bytes = decode_content(bytes, head.header("content-encoding"))?;
+        let bytes =
+            decode_content_limited(bytes, head.header("content-encoding"), limits.max_body)?;
         return Ok(Response {
             url,
             status: head.status,
@@ -463,6 +623,8 @@ fn request(
     config: Arc<rustls::ClientConfig>,
     deadline: Instant,
     cookie_header: &str,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(Head, Vec<u8>), String> {
     let request = request_bytes_with_cookies(url, body, cookie_header)?;
     let socket = connect(url, deadline)?;
@@ -486,7 +648,7 @@ fn request(
     stream
         .flush()
         .map_err(|e| format!("Request flush failed: {e}"))?;
-    read_response(BufReader::new(stream))
+    read_response_progress(BufReader::new(stream), max_body, progress)
 }
 
 #[cfg(test)]
@@ -638,7 +800,21 @@ fn read_head(reader: &mut impl BufRead, budget: &mut usize) -> Result<Head, Stri
     Ok(Head { status, headers })
 }
 
-fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
+#[cfg(test)]
+fn read_response(reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
+    read_response_limited(reader, MAX_BODY)
+}
+
+#[cfg(test)]
+fn read_response_limited(reader: impl BufRead, max_body: usize) -> Result<(Head, Vec<u8>), String> {
+    read_response_progress(reader, max_body, &mut |_, _| {})
+}
+
+fn read_response_progress(
+    mut reader: impl BufRead,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(Head, Vec<u8>), String> {
     let mut budget = MAX_HEADERS;
     let mut head = read_head(&mut reader, &mut budget)?;
     let mut interim = 0;
@@ -655,6 +831,11 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
     if matches!(head.status, 204 | 304) {
         return Ok((head, Vec::new()));
     }
+    let mut report = |received, total| {
+        if head.status == 200 {
+            progress(received, total);
+        }
+    };
     let bytes = if let Some(encoding) = head.header("transfer-encoding") {
         if head.header("content-length").is_some() {
             return Err("Ambiguous HTTP body length".into());
@@ -662,7 +843,8 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
         if !encoding.eq_ignore_ascii_case("chunked") {
             return Err(format!("Unsupported transfer encoding: {encoding}"));
         }
-        read_chunked(&mut reader)?
+        report(0, None);
+        read_chunked_progress(&mut reader, max_body, &mut report)?
     } else if let Some(length) = head.header("content-length") {
         if length.is_empty() || !length.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("Invalid Content-Length".into());
@@ -670,21 +852,58 @@ fn read_response(mut reader: impl BufRead) -> Result<(Head, Vec<u8>), String> {
         let length = length
             .parse::<usize>()
             .map_err(|_| "Invalid Content-Length")?;
-        if length > MAX_BODY {
-            return Err("Response body exceeds 8 MiB limit".into());
+        if length > max_body {
+            return Err(format!("Response body exceeds {max_body} byte limit"));
         }
         let mut bytes = vec![0; length];
-        reader
-            .read_exact(&mut bytes)
-            .map_err(|e| format!("Incomplete response body: {e}"))?;
+        report(0, Some(length));
+        read_body_progress(&mut reader, &mut bytes, 0, Some(length), &mut report)?;
         bytes
     } else {
-        read_limited(&mut reader)?
+        report(0, None);
+        let mut bytes = Vec::new();
+        loop {
+            let mut buffer = [0; 8192];
+            let count = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("Response body read failed: {e}"))?;
+            if count == 0 {
+                break;
+            }
+            if count > max_body.saturating_sub(bytes.len()) {
+                return Err(format!("Response body exceeds {max_body} byte limit"));
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            report(bytes.len(), None);
+        }
+        bytes
     };
     Ok((head, bytes))
 }
 
-fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
+fn read_body_progress(
+    reader: &mut impl Read,
+    bytes: &mut [u8],
+    offset: usize,
+    total: Option<usize>,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(), String> {
+    let mut received = 0;
+    for chunk in bytes.chunks_mut(8192) {
+        reader
+            .read_exact(chunk)
+            .map_err(|e| format!("Incomplete response body: {e}"))?;
+        received += chunk.len();
+        progress(offset + received, total);
+    }
+    Ok(())
+}
+
+fn read_chunked_progress(
+    reader: &mut impl BufRead,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut framing_budget = MAX_HEADERS;
     loop {
@@ -700,14 +919,12 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
             while !limited_line(reader, &mut framing_budget)?.is_empty() {}
             return Ok(bytes);
         }
-        if size > MAX_BODY.saturating_sub(bytes.len()) {
-            return Err("Response body exceeds 8 MiB limit".into());
+        if size > max_body.saturating_sub(bytes.len()) {
+            return Err(format!("Response body exceeds {max_body} byte limit"));
         }
         let previous = bytes.len();
         bytes.resize(previous + size, 0);
-        reader
-            .read_exact(&mut bytes[previous..])
-            .map_err(|e| format!("Incomplete chunk: {e}"))?;
+        read_body_progress(reader, &mut bytes[previous..], previous, None, progress)?;
         let mut ending = [0; 2];
         reader
             .read_exact(&mut ending)
@@ -718,19 +935,28 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
     }
 }
 
-fn read_limited(reader: &mut impl Read) -> Result<Vec<u8>, String> {
+fn read_limited(reader: &mut impl Read, max_body: usize) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader
-        .take((MAX_BODY + 1) as u64)
+        .take((max_body + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("Response body read failed: {e}"))?;
-    if bytes.len() > MAX_BODY {
-        return Err("Response body exceeds 8 MiB limit".into());
+    if bytes.len() > max_body {
+        return Err(format!("Response body exceeds {max_body} byte limit"));
     }
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn decode_content(bytes: Vec<u8>, encoding: Option<&str>) -> Result<Vec<u8>, String> {
+    decode_content_limited(bytes, encoding, MAX_BODY)
+}
+
+fn decode_content_limited(
+    bytes: Vec<u8>,
+    encoding: Option<&str>,
+    max_body: usize,
+) -> Result<Vec<u8>, String> {
     match encoding
         .map(str::trim)
         .unwrap_or("")
@@ -738,8 +964,14 @@ fn decode_content(bytes: Vec<u8>, encoding: Option<&str>) -> Result<Vec<u8>, Str
         .as_str()
     {
         "" | "identity" => Ok(bytes),
-        "gzip" => read_limited(&mut flate2::read::MultiGzDecoder::new(bytes.as_slice())),
-        "deflate" => read_limited(&mut flate2::read::ZlibDecoder::new(bytes.as_slice())),
+        "gzip" => read_limited(
+            &mut flate2::read::MultiGzDecoder::new(bytes.as_slice()),
+            max_body,
+        ),
+        "deflate" => read_limited(
+            &mut flate2::read::ZlibDecoder::new(bytes.as_slice()),
+            max_body,
+        ),
         other => Err(format!("Unsupported content encoding: {other}")),
     }
 }
@@ -752,6 +984,63 @@ mod tests {
 
     fn parse(bytes: &[u8]) -> Result<(Head, Vec<u8>), String> {
         read_response(BufReader::new(Cursor::new(bytes)))
+    }
+
+    #[test]
+    fn release_progress_counts_body_bytes_without_redirects_or_framing() {
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 20000\r\n\r\n".to_vec();
+        response.extend(vec![b'x'; 20000]);
+        let mut events = Vec::new();
+        let (_, bytes) =
+            read_response_progress(Cursor::new(response), MAX_BODY, &mut |n, total| {
+                events.push((n, total))
+            })
+            .unwrap();
+        assert_eq!(bytes.len(), 20000);
+        assert_eq!(
+            events,
+            vec![
+                (0, Some(20000)),
+                (8192, Some(20000)),
+                (16384, Some(20000)),
+                (20000, Some(20000))
+            ]
+        );
+        for response in [
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"[..],
+            &b"HTTP/1.1 200 OK\r\n\r\nabcde"[..],
+        ] {
+            events.clear();
+            let (_, bytes) = read_response_progress(Cursor::new(response), 5, &mut |n, total| events.push((n, total))).unwrap();
+            assert_eq!(bytes, b"abcde");
+            assert_eq!(events.first(), Some(&(0, None)));
+            assert_eq!(events.last(), Some(&(5, None)));
+            assert!(events.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        }
+        events.clear();
+        read_response_progress(
+            Cursor::new(b"HTTP/1.1 302 Found\r\nContent-Length: 3\r\n\r\nabc"),
+            3,
+            &mut |n, total| events.push((n, total)),
+        )
+        .unwrap();
+        assert!(events.is_empty());
+        assert!(
+            read_response_progress(
+                Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc"),
+                3,
+                &mut |_, _| {}
+            )
+            .is_err()
+        );
+        assert!(
+            read_response_progress(
+                Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc"),
+                4,
+                &mut |_, _| {}
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -789,7 +1078,31 @@ mod tests {
     }
 
     #[test]
+    fn subresource_body_limits_cover_framing_and_decoding() {
+        for response in [
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\n\r\nhello",
+        ] {
+            assert!(read_response_limited(Cursor::new(response), 4).is_err());
+            assert_eq!(
+                read_response_limited(Cursor::new(response), 5).unwrap().1,
+                b"hello"
+            );
+        }
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"expanded response").unwrap();
+        let bytes = encoder.finish().unwrap();
+        assert!(decode_content_limited(bytes, Some("gzip"), 4).is_err());
+    }
+
+    #[test]
     fn unsupported_urls_and_oversized_forms_fail_before_network() {
+        assert!(
+            fetch_release("http://127.0.0.1:1/")
+                .unwrap_err()
+                .contains("HTTPS")
+        );
         assert!(fetch("file:///etc/passwd").unwrap_err().contains("scheme"));
         assert!(
             fetch("https://user:password@example.org")
@@ -1119,6 +1432,368 @@ mod tests {
         server.join().unwrap();
     }
 
+    fn resource_test_tls(trusted: bool) -> (Arc<rustls::ClientConfig>, Arc<rustls::ServerConfig>) {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        let leaf =
+            CertificateDer::from(include_bytes!("../../../tests/fixtures/net/server.der").to_vec());
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+            include_bytes!("../../../tests/fixtures/net/server-key.der").to_vec(),
+        ));
+        let server =
+            rustls::ServerConfig::builder_with_provider(rustls_rustcrypto::provider().into())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![leaf], key)
+                .unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        if trusted {
+            roots
+                .add(CertificateDer::from(
+                    include_bytes!("../../../tests/fixtures/net/ca.der").to_vec(),
+                ))
+                .unwrap();
+        }
+        (
+            Arc::new(crate::tls_client_config(roots).unwrap()),
+            Arc::new(server),
+        )
+    }
+
+    fn resource_tls_server(
+        listener: TcpListener,
+        config: Arc<rustls::ServerConfig>,
+        replies: Vec<String>,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        listener.set_nonblocking(true).unwrap();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let mut requests = Vec::new();
+            for reply in replies {
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "Missing owned TLS request");
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                // Accepted sockets inherit nonblocking mode on macOS.
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(config.clone()).unwrap();
+                let mut stream = rustls::StreamOwned::new(connection, socket);
+                let mut reader = BufReader::new(&mut stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => return requests, // Expected for rejected TLS handshakes.
+                        Ok(_) => {
+                            request.push_str(&line);
+                            if line == "\r\n" {
+                                break;
+                            }
+                        }
+                    }
+                }
+                requests.push(request);
+                stream.write_all(reply.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+            requests
+        })
+    }
+
+    fn resource_limits(page: &str, kind: ResourceKind) -> RequestLimits {
+        RequestLimits {
+            https_only: false,
+            origin: Some(Url::parse(page).unwrap()),
+            resource_kind: kind,
+            max_body: 512 * 1024,
+            deadline: Instant::now() + Duration::from_secs(6),
+        }
+    }
+
+    #[test]
+    fn image_tls_origin_crossing_permanently_strips_request_and_response_cookies() {
+        let (client, tls) = resource_test_tls(true);
+        let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        let page = format!("https://localhost:{}/", origin.local_addr().unwrap().port());
+        let cross = format!(
+            "https://localhost:{}/cross",
+            other.local_addr().unwrap().port()
+        );
+        let first = resource_tls_server(origin, tls.clone(), vec![
+            format!("HTTP/1.1 302 Found\r\nLocation: {cross}\r\nSet-Cookie: before=accepted; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"),
+            "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: back=ignored; Path=/; Secure\r\nContent-Length: 3\r\n\r\nimg".into(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into(),
+        ]);
+        let second = resource_tls_server(
+            other,
+            tls,
+            vec![format!(
+                "HTTP/1.1 302 Found\r\nLocation: {page}back\r\nSet-Cookie: cross=ignored; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"
+            )],
+        );
+        let cookies = Mutex::new(CookieJar::default());
+        cookies
+            .lock()
+            .unwrap()
+            .store(&Url::parse(&page).unwrap(), "seed=present; Path=/; Secure");
+        let response = submit_with_limits(
+            &format!("{page}start"),
+            None,
+            client.clone(),
+            &cookies,
+            resource_limits(&page, ResourceKind::Image),
+        )
+        .unwrap();
+        assert_eq!(response.body, b"img");
+        assert_eq!(response.url.as_str(), format!("{page}back"));
+        // A separate request keeps the shared first-party session. Suppression
+        // belongs to the cross-origin chain, not a global destructive jar clear.
+        submit_with_limits(
+            &format!("{page}next"),
+            None,
+            client,
+            &cookies,
+            resource_limits(&page, ResourceKind::Image),
+        )
+        .unwrap();
+        let first = first.join().unwrap();
+        let second = second.join().unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(second.len(), 1);
+        assert!(first[0].contains("Cookie: seed=present\r\n"));
+        assert!(!first[1].contains("Cookie:"));
+        assert!(!second[0].contains("Cookie:"));
+        assert!(first[2].contains("Cookie: seed=present; before=accepted\r\n"));
+        let jar = &mut *cookies.lock().unwrap();
+        assert_eq!(
+            jar.header(&Url::parse(&page).unwrap()),
+            "seed=present; before=accepted"
+        );
+    }
+
+    #[test]
+    fn same_origin_image_and_stylesheet_tls_redirects_keep_session_cookies() {
+        for kind in [ResourceKind::Image, ResourceKind::Stylesheet] {
+            let (client, tls) = resource_test_tls(true);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let page = format!(
+                "https://localhost:{}/",
+                listener.local_addr().unwrap().port()
+            );
+            let server = resource_tls_server(listener, tls, vec![
+                "HTTP/1.1 302 Found\r\nLocation: /next\r\nSet-Cookie: next=kept; Path=/; Secure\r\nContent-Length: 0\r\n\r\n".into(),
+                "HTTP/1.1 200 OK\r\nSet-Cookie: final=kept; Path=/; Secure\r\nContent-Length: 2\r\n\r\nok".into(),
+            ]);
+            let cookies = Mutex::new(CookieJar::default());
+            cookies
+                .lock()
+                .unwrap()
+                .store(&Url::parse(&page).unwrap(), "initial=kept; Path=/; Secure");
+            let response =
+                submit_with_limits(&page, None, client, &cookies, resource_limits(&page, kind))
+                    .unwrap();
+            assert_eq!(response.body, b"ok");
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[0].contains("Cookie: initial=kept\r\n"));
+            assert!(requests[1].contains("Cookie: initial=kept; next=kept\r\n"));
+            assert_eq!(
+                cookies.lock().unwrap().header(&Url::parse(&page).unwrap()),
+                "initial=kept; next=kept; final=kept"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_cross_origin_images_verify_tls_and_never_use_matching_domain_cookies() {
+        for (host, trusted, succeeds) in [
+            ("localhost", true, true),
+            ("localhost", false, false),
+            ("127.0.0.1", true, false),
+        ] {
+            let (client, tls) = resource_test_tls(trusted);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!(
+                "https://{host}:{}/image",
+                listener.local_addr().unwrap().port()
+            );
+            let server = resource_tls_server(listener, tls, vec![
+                "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: foreign=ignored; Path=/\r\nContent-Length: 3\r\n\r\nimg".into()
+            ]);
+            let cookies = Mutex::new(CookieJar::default());
+            cookies
+                .lock()
+                .unwrap()
+                .store(&Url::parse(&url).unwrap(), "existing=not-sent; Path=/");
+            let result = submit_with_limits(
+                &url,
+                None,
+                client,
+                &cookies,
+                resource_limits("https://localhost:1/", ResourceKind::Image),
+            );
+            if succeeds {
+                assert_eq!(result.unwrap().body, b"img");
+                let requests = server.join().unwrap();
+                assert_eq!(requests.len(), 1);
+                assert!(!requests[0].contains("Cookie:"));
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.contains("certificate"), "{error}");
+                assert!(
+                    error.contains(if trusted {
+                        "not valid for name"
+                    } else {
+                        "UnknownIssuer"
+                    }),
+                    "{error}"
+                );
+                assert!(server.join().unwrap().is_empty());
+            }
+            assert_eq!(
+                cookies.lock().unwrap().header(&Url::parse(&url).unwrap()),
+                "existing=not-sent"
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_resource_rejections_happen_before_connecting() {
+        let (client, _) = resource_test_tls(true);
+        for (scheme, kind) in [
+            ("http", ResourceKind::Image),
+            ("http", ResourceKind::Stylesheet),
+            ("https", ResourceKind::Stylesheet),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!(
+                "{scheme}://localhost:{}/blocked",
+                listener.local_addr().unwrap().port()
+            );
+            let error = submit_with_limits(
+                &url,
+                None,
+                client.clone(),
+                &Mutex::new(CookieJar::default()),
+                resource_limits("https://localhost:1/", kind),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(if kind == ResourceKind::Image {
+                    "Images require HTTPS"
+                } else {
+                    "page origin"
+                }),
+                "{error}"
+            );
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!(
+            "http://localhost:{}/expired",
+            listener.local_addr().unwrap().port()
+        );
+        let mut limits = resource_limits(&url, ResourceKind::Image);
+        limits.deadline = Instant::now() - Duration::from_secs(1);
+        assert!(
+            submit_with_limits(
+                &url,
+                None,
+                client,
+                &Mutex::new(CookieJar::default()),
+                limits
+            )
+            .is_err()
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn image_https_redirect_cannot_return_to_same_origin_http_exception() {
+        let (client, tls) = resource_test_tls(true);
+        let http = TcpListener::bind("127.0.0.1:0").unwrap();
+        http.set_nonblocking(true).unwrap();
+        let page = format!("http://localhost:{}/", http.local_addr().unwrap().port());
+        let https = TcpListener::bind("127.0.0.1:0").unwrap();
+        let image = format!(
+            "https://localhost:{}/image",
+            https.local_addr().unwrap().port()
+        );
+        let server = resource_tls_server(
+            https,
+            tls,
+            vec![format!(
+                "HTTP/1.1 302 Found\r\nLocation: {page}downgrade\r\nContent-Length: 0\r\n\r\n"
+            )],
+        );
+        let error = submit_with_limits(
+            &image,
+            None,
+            client,
+            &Mutex::new(CookieJar::default()),
+            resource_limits(&page, ResourceKind::Image),
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot downgrade from HTTPS"), "{error}");
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(http.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn stylesheet_tls_redirect_to_another_origin_is_rejected_before_connection() {
+        let (client, tls) = resource_test_tls(true);
+        let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+        let page = format!("https://localhost:{}/", origin.local_addr().unwrap().port());
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        other.set_nonblocking(true).unwrap();
+        let cross = format!(
+            "https://localhost:{}/style.css",
+            other.local_addr().unwrap().port()
+        );
+        let server = resource_tls_server(
+            origin,
+            tls,
+            vec![format!(
+                "HTTP/1.1 302 Found\r\nLocation: {cross}\r\nContent-Length: 0\r\n\r\n"
+            )],
+        );
+        let error = submit_with_limits(
+            &page,
+            None,
+            client,
+            &Mutex::new(CookieJar::default()),
+            resource_limits(&page, ResourceKind::Stylesheet),
+        )
+        .unwrap_err();
+        assert!(error.contains("page origin"), "{error}");
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(
+            other.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
     #[test]
     fn rustcrypto_tls_accepts_trusted_certificate_and_rejects_untrusted_or_wrong_name() {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -1136,10 +1811,11 @@ mod tests {
                 .unwrap();
         let config = Arc::new(config);
 
-        for (host, trusted, succeeds) in [
-            ("localhost", true, true),
-            ("localhost", false, false),
-            ("127.0.0.1", true, false),
+        for (host, trusted, succeeds, downgrade) in [
+            ("localhost", true, true, false),
+            ("localhost", false, false, false),
+            ("127.0.0.1", true, false, false),
+            ("localhost", true, false, true),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -1163,9 +1839,12 @@ mod tests {
                         Ok(_) => {}
                     }
                 }
-                stream
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\ntrusted")
-                    .unwrap();
+                let reply: &[u8] = if downgrade {
+                    b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 0\r\n\r\n"
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\ntrusted"
+                };
+                stream.write_all(reply).unwrap();
                 stream.flush().unwrap();
             });
             let mut roots = rustls::RootCertStore::empty();
@@ -1177,13 +1856,29 @@ mod tests {
                     .unwrap();
             }
             let client = Arc::new(crate::tls_client_config(roots).unwrap());
-            let response = submit_with_config(
-                &format!("https://{host}:{port}/"),
-                None,
-                client,
-                &Mutex::new(CookieJar::default()),
-            );
-            if succeeds {
+            let response = if downgrade {
+                submit_with_config_policy(
+                    &format!("https://{host}:{port}/"),
+                    None,
+                    client,
+                    &Mutex::new(CookieJar::default()),
+                    true,
+                )
+            } else {
+                submit_with_config(
+                    &format!("https://{host}:{port}/"),
+                    None,
+                    client,
+                    &Mutex::new(CookieJar::default()),
+                )
+            };
+            if downgrade {
+                assert!(
+                    response
+                        .unwrap_err()
+                        .contains("Release download requires HTTPS")
+                );
+            } else if succeeds {
                 assert_eq!(response.unwrap().body, b"trusted");
             } else {
                 let error = response.unwrap_err();

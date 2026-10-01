@@ -5,6 +5,24 @@ from pathlib import Path
 import subprocess
 import sys
 
+# These exact upstream releases declare a license but omit its text from the
+# crate archive. Keep the reviewed fallback narrow: new omissions still fail.
+MPL_ARCHIVE_OMISSIONS = {
+    ("app_units", "0.7.8"), ("selectors", "0.40.0"),
+    ("stylo", "0.21.0"), ("stylo_atoms", "0.21.0"),
+    ("stylo_derive", "0.21.0"), ("stylo_dom", "0.21.0"),
+    ("stylo_static_prefs", "0.21.0"), ("stylo_traits", "0.21.0"),
+    ("to_shmem", "0.5.0"), ("to_shmem_derive", "0.1.0"),
+}
+LICENSE_INPUTS = Path(__file__).resolve().parent / "licenses"
+BOA_ARCHIVE_OMISSIONS = {
+    **{(name, "0.22.0"): "337a3668a0dc86dd401ea20906e782249a64a228"
+       for name in ("boa_ast", "boa_engine", "boa_gc", "boa_interner",
+                    "boa_macros", "boa_parser", "boa_string")},
+    **{(name, "0.1.0"): "ad8739f5e0b51d20faf7a2cce98afa5c40121438"
+       for name in ("small_btree", "tag_ptr")},
+}
+
 metadata = json.loads(subprocess.check_output([
     "cargo", "metadata", "--locked", "--format-version", "1",
     "--filter-platform", "x86_64-unknown-linux-gnu",
@@ -29,6 +47,9 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
         raise SystemExit(f"Missing license expression: {package['name']}")
     out.append(f"\n{'=' * 72}\n{package['name']} {package['version']} | {package['license']}\n")
     out.append(f"Source: {package['source'] or 'https://github.com/pierce403/mgbrowser'}\n")
+    if (package["source"] or "").startswith("registry+"):
+        out.append("Unmodified source archive (including MPL-covered source): "
+                   f"https://crates.io/api/v1/crates/{package['name']}/{package['version']}/download\n")
     summary.append(f"| {package['name']} | {package['version']} | {package['license']} |\n")
     root = Path(package["manifest_path"]).parent
     files = set()
@@ -37,7 +58,24 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
     if package.get("license_file"):
         files.add(root / package["license_file"])
     if not files:
-        raise SystemExit(f"No license text found: {package['name']} ({root})")
+        key = (package["name"], package["version"])
+        if key in MPL_ARCHIVE_OMISSIONS and package["license"] == "MPL-2.0":
+            fallback = LICENSE_INPUTS / "MPL-2.0.txt"
+        elif key == ("void", "1.0.2") and package["license"] == "MIT":
+            fallback = LICENSE_INPUTS / "void-1.0.2-MIT.txt"
+        elif key in BOA_ARCHIVE_OMISSIONS and package["license"] == "Unlicense OR MIT":
+            vcs = json.loads((root / ".cargo_vcs_info.json").read_text())
+            if vcs["git"]["sha1"] != BOA_ARCHIVE_OMISSIONS[key]:
+                raise SystemExit(f"Unreviewed Boa license source revision: {key}")
+            fallback = LICENSE_INPUTS / "boa-0.22-MIT.txt"
+        elif key == ("taffy", "0.14.0") and package["license"] == "MIT":
+            vcs = json.loads((root / ".cargo_vcs_info.json").read_text())
+            if vcs["git"]["sha1"] != "77f385683c1d698c91a23a259f87fdddf26925fb":
+                raise SystemExit(f"Unreviewed Taffy license source revision: {key}")
+            fallback = LICENSE_INPUTS / "taffy-0.14.0-MIT.txt"
+        else:
+            raise SystemExit(f"No license text found: {package['name']} ({root})")
+        out.append(f"\n--- Reviewed upstream text: {fallback.name} ---\n{fallback.read_text()}\n")
     for path in sorted(files):
         out.append(f"\n--- {path.relative_to(root)} ---\n{path.read_text(errors='replace')}\n")
 Path(sys.argv[1]).write_text("".join(out))

@@ -9,11 +9,30 @@ homepage.workspace = true
 publish = false
 description = "Original HTML, DOM, layout and Rust software rendering pipeline"
 
+[features]
+default = ["modern"]
+modern = ["mg-butane/modern", "dep:boa_engine", "dep:boa_gc"]
+
 [dependencies]
 mg-butane.workspace = true
+# Boa derive macros require these direct names for traced host wrappers.
+boa_engine = { workspace = true, optional = true }
+boa_gc = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
 image.workspace = true
+taffy.workspace = true
 fontdue.workspace = true
 rustybuzz.workspace = true
+style.workspace = true
+stylo_dom.workspace = true
+stylo_static_prefs.workspace = true
+stylo_traits.workspace = true
+selectors.workspace = true
+cssparser.workspace = true
+atomic_refcell.workspace = true
+app_units.workspace = true
+euclid.workspace = true
+resvg.workspace = true
+roxmltree.workspace = true

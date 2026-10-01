@@ -1,0 +1,40 @@
+name: JSPLAN research checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  isolated-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --component rustfmt
+      - name: Build isolated research executable and check protocol
+        run: |
+          cargo +1.91.1 fmt --manifest-path experiments/jsplan/Cargo.toml -- --check
+          cargo +1.91.1 test --locked --manifest-path experiments/jsplan/Cargo.toml
+          cargo +1.91.1 build --locked --release --manifest-path experiments/jsplan/Cargo.toml
+      - name: Verify exact research dependency and license graph
+        run: python3 experiments/jsplan/dependency_audit.py --check
+      - name: Verify runner classification and pinned inputs
+        run: |
+          test -x /usr/bin/time
+          python3 tools/jsplan/test_runner.py
+          python3 tools/jsplan/runner.py fetch
+      - name: Compare frozen engine outcomes without hiding gaps
+        run: |
+          python3 tools/jsplan/runner.py run --executable experiments/jsplan/target/release/mg-jsplan-probe --build-profile release --engine baseline --engine boa --output tmp/jsplan-report.json
+          python3 tools/jsplan/check_report.py tmp/jsplan-report.json
+      - name: Preserve full comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsplan-research-report
+          path: tmp/jsplan-report.json
+          if-no-files-found: warn

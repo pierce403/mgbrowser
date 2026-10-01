@@ -9,8 +9,14 @@ homepage.workspace = true
 publish = false
 description = "Original experimental JavaScript engine"
 
+[features]
+default = []
+modern = ["dep:boa_engine", "dep:boa_gc"]
+
 [dependencies]
 serde.workspace = true
+boa_engine = { workspace = true, optional = true }
+boa_gc = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

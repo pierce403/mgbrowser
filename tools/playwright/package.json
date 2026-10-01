@@ -1,0 +1,13 @@
+{
+  "name": "mgbrowser-playwright-acceptance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pinned external-client acceptance, not a browser dependency",
+  "scripts": {
+    "test": "node acceptance.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.58.2"
+  }
+}

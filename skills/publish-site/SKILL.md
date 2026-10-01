@@ -14,6 +14,13 @@ Update the installer when its behavior needs to change; its latest-release URLs
 already follow each newly published release. Test reinstalls as well as clean
 installs. Do not move published tags or silently replace old release artifacts.
 
+Workspace version bumps also change the local mg-butane package consumed by
+the excluded experiments/jsplan workspace. Synchronize its Cargo.lock package
+version and regenerate its reviewed dependency-audit records, then run the
+locked research gates before pushing. Keep third-party versions/features and
+frozen outcome expectations unchanged. The production workspace build alone
+does not validate this separate lockfile; exact-commit JSPLAN CI must also pass.
+
 Read FEATURES.md and the latest work log. Update descriptive index.html content when direction changes, with no unsupported readiness claims. Compile tools/site.rs into tmp/site and run it to refresh the marked generated section; run tmp/site --check and git diff --check.
 
 For an authorized publication, commit and push, then inspect the Pages workflow for the intended SHA. Check the repository Pages API for custom domain and certificate state, and confirm HTTPS enforcement. Fetch https://mgbrowser.org without bypassing TLS validation and compare the full HTML against index.html. HTTP success alone does not establish visual quality; inspect in a browser when available and state any QA limit.
@@ -29,6 +36,31 @@ files. Preview publication does not complete F-007 or the Google compatibility g
 After publication, run `python3 tools/public-release-smoke.py VERSION` from the
 repo root. It verifies public bytes, the exact advertised curl command, current
 version, replacement of an in-use executable, a fresh worker selftest, desktop/icons
-and latest links. Existing browser processes must restart after installation;
-do not claim that an old process can keep spawning workers after its binary is replaced.
+and latest links. Existing browser processes must restart to use the new build.
+Since v0.2.1, Linux workers re-exec the running inode through /proc/self/exe;
+`bash tools/chrome-update-smoke.sh PATH_TO_PACKAGED_BINARY` verifies native About
+and an existing scripted CDP journey after replacement of a test-owned binary.
+Do not assume this continuity for older releases. For updater changes, also run
+the packaged_update_smoke test with MGBROWSER_TEST_RELEASE and `-- --ignored`.
+After publication, public_update_smoke with MGBROWSER_TEST_OLD_BINARY and
+`-- --ignored` exercises real release download, installation and a no-op recheck
+against a temporary copy of an older verified public binary. See docs/UPDATES.md.
 This is a manually invoked release gate, not an unattended publication agent.
+
+Since v0.4.0, package only the default Boa-backed binary, without the
+legacy-test-engine regression feature. Installed-payload and public smoke checks
+must prove modern inline script/Promise DOM execution and retained session
+selftests, not just version/isolation. Keep the actual packaged /script-boa and
+/script-events native/CDP journeys distinct from the frozen original-engine lane.
+
+Stylo builds require Python 3 for its vendored code generator, but the shipped
+browser does not. Regenerate docs/DEPENDENCY_LICENSES.md with
+tools/license-inventory.py when the locked graph changes. It preserves upstream
+texts/source links and fails on unreviewed omissions; tools/licenses contains
+only explicitly reviewed missing-text fallbacks. Keep MPL dependency notices
+distinct from the project's Apache-2.0 license. Verify packaged size against
+the existing updater download/unpack limits without silently raising them.
+The compressed tar.gz must fit the already-installed transport's 8 MiB response
+limit as well as the separate 64 MiB unpacked limit. package-release.sh and the
+installer smoke test both enforce the compressed ceiling. Do not infer upgrade
+compatibility from a successful curl install or an unpack-only updater test.

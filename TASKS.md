@@ -1,13 +1,199 @@
 # Work queue
 
-Current task: **T-010 / F-013, extraction complete; v0.2.0 publication pending**. User approved
+2026-09-23 active: **T-023 / F-026: measurable WPT coverage** supersedes the
+remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md).
+
+1. **Complete:** integrate the fixed upstream static-reftest pilot and publish its current
+   score on every commit: observed baseline 6 PASS, 1 FAIL, 17 UNSUPPORTED / 24.
+   First milestone: immutable inputs/licenses, real Browser rendering, negative
+   harness tests, frozen pass/support ratchet and fresh exact-commit Pages gate.
+   Shipped on main at a4e3692; Pages/WPT35940400295 and public score/JSON checks
+   pass. That tooling-only commit did not change the v0.9.0 browser binary.
+2. **Complete:** v0.9.1 fixes preferred `width: max-content` and
+   admitted single-line column baseline grouping. The unchanged pilot improves
+   to 7 PASS, 0 FAIL, 17 UNSUPPORTED / 24. Released at a89747f with exact-commit
+   Rust/JSPLAN/Pages/release gates, public checksum/install, native WPT equality,
+   Boa native/CDP journeys and actual v0.9.0 self-update/no-op checks verified.
+3. Reduce unsupported coverage through reviewed general XML/font/script harness
+   prerequisites. The 17 unsupported tests remain visible, not counted as passes.
+4. Expand pinned cohorts and implement full testharness/WebDriver integration in
+   separate milestones. Keep worker/resource limits and old regressions; each
+   browser behavior improvement finishes with a verified public feature release.
+
+Goal: increase the absolute number of genuine upstream passes while preserving
+the existing passing and runnable sets. A selected-subset percentage is not a
+full WPT compatibility score. The general autoresearch executor remains planned.
+
+2026-09-18 deferred: remaining automation/Google News work, separately gated
+in [docs/DESKTOP_NEXT.md](docs/DESKTOP_NEXT.md). The native desktop increment
+has shipped; do not conflate its release with these unfinished gates:
+
+1. **T-022 / F-025:** faithful signed-out Google News reading first, interactions
+   later, as the user confirmed. See docs/GOOGLE_NEWS.md for the bounded migration.
+   Flex/grid, positioning, clipping, inline SVG, fit-content, gradients and
+   JPEG/credential-free HTTPS images pass focused tests. Saved News renders at
+   1024/1280 without fallback; HN pixels/geometry remain byte-identical.
+   Packaged fresh home/scroll/link/Back passes; the topic remains readable-flow
+   fallback. This bounded increment shipped in v0.9.0; all release/public-install
+   gates pass. Full News fidelity remains open: fonts, corner/icon
+   differences, dynamic content and destination fallbacks are explicit limits.
+2. **T-021 / F-024:** real pinned Playwright control, not handshake-only CDP claims.
+   Public v0.9.0 still fails client initialization. See docs/PLAYWRIGHT.md.
+
+Do not conflate these with the unfinished Google search or full JSPLAN/MVP gates.
+
+2026-09-18 release complete: **v0.9.0 reading increment**, tag commit
+`7b5fecac59c167442a330e2a4822b153073fc69b`. Rust35326867514,
+JSPLAN35326867508, Pages35326867490 and release35328880780 pass. Public checksum,
+exact curl install/reinstall, worker/session/Boa, desktop/icons/NOTICE, all seven
+native suites, fresh live News home/link/Back and actual v0.8 GUI update/Restart
+with a no-op recheck pass. The topic still uses readable fallback. F-025 stays
+in-progress, as does F-024: the pinned public Playwright client fails before
+locators. See the dated log. Stop this release increment here; further reading
+fidelity precedes interactive News, following the user's chosen order.
+
+2026-09-17 complete: **T-019 / F-022 and T-020 / F-023 shipped as v0.8.0**,
+release commit `8b84604c83541beade431cfbedaa2dc449878011`. Read-only native
+Inspector/diagnostics and bounded live tabs, detach/redock and left/right groups
+pass actual public-binary input checks. Stable named CDP targets survive moves;
+closing rejects their routes. Exact Rust 35309250052, JSPLAN 35309249870,
+Pages 35309250006 and release 35310681040 succeed. Public checksum, exact curl
+install/reinstall, worker/session/Boa, desktop/icons and all native helpers pass.
+An actual v0.7.2 GUI update/Restart opens v0.8.0, then passes a no-op recheck.
+Multi-tab Restart restores URLs, not unsaved state or window/pane arrangement.
+No v0.8.0 release gates remain. See the dated log for receipts.
+
+2026-09-17 complete: **T-018 / F-021 shipped as v0.7.2**, release commit
+`16043b103a6565d8761daf860405a0661d09a9db`. Wheel easing, reversal and input/
+navigation cancellation pass deterministic and native 100/200% checks; keyboard/
+CDP scrolling remains immediate. Exact Rust/JSPLAN/Pages/release gates and public
+checksum/install/reinstall/worker/session/Boa/desktop/icons pass. Actual v0.7.1
+GUI upgrade and Restart now reopen the page in v0.7.2. Public native theme,
+scale, toolbar/bookmarks and smooth traces pass. No scrolling release gates
+remain. See the dated log; continue only the newly requested work above.
+
+2026-09-16 complete: **T-017 / F-020 shipped as v0.7.1**, release commit
+`8d8ad5654950d7f720c427aa4a396ec93927af5f`. About shows download progress and
+offers Restart now after installation, with session-loss warning and failed-
+spawn retry. One toolbar row places the hamburger menu right of the URL.
+Rust CI 35164990594, JSPLAN 35164990612, Pages 35164990646 and release
+35166215804 pass on that commit. Public checksum/install/reinstall,
+worker/session/Boa, desktop/icons, v0.7.0 upgrade/no-op and public native
+restart/theme/scale/bookmark acceptance pass. See today's log for receipts.
+Scrolling was diagnosed as immediate 100-logical-pixel wheel jumps; short
+target-position animation was recommended, not implemented. No release gates
+remain; further feature work needs a new request.
+
+2026-09-16 complete: **T-016 / F-019 shipped as v0.7.0**, release commit
+`79488712b2228ba8080c53757e3e8f70a173b3fa`. Menu, Back, Forward, Refresh and
+Bookmark sit left of the URL; selection highlights only visible URL text.
+Local bounded bookmarks support save/open/remove, restart and shortcuts.
+Rust CI 35160797175, JSPLAN 35160797233, Pages 35160797223 and release
+35161878680 pass. Public archive/checksum, exact curl install/reinstall,
+worker/session/Boa, desktop/icons and actual v0.6.0 update/no-op recheck pass.
+The public binary repeats native history/refresh/bookmark/restart acceptance
+and existing scale/theme/native/CDP checks. No engine feature was added.
+See today's log for receipts. No release gates remain; stop this request here.
+
+2026-09-16 complete: **T-015 / F-018 shipped as v0.6.0**, release commit
+`363065dc17b51d8159d3434b74e393686bdc9d99`. System follows desktop DPI (192 DPI
+selects 200%); saved manual 75..300% sizes and Ctrl+plus/minus/0 scale controls
+and pages with crisp text and consistent logical input/CDP geometry. Rust CI
+35156845128, JSPLAN 35156845107, Pages 35156845115 and release 35158103311 pass.
+Public checksum/install/reinstall, worker/session/Boa, desktop/icons and actual
+v0.5.0 upgrade pass. The public binary repeats System/manual/native/CDP,
+persistence, scroll/compact/4K acceptance. The extra no-op updater recheck hit
+GitHub's anonymous API quota and is not claimed successful; the installed
+version is verified. See the dated log and docs/UPDATES.md. This is whole-browser
+size, not per-site zoom, monitor-specific Wayland support or new CSS.
+No feature/release gates remain. Stop: further engineering requires a new request.
+
+2026-09-16 complete: **T-014 / F-017 shipped as v0.5.0**, release commit
+`8c457e04a8ce00dd8cf81802da35a054d3bad8ec`. Menu > Settings offers persistent
+System/Light/Dark controls with live Linux desktop preference following.
+Rust CI 35150643020, JSPLAN CI 35150642873, Pages 35150642969 and release
+workflow 35152075966 pass on that exact commit. Public checksum, exact curl
+install/reinstall, worker/session tests, desktop/icons and actual v0.4.1
+self-update pass. Native public-binary tests cover System changes, explicit
+overrides, restart persistence, both portal APIs and unavailable-portal fallback.
+Light/Dark screenshots are visually inspected. Page colors, HTTP red warnings,
+optional chrome and engine behavior are preserved. Public archive: 7,879,494
+bytes, within the unchanged 8 MiB updater cap. See the dated log for receipts.
+No release gates remain. Stop here: further engineering requires a new request;
+Google and the remaining JSPLAN roadmap stay deferred.
+
+2026-09-16 complete: **T-013 / F-016 bounded Boa integration shipped as v0.4.1**,
+release commit `02b413f27e8ddce9b6408887317f08cd9b9b86b7`. The opt-in production
+path uses Boa for inline scripts, bounded Promise checkpoints and retained DOM
+events. See [the explicit process profile](docs/BOA.md). Rust CI 35139133042,
+JSPLAN CI 35139133037, Pages 35139133092 and release workflow 35140430106 are
+green on that exact commit. Public archive/checksum, exact curl install/reinstall,
+version/About identity, worker/session selftests, real Boa fixture execution and
+desktop/icons pass. Two installed-binary native and two external CDP journeys
+pass, with retained-event requests, zero traps and readable fatal-loop recovery.
+Actual v0.3.0 and v0.4.0 binaries update to v0.4.1, then pass a no-op update check.
+The public archive is 7,240,140 bytes compressed and 23,746,560 unpacked, within
+the unchanged 8 MiB updater cap. The size-optimized, symbol-stripped release
+preserves engine source, dependencies, resource limits and panic behavior.
+v0.4.0's tag/assets remain immutable; its oversize-package failure and the full
+receipts remain in the dated log. No release gates remain. Stop here: further
+engineering requires a new request. Google optimization remains deferred.
+No dual production engine or fallback.
+User clarified publication goes directly to main; PRs are not the default for
+user-directed work. See the standing instruction in AGENTS.md.
+
+Deferred JSPLAN roadmap; all later engineering requires a new request:
+
+1. **Remaining P1/P2:** comprehensive cooperative work/heap control, expanded
+   language/lifecycle acceptance and a broader application profile. Process-v1
+   supplies enforceable final containment, not complete native/parser/regex/GC
+   work accounting or full adoption-gate completion.
+2. **Remaining P3/P4:** external script/module loading, general tasks/timers and
+   broader DOM integration, then pinned
+   React/Vue applications with real input and long-session acceptance.
+3. **P5/P6:** Measured interpreter optimizations, then optional baseline JIT with
+   an explicit executable-memory/isolation design and evidence it pays off.
+4. **P7/P8:** Named V8 API consumer, then selective optimizing JIT, wider apps,
+   architectures, tooling and Wasm as separately scoped work.
+
+F-016, the full P1 gate and P2-P8 exit criteria remain incomplete. The selected Boa
+backend does not establish React/Vue browser applications or V8 compatibility.
+The initial research comparison remains reproducible in `experiments/jsplan`;
+its [historical results](docs/jsplan/RESULTS.md) are not rewritten as full conformance.
+
+2026-09-16 complete: **T-011 / F-014 shipped as v0.3.0**, release commit
+e3ac7a7b873eb080baf0fa9be61b343b06cbbcb9. Rust Stylo, bounded same-origin CSS/images
+and generic table/inline layout are accepted at 1024/1280 desktop widths. All
+normal CI gates, including the language/resource assertions and 26 native/26 CDP
+journeys, passed locally and remotely. Exact-commit Pages/release, public checksum,
+fresh install/reinstall, worker, desktop/icons, real v0.2.1 self-update and fresh
+public-binary HN navigation passed. Stop this request here. No further feature
+work or Google/JavaScript optimization is authorized by this completed task.
+
+2026-09-16 completed: **T-012 / F-015**, diagnosed HN styling, added verified
+automatic self-updates and About compile identity, published v0.2.1. Diagnosis:
+linked CSS loading/cascade/table layout remain absent. The HN implementation goal
+below stays planned; this request does not silently expand into that engine work.
+v0.2.1 includes the unpublished v0.2.0 extraction, closing T-010 / F-013 too.
+Release commit 830c6ca4ede1ccd5c23d3b73ebfd89aca06729ef: exact-SHA Rust CI,
+Pages, tagged release, public install and native public updater upgrade all passed.
+See the 2026-09-16 log. Stop this request here; HN engine work remains planned.
+
+Completed user-directed goal: **T-011 / F-014: Hacker News desktop rendering**.
+See docs/HACKER_NEWS.md for the bounded scope and completed acceptance evidence.
+Google/JS optimization remains deferred. This does not complete the formal MVP.
+The conversation tracker still needs the user to cancel its unfinished Google
+goal before the new goal can be activated there.
+
+Historical task: **T-010 / F-013, now shipped in v0.2.1**. User approved
 Butane (JS), Sparkle (HTML/rendering), Chassis (services/optional UX) and mg-browser
 (platform host), including push to main. Verify independent embedding, preserve
 worker isolation and native/CDP journeys, then finish the versioned release and
 public-installer gates. Drop-in compatibility and ThermiteOS implementation are
 future tasks, not part of this extraction.
 
-Source is published at a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Local component,
+Historical 2026-09-09 checkpoint, superseded by the release above:
+source was published at a444cada85ec80e8ac0df6858b63f4f980e4c3b8. Local component,
 package/installer and all 26 native/26 CDP journeys passed. Release tagging needs
 an authenticated git/tag-capable path: shell Git has no credentials, and the
 current connector exposes branch/file operations but no tag/release operation.

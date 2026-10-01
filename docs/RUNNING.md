@@ -9,7 +9,9 @@ From this repository, run `bash tools/install-macos.sh`, then open
 `~/Applications/mgbrowser.app`. The app starts XQuartz and opens example.com by
 default. It is built locally, unsigned, and does not change the default browser.
 The installer refuses to replace an existing app; move an old local build aside
-before reinstalling.
+before reinstalling. Binary self-updates are Linux x86_64 only; rebuild the
+source checkout to update a Mac installation. System theme discovery uses the
+Linux portal and falls back to Light on macOS; select Light/Dark in Settings.
 
 For development, open XQuartz's Applications > Terminal and run the Cargo command
 below from the checkout. macOS font discovery tries the system Arial font; the
@@ -20,7 +22,7 @@ only: macOS refuses page-script execution even with `--enable-scripts`.
 On macOS, run the existing portable regression suite with its font override:
 
 ```sh
-MGBROWSER_FONT=/System/Library/Fonts/Supplemental/Arial.ttf cargo test --locked --workspace --all-targets
+MGBROWSER_FONT=/System/Library/Fonts/Supplemental/Arial.ttf cargo test --locked --workspace --features legacy-test-engine --all-targets
 ```
 
 Linux-only worker tests are conditionally excluded on macOS. Passing this suite
@@ -33,35 +35,93 @@ Rust X11 protocol code and software-rendered pixels; it does not embed another
 browser, a native UI toolkit, or a native font renderer.
 
 ```sh
-cargo run --locked --bin mgbrowser -- https://www.google.com/
+cargo run --locked --bin mgbrowser -- https://news.ycombinator.com/
 ```
 
 A readable font file is required. The browser tries DejaVu Sans and Liberation
 Sans at common Linux locations. Set `MGBROWSER_FONT=/absolute/path/font.ttf` to
 choose another file; this reads font data and does not call a platform font API.
+The matching DejaVu/Liberation bold file is loaded when available. Set
+`MGBROWSER_FONT_BOLD` to supply a corresponding bold face for a custom font.
 
 Use Ctrl+L to edit the URL, Enter to navigate, Tab to move between document input
 fields, Enter in a field to submit its form, and the mouse to activate links and
-buttons. Scroll with the wheel/Page Up/Page Down; Back/Next/Reload controls are in
-the toolbar. Text editing initially supports typing, select-all, and Backspace;
+buttons. Scroll with the wheel/Page Up/Page Down. Back, Forward, Refresh
+and Bookmark icons sit left of the URL; the hamburger menu sits on its right.
+The duplicate title row is removed. Alt+Left/Right navigates history;
+Ctrl+R or F5 refreshes the loaded page, ignoring unsubmitted address edits.
+Ctrl+D toggles a bookmark; Menu > Bookmarks or Ctrl+Shift+O opens the saved list.
+See [bookmarks](BOOKMARKS.md). URL selection highlights only the displayed text.
+Text editing initially supports typing, select-all, and Backspace;
 there is no clipboard or full cursor/selection editor yet.
+
+v0.8.0 adds right-click **Inspect element**, **F12** and
+**Ctrl+Shift+I**. The native read-only Elements/Diagnostics panel shows painted
+DOM identity and bounded CSS/resource/script errors. Escape closes it; wheel
+and arrow/Page Up/Page Down keys scroll the panel without affecting the page.
+This is not the Chrome DevTools frontend or a JavaScript debugger.
+See [Inspector controls and acceptance](INSPECTOR.md).
+
+Ctrl+T opens a blank tab, Ctrl+W closes the active tab and Ctrl+Tab /
+Ctrl+Shift+Tab selects the next/previous tab in its group. The tab strip appears
+once tabs are used. Drag within a strip to reorder, outside a window to detach,
+or to a window's left/right page edge to form side-by-side groups. Dropping onto
+another strip docks into that group; Escape cancels a drag. The same live page
+and script realm move without a reload. Limits: 16 tabs, four native windows,
+two equal-width groups per window, no divider resizing or saved workspace layout.
+Closing a window closes its tabs; the last window closes the application.
+See [workspace scope and acceptance](DESKTOP_NEXT.md).
+
+Since v0.7.2, wheel steps ease over 150 ms and repeated steps accumulate.
+Reversing responds from the visible position. Clicking, keys (including Escape),
+menus, navigation, resize and size changes stop animation. Keyboard and CDP
+scrolling remain immediate. This does not add high-resolution touchpad gestures
+or compositor rendering; frame rate still depends on software paint cost.
 
 Plain `http://` URLs work as well as HTTPS. Since v0.1.1, the browser displays a red
 title/address strip and "HTTP: Not secure" for a loaded HTTP page; the desktop
 window manager still controls the outer decoration. Typing HTTPS in the location
 field does not clear the warning until that page loads. Ctrl+L selects the whole
 location from either the page or a form field; type a URL and press Enter.
-Re-run the website installer to get the latest feature release.
+Re-run the website installer to bootstrap automatic updates from v0.2.1 onward.
+Menu > About mgbrowser shows version, compile time (GMT/UTC) and source commit.
+Menu > Check for updates or `mgbrowser --update` checks and installs manually.
+Installed builds check on startup and daily; restart to run the installed update.
+About shows received bytes and a progress bar while downloading: a percentage
+when the server supplies a size, otherwise an activity segment without a guessed
+percentage. Verification/installation is a separate stage. Once installed, About
+offers **Restart now**. It reopens committed tab URLs in one fresh window using
+the new executable; unsaved edits, cookies, history and pane placement are lost.
+Blank tabs reopen example.com. Restart is optional.
+`--no-auto-update` or `MGBROWSER_NO_AUTO_UPDATE=1` disables background checks.
+See [update behavior and trust](UPDATES.md), including persistent opt-out.
+
+Menu > Settings offers System, Light and Dark appearance. System follows the
+Linux desktop settings portal, with Light fallback when unavailable. The choice
+is saved automatically and applies without restarting; web pages keep their own
+colors and plain HTTP keeps its red warning. See [appearance](APPEARANCE.md) for
+desktop support, XDG configuration and window-manager limitations.
+
+Size in the same Settings panel defaults to the desktop DPI. It scales controls
+and websites together, with sharp physical text rasterization. Ctrl+plus/minus
+steps through 75..300%; Ctrl+0 restores System. Manual size is saved across
+restarts. System uses screen-global X11 DPI with 100% fallback, not per-monitor
+Wayland scaling or independent page zoom. See [sizing details](APPEARANCE.md).
 
 ## What it renders
 
-HTML is parsed by our own bounded tokenizer/tree builder, then flattened into a
-simple flowing document with headings, text, links, and form controls. Rustybuzz
-shapes text and fontdue rasterizes it. An original partial JavaScript interpreter
-is available only with `--enable-scripts`; see below. Full CSS, font fallback/bidi
-layout and downloaded image rendering are not implemented. Images show a
-placeholder and alt text. These limits must not be mistaken for compatibility
-with the modern web.
+HTML uses our bounded tokenizer/tree builder. Styled documents use Rust Stylo for
+computed CSS and our tree-based block/inline/table layout, with bounded Rust Taffy
+flex/grid sizing. Unstyled or rejected documents retain readable flow.
+Rustybuzz shapes text and fontdue rasterizes regular/bold faces. Chassis downloads
+same-origin linked CSS and policy-checked PNG/JPEG/GIF/restricted static SVG images.
+After an image chain crosses origin, it sends/stores no cookies on later hops,
+including redirects back. Unsupported resources produce
+placeholders and warnings; no CSS imports or downloaded fonts. Full CSS, general
+positioning/stacking, font fallback and bidi layout remain incomplete. The
+[Hacker News desktop scope](HACKER_NEWS.md) and [News reading scope](GOOGLE_NEWS.md)
+are intentionally narrow. Boa-backed page JavaScript is available only with
+`--enable-scripts`; see below. None of this implies modern-web compatibility.
 
 HTTP(S) uses our own HTTP/1.1 transport and the selected experimental RustCrypto
 TLS provider, with public trust roots and certificate verification. Cookies are
@@ -74,18 +134,17 @@ no credential store, HTTP/2, proxy configuration or persistent browsing profile.
 Scripting defaults to off. On Linux x86_64, opt in explicitly:
 
 ```sh
-cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-home --enable-scripts
+cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-boa --enable-scripts
 ```
 
-Start the local fixture server described below first. The script creates the
-form, title and startup status; no form controls are present outside its script.
-The worker executes a small non-strict language subset, including bounded
-`for-in`/`switch`, regular expressions and explicit-state expression parsing,
-plus startup DOM callbacks,
-then retains the realm for bounded real later click/submit handlers. It has no
-external script loading, general event loop/timers, fetch/XHR, or script cookie access. Most modern
-sites will still fail. [JAVASCRIPT.md](JAVASCRIPT.md) records exact capabilities,
-limits and known semantic approximations.
+Start the local fixture server described below first. Two inline scripts share
+modern language state, and a Promise checkpoint creates the actual form, title
+and status. Boa runs modern syntax and builtins against Mg's bounded real DOM,
+then retains the realm for real later click/submit handlers. The bridge supports
+startup callbacks and bounded Promise checkpoints, not a general browser event
+loop. External scripts, modules, timers, fetch/XHR and script cookie access are
+not implemented. Most modern sites will still fail. [BOA.md](BOA.md) records the
+current integration and explicit `boa-page-process-v1` resource profile.
 
 Every script document uses a fresh worker with an empty environment, closed
 inherited descriptors, Linux seccomp/resource limits and a two-second TOTAL active
@@ -99,13 +158,17 @@ snapshot can still be applied while showing script errors. The status bar and
 stderr distinguish completed, partial, rejected and failed worker results.
 Each reported partial error also appears as an escaped `SCRIPT_DIAGNOSTIC` line,
 so a first parser failure does not hide other missing capabilities in that response.
-`SCRIPT_ALLOCATION` contains a fixed JSON realm report with accepted bytes,
-exclusive charge-site totals and the first rejected allocation. Repeated script
-errors can be the same latched failure; they are not separate allocation attempts.
-The fixed `SCRIPT_ALLOCATION` report excludes source text and URLs; it adds
-no page API. `SCRIPT_DIAGNOSTIC` can contain page-supplied exception text or URLs:
+`SCRIPT_BOA` contains the modern engine report: cumulative opcode, source and job
+admissions plus the actual worker's requested-allocation snapshot. The explicit
+profile allows 1,000,000 VM opcodes, 1 MiB per source/4 MiB cumulative sources,
+256 pending/2,048 cumulative jobs, and 32/64 MiB outstanding/cumulative requests
+to Rust's System allocator including its header/alignment. The latter is not GC
+live-heap or RSS; it is sampled before reply encoding, while enforcement remains
+active. Native builtin/parser/regex/GC work retains final OS/parent containment;
+full cooperative resource control remains open. Repeated errors can report one
+latched failure. The fixed report excludes source text and URLs and adds no page
+API. `SCRIPT_DIAGNOSTIC` can contain page-supplied exception text or URLs:
 escaping is not redaction, so keep raw live logs in ignored `tmp/`.
-The report is cumulative logical accounting, not measured process memory.
 `--disable-scripts` explicitly selects the default behavior.
 
 The local containment self-test requires no display and starts only owned children:
@@ -117,6 +180,14 @@ cargo run --locked --bin mgbrowser -- --script-worker-selftest
 This checks denied worker capabilities, memory/CPU/wall/output limits and bounded
 pipe exchange. It is not an audit of the whole browser or authorization to treat
 it as production-safe.
+
+The original interpreter remains a research baseline with unchanged logical
+4 MiB/fuel assertions. Worker/native reproduction of that baseline requires
+`--features legacy-test-engine` at build time and explicit `--legacy-page-tests`
+for browser journeys. Only that lane emits `SCRIPT_ALLOCATION`. Ordinary
+`--enable-scripts` still selects Boa even in a feature-enabled test build; shipped
+release binaries do not include the legacy selection flags. There is no fallback.
+[JAVASCRIPT.md](JAVASCRIPT.md) preserves the original engine's historical contract.
 
 ## Repeatable local interaction check
 
@@ -152,10 +223,19 @@ cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-redirect \
 `/script-redirect` uses `location.replace('/script-home')`. `/script-home` creates
 the actual query/hidden/submit controls with DOM methods and updates visible text
 in a `DOMContentLoaded` callback. `/script-loop` is an explicitly local infinite
-loop fixture: it should show a readable fuel error and allow normal navigation
+loop fixture: it should show a readable bounded-execution error and allow normal navigation
 afterward. On a headless Linux host, prefix the browser command with `xvfb-run -a`.
 The native script-redirect/form/result/destination journey passed under Xvfb on
 2026-09-07; rendered frames were inspected.
+
+### Historical original-engine journey evidence
+
+The detailed fixture measurements below, through the Browser automation section,
+record the pre-v0.4 original engine. Reproduce those exact allocation/fuel
+assertions with the `legacy-test-engine` build feature and `--legacy-page-tests`
+browser flag. They do not establish equivalent Boa accounting or complete web
+compatibility. Current Boa evidence is tracked in [BOA.md](BOA.md) and the dated
+work log; fixture identity is preserved across both test lanes.
 
 `/script-dynamic` is a separate authored fixture with no static form controls.
 It uses the original Function constructor to build the form and direct `eval`
@@ -732,7 +812,7 @@ the public protocol against an owned browser with remote debugging enabled:
 ```sh
 target/debug/examples/cdp_journey ws://127.0.0.1:9222/devtools/page/page-1 \
   http://127.0.0.1:7878/script-events tmp/event-journey/destination.png
-cargo test --locked --workspace --test page_events --test page_projection --test script_session
+cargo test --locked --workspace --features legacy-test-engine --test page_events --test boa_page_events --test boa_pages --test page_projection --test script_session --test boa_worker
 target/debug/mgbrowser --script-session-selftest
 ```
 
@@ -745,8 +825,8 @@ No new CDP commands or Runtime evaluation are exposed.
 
 ```sh
 cargo fmt --all -- --check
-cargo test --locked --workspace --all-targets
-cargo test --locked --workspace --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session
+cargo test --locked --workspace --features legacy-test-engine --all-targets
+cargo test --locked --workspace --features legacy-test-engine --release --lib --test js_expressions --test js_allocation --test js_arrays --test js_bindings --test js_sources --test js_ast_storage --test js_static_operators --test js_static_operator_limits --test js_symbols --test js_symbol_keys --test js_symbol_limits --test js_prototypes --test js_prototype_limits --test js_errors --test js_error_limits --test js_concat --test js_concat_limits --test js_empty_arguments --test js_empty_arguments_limits --test js_function_prototypes --test js_function_prototype_limits --test js_bound_functions --test js_bound_function_limits --test js_diagnostics --test js_diagnostic_limits --test js_call_receivers --test js_producer_diagnostics --test js_producer_limits --test js_array_callbacks --test js_array_callback_limits --test js_core_intrinsics --test js_core_intrinsic_limits --test js_object_create --test js_object_create_limits --test js_dom --test script_worker --test page_events --test page_projection --test script_session --test modern --test boa_worker --test boa_pages --test boa_page_events
 mkdir -p tmp
 rustc --edition=2024 tools/check-dependencies.rs -o tmp/check-dependencies
 tmp/check-dependencies
@@ -799,7 +879,14 @@ command above also exercises the library and real worker children; these tests
 do not increase the native thread-stack size. Passing language cases alone does
 not replace the native/CDP fixture journey or the bounded live-site gate.
 
-## Call receiver and immediate producer fixture
+## Historical original-engine fixture records
+
+The following measurements describe the original evaluator. Reproduction of
+their allocation/fuel checkpoints uses the explicit legacy test lane described
+above, not the production Boa profile. These records are retained without
+weakening their assertions or claiming equivalent engine accounting.
+
+### Call receiver and immediate producer fixture
 
 The independently authored `/script-producers` page first encounters a missing
 property, then requires correct detached native receivers before creating its

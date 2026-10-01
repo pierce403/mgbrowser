@@ -1,5 +1,23 @@
 # Candidate learnings
 
+- 2026-09-23: Release version bumps must synchronize the excluded JSPLAN
+  workspace's local mg-butane lock entry and exact dependency-audit records.
+  Previous v0.7.1/v0.7.2/v0.8.0/v0.9.0 changes did this; the initial v0.9.1
+  candidate omitted it and failed --locked before research execution. Curator
+  added the recurring check to publish-site, without changing third-party pins
+  or weakening the research gate. See the dated log for correction evidence.
+
+- 2026-09-17: Inspector context-menu, compact resize and three-tab About tests
+  independently accepted an unchanged previous framebuffer while a requested
+  new paint was still computing. Requiring actual requested control/text pixels
+  plus stability fixed the native waits without relaxing page equality, query,
+  worker or resource assertions. Curator promoted this repeated observation to
+  browser-check. Exact artifacts/failures are in the dated log.
+- 2026-09-17: Sequential tab-smoke cases lost their owned Xvfb connection when
+  the final client disconnected between cases. Its private display now uses
+  `-noreset`; the full three-scale/script/restore journey passes. This is a
+  test-display lifetime observation, not a browser or global display workaround.
+
 - 2026-09-07: One manually invoked script-worker baseline redirected the restricted child's stdout to a regular file and correctly hit its zero file-size limit. The normal pipe-based protocol returned a valid bounded reply with the same source and unchanged restrictions. Preserve the failed harness output separately; this is a local harness observation, not permission to weaken worker limits.
 
 - 2026-09-07: Feature status and work-log date drive a generated region of the project page. Initial local and GitHub CI validation passed; Pages served matching bytes. The rule is recorded in AGENTS.md and publish-site.

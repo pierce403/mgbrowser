@@ -97,6 +97,12 @@ pub struct SessionUpdate {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "script_worker_session_platform.rs"]
 mod platform;
+#[cfg(all(
+    feature = "legacy-test-engine",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub use platform::legacy_session_entry;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use platform::{Session, session_entry, session_selftest};
 

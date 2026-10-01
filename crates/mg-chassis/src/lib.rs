@@ -1,34 +1,61 @@
 //! Chassis: browser state, services, and optional chrome with a host-supplied platform.
+pub mod bookmarks;
 pub mod cdp;
 mod cdp_browser;
 #[cfg(feature = "chrome")]
 mod chrome;
+mod devtools;
 pub mod net;
+pub mod resources;
+mod scale;
 pub mod scripts;
+mod scroll;
+mod theme;
 pub use cdp_browser::BrowserCdp;
 use mg_sparkle::{
     document::{self, Document, Item},
     page_session::{ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply},
     paint::{Canvas, Fonts},
 };
-use std::sync::Arc;
+pub use scale::ScalePreference;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
+pub use theme::{ColorScheme, ThemePreference};
 
-const TOP: i32 = 108;
+const TOP: i32 = 64;
 const BG: u32 = 0xfafbf8;
-#[cfg(feature = "chrome")]
-const INK: u32 = 0x26342b;
 #[cfg(feature = "chrome")]
 const HTTP_CHROME: u32 = 0x9f202b;
 const MAX_EDIT_BYTES: usize = 8191;
 
 #[derive(Clone, Debug)]
 enum Action {
+    Menu,
+    About,
+    Settings,
+    Bookmarks,
+    ToggleBookmark,
+    OpenBookmark(usize),
+    RemoveBookmark(usize),
+    BookmarkPage(bool),
+    Theme(ThemePreference),
+    Scale(ScalePreference),
+    ScaleDown,
+    ScaleUp,
+    Update,
+    Restart,
+    CloseMenu,
+    InspectElement,
+    InspectorSection(bool),
+    InspectorScroll(bool),
     Address,
     Back,
     Forward,
@@ -58,6 +85,7 @@ enum Focus {
 }
 struct Loaded {
     generation: u64,
+    document: Option<Document>,
     result: Result<net::Response, String>,
     script: Option<Result<ScriptLoad, String>>,
 }
@@ -73,6 +101,33 @@ struct PendingEvent {
     input: SessionInput,
 }
 pub struct Browser {
+    devtools: devtools::State,
+    menu_open: bool,
+    about_open: bool,
+    settings_open: bool,
+    bookmarks_open: bool,
+    bookmarks: Vec<bookmarks::Bookmark>,
+    bookmark_page: usize,
+    bookmark_change: Option<bookmarks::BookmarkChange>,
+    bookmark_refresh: bool,
+    bookmark_status: String,
+    modal_focus: usize,
+    theme_preference: ThemePreference,
+    system_theme: ColorScheme,
+    theme_change: Option<ThemePreference>,
+    scale_preference: ScalePreference,
+    system_scale: u16,
+    scale_change: Option<ScalePreference>,
+    pub(crate) geometry_revision: u64,
+    scroll_reflow_pending: bool,
+    settings_status: String,
+    about_lines: Vec<String>,
+    update_status: String,
+    update_progress: Option<(usize, Option<usize>)>,
+    update_requested: bool,
+    restart_available: bool,
+    restart_requested: bool,
+    restart_tab_count: usize,
     chrome: bool,
     session: net::Session,
     fonts: Fonts,
@@ -102,11 +157,13 @@ pub struct Browser {
     focus: Focus,
     select_all: bool,
     scroll: i32,
+    smooth_scroll: Option<scroll::ScrollMotion>,
     content_height: i32,
     history: Vec<String>,
     history_at: usize,
     generation: u64,
     inflight: usize,
+    resource_generation: Arc<AtomicU64>,
     loading: bool,
     tx: mpsc::Sender<Loaded>,
     rx: mpsc::Receiver<Loaded>,
@@ -125,6 +182,7 @@ pub struct Browser {
 
 impl Drop for Browser {
     fn drop(&mut self) {
+        self.resource_generation.fetch_add(1, Ordering::Relaxed);
         // Fence network jobs before they can create a late child. The pool
         // retains ownership until every already-started child has been reaped.
         self.child_pool.close();
@@ -139,11 +197,303 @@ impl Drop for Browser {
 }
 
 impl Browser {
+    /// Apply a host-loaded whole-browser size without requesting persistence.
+    /// Invalid explicit percentages fall back to System.
+    pub fn set_scale_preference(&mut self, preference: ScalePreference) {
+        let preference = preference.validated();
+        if self.scale_preference != preference {
+            self.scale_preference = preference;
+            self.invalidate_scaled_geometry();
+        }
+    }
+    pub fn scale_preference(&self) -> ScalePreference {
+        self.scale_preference
+    }
+    /// Host desktop size in percent. System values are bounded to 75..=300.
+    pub fn set_system_scale(&mut self, percent: u16) {
+        let percent = percent.clamp(75, 300);
+        if self.system_scale != percent {
+            self.system_scale = percent;
+            if self.scale_preference == ScalePreference::System {
+                self.invalidate_scaled_geometry();
+            }
+        }
+    }
+    pub fn effective_scale_percent(&self) -> u16 {
+        self.scale_preference.resolve(self.system_scale)
+    }
+    pub fn effective_scale(&self) -> f32 {
+        f32::from(self.effective_scale_percent()) / 100.
+    }
+    /// An explicit user selection, including reselection after a failed save.
+    pub fn take_scale_change(&mut self) -> Option<ScalePreference> {
+        self.scale_change.take()
+    }
+    fn invalidate_scaled_geometry(&mut self) {
+        self.stop_scroll();
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        self.scroll_reflow_pending = true;
+        self.hits.clear();
+        self.boxes.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    fn choose_scale(&mut self, preference: ScalePreference) {
+        self.set_scale_preference(preference);
+        self.scale_change = Some(self.scale_preference);
+    }
+    /// Apply a host-loaded preference without generating a persistence request.
+    pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+        self.theme_preference = preference;
+        self.dirty = true;
+    }
+    pub fn theme_preference(&self) -> ThemePreference {
+        self.theme_preference
+    }
+    /// Update the desktop preference. Explicit light/dark choices keep precedence.
+    pub fn set_system_theme(&mut self, scheme: ColorScheme) {
+        if self.system_theme != scheme {
+            self.system_theme = scheme;
+            self.dirty = true;
+        }
+    }
+    pub fn effective_theme(&self) -> ColorScheme {
+        self.theme_preference.resolve(self.system_theme)
+    }
+    /// A user choice from Settings, consumed by the host to persist it.
+    pub fn take_theme_change(&mut self) -> Option<ThemePreference> {
+        self.theme_change.take()
+    }
+    /// Host-owned settings persistence or desktop-detection feedback.
+    pub fn set_settings_status(&mut self, status: String) {
+        self.settings_status = status;
+        self.dirty = true;
+    }
+    fn modal_open(&self) -> bool {
+        self.menu_open
+            || self.about_open
+            || self.settings_open
+            || self.bookmarks_open
+            || self.devtools.visible()
+    }
+    fn modal_actions(&self) -> Vec<Action> {
+        if self.devtools.context.is_some() {
+            vec![Action::InspectElement, Action::CloseMenu]
+        } else if self.devtools.open {
+            vec![
+                Action::InspectorSection(false),
+                Action::InspectorSection(true),
+                Action::CloseMenu,
+                Action::InspectorScroll(false),
+                Action::InspectorScroll(true),
+            ]
+        } else if self.bookmarks_open {
+            let start = self.bookmark_page * self.bookmark_rows();
+            let mut actions = Vec::new();
+            for i in start..(start + self.bookmark_rows()).min(self.bookmarks.len()) {
+                actions.push(Action::OpenBookmark(i));
+                actions.push(Action::RemoveBookmark(i));
+            }
+            if self.bookmark_page > 0 {
+                actions.push(Action::BookmarkPage(false));
+            }
+            if start + self.bookmark_rows() < self.bookmarks.len() {
+                actions.push(Action::BookmarkPage(true));
+            }
+            actions.push(Action::CloseMenu);
+            actions
+        } else if self.settings_open {
+            vec![
+                Action::Theme(ThemePreference::System),
+                Action::Theme(ThemePreference::Light),
+                Action::Theme(ThemePreference::Dark),
+                Action::Scale(ScalePreference::System),
+                Action::ScaleDown,
+                Action::ScaleUp,
+                Action::CloseMenu,
+            ]
+        } else if self.about_open {
+            vec![self.update_button_action(), Action::CloseMenu]
+        } else {
+            vec![
+                Action::About,
+                Action::Update,
+                Action::Settings,
+                Action::Bookmarks,
+                Action::CloseMenu,
+            ]
+        }
+    }
+    fn modal_action(&self, action: &Action) -> bool {
+        match action {
+            Action::InspectElement => self.devtools.context.is_some(),
+            Action::InspectorSection(_) | Action::InspectorScroll(_) => self.devtools.open,
+            Action::Menu | Action::CloseMenu => true,
+            Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
+            Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
+                self.bookmarks_open
+            }
+            Action::Update => self.menu_open || self.about_open,
+            Action::Restart => self.about_open && self.restart_available,
+            Action::Theme(_) => self.settings_open,
+            Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
+            _ => false,
+        }
+    }
+    fn modal_key(&mut self, sym: u32, shift: bool) {
+        let actions = self.modal_actions();
+        match sym {
+            0xff1b => self.activate(Action::CloseMenu),
+            0xff09 | 0xff51..=0xff54 => {
+                let reverse = (sym == 0xff09 && shift) || sym == 0xff51 || sym == 0xff52;
+                self.modal_focus = if reverse {
+                    (self.modal_focus + actions.len() - 1) % actions.len()
+                } else {
+                    (self.modal_focus + 1) % actions.len()
+                };
+                self.dirty = true;
+            }
+            0xff0d | 0x20 => self.activate(actions[self.modal_focus % actions.len()].clone()),
+            _ => {}
+        }
+    }
+    /// Host-owned build identity; reusable Chassis does not inspect its executable.
+    pub fn set_build_info(&mut self, version: &str, compiled: &str, revision: &str) {
+        self.about_lines = vec![
+            format!("mgbrowser {version}"),
+            format!("Compiled: {compiled}"),
+            format!("Commit: {revision}"),
+            "Experimental Preview : Apache-2.0".into(),
+        ];
+        self.dirty = true;
+    }
+    pub fn set_update_status(&mut self, status: String) {
+        self.update_status = status;
+        self.update_progress = None;
+        self.dirty = true;
+    }
+    /// Byte progress is informational, never authorization to install or restart.
+    pub fn set_update_progress(&mut self, received: usize, total: Option<usize>) {
+        let total = total.filter(|total| *total > 0 && received <= *total);
+        self.update_status = match total {
+            Some(total) => format!(
+                "Downloading: {}% ({} / {} KiB)",
+                (received as u128 * 100 / total as u128),
+                received / 1024,
+                total.div_ceil(1024)
+            ),
+            None => format!("Downloading: {} KiB (size unknown)", received / 1024),
+        };
+        self.update_progress = Some((received, total));
+        self.dirty = true;
+    }
+    pub fn take_update_request(&mut self) -> bool {
+        std::mem::take(&mut self.update_requested)
+    }
+    /// Only the host can authorize restarting an installed update.
+    pub fn set_restart_available(&mut self, available: bool) {
+        self.restart_available = available;
+        self.restart_requested = false;
+        self.hits.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    pub fn take_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.restart_requested)
+    }
+    /// Host-supplied scope of a restart; no tab ownership belongs to Chassis.
+    pub fn set_restart_tab_count(&mut self, count: usize) {
+        let count = count.max(1);
+        if self.restart_tab_count != count {
+            self.restart_tab_count = count;
+            if self.about_open {
+                self.dirty = true;
+            }
+        }
+    }
+    fn update_button_action(&self) -> Action {
+        if self.restart_available {
+            Action::Restart
+        } else {
+            Action::Update
+        }
+    }
+    /// Supply bookmarks from a host store. Chassis never accesses user files.
+    pub fn set_bookmarks(&mut self, entries: Vec<bookmarks::Bookmark>) {
+        self.bookmarks = entries
+            .into_iter()
+            .take(bookmarks::MAX_BOOKMARKS)
+            .filter_map(|b| bookmarks::Bookmark::new(&b.url, &b.title).ok())
+            .collect();
+        self.bookmark_page = self
+            .bookmark_page
+            .min(self.bookmarks.len().saturating_sub(1) / self.bookmark_rows());
+        self.modal_focus = 0;
+        self.hits.clear();
+        self.pointer_press = None;
+        self.dirty = true;
+    }
+    pub fn take_bookmark_change(&mut self) -> Option<bookmarks::BookmarkChange> {
+        self.bookmark_change.take()
+    }
+    pub fn take_bookmark_refresh(&mut self) -> bool {
+        std::mem::take(&mut self.bookmark_refresh)
+    }
+    pub fn set_bookmark_status(&mut self, status: String) {
+        self.status = status.clone();
+        self.bookmark_status = status;
+        self.dirty = true;
+    }
+    fn bookmark_rows(&self) -> usize {
+        ((self.height.saturating_sub(40).min(540).saturating_sub(122)) / 48).clamp(1, 8) as usize
+    }
+    fn current_bookmark(&self) -> Option<bookmarks::Bookmark> {
+        bookmarks::Bookmark::new(&self.page_url, &self.document.title).ok()
+    }
+    fn is_bookmarked(&self) -> bool {
+        self.bookmarks.iter().any(|b| b.url == self.page_url)
+    }
     pub fn new(fonts: Fonts, scripts: Arc<dyn scripts::ScriptRuntime>) -> Self {
+        Self::new_with_session(fonts, scripts, net::Session::default())
+    }
+    /// Compose a page with a host-selected HTTP/cookie session. Tabs may share
+    /// a cloned network session, but each page still needs its own script service.
+    pub fn new_with_session(
+        fonts: Fonts,
+        scripts: Arc<dyn scripts::ScriptRuntime>,
+        session: net::Session,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
+            devtools: devtools::State::default(),
             chrome: cfg!(feature = "chrome"),
-            session: net::Session::default(),
+            menu_open: false,
+            about_open: false,
+            settings_open: false,
+            bookmarks_open: false,
+            bookmarks: Vec::new(),
+            bookmark_page: 0,
+            bookmark_change: None,
+            bookmark_refresh: false,
+            bookmark_status: "Local bookmarks : Ctrl+D to save or remove this page".into(),
+            modal_focus: 0,
+            theme_preference: ThemePreference::System,
+            system_theme: ColorScheme::Light,
+            theme_change: None,
+            scale_preference: ScalePreference::System,
+            system_scale: 100,
+            scale_change: None,
+            geometry_revision: 0,
+            scroll_reflow_pending: false,
+            settings_status: String::new(),
+            about_lines: vec!["mgbrowser : build details not supplied by host".into()],
+            update_status: "Updates have not been checked".into(),
+            update_progress: None,
+            update_requested: false,
+            restart_available: false,
+            restart_requested: false,
+            restart_tab_count: 1,
+            session,
             fonts,
             width: 1100,
             height: 820,
@@ -178,10 +528,12 @@ impl Browser {
             },
             select_all: false,
             scroll: 0,
+            smooth_scroll: None,
             content_height: 0,
             history: Vec::new(),
             history_at: 0,
             generation: 0,
+            resource_generation: Arc::new(AtomicU64::new(0)),
             inflight: 0,
             loading: false,
             tx,
@@ -209,6 +561,7 @@ impl Browser {
         add_history: bool,
         automatic: bool,
     ) {
+        self.stop_scroll();
         let target = if target.contains("://") {
             target
         } else {
@@ -220,6 +573,9 @@ impl Browser {
             return;
         }
         self.generation += 1;
+        self.devtools.new_navigation();
+        self.resource_generation
+            .store(self.generation, Ordering::Relaxed);
         if let Err(error) = self.child_pool.set_generation(self.generation) {
             self.block_session(&format!("Script child ownership error: {error}"));
             return;
@@ -257,6 +613,7 @@ impl Browser {
         let session = self.session.clone();
         let scripts_enabled = self.scripts_enabled;
         let pool = self.child_pool.clone();
+        let resource_generation = self.resource_generation.clone();
         eprintln!(
             "NAVIGATE {} {}",
             if body.is_some() { "POST" } else { "GET" },
@@ -267,6 +624,23 @@ impl Browser {
             // not by blocking the window thread or creating per-event threads.
             drop(retired);
             let result = session.submit(&target, body.as_deref());
+            let document = result
+                .as_ref()
+                .ok()
+                .filter(|response| {
+                    response.content_type.contains("html") || response.content_type.is_empty()
+                })
+                .map(|response| {
+                    let mut document = document::parse_with_scripting(
+                        &decode_text(&response.body, &response.content_type),
+                        response.url.as_str(),
+                        scripts_enabled,
+                    );
+                    resources::load(&session, &mut document, response.url.as_str(), || {
+                        resource_generation.load(Ordering::Relaxed) != generation
+                    });
+                    document
+                });
             let script = if scripts_enabled {
                 result
                     .as_ref()
@@ -292,6 +666,7 @@ impl Browser {
             };
             let _ = tx.send(Loaded {
                 generation,
+                document,
                 result,
                 script,
             });
@@ -305,6 +680,7 @@ impl Browser {
             }
             self.loading = false;
             self.scroll = 0;
+            self.stop_scroll();
             self.values.clear();
             self.edit_versions.clear();
             self.pending_event = None;
@@ -359,29 +735,44 @@ impl Browser {
                                     } else if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
-                                    Self::script_summary(&startup.reply)
+                                    self.script_summary(&startup.reply)
                                 }
                                 Err(error) => {
                                     if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
                                     eprintln!("SCRIPT_REJECTED {error:?}");
+                                    self.devtools.record("JavaScript rejected", &error);
                                     format!("JS rejected; original document retained: {error}")
                                 }
                             }
                         }
                         Some(Err(error)) => {
                             eprintln!("SCRIPT_ERROR {error:?}");
+                            self.devtools.record("JavaScript worker", &error);
                             format!("JS worker failed: {error}")
                         }
                         None => "JavaScript disabled".into(),
                     };
-                    self.document = if let Some(document) = projected {
+                    self.document = if let Some(mut document) = projected {
+                        if let Some(resources) = loaded.document {
+                            document.stylesheets = resources.stylesheets;
+                            document.resources = resources.resources;
+                            document.resource_warnings = resources.resource_warnings;
+                        }
                         document
                     } else if response.content_type.contains("html")
                         || response.content_type.is_empty()
                     {
-                        document::parse_with_scripting(&source, &self.address, scripting)
+                        if self.scripts_enabled && !scripting {
+                            // Rejected workers retain the original no-script
+                            // projection, not the resource discovery projection.
+                            document::parse(&source, &self.address)
+                        } else {
+                            loaded.document.unwrap_or_else(|| {
+                                document::parse_with_scripting(&source, &self.address, scripting)
+                            })
+                        }
                     } else {
                         document::parse(
                             &format!(
@@ -392,15 +783,20 @@ impl Browser {
                         )
                     };
                     self.status = format!(
-                        "HTTP {} · {} bytes · {} links · {script_status} · CSS partial",
+                        "HTTP {} · {} bytes · {} links · {script_status} · {} stylesheets · {} resource warnings",
                         response.status,
                         response.body.len(),
                         self.document
                             .items
                             .iter()
                             .filter(|i| matches!(i, Item::Text { href: Some(_), .. }))
-                            .count()
+                            .count(),
+                        self.document.stylesheets.len(),
+                        self.document.resource_warnings.len()
                     );
+                    for warning in &self.document.resource_warnings {
+                        self.devtools.record("Resource", warning);
+                    }
                     eprintln!(
                         "LOADED {} HTTP {} title={:?} items={} forms={}",
                         self.address,
@@ -411,6 +807,7 @@ impl Browser {
                     );
                 }
                 Err(error) => {
+                    self.devtools.record("Navigation", &error);
                     load_error = Some(error.clone());
                     self.page_mime = "text/html".into();
                     self.status = format!("Load failed: {error}");
@@ -446,7 +843,15 @@ impl Browser {
         }
         self.poll_page_session();
     }
-    fn script_summary(reply: &SessionReply) -> String {
+    fn script_summary(&mut self, reply: &SessionReply) -> String {
+        for diagnostic in &reply.errors {
+            self.devtools.record("JavaScript", diagnostic);
+        }
+        if let Some(report) = &reply.boa
+            && let Ok(json) = serde_json::to_string(report)
+        {
+            eprintln!("SCRIPT_BOA {json}");
+        }
         if let Some(report) = &reply.allocations {
             if let Ok(json) = serde_json::to_string(report) {
                 eprintln!("SCRIPT_ALLOCATION {json}");
@@ -495,10 +900,7 @@ impl Browser {
             || reply.errors.iter().any(|error| error.len() > 4096)
             || reply.scripts_executed > 32
             || reply.acknowledgements.len() > 128
-            || reply
-                .allocations
-                .as_ref()
-                .is_none_or(|report| !report.is_valid())
+            || !reply.accounting_valid()
         {
             return Err("Invalid script session report limits".into());
         }
@@ -556,6 +958,7 @@ impl Browser {
             })
     }
     fn block_session(&mut self, error: &str) {
+        self.devtools.record("JavaScript session", error);
         if let Some(session) = &self.page_session {
             session.cancel();
         }
@@ -770,7 +1173,7 @@ impl Browser {
             // Later failed transactions are atomic from the parent's point of
             // view. Diagnostics survive, but the previous accepted document,
             // edit versions, focus, and CDP epoch remain unchanged.
-            let _ = Self::script_summary(&reply);
+            let _ = self.script_summary(&reply);
             self.block_session("Realm became fatal or closed; previous page retained");
             return;
         }
@@ -780,7 +1183,7 @@ impl Browser {
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
         }
-        let _ = Self::script_summary(&reply);
+        let _ = self.script_summary(&reply);
         self.status = format!("Page event completed · {} diagnostics", reply.errors.len());
         eprintln!(
             "PAGE_EVENT_APPLIED sequence={} revision={} click_canceled={:?} submit_canceled={:?}",
@@ -833,7 +1236,12 @@ impl Browser {
             }
         }
     }
-    fn acknowledge_projection(&mut self, document: Document, ack: &[(usize, u64)]) {
+    fn acknowledge_projection(&mut self, mut document: Document, ack: &[(usize, u64)]) {
+        // Initial resources stay parent-owned. Dynamic fetches are not supported;
+        // workers receive no network/file capabilities or resource payloads.
+        document.stylesheets = std::mem::take(&mut self.document.stylesheets);
+        document.resources = std::mem::take(&mut self.document.resources);
+        document.resource_warnings = std::mem::take(&mut self.document.resource_warnings);
         self.document = document;
         for &(node, version) in ack {
             if self.edit_versions.get(&node) == Some(&version) {
@@ -940,8 +1348,139 @@ impl Browser {
         let _ = self.activate_checked(action);
     }
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
+        self.stop_scroll();
         self.select_all = false;
+        if matches!(
+            action,
+            Action::Menu
+                | Action::About
+                | Action::Settings
+                | Action::Update
+                | Action::CloseMenu
+                | Action::Bookmarks
+                | Action::OpenBookmark(_)
+                | Action::BookmarkPage(_)
+        ) {
+            self.hits.clear();
+            self.pointer_press = None;
+            self.bookmarks_open = false;
+        }
         match action {
+            Action::InspectElement => self.open_inspector(),
+            Action::InspectorSection(diagnostics) => {
+                self.devtools.diagnostics = diagnostics;
+                self.devtools.row = 0;
+            }
+            Action::InspectorScroll(next) => self.inspector_scroll(if next { 6 } else { -6 }),
+            Action::Bookmarks => {
+                self.bookmarks_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.settings_open = false;
+                self.bookmark_refresh = true;
+                self.modal_focus = 0;
+            }
+            Action::ToggleBookmark => {
+                if let Some(bookmark) = self.current_bookmark() {
+                    self.bookmark_change = Some(if self.is_bookmarked() {
+                        bookmarks::BookmarkChange::Remove(bookmark.url)
+                    } else {
+                        bookmarks::BookmarkChange::Add(bookmark)
+                    });
+                } else {
+                    self.set_bookmark_status(
+                        "Only HTTP(S) pages without URL credentials can be bookmarked".into(),
+                    );
+                }
+            }
+            Action::OpenBookmark(index) => {
+                if let Some(bookmark) = self.bookmarks.get(index) {
+                    self.navigate(bookmark.url.clone(), None, true);
+                }
+            }
+            Action::RemoveBookmark(index) => {
+                if let Some(bookmark) = self.bookmarks.get(index) {
+                    self.bookmark_change =
+                        Some(bookmarks::BookmarkChange::Remove(bookmark.url.clone()));
+                }
+            }
+            Action::BookmarkPage(next) => {
+                self.bookmarks_open = true;
+                let last = self.bookmarks.len().saturating_sub(1) / self.bookmark_rows();
+                self.bookmark_page = if next {
+                    (self.bookmark_page + 1).min(last)
+                } else {
+                    self.bookmark_page.saturating_sub(1)
+                };
+                self.modal_focus = 0;
+            }
+            Action::Menu => {
+                self.menu_open = !self.menu_open;
+                self.about_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
+            }
+            Action::About => {
+                self.about_open = true;
+                self.menu_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
+            }
+            Action::Settings => {
+                self.settings_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.modal_focus = match self.theme_preference {
+                    ThemePreference::System => 0,
+                    ThemePreference::Light => 1,
+                    ThemePreference::Dark => 2,
+                };
+            }
+            Action::Theme(preference) => {
+                // An explicit choice also retries a previously failed save, or
+                // replaces invalid settings that fell back to this same value.
+                self.set_theme_preference(preference);
+                self.theme_change = Some(preference);
+                self.modal_focus = match preference {
+                    ThemePreference::System => 0,
+                    ThemePreference::Light => 1,
+                    ThemePreference::Dark => 2,
+                };
+            }
+            Action::Scale(preference) => {
+                self.choose_scale(preference);
+                if self.settings_open {
+                    self.modal_focus = 3;
+                }
+            }
+            Action::ScaleDown | Action::ScaleUp => {
+                let increase = matches!(action, Action::ScaleUp);
+                self.choose_scale(ScalePreference::Percent(scale::next_step(
+                    self.effective_scale_percent(),
+                    increase,
+                )));
+                if self.settings_open {
+                    self.modal_focus = if increase { 5 } else { 4 };
+                }
+            }
+            Action::Update => {
+                self.update_requested = !self.restart_available;
+                self.about_open = true;
+                self.menu_open = false;
+                self.settings_open = false;
+                self.modal_focus = 0;
+            }
+            Action::Restart => {
+                if self.chrome && self.restart_available && self.about_open {
+                    self.restart_requested = true;
+                }
+            }
+            Action::CloseMenu => {
+                self.devtools.close();
+                self.about_open = false;
+                self.menu_open = false;
+                self.settings_open = false;
+            }
             Action::Address => {
                 self.focus = Focus::Address;
                 self.select_all = true;
@@ -966,7 +1505,7 @@ impl Browser {
                     self.navigate(href, None, true);
                 }
             }
-            Action::Reload => self.navigate(self.address.clone(), None, false),
+            Action::Reload => self.navigate(self.page_url.clone(), None, false),
             Action::Back => {
                 if self.history_at > 0 && self.inflight < 2 {
                     self.history_at -= 1;
@@ -986,16 +1525,29 @@ impl Browser {
     fn click(&mut self, x: i32, y: i32) {
         let _ = self.click_checked(x, y);
     }
+    fn topmost_hit(&self, x: i32, y: i32) -> Option<usize> {
+        self.hits.iter().rposition(|hit| hit.contains(x, y))
+    }
     fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
-        if let Some(hit) = self.hits.iter().rev().find(|h| h.contains(x, y)) {
+        self.stop_scroll();
+        if let Some(index) = self.topmost_hit(x, y) {
+            let hit = &self.hits[index];
+            // Input may arrive between opening a popup and its first paint.
+            // Reject stale page/chrome hit regions even in that interval.
+            if self.modal_open() && !self.modal_action(&hit.action) {
+                return Ok(());
+            }
             self.activate_checked(hit.action.clone())?;
-        } else {
+        } else if !self.modal_open() {
             self.focus = Focus::Page;
             self.dirty = true;
         }
         Ok(())
     }
     pub fn type_text(&mut self, text: &str) {
+        if self.modal_open() {
+            return;
+        }
         if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
             return;
         }
@@ -1038,6 +1590,10 @@ impl Browser {
         self.dirty = true;
     }
     fn enter_checked(&mut self) -> Result<(), String> {
+        if self.modal_open() {
+            self.modal_key(0xff0d, false);
+            return Ok(());
+        }
         match self.focus {
             Focus::Address => self.navigate(self.address.clone(), None, true),
             Focus::Input(node) => {
@@ -1056,8 +1612,50 @@ impl Browser {
         Ok(())
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
+        self.stop_scroll();
+        if self.chrome && !alt && (sym == 0xffc9 || (ctrl && shift && matches!(sym, 0x69 | 0x49))) {
+            self.toggle_devtools();
+            return;
+        }
+        if self.devtools.visible() {
+            if self.devtools.open && matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
+                self.inspector_scroll(match sym {
+                    0xff52 => -1,
+                    0xff54 => 1,
+                    0xff55 => -6,
+                    _ => 6,
+                });
+            } else {
+                self.modal_key(sym, shift);
+            }
+            return;
+        }
+        if ctrl && !alt {
+            let scale_action = match sym {
+                0x2b | 0x3d => Some(Action::ScaleUp),
+                0x2d => Some(Action::ScaleDown),
+                0x30 => Some(Action::Scale(ScalePreference::System)),
+                _ => None,
+            };
+            if let Some(action) = scale_action {
+                self.activate(action);
+                return;
+            }
+        }
+        if self.modal_open() {
+            self.modal_key(sym, shift);
+            return;
+        }
         if self.chrome && ctrl && (sym == b'l' as u32 || sym == b'L' as u32) {
             self.activate(Action::Address);
+            return;
+        }
+        if self.chrome && ctrl && !alt && (sym == b'd' as u32 || sym == b'D' as u32) {
+            self.activate(Action::ToggleBookmark);
+            return;
+        }
+        if self.chrome && ctrl && shift && !alt && (sym == b'o' as u32 || sym == b'O' as u32) {
+            self.activate(Action::Bookmarks);
             return;
         }
         if ctrl && (sym == b'a' as u32 || sym == b'A' as u32) {
@@ -1067,6 +1665,10 @@ impl Browser {
         }
         if alt && sym == 0xff51 {
             self.activate(Action::Back);
+            return;
+        }
+        if alt && sym == 0xff53 {
+            self.activate(Action::Forward);
             return;
         }
         if sym == 0xffc2 || (ctrl && (sym == b'r' as u32 || sym == b'R' as u32)) {
@@ -1156,8 +1758,14 @@ impl Browser {
         }
     }
     pub fn scroll_by(&mut self, amount: i32) {
-        self.scroll =
-            (self.scroll + amount).clamp(0, (self.content_height - self.height as i32 + 40).max(0));
+        self.stop_scroll();
+        if self.modal_open() {
+            return;
+        }
+        self.scroll = self
+            .scroll
+            .saturating_add(amount)
+            .clamp(0, self.max_scroll());
         self.dirty = true;
     }
     #[cfg(test)]
@@ -1185,7 +1793,12 @@ impl Browser {
         }
     }
     pub fn paint(&mut self) -> Canvas {
+        let reflow = std::mem::take(&mut self.scroll_reflow_pending);
+        self.paint_with_scroll_clamp(reflow)
+    }
+    fn paint_with_scroll_clamp(&mut self, clamp_scroll: bool) -> Canvas {
         let top = self.page_top();
+        let scale = self.effective_scale();
         let controls = mg_sparkle::render::Controls {
             values: Some(&self.values),
             focused_input: if let Focus::Input(node) = self.focus {
@@ -1200,8 +1813,21 @@ impl Browser {
             height: self.viewport_height(),
             scroll: self.scroll,
         };
-        let frame =
-            mg_sparkle::render::render(&self.document, &mut self.fonts, viewport, &controls);
+        let frame = mg_sparkle::render::render_scaled(
+            &self.document,
+            &mut self.fonts,
+            viewport,
+            &controls,
+            scale,
+        );
+        self.devtools.rendering = frame.diagnostics;
+        self.content_height = frame.content_height + top;
+        let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
+        if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
+            self.stop_scroll();
+            self.scroll = max_scroll;
+            return self.paint_with_scroll_clamp(false);
+        }
         self.boxes = frame
             .boxes
             .into_iter()
@@ -1210,6 +1836,8 @@ impl Browser {
                 rect
             })
             .collect();
+        self.devtools.painted_epoch = self.dom_epoch;
+        self.devtools.invalidate_selection(self.dom_epoch);
         self.hits = frame
             .hits
             .into_iter()
@@ -1225,18 +1853,36 @@ impl Browser {
                 },
             })
             .collect();
-        self.content_height = frame.content_height + top;
         if !self.chrome {
             self.dirty = false;
             return frame.canvas;
         }
-        let mut canvas = Canvas::new(self.width, self.height, BG);
-        let offset = top as usize * self.width as usize;
-        canvas.pixels[offset..offset + frame.canvas.pixels.len()]
-            .copy_from_slice(&frame.canvas.pixels);
+        let mut canvas = Canvas::new_scaled(self.width, self.height, BG, scale);
+        let physical_top = canvas.physical_edge(i64::from(top)) as u32;
+        let physical_bottom = canvas
+            .physical_edge(i64::from(top) + i64::from(self.viewport_height()))
+            .min(i64::from(canvas.height)) as u32;
+        let page_rows = physical_bottom.saturating_sub(physical_top);
+        let rows = frame.canvas.height.min(page_rows);
+        let offset = physical_top as usize * canvas.width as usize;
+        let length = rows as usize * canvas.width as usize;
+        canvas.pixels[offset..offset + length].copy_from_slice(&frame.canvas.pixels[..length]);
+        // Independent rounding of the page height and its translated bottom
+        // edge can differ by one physical row. Extend only that terminal row,
+        // without stretching text or allocating a second resampled surface.
+        if rows > 0 {
+            let last = offset + (rows as usize - 1) * canvas.width as usize;
+            for row in rows..page_rows {
+                canvas.pixels.copy_within(
+                    last..last + canvas.width as usize,
+                    offset + row as usize * canvas.width as usize,
+                );
+            }
+        }
         #[cfg(feature = "chrome")]
         if self.chrome {
             self.paint_chrome(&mut canvas);
+            self.paint_devtools(&mut canvas);
         }
         self.dirty = false;
         canvas
@@ -1542,6 +2188,210 @@ mod tests {
     use std::net::TcpListener;
 
     #[test]
+    fn theme_settings_pointer_choices_apply_and_emit_only_user_changes() {
+        let mut app = test_app();
+        app.set_system_theme(ColorScheme::Dark);
+        app.set_theme_preference(ThemePreference::System);
+        assert_eq!(app.take_theme_change(), None);
+        assert_eq!(app.effective_theme(), ColorScheme::Dark);
+        app.paint();
+        app.click(app.width as i32 - 28, 31);
+        app.paint();
+        app.click(app.width as i32 - 140, 142);
+        assert!(app.settings_open && !app.menu_open && !app.about_open);
+        for preference in [
+            ThemePreference::Light,
+            ThemePreference::Dark,
+            ThemePreference::System,
+        ] {
+            app.paint();
+            let hit = app
+                .hits
+                .iter()
+                .find(|h| matches!(h.action, Action::Theme(p) if p == preference))
+                .unwrap()
+                .clone();
+            app.pointer_down(hit.x + 5, hit.y + 5);
+            app.pointer_up(hit.x + 5, hit.y + 5);
+            assert_eq!(app.theme_preference(), preference);
+            assert_eq!(app.effective_theme(), preference.resolve(ColorScheme::Dark));
+            assert_eq!(app.take_theme_change(), Some(preference));
+            assert_eq!(app.take_theme_change(), None);
+            app.click(hit.x + 5, hit.y + 5);
+            assert_eq!(app.take_theme_change(), Some(preference));
+            assert_eq!(app.take_theme_change(), None);
+        }
+    }
+
+    #[test]
+    fn theme_reselection_retries_failed_save_and_invalid_settings_fallback() {
+        let mut app = test_app();
+        app.set_settings_status("Invalid appearance settings JSON; using System".into());
+        app.set_theme_preference(ThemePreference::System);
+        app.set_system_theme(ColorScheme::Dark);
+        assert_eq!(app.take_theme_change(), None);
+        app.activate(Action::Settings);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_theme_change(), Some(ThemePreference::System));
+        assert_eq!(app.take_theme_change(), None);
+        app.set_settings_status("Session only: Cannot save appearance settings".into());
+        app.set_system_theme(ColorScheme::Light);
+        assert_eq!(app.take_theme_change(), None);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_theme_change(), Some(ThemePreference::System));
+        assert_eq!(app.take_theme_change(), None);
+        app.set_settings_status("Appearance saved".into());
+        app.set_theme_preference(ThemePreference::Light);
+        app.set_system_theme(ColorScheme::Dark);
+        assert_eq!(app.effective_theme(), ColorScheme::Light);
+        assert_eq!(app.take_theme_change(), None);
+    }
+
+    #[test]
+    fn theme_modal_keyboard_blocks_page_edits_navigation_and_scroll() {
+        let mut app = test_app();
+        app.address = "https://example.test/".into();
+        app.document = document::parse(
+            "<form><input id=q name=q value=original><button>Go</button></form>",
+            &app.address,
+        );
+        app.focus = Focus::Input(app.document.query_selector(0, "#q").unwrap().unwrap());
+        app.paint();
+        let input = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap()
+            .clone();
+        app.activate(Action::Settings);
+        // No intervening repaint: old page hit regions must already be invalid.
+        app.click(input.x + 2, input.y + 2);
+        app.handle_key(Key::Character('l'), true, false, false);
+        app.type_text("unexpected");
+        app.handle_key(Key::Backspace, false, false, false);
+        app.handle_key(Key::Reload, false, false, false);
+        app.scroll_by(500);
+        assert!(app.values.is_empty());
+        assert_eq!(app.address, "https://example.test/");
+        assert!(!app.loading);
+        assert_eq!(app.scroll, 0);
+        app.handle_key(Key::Tab, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::Light);
+        app.handle_key(Key::Right, false, false, false);
+        assert_eq!(app.modal_focus, 2);
+        app.handle_key(Key::Left, false, false, false);
+        assert_eq!(app.modal_focus, 1);
+        app.handle_key(Key::Down, false, false, false);
+        app.handle_key(Key::Character(' '), false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::Dark);
+        app.handle_key(Key::Tab, false, true, false);
+        app.handle_key(Key::Up, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.theme_preference(), ThemePreference::System);
+        app.handle_key(Key::Escape, false, false, false);
+        assert!(!app.modal_open());
+        assert!(app.hits.is_empty());
+    }
+
+    #[test]
+    fn theme_changes_chrome_but_not_page_pixels_or_http_warning() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.set_theme_preference(ThemePreference::Light);
+        let light = app.paint();
+        app.set_theme_preference(ThemePreference::Dark);
+        let dark = app.paint();
+        let start = TOP as usize * app.width as usize;
+        let end = (app.height - app.page_footer()) as usize * app.width as usize;
+        assert_eq!(&light.pixels[start..end], &dark.pixels[start..end]);
+        assert_eq!(light.pixels[0], ColorScheme::Light.palette().background);
+        assert_eq!(dark.pixels[0], ColorScheme::Dark.palette().background);
+        assert_eq!(
+            light.pixels[13 * 640 + 241],
+            ColorScheme::Light.palette().field
+        );
+        assert_eq!(
+            dark.pixels[13 * 640 + 241],
+            ColorScheme::Dark.palette().field
+        );
+        assert_eq!(
+            *dark.pixels.last().unwrap(),
+            ColorScheme::Dark.palette().background
+        );
+        app.page_url = "http://example.test/".into();
+        for preference in [ThemePreference::Light, ThemePreference::Dark] {
+            app.set_theme_preference(preference);
+            assert_eq!(app.paint().pixels[0], HTTP_CHROME);
+            assert!(app.visible_title().starts_with("HTTP: Not secure"));
+        }
+    }
+
+    #[test]
+    fn theme_panels_follow_palette_and_small_settings_controls_remain_visible() {
+        let mut app = test_app();
+        for preference in [ThemePreference::Light, ThemePreference::Dark] {
+            app.set_theme_preference(preference);
+            let palette = app.effective_theme().palette();
+            app.activate(Action::About);
+            let canvas = app.paint();
+            let x = (app.width - app.width.saturating_sub(40).min(700)) / 2;
+            assert_eq!(
+                canvas.pixels[128 * app.width as usize + x as usize + 3],
+                palette.panel
+            );
+            app.activate(Action::Settings);
+            let canvas = app.paint();
+            let x = (app.width - 600) / 2;
+            assert_eq!(
+                canvas.pixels[128 * app.width as usize + x as usize + 3],
+                palette.panel
+            );
+        }
+        app.resize(360, 240);
+        app.paint();
+        for hit in app
+            .hits
+            .iter()
+            .filter(|hit| !matches!(hit.action, Action::Menu))
+        {
+            assert!(hit.x >= 0 && hit.y >= 0);
+            assert!(hit.x + hit.w as i32 <= app.width as i32);
+            assert!(hit.y + hit.h as i32 <= app.height as i32);
+        }
+    }
+
+    #[test]
+    fn about_menu_uses_host_build_and_blocks_page_input() {
+        let mut app = test_app();
+        app.set_build_info("0.2.1", "Wed, 16 Sep 2026 12:00:00 GMT", "abc123");
+        app.paint();
+        app.click(app.width as i32 - 28, 31);
+        assert!(app.menu_open);
+        app.paint();
+        app.click(app.width as i32 - 140, 74);
+        assert!(app.about_open);
+        app.paint();
+        assert!(app.about_lines[1].contains("16 Sep 2026"));
+        assert!(
+            app.hits
+                .iter()
+                .all(|h| matches!(h.action, Action::Menu | Action::CloseMenu | Action::Update))
+        );
+        let address = app.address.clone();
+        app.key(b'l' as u32, true, false, false);
+        app.type_text("unexpected");
+        app.scroll_by(100);
+        assert_eq!(app.address, address);
+        assert_eq!(app.scroll, 0);
+        app.activate(Action::Update);
+        assert!(app.take_update_request());
+        assert!(!app.take_update_request());
+        app.key(0xff1b, false, false, false);
+        assert!(!app.about_open && !app.menu_open);
+    }
+
+    #[test]
     fn http_warning_follows_loaded_url_not_location_edits() {
         let mut app = test_app();
         app.generation = 1;
@@ -1554,6 +2404,7 @@ mod tests {
                 .send(Loaded {
                     generation: 1,
                     script: None,
+                    document: None,
                     result: Ok(net::Response {
                         url: url::Url::parse(url).unwrap(),
                         status: 200,
@@ -1680,6 +2531,7 @@ mod tests {
             .send(Loaded {
                 generation: 1,
                 script: None,
+                document: None,
                 result: Ok(net::Response {
                     url: url::Url::parse("https://example.org/").unwrap(),
                     status: 200,
@@ -1737,6 +2589,7 @@ mod tests {
                     errors: vec!["Rejected source".into()],
                     scripts_executed: 0,
                     allocations: None,
+                    boa: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -1758,6 +2611,7 @@ mod tests {
                     errors: vec![],
                     scripts_executed: 0,
                     allocations: Some(invalid_report),
+                    boa: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -1768,6 +2622,7 @@ mod tests {
                 .send(Loaded {
                     generation: 1,
                     script: Some(script),
+                    document: None,
                     result: Ok(net::Response {
                         url: url::Url::parse("https://example.test/").unwrap(),
                         status: 200,
@@ -1817,6 +2672,7 @@ mod tests {
         app.tx
             .send(Loaded {
                 generation: 1,
+                document: None,
                 script: Some(Ok(ScriptLoad {
                     session: None,
                     reply: SessionReply {
@@ -1833,6 +2689,7 @@ mod tests {
                         errors: vec![],
                         scripts_executed: 1,
                         allocations: None,
+                        boa: None,
                     },
                 })),
                 result: Ok(net::Response {
@@ -2001,16 +2858,19 @@ type App = Browser;
 /// Platform-neutral keyboard input. Text entry may also use Browser::type_text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
+    Escape,
     Character(char),
     Enter,
     Backspace,
     Tab,
     Left,
+    Right,
     Up,
     Down,
     PageUp,
     PageDown,
     Reload,
+    DeveloperTools,
 }
 
 /// Existing fixture-journey controls used by the desktop acceptance harness.
@@ -2069,8 +2929,33 @@ impl Browser {
         self.dirty = true;
     }
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width.clamp(360, 2400);
-        self.height = height.clamp(240, 1800);
+        let width = width.clamp(360, 2400);
+        let height = height.clamp(240, 1800);
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.invalidate_scaled_geometry();
+        }
+        self.dirty = true;
+    }
+    /// Resize a native host's surface using device pixels, bounded to 4800x3600.
+    /// Layout/input remain logical; upward rounding covers the physical window.
+    /// A host should enforce 360x240 logical minimum-size window hints and clip
+    /// the final device-pixel canvas to the actual window when rounding differs.
+    pub fn resize_surface(&mut self, physical_width: u32, physical_height: u32) {
+        let percent = u64::from(self.effective_scale_percent());
+        let logical = |physical: u32, maximum: u32, minimum: u32| {
+            ((u64::from(physical.clamp(1, maximum)) * 100).div_ceil(percent) as u32).max(minimum)
+        };
+        let width = logical(physical_width, 4800, 360);
+        let height = logical(physical_height, 3600, 240);
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.invalidate_scaled_geometry();
+        }
+        // Different physical extents can round to the same logical viewport.
+        // Redraw for the host's new clip even when layout geometry is unchanged.
         self.dirty = true;
     }
     /// Scripts remain opt-in and require a host-provided isolated runtime.
@@ -2082,12 +2967,21 @@ impl Browser {
     }
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {
+        self.devtools.close();
+        self.stop_scroll();
         self.chrome = enabled && cfg!(feature = "chrome");
+        self.restart_requested = false;
+        self.bookmarks_open = false;
+        self.bookmark_change = None;
+        self.bookmark_refresh = false;
         self.hits.clear();
         self.boxes.clear();
         self.focus = Focus::Page;
         self.select_all = false;
         self.pointer_press = None;
+        self.menu_open = false;
+        self.about_open = false;
+        self.settings_open = false;
         self.dirty = true;
     }
     fn page_top(&self) -> i32 {
@@ -2097,12 +2991,13 @@ impl Browser {
         if self.chrome { 29 } else { 0 }
     }
     pub fn pointer_down(&mut self, x: i32, y: i32) {
+        self.stop_scroll();
         self.pointer_press = Some((x, y));
     }
     pub fn pointer_up(&mut self, x: i32, y: i32) {
         if let Some((px, py)) = self.pointer_press.take() {
-            let press = self.hits.iter().position(|hit| hit.contains(px, py));
-            let release = self.hits.iter().position(|hit| hit.contains(x, y));
+            let press = self.topmost_hit(px, py);
+            let release = self.topmost_hit(x, y);
             if press.is_some() && press == release {
                 self.click(x, y);
             }
@@ -2110,16 +3005,19 @@ impl Browser {
     }
     pub fn handle_key(&mut self, key: Key, ctrl: bool, shift: bool, alt: bool) {
         let sym = match key {
+            Key::Escape => 0xff1b,
             Key::Character(ch) => ch as u32,
             Key::Enter => 0xff0d,
             Key::Backspace => 0xff08,
             Key::Tab => 0xff09,
             Key::Left => 0xff51,
+            Key::Right => 0xff53,
             Key::Up => 0xff52,
             Key::Down => 0xff54,
             Key::PageUp => 0xff55,
             Key::PageDown => 0xff56,
             Key::Reload => 0xffc2,
+            Key::DeveloperTools => 0xffc9,
         };
         self.key(sym, ctrl, shift, alt);
     }
@@ -2151,4 +3049,674 @@ fn test_app() -> Browser {
         Fonts::from_bytes(std::fs::read(path).unwrap()).unwrap(),
         Arc::new(scripts::DisabledScripts),
     )
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    fn overlapping_links() -> Browser {
+        let mut app = test_app();
+        // Hit order is paint order. Unsupported schemes let us observe native
+        // navigation activation without creating any network connection.
+        for (x, target) in [(0, "bottom"), (50, "top")] {
+            app.hit(
+                x,
+                100,
+                100,
+                50,
+                Action::Link {
+                    node: x as usize,
+                    href: format!("invalid://{target}"),
+                },
+            );
+        }
+        app
+    }
+
+    #[test]
+    fn native_pointer_activates_only_the_same_topmost_link() {
+        for (press, release, target) in [
+            (25, 25, Some("bottom")),
+            (75, 75, Some("top")),
+            (75, 125, Some("top")),
+            (125, 75, Some("top")),
+            (25, 75, None),
+            (75, 25, None),
+            (25, 125, None),
+            (200, 75, None),
+            (75, 200, None),
+        ] {
+            let mut app = overlapping_links();
+            app.pointer_down(press, 110);
+            app.pointer_up(release, 110);
+            assert!(app.pointer_press.is_none());
+            if let Some(target) = target {
+                assert_eq!(app.address, format!("invalid://{target}"));
+                assert_eq!(app.history, [app.address.clone()]);
+            } else {
+                assert!(app.history.is_empty(), "press {press}, release {release}");
+                assert!(!app.loading);
+            }
+        }
+
+        let mut app = overlapping_links();
+        app.click_checked(75, 110).unwrap();
+        assert_eq!(app.address, "invalid://top");
+    }
+
+    #[test]
+    fn native_pointer_cancellation_keeps_overlapping_links_inactive() {
+        for cancel in [
+            Browser::cancel_pointer_input,
+            |app: &mut Browser| app.wheel_scroll_by(100),
+            |app: &mut Browser| app.resize(800, 600),
+        ] {
+            let mut app = overlapping_links();
+            app.content_height = 3000;
+            app.pointer_down(75, 110);
+            cancel(&mut app);
+            assert!(app.pointer_press.is_none());
+            app.pointer_up(75, 110);
+            assert!(app.history.is_empty());
+            assert!(!app.loading);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "chrome"))]
+mod bookmark_tests {
+    use super::*;
+    #[test]
+    fn bookmarks_use_committed_page_and_keyboard_toggles() {
+        let mut app = test_app();
+        app.page_url = "https://example.com/".into();
+        app.document.title = "Saved page".into();
+        app.address = "https://not-submitted.example/".into();
+        app.key(b'd' as u32, true, false, false);
+        let Some(bookmarks::BookmarkChange::Add(value)) = app.take_bookmark_change() else {
+            panic!("missing add")
+        };
+        assert_eq!(value.url, app.page_url);
+        assert_eq!(value.title, "Saved page");
+        app.set_bookmarks(vec![value]);
+        assert!(app.is_bookmarked());
+        app.key(b'd' as u32, true, false, false);
+        assert!(
+            matches!(app.take_bookmark_change(), Some(bookmarks::BookmarkChange::Remove(url)) if url == app.page_url)
+        );
+        app.key(b'O' as u32, true, true, false);
+        assert!(app.bookmarks_open && app.take_bookmark_refresh());
+        app.type_text("must not reach address");
+        assert_eq!(app.address, "https://not-submitted.example/");
+        app.key(0xff1b, false, false, false);
+        assert!(!app.modal_open());
+        app.set_chrome(false);
+        app.key(b'd' as u32, true, false, false);
+        assert!(app.take_bookmark_change().is_none());
+    }
+    #[test]
+    fn bookmark_pages_fit_small_windows_and_stale_clicks_are_invalidated() {
+        let mut app = test_app();
+        let entries = (0..12)
+            .map(|i| {
+                bookmarks::Bookmark::new(&format!("https://example.com/{i}"), &format!("Page {i}"))
+                    .unwrap()
+            })
+            .collect();
+        app.set_bookmarks(entries);
+        app.resize(360, 240);
+        app.activate(Action::Bookmarks);
+        app.paint();
+        assert_eq!(app.bookmark_rows(), 1);
+        for hit in &app.hits {
+            assert!(
+                hit.x >= 0
+                    && hit.y >= 0
+                    && hit.x + hit.w as i32 <= 360
+                    && hit.y + hit.h as i32 <= 240
+            );
+            assert!(app.modal_action(&hit.action));
+        }
+        app.activate(Action::BookmarkPage(true));
+        assert!(app.bookmarks_open);
+        assert_eq!(app.bookmark_page, 1);
+        app.paint();
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::OpenBookmark(1)))
+        );
+        app.pointer_down(50, 100);
+        app.set_bookmarks(vec![]);
+        assert!(app.hits.is_empty() && app.pointer_press.is_none());
+        assert_eq!(app.bookmark_page, 0);
+        app.paint();
+        assert_eq!(app.modal_actions().len(), 1);
+    }
+    #[test]
+    fn address_selection_covers_only_visible_url_at_every_scale() {
+        let mut app = test_app();
+        for percent in [100, 125, 200] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            app.address = "https://example.com/".into();
+            app.activate(Action::Address);
+            let c = app.paint();
+            let pixel = |x: usize, y: usize| {
+                c.pixels
+                    [(y * percent as usize / 100) * c.width as usize + x * percent as usize / 100]
+            };
+            let p = app.effective_theme().palette();
+            assert_eq!(pixel(205, 21), p.selection);
+            assert_eq!(pixel(700, 21), p.field);
+            app.address.clear();
+            let c = app.paint();
+            assert_eq!(
+                c.pixels[(21 * percent as usize / 100) * c.width as usize
+                    + 205 * percent as usize / 100],
+                p.field
+            );
+        }
+    }
+    #[test]
+    fn disabled_history_has_no_hit_and_menu_is_right_of_address() {
+        let mut app = test_app();
+        app.paint();
+        assert!(
+            !app.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::Back | Action::Forward))
+        );
+        let menu = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Menu))
+            .unwrap();
+        let address = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Address))
+            .unwrap();
+        assert!(menu.x >= address.x + address.w as i32 && menu.y == 14);
+        assert_eq!(TOP, 64, "No duplicate title row below the address");
+        app.history = vec![
+            "https://example.com/".into(),
+            "https://example.org/".into(),
+            "https://example.net/".into(),
+        ];
+        app.history_at = 1;
+        app.paint();
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Back)));
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Forward)));
+    }
+}
+
+#[cfg(all(test, feature = "chrome"))]
+mod restart_tests {
+    use super::*;
+    #[test]
+    fn download_progress_paints_known_and_unknown_sizes_and_clears_on_status() {
+        let mut app = test_app();
+        app.activate(Action::About);
+        for percent in [100, 125, 200] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            app.set_theme_preference(if percent == 200 {
+                ThemePreference::Dark
+            } else {
+                ThemePreference::Light
+            });
+            for (width, height) in [(900, 700), (360, 240)] {
+                app.resize(width, height);
+                app.set_update_progress(2048, Some(4096));
+                assert!(app.update_status.contains("50%"));
+                assert!(!app.restart_available);
+                let frame = app.paint();
+                if let Ok(directory) = std::env::var("MGBROWSER_TEST_PROGRESS_SCREENSHOTS") {
+                    frame
+                        .save_png(&format!("{directory}/progress-{percent}-{width}.png"))
+                        .unwrap();
+                }
+                let w = width.saturating_sub(40).min(700);
+                let x = ((width - w) / 2 + 16) as i32;
+                let compact = height < 450;
+                let h = if compact { 232 } else { 300 };
+                let y =
+                    125.min(height.saturating_sub(h + 4) as i32) + if compact { 127 } else { 184 };
+                let pixel = |x: i32| {
+                    frame.pixels[frame.physical_edge(i64::from(y + 2)) as usize
+                        * frame.width as usize
+                        + frame.physical_edge(i64::from(x)) as usize]
+                };
+                assert_eq!(pixel(x + 2), app.effective_theme().palette().accent);
+                assert_eq!(
+                    pixel(x + (w - 32) as i32 - 2),
+                    app.effective_theme().palette().border
+                );
+                app.set_update_progress(2048, None);
+                assert!(app.update_status.contains("size unknown"));
+                app.paint();
+                app.set_update_progress(2048, Some(1));
+                assert_eq!(app.update_progress, Some((2048, None)));
+                app.set_update_status("Verifying checksum and installing...".into());
+                assert_eq!(app.update_progress, None);
+                assert!(!app.take_restart_request());
+            }
+        }
+    }
+    #[test]
+    fn restart_requires_host_ready_and_explicit_about_action() {
+        let mut app = test_app();
+        app.activate(Action::About);
+        app.set_update_status("Installed text alone is not authorization".into());
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+        assert!(matches!(app.modal_actions()[0], Action::Update));
+        app.set_restart_available(true);
+        assert!(matches!(app.modal_actions()[0], Action::Restart));
+        app.key(0xff0d, false, false, false);
+        assert!(app.take_restart_request());
+        assert!(!app.take_restart_request());
+        app.set_update_status("Restart failed; try again".into());
+        app.key(0xff0d, false, false, false);
+        assert!(app.take_restart_request());
+        app.activate(Action::CloseMenu);
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+        app.activate(Action::Update);
+        assert!(!app.take_update_request());
+        assert!(app.about_open);
+        app.set_chrome(false);
+        app.activate(Action::Restart);
+        assert!(!app.take_restart_request());
+    }
+    #[test]
+    fn installed_update_invalidates_old_press_and_fits_compact_about() {
+        let mut app = test_app();
+        app.resize(360, 240);
+        app.activate(Action::About);
+        app.paint();
+        let hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Update))
+            .unwrap()
+            .clone();
+        app.pointer_down(hit.x + 5, hit.y + 5);
+        app.set_restart_available(true);
+        app.paint();
+        app.pointer_up(hit.x + 5, hit.y + 5);
+        assert!(!app.take_restart_request());
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Restart)));
+        for hit in &app.hits {
+            assert!(
+                hit.x >= 0
+                    && hit.y >= 0
+                    && hit.x + hit.w as i32 <= 360
+                    && hit.y + hit.h as i32 <= 240
+            );
+        }
+        app.set_restart_available(false);
+        app.paint();
+        assert!(!app.hits.iter().any(|h| matches!(h.action, Action::Restart)));
+    }
+}
+
+#[cfg(test)]
+mod theme_embedding_tests {
+    use super::*;
+
+    #[test]
+    fn theme_preference_does_not_change_toolbar_free_page_surface() {
+        let mut app = test_app();
+        app.set_chrome(false);
+        app.resize(640, 480);
+        let original = app.paint().pixels;
+        for preference in [
+            ThemePreference::System,
+            ThemePreference::Light,
+            ThemePreference::Dark,
+        ] {
+            app.set_theme_preference(preference);
+            for system in [ColorScheme::Light, ColorScheme::Dark] {
+                app.set_system_theme(system);
+                assert_eq!(app.paint().pixels, original);
+                assert_eq!(app.take_theme_change(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_chrome_dismisses_modals_and_restores_page_input() {
+        let mut app = test_app();
+        app.activate(Action::Settings);
+        assert!(app.settings_open);
+        app.set_chrome(false);
+        assert!(!app.modal_open());
+        app.document = document::parse("<form><input name=q></form>", "https://example.test/");
+        app.paint();
+        app.handle_key(Key::Tab, false, false, false);
+        app.type_text("usable");
+        assert!(app.values.values().any(|value| value == "usable"));
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_fractional_page_composition_covers_the_exact_footer_boundary() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.document = document::parse(
+            "<body style='background:#123456;margin:0'></body>",
+            "https://example.test/",
+        );
+        for percent in [75, 80, 83, 100, 101, 103, 125, 127, 167, 200, 300] {
+            app.set_system_scale(percent);
+            let canvas = app.paint();
+            let top = canvas.physical_edge(i64::from(app.page_top())) as usize;
+            let bottom = canvas.physical_edge(i64::from(app.height - app.page_footer())) as usize;
+            let width = canvas.width as usize;
+            assert!(
+                canvas.pixels[top * width..bottom * width]
+                    .iter()
+                    .all(|pixel| *pixel == 0x123456),
+                "page surface has no blank seam at {percent}%"
+            );
+            assert!(
+                canvas.pixels[bottom * width..(bottom + 1) * width]
+                    .iter()
+                    .all(|pixel| *pixel == app.effective_theme().palette().background),
+                "page must not overwrite the footer at {percent}%"
+            );
+        }
+    }
+
+    #[test]
+    fn scale_host_changes_are_bounded_and_never_request_persistence() {
+        let mut app = test_app();
+        assert_eq!(app.scale_preference(), ScalePreference::System);
+        assert_eq!(app.effective_scale_percent(), 100);
+        app.set_system_scale(200);
+        assert_eq!(app.effective_scale(), 2.);
+        app.set_scale_preference(ScalePreference::Percent(125));
+        app.set_system_scale(133);
+        assert_eq!(app.effective_scale_percent(), 125);
+        app.set_scale_preference(ScalePreference::Percent(999));
+        assert_eq!(app.scale_preference(), ScalePreference::System);
+        assert_eq!(app.effective_scale_percent(), 133);
+        app.set_system_scale(0);
+        assert_eq!(app.effective_scale_percent(), 75);
+        app.set_system_scale(u16::MAX);
+        assert_eq!(app.effective_scale_percent(), 300);
+        assert_eq!(app.take_scale_change(), None);
+    }
+
+    #[test]
+    fn scale_geometry_revision_changes_only_when_logical_mapping_changes() {
+        let mut app = test_app();
+        assert_eq!(app.geometry_revision, 0);
+        app.set_scale_preference(ScalePreference::Percent(125));
+        assert_eq!(app.geometry_revision, 1);
+        app.set_system_scale(200);
+        assert_eq!(app.geometry_revision, 1);
+        app.resize(640, 480);
+        assert_eq!(app.geometry_revision, 2);
+        app.resize(640, 480);
+        assert_eq!(app.geometry_revision, 2);
+        app.resize_surface(640, 480);
+        assert_eq!(app.geometry_revision, 3);
+        app.set_scale_preference(ScalePreference::System);
+        app.geometry_revision = u64::MAX;
+        app.set_system_scale(201);
+        assert_eq!(app.geometry_revision, 0);
+    }
+
+    #[test]
+    fn scale_shortcuts_step_reset_and_retry_without_editing_the_page() {
+        let mut app = test_app();
+        app.set_system_scale(133);
+        app.document = document::parse("<form><input name=q></form>", "https://example.test/");
+        app.handle_key(Key::Tab, false, false, false);
+        for (key, expected) in [('=', 150), ('+', 175), ('-', 150)] {
+            app.handle_key(Key::Character(key), true, key == '+', false);
+            assert_eq!(app.effective_scale_percent(), expected);
+            assert_eq!(
+                app.take_scale_change(),
+                Some(ScalePreference::Percent(expected))
+            );
+            assert_eq!(app.take_scale_change(), None);
+        }
+        assert!(app.values.is_empty());
+        app.handle_key(Key::Character('0'), true, false, false);
+        assert_eq!(app.effective_scale_percent(), 133);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.set_settings_status("Session only: Cannot save settings".into());
+        app.handle_key(Key::Character('0'), true, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+    }
+
+    #[test]
+    fn scale_two_x_surface_preserves_logical_page_geometry_and_hits() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.document = document::parse(
+            "<h1>Scaled page</h1><form><input name=q><button>Go</button></form>",
+            "https://example.test/",
+        );
+        let one = app.paint();
+        let boxes = app.boxes.clone();
+        let content_height = app.content_height;
+        let input = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap()
+            .clone();
+        app.pointer_down(input.x + 2, input.y + 2);
+        app.set_scale_preference(ScalePreference::Percent(200));
+        assert!(app.hits.is_empty() && app.boxes.is_empty() && app.pointer_press.is_none());
+        app.pointer_up(input.x + 2, input.y + 2);
+        let two = app.paint();
+        assert_eq!((two.width, two.height), (one.width * 2, one.height * 2));
+        assert_eq!((app.width, app.height), (640, 480));
+        assert_eq!(app.boxes, boxes);
+        assert_eq!(app.content_height, content_height);
+        let scaled_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Input(_)))
+            .unwrap();
+        assert_eq!(
+            (scaled_hit.x, scaled_hit.y, scaled_hit.w, scaled_hit.h),
+            (input.x, input.y, input.w, input.h)
+        );
+        let viewport_height = app.viewport_height();
+        let page = mg_sparkle::render::render_scaled(
+            &app.document,
+            &mut app.fonts,
+            mg_sparkle::render::Viewport {
+                width: app.width,
+                height: viewport_height,
+                scroll: 0,
+            },
+            &mg_sparkle::render::Controls::default(),
+            2.,
+        );
+        let offset = app.page_top() as usize * 2 * two.width as usize;
+        assert_eq!(
+            &two.pixels[offset..offset + page.canvas.pixels.len()],
+            &page.canvas.pixels
+        );
+        app.pointer_down(input.x + 2, input.y + 2);
+        app.pointer_up(input.x + 2, input.y + 2);
+        app.type_text("logical input");
+        assert!(app.values.values().any(|value| value == "logical input"));
+    }
+
+    #[test]
+    fn scale_no_chrome_matches_standalone_scaled_sparkle() {
+        let mut app = test_app();
+        app.set_chrome(false);
+        app.resize(641, 481);
+        for percent in [75, 100, 125, 150, 175, 200, 250, 300] {
+            app.set_scale_preference(ScalePreference::Percent(percent));
+            let actual = app.paint();
+            let frame = mg_sparkle::render::render_scaled(
+                &app.document,
+                &mut app.fonts,
+                mg_sparkle::render::Viewport {
+                    width: 641,
+                    height: 481,
+                    scroll: 0,
+                },
+                &mg_sparkle::render::Controls::default(),
+                f32::from(percent) / 100.,
+            );
+            assert_eq!(
+                (actual.width, actual.height),
+                (frame.canvas.width, frame.canvas.height)
+            );
+            assert_eq!(actual.pixels, frame.canvas.pixels);
+        }
+    }
+
+    #[test]
+    fn scale_native_surface_covers_four_k_and_bounds_extreme_inputs() {
+        let mut app = test_app();
+        app.set_system_scale(200);
+        app.resize_surface(3840, 2160);
+        assert_eq!((app.width, app.height), (1920, 1080));
+        app.set_scale_preference(ScalePreference::Percent(100));
+        app.resize_surface(3840, 2160);
+        assert_eq!((app.width, app.height), (3840, 2160));
+        for percent in 75..=300 {
+            app.set_scale_preference(ScalePreference::System);
+            app.set_system_scale(percent);
+            app.resize_surface(u32::MAX, u32::MAX);
+            let physical_width = (f64::from(app.width) * f64::from(app.effective_scale())).round();
+            let physical_height =
+                (f64::from(app.height) * f64::from(app.effective_scale())).round();
+            assert!((4800.0..=4803.0).contains(&physical_width));
+            assert!((3600.0..=3603.0).contains(&physical_height));
+        }
+        app.resize_surface(1441, 901);
+        app.dirty = false;
+        app.resize_surface(1442, 902);
+        assert_eq!((app.width, app.height), (481, 301));
+        assert!(app.dirty);
+        app.resize_surface(0, 0);
+        assert_eq!((app.width, app.height), (360, 240));
+        app.resize(u32::MAX, u32::MAX);
+        assert_eq!((app.width, app.height), (2400, 1800));
+    }
+
+    #[test]
+    fn scale_reflow_clamps_old_bottom_scroll_to_the_new_viewport() {
+        let mut app = test_app();
+        app.resize(640, 240);
+        app.document = document::parse(
+            &"<p>Readable content after sizing</p>".repeat(12),
+            "https://example.test/",
+        );
+        app.paint();
+        app.scroll_by(10_000);
+        app.paint();
+        assert!(app.scroll > 0);
+        app.resize(640, 1800);
+        let scrolled = app.paint();
+        assert_eq!(app.scroll, 0);
+        let fresh = app.paint();
+        assert_eq!(scrolled.pixels, fresh.pixels);
+    }
+
+    #[test]
+    fn scale_reflow_clamp_does_not_change_ordinary_redraw_scroll() {
+        let mut app = test_app();
+        app.resize(640, 480);
+        app.paint();
+        app.scroll = 12;
+        app.request_redraw();
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.resize(640, 480);
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.set_theme_preference(ThemePreference::Dark);
+        app.paint();
+        assert_eq!(app.scroll, 12);
+        app.set_system_scale(200);
+        app.paint();
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_settings_pointer_and_modal_keyboard_apply_immediately() {
+        let mut app = test_app();
+        app.activate(Action::Settings);
+        app.paint();
+        let plus = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::ScaleUp))
+            .unwrap()
+            .clone();
+        app.pointer_down(plus.x + 2, plus.y + 2);
+        app.pointer_up(plus.x + 2, plus.y + 2);
+        assert_eq!(app.effective_scale_percent(), 125);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::Percent(125)));
+        assert!(app.hits.is_empty());
+        assert!(app.settings_open);
+        app.handle_key(Key::Left, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.effective_scale_percent(), 100);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::Percent(100)));
+        app.handle_key(Key::Left, false, false, false);
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.handle_key(Key::Enter, false, false, false);
+        assert_eq!(app.take_scale_change(), Some(ScalePreference::System));
+        app.handle_key(Key::Character('+'), true, true, false);
+        assert_eq!(app.effective_scale_percent(), 125);
+        app.handle_key(Key::Escape, false, false, false);
+        assert!(!app.modal_open());
+        app.resize(360, 240);
+        app.activate(Action::Settings);
+        app.paint();
+        for hit in app
+            .hits
+            .iter()
+            .filter(|h| !matches!(h.action, Action::Menu))
+        {
+            assert!(hit.x >= 0 && hit.y >= 0);
+            assert!(hit.x + hit.w as i32 <= 360);
+            assert!(hit.y + hit.h as i32 <= 240);
+        }
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn scale_all_popups_keep_every_action_visible_at_minimum_logical_size() {
+        let mut app = test_app();
+        app.resize(360, 240);
+        app.set_build_info("0.6.0", "Wed, 16 Sep 2026 12:00:00 GMT", "0123456789ab");
+        for action in [Action::Menu, Action::About, Action::Settings] {
+            app.activate(action);
+            app.paint();
+            assert!(
+                app.hits
+                    .iter()
+                    .any(|hit| matches!(hit.action, Action::CloseMenu))
+            );
+            for hit in &app.hits {
+                assert!(hit.x >= 0 && hit.y >= 0);
+                assert!(hit.x + hit.w as i32 <= 360);
+                assert!(hit.y + hit.h as i32 <= 240);
+            }
+            app.activate(Action::CloseMenu);
+        }
+    }
 }
