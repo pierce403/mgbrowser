@@ -90,6 +90,10 @@ mgbrowser https://example.com/
 [Download / release notes](https://github.com/pierce403/mgbrowser/releases/latest)
 · [Website](https://mgbrowser.org) · [Inspect installer](install.sh)
 
+For an experimental **macOS source build with XQuartz**, see the
+[Mac installation instructions](docs/RUNNING.md#experimental-macos-source-install).
+Page-script isolation remains Linux x86_64 only.
+
 ### Web Platform Tests
 
 Current-source results: **7 pass, 0 fail, 17 unsupported out of 24 selected

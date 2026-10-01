@@ -256,7 +256,8 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
     while !shared.stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((socket, peer)) => {
-                if !peer.ip().is_loopback() {
+                // macOS inherits the listener mode; client I/O uses bounded timeouts.
+                if !peer.ip().is_loopback() || socket.set_nonblocking(false).is_err() {
                     continue;
                 }
                 let Ok(mut clients) = shared.clients.lock() else {

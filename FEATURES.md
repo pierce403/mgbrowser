@@ -585,6 +585,20 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 
 Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
 
+Local macOS evidence (2026-09-09): an arm64 source build with XQuartz 2.8.6
+loads the system Arial font and completes the static form/results/destination
+journey. The destination frame was inspected. A user-level app launcher loads
+example.com over verified HTTPS. This is experimental source installation, not
+a published macOS binary or macOS script-isolation implementation.
+
+Current-source macOS refresh (2026-10-01): merged upstream v0.9.1 development
+through 6537de2, retaining its desktop/engine improvements. Locked arm64 release
+build, 1,549 portable tests (two ignored), independent no-chrome embedding and
+the unchanged WPT pilot pass. Accepted CDP/test sockets explicitly use blocking
+I/O with existing timeouts; Linux binary updates refuse unsupported hosts.
+XQuartz is absent on this validation host, so native windows/app installation
+were not reverified; the 2026-09-09 native evidence above is historical.
+
 ## F-004 : Static web navigation
 
 Stability: in-progress

@@ -1151,7 +1151,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
     let mut cdp = debug_port.map(BrowserCdp::bind).transpose()?;
     app.set_debugging(cdp.is_some());
     let (conn, screen_num) = x11rb::connect(None).map_err(|error| {
-        format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
+        format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set. On macOS, install/start XQuartz and use its terminal (Applications > Terminal).")
     })?;
     let screen = &conn.setup().roots[screen_num];
     let system_scale = platform::scaling::read_scale(&conn, screen_num).unwrap_or(100);

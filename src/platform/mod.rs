@@ -1,4 +1,4 @@
-//! Linux/X11 host facilities. Engines do not depend on this crate.
+//! X11 host facilities. Engines do not depend on this crate.
 pub mod appearance;
 pub mod scaling;
 pub mod script_worker;
@@ -99,6 +99,10 @@ pub fn load_fonts() -> Result<Fonts, String> {
         return load_font_path(std::path::Path::new(&path));
     }
     let paths = [
+        #[cfg(target_os = "macos")]
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        #[cfg(target_os = "macos")]
+        "/Library/Fonts/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
@@ -124,6 +128,7 @@ fn load_font_path(path: &std::path::Path) -> Result<Fonts, String> {
     let bold_path = std::env::var_os("MGBROWSER_FONT_BOLD")
         .map(std::path::PathBuf::from)
         .or_else(|| match path.file_name()?.to_str()? {
+            "Arial.ttf" => Some(path.with_file_name("Arial Bold.ttf")),
             "DejaVuSans.ttf" => Some(path.with_file_name("DejaVuSans-Bold.ttf")),
             "LiberationSans-Regular.ttf" => Some(path.with_file_name("LiberationSans-Bold.ttf")),
             _ => None,

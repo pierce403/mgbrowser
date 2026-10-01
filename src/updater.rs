@@ -273,7 +273,8 @@ fn install(target: &Path, archive: &[u8], checksum: &[u8], expected: &str) -> Re
 
 /// True only for installs explicitly enabled by install.sh, never worker entrypoints.
 pub fn automatic_enabled(target: &Path) -> bool {
-    std::env::var_os("MGBROWSER_NO_AUTO_UPDATE").is_none()
+    cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        && std::env::var_os("MGBROWSER_NO_AUTO_UPDATE").is_none()
         && target.with_file_name(MARKER).is_file()
 }
 
@@ -285,6 +286,12 @@ pub fn update_with_progress(
     target: &Path,
     report: &mut dyn FnMut(UpdateEvent),
 ) -> Result<String, String> {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        return Err(
+            "Binary updates require Linux x86_64; rebuild this source installation to update."
+                .into(),
+        );
+    }
     let _lock = lock(target)?;
     let installed = binary_output(target, "--version")?;
     let current = installed
@@ -327,6 +334,18 @@ pub fn update_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[test]
+    fn unsupported_host_rejects_update_before_filesystem_or_network_access() {
+        let target = Path::new("/nonexistent/mgbrowser-update-test/mgbrowser");
+        assert!(!automatic_enabled(target));
+        let mut events = 0;
+        let error = update_with_progress(target, &mut |_| events += 1).unwrap_err();
+        assert!(error.contains("Binary updates require Linux x86_64"));
+        assert_eq!(events, 0);
+    }
+
     #[test]
     fn release_versions_never_downgrade_or_accept_untrusted_tags() {
         for tag in ["v0.1.1", "v0.2.0"] {

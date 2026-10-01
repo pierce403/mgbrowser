@@ -12,8 +12,9 @@ use std::{
 };
 
 fn fonts() -> Fonts {
-    Fonts::from_bytes(std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").unwrap())
-        .unwrap()
+    let path = std::env::var("MGBROWSER_FONT")
+        .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into());
+    Fonts::from_bytes(std::fs::read(path).unwrap()).unwrap()
 }
 fn finish(browser: &mut Browser) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -46,6 +47,8 @@ fn linked_css_svg_table_and_scrolled_link_use_real_resource_and_input_paths() {
                 }
                 Err(error) => panic!("{error}"),
             };
+            // Accepted sockets inherit nonblocking mode on macOS.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

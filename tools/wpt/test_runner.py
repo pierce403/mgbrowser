@@ -371,7 +371,7 @@ class CargoArtifactTests(unittest.TestCase):
         wrong_kind = self.artifact(target={"name": "wpt_render", "kind": ["bin"]})
         messages = "\n".join(json.dumps(event) for event in (
             unrelated, wrong_kind, expected, {"reason": "build-finished", "success": True}))
-        self.assertEqual(runner.cargo_executable(messages), Path(expected["executable"]))
+        self.assertEqual(runner.cargo_executable(messages), Path(expected["executable"]).resolve())
 
     def test_missing_or_ambiguous_executable_is_rejected(self):
         one = json.dumps(self.artifact())
