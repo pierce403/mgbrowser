@@ -109,6 +109,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "1fe98ba25f63963bc12236df8e7202d8953a09da9d8d18623dfac1f18136a81d",
+  "source_sha256": "a28f357a10c165c17b6793ce376c62c614935c23216aa5b14600685b2dbde6cf",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

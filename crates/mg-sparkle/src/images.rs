@@ -115,12 +115,43 @@ fn target_size(
     Ok((w, h))
 }
 
+pub(crate) fn svg_is_aspect_ratio_only(bytes: &[u8], content_type: &str) -> bool {
+    if content_type.split(';').next() != Some("image/svg+xml")
+        && bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'<')
+    {
+        return false;
+    }
+    let Ok(source) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    if crate::document::has_internal_dtd_or_entity(source) {
+        return false;
+    }
+    let Ok(xml) = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: 2048,
+        },
+    ) else {
+        return false;
+    };
+    let root = xml.root_element();
+    root.tag_name().name() == "svg"
+        && root.attribute("viewBox").is_some()
+        && root.attribute("width").is_none()
+        && root.attribute("height").is_none()
+}
+
 fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterImage, String> {
     let source = std::str::from_utf8(bytes).map_err(|_| "SVG must be UTF-8")?;
+    if crate::document::has_internal_dtd_or_entity(source) {
+        return Err("Invalid or oversized SVG: internal DTD or entity declaration".into());
+    }
     let xml = roxmltree::Document::parse_with_options(
         source,
         roxmltree::ParsingOptions {
-            allow_dtd: false,
+            allow_dtd: true,
             nodes_limit: 2048,
         },
     )

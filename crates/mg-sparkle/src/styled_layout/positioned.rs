@@ -358,18 +358,22 @@ fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
             }
         }
     }
-    let x = containing.x
-        + left.map(|n| n + margin[3]).unwrap_or_else(|| {
-            right
-                .map(|n| containing.w - n - width - margin[1])
-                .unwrap_or(margin[3])
-        });
-    let y = containing.y
-        + top.map(|n| n + margin[0]).unwrap_or_else(|| {
-            bottom
-                .map(|n| containing.h - n - height - margin[2])
-                .unwrap_or(margin[0])
-        });
+    let static_pos = if style.layout.position == Position::Absolute
+        && style.layout.z_index.is_none()
+        && is_block(style.display)
+    {
+        layout.scene.static_positions.get(&id).copied()
+    } else {
+        None
+    };
+    let x = left
+        .map(|n| containing.x + n + margin[3])
+        .or_else(|| right.map(|n| containing.x + containing.w - n - width - margin[1]))
+        .unwrap_or_else(|| static_pos.map_or(containing.x, |(sx, _)| sx) + margin[3]);
+    let y = top
+        .map(|n| containing.y + n + margin[0])
+        .or_else(|| bottom.map(|n| containing.y + containing.h - n - height - margin[2]))
+        .unwrap_or_else(|| static_pos.map_or(containing.y, |(_, sy)| sy) + margin[0]);
     if ![x, y, width, height]
         .into_iter()
         .all(|n| n.is_finite() && n.abs() <= MAX_EXTENT)

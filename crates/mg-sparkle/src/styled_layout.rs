@@ -157,6 +157,8 @@ struct Scene {
     /// Unclipped, fractional structural border boxes for containing blocks.
     /// Kept separate from clipped Inspector coverage and shifted with children.
     borders: Vec<(usize, Rect)>,
+    /// Hypothetical normal-flow static positions for out-of-flow boxes.
+    static_positions: HashMap<usize, (f32, f32)>,
 }
 
 impl Scene {
@@ -279,6 +281,7 @@ enum Token {
     Gap(f32),
     Box(usize),
     Block(usize),
+    StaticPos(usize),
     Break,
 }
 
@@ -812,6 +815,20 @@ impl Layout<'_, '_> {
 
     fn is_structured_button(&self, id: usize) -> bool {
         self.document.nodes[id].tag == "button" && !self.is_replaced(id)
+    }
+
+    fn is_aspect_ratio_only_svg(&self, id: usize) -> bool {
+        let node = &self.document.nodes[id];
+        if node.tag != "img" || node.has("width") || node.has("height") {
+            return false;
+        }
+        let Some(url) = self.image_url(id) else {
+            return false;
+        };
+        let Some(resource) = self.document.resources.get(&url) else {
+            return false;
+        };
+        crate::images::svg_is_aspect_ratio_only(&resource.bytes, &resource.content_type)
     }
 
     fn prepare_inline_svg(&mut self, id: usize) {
@@ -2229,6 +2246,9 @@ impl Layout<'_, '_> {
             self.styles[id].layout.position,
             crate::style::Position::Absolute | crate::style::Position::Fixed
         ) {
+            if out.len() < MAX_OPS && self.styles[id].display != Display::None {
+                out.push(Token::StaticPos(id));
+            }
             return;
         }
         if !self.spend(depth) || out.len() >= MAX_OPS || self.styles[id].display == Display::None {
@@ -2342,6 +2362,32 @@ impl Layout<'_, '_> {
                 Token::Space { node, width } => {
                     if !line.is_empty() {
                         pending_space = Some((node, width));
+                    }
+                }
+                Token::StaticPos(child) => {
+                    if is_block(self.styles[child].display) && !line.is_empty() {
+                        top += self.line::<EMIT>(
+                            id,
+                            x,
+                            top,
+                            width,
+                            containing_height,
+                            &line,
+                            used,
+                            depth + 1,
+                        );
+                        line.clear();
+                        used = 0.0;
+                        pending_space = None;
+                    }
+                    if EMIT && self.scene.static_positions.len() < MAX_OPS {
+                        let sx = x
+                            + if line.is_empty() || is_block(self.styles[child].display) {
+                                0.0
+                            } else {
+                                used
+                            };
+                        self.scene.static_positions.insert(child, (sx, top));
                     }
                 }
                 Token::Block(child) => {

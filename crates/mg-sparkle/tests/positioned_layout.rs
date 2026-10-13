@@ -347,3 +347,46 @@ fn hidden_ancestors_and_global_positioned_limit_fail_without_partial_layout() {
         assert!(failure.node.is_some());
     }
 }
+
+#[test]
+fn static_position_absolute_overlay_covers_aspect_ratio_only_svg_in_column_flex() {
+    let mut doc = parse(
+        "<!DOCTYPE html>
+<html>
+<body>
+  <p>Test passes if there is a filled green square and <strong>no red</strong>.</p>
+  <div id=overlay style='position: absolute; width: 100px; height: 100px; background: green;'></div>
+  <div id=flex style='display: flex; flex-direction: column; align-items: center; width: 100px; height: 100px; background: red;'>
+    <img id=svg src='../support/red-rect.svg'>
+  </div>
+</body>
+</html>",
+        "https://fixture.example/css/css-flexbox/align-items-007.html",
+    );
+    doc.resources.insert(
+        "https://fixture.example/css/support/red-rect.svg".into(),
+        mg_sparkle::document::ResourceData {
+            bytes: b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>
+<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 20001102//EN\" \"http://www.w3.org/TR/2000/CR-SVG-20001102/DTD/svg-20001102.dtd\">
+<svg version=\"1.0\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 100\">
+ <rect width=\"200\" height=\"100\" fill=\"red\"/>
+</svg>"
+                .to_vec(),
+            content_type: "image/svg+xml".into(),
+        },
+    );
+    let rendered = frame(&doc, 0, 1.0);
+    assert!(
+        rendered.diagnostics.entries.is_empty(),
+        "expected no style or layout diagnostics: {:?}",
+        rendered.diagnostics
+    );
+    let overlay = geometry(rect(&doc, &rendered, "#overlay"));
+    let flex = geometry(rect(&doc, &rendered, "#flex"));
+    let svg = geometry(rect(&doc, &rendered, "#svg"));
+    assert_eq!(overlay, flex);
+    assert_eq!((svg.0, svg.1, svg.2, svg.3), (flex.0, flex.1, 100, 50));
+    assert_eq!(pixel(&rendered, overlay.0 + 50, overlay.1 + 25), 0x008000);
+    assert_eq!(pixel(&rendered, overlay.0 + 50, overlay.1 + 75), 0x008000);
+    assert!(!rendered.canvas.pixels.contains(&0xff0000));
+}

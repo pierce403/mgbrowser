@@ -630,6 +630,18 @@ impl Adapter<'_, '_, '_> {
                     .max(0.0)
             } else if image && definite_height.is_some() && natural.height > 0.0 {
                 definite_height.unwrap() * natural.width / natural.height
+            } else if self.layout.is_aspect_ratio_only_svg(node) {
+                available
+                    .width
+                    .into_option()
+                    .or_else(|| {
+                        input.parent_size.width.map(|pw| {
+                            let (margin, padding) = self.layout.edges(node, pw);
+                            (pw - margin[1] - margin[3] - padding[1] - padding[3]).max(0.0)
+                        })
+                    })
+                    .unwrap_or(natural.width)
+                    .max(0.0)
             } else {
                 natural.width
             };
