@@ -4,9 +4,9 @@
     "CRASH": 0,
     "ERROR": 0,
     "FAIL": 0,
-    "PASS": 7,
+    "PASS": 20,
     "TIMEOUT": 0,
-    "UNSUPPORTED": 17,
+    "UNSUPPORTED": 4,
     "total": 24
   },
   "results": [
@@ -15,7 +15,7 @@
       "test": "css/css-flexbox/align-baseline.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-content-wrap-004.html"
     },
     {
@@ -47,7 +47,7 @@
       "test": "css/css-flexbox/align-items-006.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-items-007.html"
     },
     {
@@ -63,52 +63,52 @@
       "test": "css/css-flexbox/align-items-baseline-overflow-non-visible.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-001.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-002.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-003.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-004.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-005.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-007.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-008.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-009.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-011.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-012.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-self-013.html"
     }
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "2648dd5d9fd81b661cae5d881138f1cd02d120a8fb672303f643a09f33227deb",
+  "source_sha256": "35e76976f6b03f7a7a63f178337e23a91ab0d54c0df9b6ba5ab67ddeaa33037c",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

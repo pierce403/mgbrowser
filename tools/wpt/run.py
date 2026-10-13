@@ -131,13 +131,11 @@ def prerequisites(name, files, visited=None):
     if name not in files:
         raise ValueError(f"Missing resource in corpus: {name}")
     suffix = PurePosixPath(name).suffix.lower()
-    if suffix in (".xht", ".xhtml", ".xml"):
-        return [f"{name}: XML/XHTML parser unavailable"]
-    if suffix not in (".html", ".css", ".svg"):
+    if suffix not in (".html", ".xht", ".xhtml", ".xml", ".css", ".svg"):
         return []
     text = files[name].decode("utf-8")
     reasons, resources = [], []
-    if suffix in (".html", ".svg"):
+    if suffix in (".html", ".xht", ".xhtml", ".xml", ".svg"):
         markup = Markup(text)
         reasons.extend(markup.reasons)
         resources.extend(markup.resources)
