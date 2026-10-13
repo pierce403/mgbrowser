@@ -1630,18 +1630,21 @@ impl Layout<'_, '_> {
         let node = &self.document.nodes[id];
         if node.tag == "#text" {
             let text = collapse(&node.text);
-            let max = self
-                .fonts
-                .select_family(&s.font_families)
-                .width_weight(&text, s.font_size, s.font_weight >= 600);
+            let max = self.fonts.select_family(&s.font_families).width_weight(
+                &text,
+                s.font_size,
+                s.font_weight >= 600,
+            );
             let min = if matches!(s.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre) {
                 max
             } else {
                 text.split(is_css_space)
                     .map(|word| {
-                        self.fonts
-                            .select_family(&s.font_families)
-                            .width_weight(word, s.font_size, s.font_weight >= 600)
+                        self.fonts.select_family(&s.font_families).width_weight(
+                            word,
+                            s.font_size,
+                            s.font_weight >= 600,
+                        )
                     })
                     .fold(0.0, f32::max)
             };
@@ -1817,7 +1820,8 @@ impl Layout<'_, '_> {
         forced: Option<f32>,
         depth: usize,
     ) -> (f32, f32) {
-        let (w, h) = self.block_layout::<true>(id, x, y, available, containing_height, forced, depth);
+        let (w, h) =
+            self.block_layout::<true>(id, x, y, available, containing_height, forced, depth);
         (w, h.max(0.0))
     }
 
@@ -2037,10 +2041,7 @@ impl Layout<'_, '_> {
             self.scene.box_for(id, rect);
             self.hit(id, rect);
         }
-        (
-            width + margin[1] + margin[3],
-            h + margin[0] + margin[2],
-        )
+        (width + margin[1] + margin[3], h + margin[0] + margin[2])
     }
     fn finish_decoration(&mut self, start: usize, id: usize, r: Rect) {
         if !self.styles[id].visible {
@@ -2288,10 +2289,11 @@ impl Layout<'_, '_> {
                 }
                 if is_css_space(ch) {
                     if !word.is_empty() {
-                        let width = self
-                            .fonts
-                            .select_family(&s.font_families)
-                            .width_weight(&word, s.font_size, s.font_weight >= 600);
+                        let width = self.fonts.select_family(&s.font_families).width_weight(
+                            &word,
+                            s.font_size,
+                            s.font_weight >= 600,
+                        );
                         out.push(Token::Word {
                             node: id,
                             text: std::mem::take(&mut word),
@@ -2301,10 +2303,11 @@ impl Layout<'_, '_> {
                     if !matches!(out.last(), Some(Token::Space { .. })) {
                         out.push(Token::Space {
                             node: id,
-                            width: self
-                                .fonts
-                                .select_family(&s.font_families)
-                                .width_weight(" ", s.font_size, s.font_weight >= 600),
+                            width: self.fonts.select_family(&s.font_families).width_weight(
+                                " ",
+                                s.font_size,
+                                s.font_weight >= 600,
+                            ),
                         });
                     }
                 } else {
@@ -2312,10 +2315,11 @@ impl Layout<'_, '_> {
                 }
             }
             if !word.is_empty() {
-                let width = self
-                    .fonts
-                    .select_family(&s.font_families)
-                    .width_weight(&word, s.font_size, s.font_weight >= 600);
+                let width = self.fonts.select_family(&s.font_families).width_weight(
+                    &word,
+                    s.font_size,
+                    s.font_weight >= 600,
+                );
                 out.push(Token::Word {
                     node: id,
                     text: word,
@@ -2407,12 +2411,11 @@ impl Layout<'_, '_> {
                         pending_space = None;
                     }
                     if EMIT && self.scene.static_positions.len() < MAX_OPS {
-                        let sx = x
-                            + if line.is_empty() || is_block(self.styles[child].display) {
-                                0.0
-                            } else {
-                                used
-                            };
+                        let sx = x + if line.is_empty() || is_block(self.styles[child].display) {
+                            0.0
+                        } else {
+                            used
+                        };
                         self.scene.static_positions.insert(child, (sx, top));
                     }
                 }

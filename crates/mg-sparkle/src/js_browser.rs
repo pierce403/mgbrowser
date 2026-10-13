@@ -1299,7 +1299,11 @@ mod tests {
             url: "http://localhost/flex".into(),
             html: "<!DOCTYPE html><div id=\"target\" style=\"display: flex; min-height: 200px;\"><div style=\"width: 100px; min-height: 100px; background: green;\"></div></div><script>document.body.offsetTop;document.getElementById('target').style.alignItems = 'flex-start';</script>".into(),
         });
-        assert!(reply.applied && reply.errors.is_empty(), "{:?}", reply.errors);
+        assert!(
+            reply.applied && reply.errors.is_empty(),
+            "{:?}",
+            reply.errors
+        );
         let doc = document::parse_with_scripting(&reply.html, "http://localhost/flex", true);
         let target = doc.query_selector(0, "#target").unwrap().unwrap();
         assert_eq!(

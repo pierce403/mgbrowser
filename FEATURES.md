@@ -18,12 +18,17 @@ F-003/F-005 production rendering, immutable upstream inputs and truthful results
 
 Maximize genuine upstream passes without rewriting assertions, hiding failures,
 silently shrinking the denominator or weakening browser boundaries. Start with
-the pinned 24-test static flexbox reftest pilot in docs/WPT.md: 7 pass, 0 fail,
-17 are explicitly unsupported. This does not implement full wptrunner,
+the pinned 24-test flexbox reftest pilot in docs/WPT.md: 24 pass, 0 fail,
+0 are unsupported. This does not implement full wptrunner,
 WebDriver, JavaScript testharness or broad web conformance. No production browser
 behavior changed in the initial test-tooling contribution. The v0.9.1 release
-adds preferred max-content widths and admitted single-line column baselines;
-unchanged-corpus results improve from six passes to seven. Release and
+added preferred max-content widths and admitted single-line column baselines
+(7/24 pass). The v0.9.2 candidate adds bounded XML/XHTML parsing, signed
+margin-box block advancement, column flex fit-content cross sizing, block static
+positioning for `inset: auto` overlays, aspect-ratio-only SVG flex sizing,
+implicit `<body>` synthesis, row flex first-baseline alignment, bounded
+same-origin `@font-face` TTF/OTF loading and DOM `element.style` camelCase
+normalization; all 24 selected tests now pass. Release and
 public-installer verification are recorded separately in the dated log.
 Every commit reruns the pilot before Pages publishes its score and exact-commit
 JSON report; known passes and runnable tests may not regress.
@@ -35,15 +40,15 @@ JSON report; known passes and runnable tests may not regress.
 - [x] Independent negative harness tests and baseline reproduction pass locally and in CI.
 - [x] Exact-commit website displays current score and verified public result JSON.
 - [x] First unchanged-cohort gain: align-baseline passes locally, in CI and in the public v0.9.1 native binary without fallback.
-- [ ] Increase passing coverage and reduce unsupported prerequisites with reviewed changes.
+- [x] Increase passing coverage and reduce unsupported prerequisites with reviewed changes (24/24 passing in the initial cohort).
 - [ ] Broader web-API/testharness and browser automation integration verified.
 
 Initial integration: a4e3692bc527b8f89814034a7dbc182254bc0aa3, verified by
 Pages/WPT35940400295 and its exact-commit public report. First gain released as
 v0.9.1 at a89747f927c83e4ae9715198b5b66437b9a6f422: Rust35942827577,
 JSPLAN35942827541, Pages/WPT35942827584 and release35944507465 pass.
-Fresh public install, native WPT/Boa and actual prior-version update receipts
-are in the 2026-09-23 log. Broader prerequisites above remain unfinished.
+v0.9.2 completes the 24-test initial cohort (24/24 PASS); see the 2026-10-13
+log. Broader cohort expansion and testharness/WebDriver prerequisites remain unfinished.
 
 ## F-025 : Google News desktop reading
 

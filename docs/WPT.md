@@ -26,12 +26,23 @@ classification is recalculated on every run; an ordinary rendering mismatch is
 not relabeled unsupported to improve the score.
 
 The initial run reported **6 PASS, 1 FAIL and 17 UNSUPPORTED out of 24**.
-The v0.9.1 release reports **7 PASS, 0 FAIL and 17 UNSUPPORTED out of 24**,
+The v0.9.1 release reported **7 PASS, 0 FAIL and 17 UNSUPPORTED out of 24**,
 with no errors, timeouts or crashes. First, `align-baseline.html`'s reference
 required genuine `width: max-content` support. Removing its fallback then exposed
 a separate column baseline grouping error. Both fixes preserve the upstream
 files: test and reference now match exactly, without diagnostics. The ratchet
-adds this new pass while retaining every old test and supported prerequisite.
+added that pass while retaining every old test and supported prerequisite.
+
+The v0.9.2 candidate reports **24 PASS, 0 FAIL and 0 UNSUPPORTED out of 24**,
+with no errors, timeouts or crashes. It adds bounded XML/XHTML document parsing
+with CDATA stylesheet unwrapping, normal-flow block advancement by signed
+vertical margin-box extent, column flex cross-axis `fit-content` sizing with
+whitespace-trimmed intrinsic measurement, block static-position resolution for
+`inset: auto` absolutely positioned overlays, aspect-ratio-only SVG flex item
+sizing, implicit `<body>` synthesis, row flex first-baseline alignment offsets,
+bounded same-origin `@font-face` `.ttf`/`.otf` loading and selection, and DOM
+`element.style` camelCase property normalization with restricted-worker inline
+`<script>` execution for HTML pages.
 The authoritative current results are [score.json](../tools/wpt/score.json),
 the website's **selected tests passing** count, and its
 [full report](https://mgbrowser.org/wpt-results.json).
@@ -48,12 +59,10 @@ sizing remain unsupported; resource limits and the restricted script path are
 unchanged. These are browser changes, so public release verification is required
 in addition to the source-linked WPT gate.
 
-[v0.9.1](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.1) ships these
-fixes at `a89747f927c83e4ae9715198b5b66437b9a6f422`. Exact-commit CI, public
-checksum/install and real prior-version upgrade checks pass. The public-installed
-native browser also reproduces the original baseline test/reference match at
-1100 x 727 page pixels with zero differences. This separate native check is not
-added to the 24-test score. See the 2026-09-23 work log for release receipts.
+[v0.9.1](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.1) shipped the
+initial width and column-baseline fixes at `a89747f927c83e4ae9715198b5b66437b9a6f422`.
+v0.9.2 ships the remaining XML/XHTML, layout, `@font-face` and DOM `style`
+improvements for the 24-test cohort; see the 2026-10-13 work log for release receipts.
 
 The unmodified upstream HTML, CSS, SVG, font and license bytes are inventoried
 with lengths and SHA-256 hashes. Missing, changed or extra input files fail the

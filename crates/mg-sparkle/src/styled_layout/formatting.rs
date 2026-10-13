@@ -980,12 +980,12 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                     let baseline_aligned = match tree.slots[index].kind {
                         Kind::Element => {
                             let item_style = &tree.layout.styles[tree.slots[index].node];
-                            let align = if item_style.layout.align_self.keyword == AlignKeyword::Auto
-                            {
-                                root_style.layout.align_items.keyword
-                            } else {
-                                item_style.layout.align_self.keyword
-                            };
+                            let align =
+                                if item_style.layout.align_self.keyword == AlignKeyword::Auto {
+                                    root_style.layout.align_items.keyword
+                                } else {
+                                    item_style.layout.align_self.keyword
+                                };
                             align == AlignKeyword::Baseline
                         }
                         Kind::Anonymous { .. } => {
@@ -1001,10 +1001,9 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                                 tree.depth + 1,
                             ),
                             Kind::Anonymous { start, end } => {
-                                let children =
-                                    tree.layout.document.nodes[tree.slots[0].node].children
-                                        [start..end]
-                                        .to_vec();
+                                let children = tree.layout.document.nodes[tree.slots[0].node]
+                                    .children[start..end]
+                                    .to_vec();
                                 children.into_iter().find_map(|child| {
                                     tree.layout.first_baseline(
                                         child,
@@ -1460,18 +1459,50 @@ mod tests {
             </div>"#,
             |layout, id| {
                 assert_eq!(
-                    run::<true>(layout, id, 0.0, 0.0, AvailableSpace::Definite(100.0), None, 0),
+                    run::<true>(
+                        layout,
+                        id,
+                        0.0,
+                        0.0,
+                        AvailableSpace::Definite(100.0),
+                        None,
+                        0
+                    ),
                     Some(Size {
                         width: 100.0,
                         height: 100.0
                     })
                 );
-                let first = layout.document.query_selector(0, "#first").unwrap().unwrap();
-                let second = layout.document.query_selector(0, "#second").unwrap().unwrap();
+                let first = layout
+                    .document
+                    .query_selector(0, "#first")
+                    .unwrap()
+                    .unwrap();
+                let second = layout
+                    .document
+                    .query_selector(0, "#second")
+                    .unwrap()
+                    .unwrap();
                 let first_box = layout.scene.boxes.iter().find(|b| b.node == first).unwrap();
-                let second_box = layout.scene.boxes.iter().find(|b| b.node == second).unwrap();
-                assert_eq!((first_box.x, first_box.y, first_box.width, first_box.height), (0, 0, 100, 40));
-                assert_eq!((second_box.x, second_box.y, second_box.width, second_box.height), (0, 40, 100, 60));
+                let second_box = layout
+                    .scene
+                    .boxes
+                    .iter()
+                    .find(|b| b.node == second)
+                    .unwrap();
+                assert_eq!(
+                    (first_box.x, first_box.y, first_box.width, first_box.height),
+                    (0, 0, 100, 40)
+                );
+                assert_eq!(
+                    (
+                        second_box.x,
+                        second_box.y,
+                        second_box.width,
+                        second_box.height
+                    ),
+                    (0, 40, 100, 60)
+                );
             },
         );
     }
@@ -1497,13 +1528,34 @@ mod tests {
             </div>"#,
             |layout, id| {
                 assert!(
-                    run::<true>(layout, id, 0.0, 0.0, AvailableSpace::Definite(200.0), None, 0)
-                        .is_some()
+                    run::<true>(
+                        layout,
+                        id,
+                        0.0,
+                        0.0,
+                        AvailableSpace::Definite(200.0),
+                        None,
+                        0
+                    )
+                    .is_some()
                 );
-                let first = layout.document.query_selector(0, "#first").unwrap().unwrap();
-                let second = layout.document.query_selector(0, "#second").unwrap().unwrap();
+                let first = layout
+                    .document
+                    .query_selector(0, "#first")
+                    .unwrap()
+                    .unwrap();
+                let second = layout
+                    .document
+                    .query_selector(0, "#second")
+                    .unwrap()
+                    .unwrap();
                 let first_box = layout.scene.boxes.iter().find(|b| b.node == first).unwrap();
-                let second_box = layout.scene.boxes.iter().find(|b| b.node == second).unwrap();
+                let second_box = layout
+                    .scene
+                    .boxes
+                    .iter()
+                    .find(|b| b.node == second)
+                    .unwrap();
                 assert_eq!(first_box.y, 0);
                 assert_eq!(second_box.y, 0);
                 assert_eq!(second_box.height, 50);

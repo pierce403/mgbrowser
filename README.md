@@ -2,12 +2,16 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.1 Experimental Preview
+## v0.9.2 Experimental Preview
 
-The first WPT-driven CSS fixes add preferred `width: max-content` sizing and
-correct synthesized baselines for supported single-line columns. The unchanged
-24-test pilot now passes seven tests, up from six. Seventeen prerequisites remain
-unsupported: this is measured progress, not broad standards conformance.
+The initial 24-test WPT flexbox reftest selection now passes completely (**24 pass,
+0 fail, 0 unsupported out of 24**). v0.9.2 adds bounded XML/XHTML document
+parsing, signed vertical margin-box block advancement, column flex `fit-content`
+cross sizing, block static-position resolution for `inset: auto` overlays,
+aspect-ratio-only SVG flex item sizing, implicit `<body>` synthesis, row flex
+first-baseline alignment, bounded same-origin `@font-face` `.ttf`/`.otf` font
+loading and DOM `element.style` camelCase normalization. This is measured
+progress on a fixed reftest cohort, not broad standards conformance.
 [Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,
@@ -77,7 +81,7 @@ The size-optimized, symbol-stripped release stays within older builds' unchanged
 establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded in the [dated work log](memory/logs/2026-09-23.md).
+installation receipts are recorded in the [dated work log](memory/logs/2026-10-13.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -92,14 +96,14 @@ mgbrowser https://example.com/
 
 ### Web Platform Tests
 
-Current-source results: **7 pass, 0 fail, 17 unsupported out of 24 selected
-upstream reftests**. This is a pinned static CSS pilot, not the full WPT suite
+Current-source results: **24 pass, 0 fail, 0 unsupported out of 24 selected
+upstream reftests**. This is a pinned CSS reftest pilot, not the full WPT suite
 or a JavaScript conformance score. The tests use the real Rust navigation,
-resource-loading and painting code. [Method and commands](docs/WPT.md).
+resource-loading, painting and restricted script-worker code. [Method and commands](docs/WPT.md).
 The website reruns the selection before every commit's Pages deployment and
 publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
 The goal is more genuine passes, without hiding failures or losing old passes.
-v0.9.1 includes the first resulting CSS fixes. Current-source website scores may
+v0.9.2 completes all 24 tests in the initial cohort. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
@@ -137,8 +141,8 @@ See [updater behavior and trust](docs/UPDATES.md).
   OS/parent containment. Active detached listeners persist until removal/teardown.
 - Full CSS is not implemented. Flex/grid, positioning and stacking are bounded
   subsets; rounded corners, transforms and independently scrolling elements are
-  not implemented. Stylesheets remain same-origin with no imports or downloaded
-  fonts. PNG, JPEG, first-frame GIF and restricted static SVG images are supported;
+  not implemented. Stylesheets remain same-origin with no imports; `@font-face`
+  is limited to bounded same-origin `.ttf`/`.otf` fonts. PNG, JPEG, first-frame GIF and restricted static SVG images are supported;
   foreign HTTPS images are fetched without cookies. Unsupported or blocked images
   remain placeholders. Dynamic resources are not fetched.
 - Linux X11/XWayland is the supported GUI target. Cookies are memory-only.
@@ -154,7 +158,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.1.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.2.md) for manual install and uninstall.
 
 ## Components
 

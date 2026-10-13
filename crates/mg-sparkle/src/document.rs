@@ -1093,10 +1093,7 @@ fn build_tree(source: &str) -> Vec<Node> {
         && !nodes
             .iter()
             .any(|n| matches!(n.tag.as_str(), "body" | "frameset"))
-        && !nodes[0]
-            .children
-            .iter()
-            .any(|&id| nodes[id].tag == "svg")
+        && !nodes[0].children.iter().any(|&id| nodes[id].tag == "svg")
     {
         let container = nodes[0]
             .children
@@ -2121,6 +2118,11 @@ mod tests {
             "https://example.org/test.html",
         );
         assert!(implicit_body.query_selector(0, "body p").unwrap().is_some());
-        assert!(implicit_body.query_selector(0, "body div.box").unwrap().is_some());
+        assert!(
+            implicit_body
+                .query_selector(0, "body div.box")
+                .unwrap()
+                .is_some()
+        );
     }
 }

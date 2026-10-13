@@ -14,8 +14,14 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    to 7 PASS, 0 FAIL, 17 UNSUPPORTED / 24. Released at a89747f with exact-commit
    Rust/JSPLAN/Pages/release gates, public checksum/install, native WPT equality,
    Boa native/CDP journeys and actual v0.9.0 self-update/no-op checks verified.
-3. Reduce unsupported coverage through reviewed general XML/font/script harness
-   prerequisites. The 17 unsupported tests remain visible, not counted as passes.
+3. **In release validation:** v0.9.2 implements general XML/XHTML parsing,
+   signed margin-box block advancement, column flex fit-content cross sizing,
+   block static positioning for `inset: auto` overlays, aspect-ratio-only SVG
+   flex sizing, implicit `<body>` synthesis, row flex first-baseline alignment,
+   bounded same-origin `@font-face` TTF/OTF loading and DOM `element.style`
+   camelCase normalization. All 24 selected tests now pass (24 PASS, 0 FAIL,
+   0 UNSUPPORTED / 24). Finish exact-commit CI/Pages, v0.9.2 release and public
+   installer verification.
 4. Expand pinned cohorts and implement full testharness/WebDriver integration in
    separate milestones. Keep worker/resource limits and old regressions; each
    browser behavior improvement finishes with a verified public feature release.

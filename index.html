@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.9.1 Experimental Preview</title>
+<title>mgbrowser: v0.9.2 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -17,8 +17,8 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.1 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
-<p class="muted"><strong>Measured standards progress.</strong> This update fixes intrinsic widths and supported column baseline alignment. The pinned WPT pilot and remaining unsupported tests are reported below, freshly measured on every commit.</p>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.2 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<p class="muted"><strong>Measured standards progress.</strong> All 24 selected tests in the initial WPT flexbox reftest cohort now pass. The pinned WPT selection is reported below, freshly measured on every commit.</p>
 <p class="muted">Right-click Inspect element or press F12 for diagnostics. Ctrl+T opens a tab; drag tabs into windows or left/right groups. Smooth scrolling, themes, sizing, bookmarks and update progress with Restart now remain.</p>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
@@ -38,7 +38,7 @@
 <details><summary>Reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
 <p>Corpus SHA-256: <code class="wpt-fingerprint">a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd</code></p>
-<p>Browser source SHA-256: <code class="wpt-fingerprint">149a3db5819548a5c0a26b9885773e6a45025ac64209a307f3e0ff926c88d291</code></p>
+<p>Browser source SHA-256: <code class="wpt-fingerprint">05c7bd7cb559af656363079fcb636f041eb6ac5a7b3fe227ff516dc4c13e7dc1</code></p>
 </details>
 <!-- wpt-score:end -->
 </section>
@@ -62,7 +62,7 @@
 <section class="detail grid"><div><p class="eyebrow">Research after the release</p><h2>Leave a trail others can follow.</h2><p>Feature contracts, daily logs and reusable agent skills keep experiments reviewable. The proposed autoresearch evaluator, broader CSS/images and full CDP remain future work. This preview does not complete the formal Linux MVP gates.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/MVP.md">MVP plan</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/CONTRIBUTING.md">Contribute</a></p></div><div><p class="eyebrow">Built in the open</p><h2>Evidence over promises.</h2><p>Modern page, Promise, retained-event and GC/lifecycle tests accompany the Boa integration. The original engine's assertions and 26 native/26 CDP fixture journeys remain a separate research baseline. Exact release and public-install receipts live in the dated work log; local fixtures are not broad web compatibility.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/FEATURES.md">Feature specification</a> · <a href="https://github.com/pierce403/mgbrowser/tree/main/memory/logs">Daily logs</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/SKILLS.md">Skills</a></p><p class="muted">Our collaboration workflow draws from <a href="https://recurse.bot">Recurse</a>.</p></div></section>
 <section class="detail" id="status"><h2>Project status</h2>
 <!-- project-status:start -->
-<p class="muted">Latest work log: <time datetime="2026-09-23">2026-09-23</time>. Status comes from the repository’s feature specification.</p>
+<p class="muted">Latest work log: <time datetime="2026-10-13">2026-10-13</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
   <li><span>F-026 : Upstream Web Platform Tests coverage</span><small>in-progress</small></li>
   <li><span>F-025 : Google News desktop reading</span><small>in-progress</small></li>
