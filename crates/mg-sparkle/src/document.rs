@@ -459,9 +459,14 @@ pub fn parse(html: &str, page_url: &str) -> Document {
 }
 
 /// The scripting flag controls noscript projection and its meta-refresh effects.
-/// This remains the documented partial HTML tree builder, not full HTML parsing.
+/// This remains the documented partial HTML tree builder (plus bounded XML/XHTML
+/// parsing for XML/XHTML documents), not full HTML5 parsing.
 pub fn parse_with_scripting(html: &str, page_url: &str, scripting: bool) -> Document {
-    let nodes = build_tree(html);
+    let nodes = if is_xml_source(html, page_url) {
+        build_xml_tree(html)
+    } else {
+        build_tree(html)
+    };
     project_arena(nodes, page_url, scripting).0
 }
 
@@ -703,6 +708,130 @@ fn meta_refresh(content: &str, page_url: &str) -> Option<String> {
     };
     let resolved = resolve(page_url, destination)?;
     matches!(url::Url::parse(&resolved).ok()?.scheme(), "http" | "https").then_some(resolved)
+}
+
+fn is_xml_source(source: &str, page_url: &str) -> bool {
+    let path = url::Url::parse(page_url)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_else(|| page_url.to_ascii_lowercase());
+    if path.ends_with(".xht") || path.ends_with(".xhtml") || path.ends_with(".xml") {
+        return true;
+    }
+    let trimmed = source.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with("<?xml") {
+        return true;
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("<!DOCTYPE")
+        .or_else(|| trimmed.strip_prefix("<!doctype"))
+        && let Some(end) = rest.find('>')
+    {
+        return rest[..end].to_ascii_lowercase().contains("xhtml");
+    }
+    false
+}
+
+pub(crate) fn has_internal_dtd_or_entity(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    if lower.contains("<!entity") {
+        return true;
+    }
+    if let Some(pos) = lower.find("<!doctype") {
+        let rest = &source[pos + "<!doctype".len()..];
+        let mut quote = 0u8;
+        for byte in rest.bytes() {
+            if quote != 0 {
+                if byte == quote {
+                    quote = 0;
+                }
+            } else if byte == b'\'' || byte == b'"' {
+                quote = byte;
+            } else if byte == b'[' {
+                return true;
+            } else if byte == b'>' {
+                break;
+            }
+        }
+    }
+    false
+}
+
+fn build_xml_tree(source: &str) -> Vec<Node> {
+    let mut nodes = vec![Node {
+        tag: "#document".to_owned(),
+        attributes: Vec::new(),
+        text: String::new(),
+        parent: 0,
+        children: Vec::new(),
+    }];
+    if source.len() > MAX_SOURCE || has_internal_dtd_or_entity(source) {
+        return nodes;
+    }
+    let Ok(xml) = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: MAX_NODES as u32,
+        },
+    ) else {
+        return nodes;
+    };
+    let mut stack: Vec<(roxmltree::Node<'_, '_>, usize, usize)> = xml
+        .root()
+        .children()
+        .rev()
+        .map(|child| (child, 0usize, 1usize))
+        .collect();
+    while let Some((xml_node, parent_id, depth)) = stack.pop() {
+        if nodes.len() >= MAX_NODES {
+            break;
+        }
+        if xml_node.is_element() {
+            if depth >= MAX_DEPTH {
+                break;
+            }
+            let tag = xml_node.tag_name().name().to_ascii_lowercase();
+            if tag.is_empty()
+                || tag.len() > MAX_ATTRIBUTE
+                || !tag
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+            {
+                continue;
+            }
+            let mut attributes = Vec::new();
+            for attr in xml_node.attributes() {
+                let key = attr.name().to_ascii_lowercase();
+                let value = attr.value();
+                if attributes.len() < 256
+                    && !key.is_empty()
+                    && key.len() <= 256
+                    && value.len() <= MAX_ATTRIBUTE
+                    && !attributes.iter().any(|(old, _)| *old == key)
+                {
+                    attributes.push((key, value.to_owned()));
+                }
+            }
+            let id = nodes.len();
+            nodes.push(Node {
+                tag,
+                attributes,
+                text: String::new(),
+                parent: parent_id,
+                children: Vec::new(),
+            });
+            nodes[parent_id].children.push(id);
+            for child in xml_node.children().rev() {
+                stack.push((child, id, depth + 1));
+            }
+        } else if xml_node.is_text()
+            && let Some(text) = xml_node.text()
+        {
+            add_text(&mut nodes, parent_id, text.to_owned());
+        }
+    }
+    nodes
 }
 
 fn build_tree(source: &str) -> Vec<Node> {
@@ -1780,5 +1909,52 @@ mod tests {
             meta_refresh("0;url=data:text/html,hello", "https://example.org/"),
             None
         );
+    }
+
+    #[test]
+    fn xhtml_strict_cdata_stylesheet_and_dtd_rejection() {
+        let xhtml = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+ <head>
+  <title>CSS Reftest Reference</title>
+  <link rel="author" title="Gérard Talbot" href="http://www.gtalbot.org/BrowserBugsSection/css21testsuite/" />
+  <style type="text/css"><![CDATA[
+  div
+  {
+  background-color: green;
+  height: 100px;
+  width: 100px;
+  }
+  ]]></style>
+ </head>
+ <body>
+  <p>Test passes if there is a filled green square and <strong>no red</strong>.</p>
+  <div></div>
+ </body>
+</html>"#;
+        let doc = parse(
+            xhtml,
+            "http://127.0.0.1/css/reference/ref-filled-green-100px-square.xht",
+        );
+        assert_eq!(doc.title, "CSS Reftest Reference");
+        assert_eq!(doc.stylesheets.len(), 1);
+        assert!(doc.stylesheets[0].css.contains("background-color: green;"));
+        assert!(!doc.stylesheets[0].css.contains("CDATA"));
+        assert!(doc.items.iter().any(|item| matches!(
+            item,
+            Item::Text { text, .. } if text == "Test passes if there is a filled green square and no red."
+        )));
+        let div = doc.query_selector(0, "body div").unwrap().unwrap();
+        assert_eq!(doc.nodes[div].tag, "div");
+
+        let with_internal_dtd = r#"<!DOCTYPE html [<!ENTITY xxe "secret">]><html xmlns="http://www.w3.org/1999/xhtml"><body><p>&xxe;</p></body></html>"#;
+        let rejected = parse(with_internal_dtd, "https://example.org/test.xht");
+        assert_eq!(rejected.nodes.len(), 1);
+        assert!(rejected.items.is_empty());
+
+        let malformed = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>unclosed</body></html>"#;
+        let rejected_malformed = parse(malformed, "https://example.org/test.xhtml");
+        assert_eq!(rejected_malformed.nodes.len(), 1);
+        assert!(rejected_malformed.items.is_empty());
     }
 }
