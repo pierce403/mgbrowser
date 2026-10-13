@@ -2910,6 +2910,65 @@ impl Layout<'_, '_> {
         self.scene.box_for(id, r);
         self.hit(id, r);
     }
+
+    pub(super) fn first_baseline(&mut self, id: usize, width: f32, depth: usize) -> Option<f32> {
+        if !self.spend(depth)
+            || self.styles[id].display == Display::None
+            || matches!(
+                self.styles[id].layout.position,
+                crate::style::Position::Absolute | crate::style::Position::Fixed
+            )
+            || self.is_replaced(id)
+        {
+            return None;
+        }
+        if self.document.nodes[id].tag == "#text" {
+            if self.document.nodes[id].text.trim().is_empty() {
+                return None;
+            }
+            let lh = self.line_height(id);
+            let fs = self.styles[id].font_size;
+            return Some(fs + (lh - fs).max(0.0) * 0.1);
+        }
+        let (_, p) = self.edges(id, width);
+        let inner_w = (width - p[1] - p[3]).max(0.0);
+        let mut y = p[0];
+        let children = self.document.nodes[id].children.clone();
+        for child in children {
+            if self.styles[child].display == Display::None
+                || matches!(
+                    self.styles[child].layout.position,
+                    crate::style::Position::Absolute | crate::style::Position::Fixed
+                )
+            {
+                continue;
+            }
+            if self.document.nodes[child].tag == "#text" {
+                if !self.document.nodes[child].text.trim().is_empty() {
+                    let lh = self.line_height(child);
+                    let fs = self.styles[child].font_size;
+                    return Some(y + fs + (lh - fs).max(0.0) * 0.1);
+                }
+            } else if is_block(self.styles[child].display) {
+                let (m, _) = self.edges(child, inner_w);
+                if let Some(b) = self.first_baseline(child, inner_w, depth + 1) {
+                    return Some(y + m[0] + b);
+                }
+                let (_, h) =
+                    self.block_layout::<false>(child, 0.0, 0.0, inner_w, None, None, depth + 1);
+                y += h;
+            } else if self.styles[child].display == Display::InlineBlock
+                && self.styles[child].layout.overflow != [crate::style::Overflow::Visible; 2]
+            {
+                let (_, h) =
+                    self.block_layout::<false>(child, 0.0, 0.0, inner_w, None, None, depth + 1);
+                return Some(y + h.max(0.0));
+            } else if let Some(b) = self.first_baseline(child, inner_w, depth + 1) {
+                return Some(y + b);
+            }
+        }
+        None
+    }
 }
 
 fn is_format(display: Display) -> bool {

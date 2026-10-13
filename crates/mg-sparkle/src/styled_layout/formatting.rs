@@ -6,7 +6,8 @@
 use super::formatting_style::{LeafStyle, StyleView};
 use super::{Intrinsic, Layout, MAX_DEPTH, MAX_EXTENT, Rect, Token, is_css_space};
 use crate::style::{
-    BoxSizing, Display, GridAutoFlow, GridLine, IntrinsicSize, Length, Position, WhiteSpace,
+    AlignKeyword, BoxSizing, Display, FlexDirection, GridAutoFlow, GridLine, IntrinsicSize, Length,
+    Position, WhiteSpace,
 };
 use std::{cell::Cell, ops::Range};
 use taffy::{
@@ -948,7 +949,7 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
             } else {
                 let style = LeafStyle::from(tree.view(index));
                 let invalid_calc = Cell::new(false);
-                let output = compute_leaf_layout(
+                let mut output = compute_leaf_layout(
                     input,
                     &style,
                     |_, _| {
@@ -968,6 +969,53 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                 );
                 if invalid_calc.get() {
                     tree.invalid.set(true);
+                }
+                let root_style = &tree.layout.styles[tree.slots[0].node];
+                if matches!(root_style.display, Display::Flex | Display::InlineFlex)
+                    && matches!(
+                        root_style.layout.flex_direction,
+                        FlexDirection::Row | FlexDirection::RowReverse
+                    )
+                {
+                    let baseline_aligned = match tree.slots[index].kind {
+                        Kind::Element => {
+                            let item_style = &tree.layout.styles[tree.slots[index].node];
+                            let align = if item_style.layout.align_self.keyword == AlignKeyword::Auto
+                            {
+                                root_style.layout.align_items.keyword
+                            } else {
+                                item_style.layout.align_self.keyword
+                            };
+                            align == AlignKeyword::Baseline
+                        }
+                        Kind::Anonymous { .. } => {
+                            root_style.layout.align_items.keyword == AlignKeyword::Baseline
+                        }
+                        Kind::Root => false,
+                    };
+                    if baseline_aligned {
+                        output.baselines.first = match tree.slots[index].kind {
+                            Kind::Element => tree.layout.first_baseline(
+                                tree.slots[index].node,
+                                output.size.width,
+                                tree.depth + 1,
+                            ),
+                            Kind::Anonymous { start, end } => {
+                                let children =
+                                    tree.layout.document.nodes[tree.slots[0].node].children
+                                        [start..end]
+                                        .to_vec();
+                                children.into_iter().find_map(|child| {
+                                    tree.layout.first_baseline(
+                                        child,
+                                        output.size.width,
+                                        tree.depth + 1,
+                                    )
+                                })
+                            }
+                            Kind::Root => None,
+                        };
+                    }
                 }
                 output
             };
@@ -1424,6 +1472,41 @@ mod tests {
                 let second_box = layout.scene.boxes.iter().find(|b| b.node == second).unwrap();
                 assert_eq!((first_box.x, first_box.y, first_box.width, first_box.height), (0, 0, 100, 40));
                 assert_eq!((second_box.x, second_box.y, second_box.width, second_box.height), (0, 40, 100, 60));
+            },
+        );
+    }
+
+    #[test]
+    fn row_flexbox_baseline_aligns_normal_block_with_overflow_hidden() {
+        with_layout(
+            r#"<style>
+            #root {
+                display: flex;
+                align-items: baseline;
+                font-size: 25px;
+                line-height: 1;
+            }
+            #overflow {
+                overflow: hidden;
+                height: 2em;
+            }
+            </style>
+            <div id=root>
+              <span id=first>XX</span>
+              <div id=second><div id=overflow>YY</div></div>
+            </div>"#,
+            |layout, id| {
+                assert!(
+                    run::<true>(layout, id, 0.0, 0.0, AvailableSpace::Definite(200.0), None, 0)
+                        .is_some()
+                );
+                let first = layout.document.query_selector(0, "#first").unwrap().unwrap();
+                let second = layout.document.query_selector(0, "#second").unwrap().unwrap();
+                let first_box = layout.scene.boxes.iter().find(|b| b.node == first).unwrap();
+                let second_box = layout.scene.boxes.iter().find(|b| b.node == second).unwrap();
+                assert_eq!(first_box.y, 0);
+                assert_eq!(second_box.y, 0);
+                assert_eq!(second_box.height, 50);
             },
         );
     }
