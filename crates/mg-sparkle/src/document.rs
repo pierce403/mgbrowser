@@ -826,6 +826,9 @@ fn is_xml_source(source: &str, page_url: &str) -> bool {
     if path.ends_with(".xht") || path.ends_with(".xhtml") || path.ends_with(".xml") {
         return true;
     }
+    if path.ends_with(".html") || path.ends_with(".htm") {
+        return false;
+    }
     let trimmed = source.trim_start_matches('\u{feff}').trim_start();
     if trimmed.starts_with("<?xml") {
         return true;
