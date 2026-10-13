@@ -334,6 +334,24 @@ fn valid_name(name: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
 }
+fn css_property_name(name: &str) -> String {
+    if name == "cssFloat" {
+        return "float".into();
+    }
+    if name.starts_with("--") {
+        return name.into();
+    }
+    let mut out = String::with_capacity(name.len() + 4);
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('-');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
 fn void(tag: &str) -> bool {
     matches!(
         tag,
@@ -802,10 +820,11 @@ impl Host for BrowserHost {
             let value = if key == "cssText" {
                 style
             } else {
+                let property = css_property_name(key);
                 style
                     .split(';')
                     .filter_map(|v| v.split_once(':'))
-                    .find(|(n, _)| n.trim() == key)
+                    .find(|(n, _)| n.trim() == property)
                     .map(|(_, v)| v.trim())
                     .unwrap_or("")
             };
@@ -868,6 +887,8 @@ impl Host for BrowserHost {
                     .unwrap_or_default(),
             ),
             "style" => Value::Host(format!("style:{id}")),
+            "offsetTop" | "offsetLeft" | "offsetWidth" | "offsetHeight" | "clientTop"
+            | "clientLeft" | "clientWidth" | "clientHeight" => Value::Number(0.),
             "parentNode" => {
                 if id == 0 || node.parent == id {
                     Value::Null
@@ -940,12 +961,16 @@ impl Host for BrowserHost {
             let style = if key == "cssText" {
                 text
             } else {
+                let property = css_property_name(key);
                 let mut declarations: Vec<_> = old
                     .split(';')
-                    .filter(|part| part.split_once(':').is_some_and(|(n, _)| n.trim() != key))
+                    .filter(|part| {
+                        part.split_once(':')
+                            .is_some_and(|(n, _)| n.trim() != property)
+                    })
                     .map(str::to_string)
                     .collect();
-                declarations.push(format!("{key}:{text}"));
+                declarations.push(format!("{property}:{text}"));
                 declarations.join(";")
             };
             return self.attr(id, "style", style);
@@ -1267,5 +1292,19 @@ mod tests {
         assert!(!reply.applied);
         assert_eq!(reply.scripts_executed, 0);
         assert!(reply.allocations.is_none());
+    }
+    #[test]
+    fn camel_case_style_properties_and_layout_readback_update_serialized_style() {
+        let reply = execute(Request {
+            url: "http://localhost/flex".into(),
+            html: "<!DOCTYPE html><div id=\"target\" style=\"display: flex; min-height: 200px;\"><div style=\"width: 100px; min-height: 100px; background: green;\"></div></div><script>document.body.offsetTop;document.getElementById('target').style.alignItems = 'flex-start';</script>".into(),
+        });
+        assert!(reply.applied && reply.errors.is_empty(), "{:?}", reply.errors);
+        let doc = document::parse_with_scripting(&reply.html, "http://localhost/flex", true);
+        let target = doc.query_selector(0, "#target").unwrap().unwrap();
+        assert_eq!(
+            doc.nodes[target].attr("style"),
+            Some("display: flex; min-height: 200px;align-items:flex-start")
+        );
     }
 }
