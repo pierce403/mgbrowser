@@ -1,9 +1,14 @@
-//! Static WPT adapter over the real Chassis navigation, resources and paint path.
+//! WPT reftest adapter over the real Chassis navigation, resources, paint and
+//! restricted Linux script-worker path.
 //!
-//! This is not WebDriver or a script/testharness executor. The caller serves a
-//! reviewed pinned static selection on loopback and enforces the outer timeout.
-//! Run: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX
-use mg_chassis::{Browser, scripts::DisabledScripts};
+//! This is not WebDriver or a general testharness executor. The caller serves a
+//! reviewed pinned selection on loopback and enforces the outer timeout.
+//! Run: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX [--enable-scripts]
+use mg_browser::platform::{self, script_worker};
+use mg_chassis::{
+    Browser,
+    scripts::{DisabledScripts, ScriptRuntime},
+};
 use mg_sparkle::{
     paint::{Canvas, Fonts},
     render::{self, Controls, Viewport},
@@ -17,6 +22,10 @@ use std::{
     time::{Duration, Instant},
 };
 use url::Url;
+
+#[global_allocator]
+static ALLOCATOR: platform::worker_memory::WorkerAllocator =
+    platform::worker_memory::WorkerAllocator;
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
@@ -82,11 +91,22 @@ fn rgb_bytes(canvas: &Canvas) -> Result<Vec<u8>, String> {
     Ok(rgb)
 }
 
-fn render_page(url: &str, font_path: &Path, prefix: &Path) -> Result<(), String> {
+fn render_page(
+    url: &str,
+    font_path: &Path,
+    prefix: &Path,
+    enable_scripts: bool,
+) -> Result<(), String> {
     let requested = local_url(url)?;
     let font = fs::read(font_path).map_err(|error| format!("Cannot read font: {error}"))?;
-    let mut browser = Browser::new(Fonts::from_bytes(font.clone())?, Arc::new(DisabledScripts));
+    let scripts: Arc<dyn ScriptRuntime> = if enable_scripts {
+        Arc::new(platform::LinuxScripts::default())
+    } else {
+        Arc::new(DisabledScripts)
+    };
+    let mut browser = Browser::new(Fonts::from_bytes(font.clone())?, scripts.clone());
     browser.set_chrome(false);
+    browser.set_scripts_enabled(enable_scripts);
     browser.resize(WIDTH, HEIGHT);
     browser.navigate(requested.to_string(), None, false);
     let deadline = Instant::now() + LOAD_TIMEOUT;
@@ -99,6 +119,14 @@ fn render_page(url: &str, font_path: &Path, prefix: &Path) -> Result<(), String>
     }
     if !browser.last_load_succeeded() {
         return Err(format!("Navigation failed: {}", browser.status()));
+    }
+    if enable_scripts
+        && (!browser.status().contains("JS: ")
+            || browser.status().contains("errors")
+            || browser.status().contains("JS rejected")
+            || browser.status().contains("JS worker failed"))
+    {
+        return Err(format!("Script execution failed: {}", browser.status()));
     }
     check_final_url(&requested, browser.page_url())?;
     let canvas = browser.paint();
@@ -139,10 +167,17 @@ fn render_page(url: &str, font_path: &Path, prefix: &Path) -> Result<(), String>
             })
         })
         .collect();
+    let final_url = browser.page_url().to_owned();
+    let resource_warnings = browser.document().resource_warnings.clone();
+    let stylesheets = browser.document().stylesheets.len();
+    let resources = browser.document().resources.len();
+    let status = browser.status().to_owned();
+    drop(browser);
+    scripts.wait_idle()?;
     let report = json!({
         "schema_version": 1,
         "url": url,
-        "final_url": browser.page_url(),
+        "final_url": final_url,
         "width": WIDTH,
         "height": HEIGHT,
         "scale": 1,
@@ -150,11 +185,11 @@ fn render_page(url: &str, font_path: &Path, prefix: &Path) -> Result<(), String>
         "content_height": frame.content_height,
         "diagnostics": diagnostics,
         "diagnostics_omitted": frame.diagnostics.omitted,
-        "resource_warnings": browser.document().resource_warnings,
-        "stylesheets": browser.document().stylesheets.len(),
-        "resources": browser.document().resources.len(),
-        "status": browser.status(),
-        "scripts": false,
+        "resource_warnings": resource_warnings,
+        "stylesheets": stylesheets,
+        "resources": resources,
+        "status": status,
+        "scripts": enable_scripts,
         "browser_replay_equal": true,
     });
     let png_path = artifact_path(prefix, ".png");
@@ -166,18 +201,40 @@ fn render_page(url: &str, font_path: &Path, prefix: &Path) -> Result<(), String>
         serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?,
     )
     .map_err(|error| format!("Cannot write report: {error}"))?;
-    println!("WPT_RENDER_OK {} {}x{}", browser.page_url(), WIDTH, HEIGHT);
+    println!("WPT_RENDER_OK {} {}x{}", final_url, WIDTH, HEIGHT);
     Ok(())
 }
 
 fn main() -> Result<(), String> {
+    // Worker dispatch must precede fonts, networking and browser setup.
+    match std::env::args().nth(1).as_deref() {
+        Some("--script-worker") => script_worker::worker_entry(),
+        Some("--script-session") => script_worker::session_entry(),
+        _ => {}
+    }
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 3 || args[2].is_empty() {
+    let enable_scripts = match args.len() {
+        3 => false,
+        4 if args[3] == "--enable-scripts" => true,
+        _ => {
+            return Err(
+                "Usage: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX [--enable-scripts]"
+                    .into(),
+            );
+        }
+    };
+    if args[2].is_empty() {
         return Err(
-            "Usage: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX".into(),
+            "Usage: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX [--enable-scripts]"
+                .into(),
         );
     }
-    render_page(&args[0], Path::new(&args[1]), Path::new(&args[2]))
+    render_page(
+        &args[0],
+        Path::new(&args[1]),
+        Path::new(&args[2]),
+        enable_scripts,
+    )
 }
 
 #[cfg(test)]

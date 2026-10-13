@@ -109,7 +109,7 @@ class CorpusTests(unittest.TestCase):
             pages = [test["path"]] + [edge["path"] for edge in test["references"]]
             if not any(runner.prerequisites(page, files) for page in pages):
                 runnable.append(test["path"])
-        self.assertEqual(len(runnable), 7)
+        self.assertEqual(len(runnable), 24)
 
 
 class PrerequisiteTests(unittest.TestCase):
@@ -123,9 +123,18 @@ class PrerequisiteTests(unittest.TestCase):
         self.assertEqual(self.reasons('<link rel="stylesheet" href="box.css"><div></div>',
                                      extras={"box.css": b"div { width: 20px; background: green }"}), "")
 
-    def test_scripts_event_handlers_and_wait_protocols_are_unsupported(self):
+    def test_inline_html_scripts_xml_and_local_font_face_are_admitted(self):
+        self.assertEqual(self.reasons("<script>void 0</script>"), "")
+        self.assertEqual(self.reasons("<html/>", "xht"), "")
+        self.assertEqual(self.reasons("<html/>", "xhtml"), "")
+        self.assertEqual(self.reasons("<html/>", "xml"), "")
+        self.assertEqual(self.reasons("div { font-family: Ahem }", "css"), "")
+        self.assertEqual(self.reasons("@font-face { font-family: Custom }", "css"), "")
+
+    def test_external_scripts_event_handlers_and_wait_protocols_are_unsupported(self):
         for body, reason in (
-            ("<script>void 0</script>", "script setup"),
+            ('<script src="/resources/testharness.js"></script>', "script setup"),
+            ('<script type="module">void 0</script>', "script setup"),
             ('<body onload="void 0">', "event-handler"),
             ('<html class="reftest-wait">', "reftest-wait"),
             ('<html class="test-wait">', "reftest-wait"),
@@ -140,13 +149,8 @@ class PrerequisiteTests(unittest.TestCase):
         self.assertIn("event-handler", self.reasons('<svg onload="void 0"/>', "svg"))
         self.assertIn("external references", self.reasons('<svg><use href="#shape"/></svg>', "svg"))
 
-    def test_xml_fonts_imports_timing_and_server_metadata_are_unsupported(self):
+    def test_imports_timing_and_server_metadata_are_unsupported(self):
         for body, suffix, expected in (
-            ("<html/>", "xht", "XML/XHTML"),
-            ("<html/>", "xhtml", "XML/XHTML"),
-            ("<html/>", "xml", "XML/XHTML"),
-            ("div { font-family: Ahem }", "css", "Ahem/webfont"),
-            ("@font-face { font-family: Custom }", "css", "Ahem/webfont"),
             ('@import "other.css";', "css", "CSS imports"),
             ("div { animation-duration: 1s }", "css", "animation/timing"),
             ("div { transition: width 1s }", "css", "animation/timing"),
@@ -170,8 +174,8 @@ class PrerequisiteTests(unittest.TestCase):
                     '<link rel="stylesheet" href="' + href + '">'))
 
     def test_transitive_css_requirements_and_cycles_are_bounded(self):
-        self.assertIn("Ahem/webfont", self.reasons('<link rel="stylesheet" href="font.css">',
-                                                 extras={"font.css": b"body { font-family: Ahem }"}))
+        self.assertIn("CSS imports", self.reasons('<link rel="stylesheet" href="import.css">',
+                                                  extras={"import.css": b'@import "other.css";'}))
         self.assertEqual(self.reasons('body { background-image: url(test.css) }', "css"), "")
 
 

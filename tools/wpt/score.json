@@ -4,9 +4,9 @@
     "CRASH": 0,
     "ERROR": 0,
     "FAIL": 0,
-    "PASS": 23,
+    "PASS": 24,
     "TIMEOUT": 0,
-    "UNSUPPORTED": 1,
+    "UNSUPPORTED": 0,
     "total": 24
   },
   "results": [
@@ -51,7 +51,7 @@
       "test": "css/css-flexbox/align-items-007.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-items-008.html"
     },
     {
@@ -109,6 +109,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "658f9435518173c9e727de072c22afaf31c4e0f8992dde321f160142c1f07e59",
+  "source_sha256": "149a3db5819548a5c0a26b9885773e6a45025ac64209a307f3e0ff926c88d291",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

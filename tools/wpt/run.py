@@ -53,17 +53,25 @@ def resource_path(base, href):
 
 
 class Markup(HTMLParser):
-    def __init__(self, text):
+    def __init__(self, text, suffix=".html"):
         super().__init__(convert_charrefs=True)
+        self.suffix = suffix.lower()
         self.references = []
         self.resources = []
         self.reasons = []
+        self.inline_scripts = False
         self.feed(text)
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
         rel = (attrs.get("rel") or "").lower().split()
-        if tag in ("script", "iframe", "object", "embed", "base", "video", "audio"):
+        if tag == "script":
+            kind = (attrs.get("type") or "").strip().lower()
+            if self.suffix not in (".html", "html") or "src" in attrs or kind == "module":
+                self.reasons.append("script setup is outside the static adapter")
+            else:
+                self.inline_scripts = True
+        elif tag in ("iframe", "object", "embed", "base", "video", "audio"):
             self.reasons.append(f"{tag} setup is outside the static adapter")
         if any(name.startswith("on") for name in attrs):
             self.reasons.append("event-handler setup requires scripting")
@@ -84,6 +92,13 @@ class Markup(HTMLParser):
                 self.reasons.append("responsive image selection is not implemented")
 
     handle_startendtag = handle_starttag
+
+
+def uses_inline_scripts(name, files):
+    suffix = PurePosixPath(name).suffix.lower()
+    if suffix != ".html":
+        return False
+    return Markup(files[name].decode("utf-8"), suffix=suffix).inline_scripts
 
 
 def load_corpus(path=HERE / "corpus.json", upstream=HERE / "upstream"):
@@ -111,7 +126,7 @@ def load_corpus(path=HERE / "corpus.json", upstream=HERE / "upstream"):
         raise ValueError("Changed, duplicate or unsorted test denominator")
     for test in corpus["tests"]:
         name = safe_path(test["path"])
-        parsed = Markup(files[name].decode("utf-8"))
+        parsed = Markup(files[name].decode("utf-8"), suffix=PurePosixPath(name).suffix)
         edges = [{"relation": relation, "href": href, "path": resource_path(name, href)}
                  for relation, href in parsed.references]
         if not edges or edges != test["references"]:
@@ -136,7 +151,7 @@ def prerequisites(name, files, visited=None):
     text = files[name].decode("utf-8")
     reasons, resources = [], []
     if suffix in (".html", ".xht", ".xhtml", ".xml", ".svg"):
-        markup = Markup(text)
+        markup = Markup(text, suffix=suffix)
         reasons.extend(markup.reasons)
         resources.extend(markup.resources)
     for pattern, reason in (
@@ -235,7 +250,7 @@ def relations_pass(comparisons):
     return bool(comparisons) and (not matches or any(matches)) and all(mismatches)
 
 
-def page_failure(metadata):
+def page_failure(metadata, scripts=False):
     if (not isinstance(metadata, dict) or not isinstance(metadata.get("diagnostics"), list)
             or not all(isinstance(item, dict) and isinstance(item.get("kind"), str)
                        for item in metadata["diagnostics"])
@@ -245,7 +260,7 @@ def page_failure(metadata):
         return "ERROR", "Malformed renderer metadata"
     if (metadata.get("schema_version") != 1 or metadata.get("width") != WIDTH
             or metadata.get("height") != HEIGHT or metadata.get("scale") != 1
-            or metadata.get("scripts") is not False or metadata.get("browser_replay_equal") is not True):
+            or metadata.get("scripts") is not scripts or metadata.get("browser_replay_equal") is not True):
         return "ERROR", "Invalid viewport/execution/replay evidence"
     if metadata.get("resource_warnings"):
         return "FAIL", "Resource loading failed or was incomplete"
@@ -260,13 +275,16 @@ def page_failure(metadata):
     return None
 
 
-def render_page(binary, font, base, name, output, timeout=45):
+def render_page(binary, font, base, name, output, timeout=45, scripts=False):
     prefix = output / digest(name.encode())[:20]
     began = time.monotonic()
     environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    command = [str(binary), base + name, str(font), str(prefix)]
+    if scripts:
+        command.append("--enable-scripts")
     with prefix.with_suffix(".log").open("wb") as log:
         try:
-            process = subprocess.run([str(binary), base + name, str(font), str(prefix)],
+            process = subprocess.run(command,
                                      cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT,
                                      timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -286,7 +304,7 @@ def render_page(binary, font, base, name, output, timeout=45):
         non_uniform = pixels != pixels[:3] * (WIDTH * HEIGHT)
         if non_uniform != metadata.get("non_uniform"):
             raise ValueError("Pixel content disagrees with nonuniform-frame evidence")
-        failure = page_failure(metadata)
+        failure = page_failure(metadata, scripts=scripts)
         return {"status": failure[0] if failure else "OK", "reason": failure[1] if failure else "",
                 "artifact": prefix.name, "rgb_sha256": digest(pixels), "metadata": metadata,
                 "elapsed_ms": round((time.monotonic() - began) * 1000, 2)}
@@ -385,8 +403,8 @@ def main():
                       git_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                       git_dirty=bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
                       viewport={"width": WIDTH, "height": HEIGHT, "scale": 1},
-                      limitations=["Selected static reftests only, not full WPT or wptrunner",
-                                   "No testharness.js, WebDriver, script setup, downloaded fonts, XML, fuzzy matching or scrollbar protocol",
+                      limitations=["Selected reftests only, not full WPT or wptrunner",
+                                   "No testharness.js, WebDriver, external scripts, fuzzy matching or scrollbar protocol",
                                    "Reftest equality is not an independent proof that all reference features are implemented"])
         write_json(report_path, report)
         with serve(files | CONTROL_FILES) as (base, requests):
@@ -401,7 +419,8 @@ def main():
                 if not item["reasons"]:
                     for page in pages:
                         if page not in cache:
-                            cache[page] = render_page(args.binary, args.font, base, page, args.output)
+                            cache[page] = render_page(args.binary, args.font, base, page, args.output,
+                                                      scripts=uses_inline_scripts(page, files))
                     item["pages"] = {page: cache[page] for page in pages}
                     failed = [cache[page] for page in pages if cache[page]["status"] != "OK"]
                     if failed:
