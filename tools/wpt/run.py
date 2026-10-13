@@ -140,7 +140,6 @@ def prerequisites(name, files, visited=None):
         reasons.extend(markup.reasons)
         resources.extend(markup.resources)
     for pattern, reason in (
-        (r"\bAhem\b|@font-face", "Ahem/webfont selection unavailable"),
         (r"@import", "CSS imports unavailable"),
         (r"\b(?:animation|transition)(?:-[\w-]+)?\s*:", "animation/timing protocol unavailable"),
         (r"\{\{", "WPT server substitution unavailable"),

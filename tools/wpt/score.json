@@ -4,9 +4,9 @@
     "CRASH": 0,
     "ERROR": 0,
     "FAIL": 0,
-    "PASS": 20,
+    "PASS": 23,
     "TIMEOUT": 0,
-    "UNSUPPORTED": 4,
+    "UNSUPPORTED": 1,
     "total": 24
   },
   "results": [
@@ -43,7 +43,7 @@
       "test": "css/css-flexbox/align-content_stretch.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-items-006.html"
     },
     {
@@ -55,11 +55,11 @@
       "test": "css/css-flexbox/align-items-008.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-items-009.html"
     },
     {
-      "status": "UNSUPPORTED",
+      "status": "PASS",
       "test": "css/css-flexbox/align-items-baseline-overflow-non-visible.html"
     },
     {
@@ -109,6 +109,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "422bf8a6bc7b70ca1bec49770b12839d6e213b32ed308be352e1865c79da6283",
+  "source_sha256": "7621f89a815467f114c6149c2ac8754403d52791fc02b1a06912fabf8074ec66",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }
