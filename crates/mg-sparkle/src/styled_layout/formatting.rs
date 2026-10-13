@@ -647,7 +647,30 @@ impl Adapter<'_, '_, '_> {
             available.width.into_option()?.max(0.0)
         } else {
             let intrinsic = self.intrinsic(index)?;
-            match available.width {
+            let available_width = match available.width {
+                AvailableSpace::MaxContent => {
+                    let root = &self.layout.styles[self.slots[0].node];
+                    if matches!(root.display, Display::Flex | Display::InlineFlex)
+                        && matches!(
+                            root.layout.flex_direction,
+                            crate::style::FlexDirection::Column
+                                | crate::style::FlexDirection::ColumnReverse
+                        )
+                        && let Some(parent_width) = input.parent_size.width
+                    {
+                        let (margin, padding) =
+                            self.layout.edges(self.slots[index].node, parent_width);
+                        AvailableSpace::Definite(
+                            (parent_width - margin[1] - margin[3] - padding[1] - padding[3])
+                                .max(0.0),
+                        )
+                    } else {
+                        AvailableSpace::MaxContent
+                    }
+                }
+                other => other,
+            };
+            match available_width {
                 AvailableSpace::MinContent => intrinsic.min,
                 AvailableSpace::MaxContent => intrinsic.max,
                 AvailableSpace::Definite(width) => {
@@ -1341,5 +1364,55 @@ mod tests {
             .item([GridLine::Line(-128), GridLine::Span(128)])
             .unwrap();
         assert_eq!(displaced.tracks(false), None);
+    }
+
+    #[test]
+    fn wrapping_column_flexbox_sizes_items_as_fit_content() {
+        with_layout(
+            r#"<style>
+            #root {
+                display: flex;
+                flex-wrap: wrap;
+                align-content: center;
+                flex-direction: column;
+                align-items: flex-start;
+                width: 100px;
+                line-height: 1;
+            }
+            #root > div {
+                min-height: 0;
+                background: green;
+            }
+            #root * {
+                vertical-align: top;
+            }
+            </style>
+            <div id=root>
+              <div id=first style="align-self: stretch;">
+                <div style="display: inline-block; width: 20px; height: 40px;"></div>
+              </div>
+              <div id=second style="height: 60px;">
+                <div style="display: inline-block; height: 15px; width: 20px;"></div>
+                <div style="display: inline-block; height: 15px; width: 100px;"></div>
+                <div style="display: inline-block; height: 15px; width: 100px;"></div>
+                <div style="display: inline-block; height: 15px; width: 100px;"></div>
+              </div>
+            </div>"#,
+            |layout, id| {
+                assert_eq!(
+                    run::<true>(layout, id, 0.0, 0.0, AvailableSpace::Definite(100.0), None, 0),
+                    Some(Size {
+                        width: 100.0,
+                        height: 100.0
+                    })
+                );
+                let first = layout.document.query_selector(0, "#first").unwrap().unwrap();
+                let second = layout.document.query_selector(0, "#second").unwrap().unwrap();
+                let first_box = layout.scene.boxes.iter().find(|b| b.node == first).unwrap();
+                let second_box = layout.scene.boxes.iter().find(|b| b.node == second).unwrap();
+                assert_eq!((first_box.x, first_box.y, first_box.width, first_box.height), (0, 0, 100, 40));
+                assert_eq!((second_box.x, second_box.y, second_box.width, second_box.height), (0, 40, 100, 60));
+            },
+        );
     }
 }

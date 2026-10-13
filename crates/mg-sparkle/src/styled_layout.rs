@@ -1629,12 +1629,29 @@ impl Layout<'_, '_> {
         } else {
             let children = node.children.clone();
             let mut current = 0.0;
+            let mut pending_space = 0.0;
             let mut result = Intrinsic::default();
             for child in children {
                 if matches!(
                     self.styles[child].layout.position,
                     crate::style::Position::Absolute | crate::style::Position::Fixed
-                ) {
+                ) || self.styles[child].display == Display::None
+                {
+                    continue;
+                }
+                if self.document.nodes[child].tag == "#text"
+                    && !matches!(s.white_space, WhiteSpace::Pre)
+                    && self.document.nodes[child].text.chars().all(is_css_space)
+                {
+                    if current > 0.0 {
+                        let v = if natural_replaced {
+                            self.measure_content_intrinsic(child, depth + 1)
+                                .unwrap_or_default()
+                        } else {
+                            self.intrinsic(child, depth + 1)
+                        };
+                        pending_space = v.max;
+                    }
                     continue;
                 }
                 // A content-only text measurement inherits typography, not an
@@ -1651,8 +1668,10 @@ impl Layout<'_, '_> {
                 if is_block(self.styles[child].display) {
                     result.max = result.max.max(current).max(v.max);
                     current = 0.0;
-                } else {
-                    current += v.max;
+                    pending_space = 0.0;
+                } else if v.max > 0.0 {
+                    current += pending_space + v.max;
+                    pending_space = 0.0;
                 }
             }
             result.max = result.max.max(current);
