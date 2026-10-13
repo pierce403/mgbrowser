@@ -1127,7 +1127,7 @@ impl Layout<'_, '_> {
         {
             return None;
         }
-        let size = self.block_layout::<false>(
+        let (w, h) = self.block_layout::<false>(
             id,
             0.0,
             0.0,
@@ -1136,7 +1136,7 @@ impl Layout<'_, '_> {
             forced_border_width,
             depth,
         );
-        (!self.exhausted).then_some(size)
+        (!self.exhausted).then_some((w, h.max(0.0)))
     }
     fn line_height(&self, node: usize) -> f32 {
         let s = &self.styles[node];
@@ -1762,7 +1762,8 @@ impl Layout<'_, '_> {
         forced: Option<f32>,
         depth: usize,
     ) -> (f32, f32) {
-        self.block_layout::<true>(id, x, y, available, containing_height, forced, depth)
+        let (w, h) = self.block_layout::<true>(id, x, y, available, containing_height, forced, depth);
+        (w, h.max(0.0))
     }
 
     // One calculation path for paint and measurement. EMIT=false never touches
@@ -1983,7 +1984,7 @@ impl Layout<'_, '_> {
         }
         (
             width + margin[1] + margin[3],
-            (h + margin[0] + margin[2]).max(0.0),
+            h + margin[0] + margin[2],
         )
     }
     fn finish_decoration(&mut self, start: usize, id: usize, r: Rect) {
@@ -2415,7 +2416,7 @@ impl Layout<'_, '_> {
         if !line.is_empty() {
             top += self.line::<EMIT>(id, x, top, width, containing_height, &line, used, depth + 1);
         }
-        top - y
+        (top - y).max(0.0)
     }
     fn inline_box_width(
         &mut self,
@@ -2604,6 +2605,7 @@ impl Layout<'_, '_> {
                             depth + 1,
                         )
                     };
+                    let h = h.max(0.0);
                     if EMIT && h < height {
                         self.scene.shift(start, 0.0, height - h);
                     }
@@ -3586,5 +3588,25 @@ mod tests {
         assert!(first.x > host.x);
         assert!(second.x > first.x);
         assert!(second.x + second.width as i32 <= host.x + host.width as i32);
+    }
+
+    #[test]
+    fn negative_vertical_block_margin_advances_following_siblings() {
+        let doc = crate::document::parse(
+            "<style>body{margin:0}#box{height:100px;width:100px}#top{height:25px;width:100px;margin-top:-100px}#bottom{height:25px;width:100px;margin-top:50px}</style><div id=box></div><div id=top></div><div id=bottom></div>",
+            "https://example.test/",
+        );
+        let frame = render_test(
+            &doc,
+            crate::style::compute_styles(&doc, &doc.stylesheets, (200.0, 100.0)).unwrap(),
+            200,
+            0,
+        );
+        let main = element_box(&doc, &frame, "#box");
+        let top = element_box(&doc, &frame, "#top");
+        let bottom = element_box(&doc, &frame, "#bottom");
+        assert_eq!((main.y, main.height), (0, 100));
+        assert_eq!((top.y, top.height), (0, 25));
+        assert_eq!((bottom.y, bottom.height), (75, 25));
     }
 }
