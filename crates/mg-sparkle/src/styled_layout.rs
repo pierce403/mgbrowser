@@ -342,6 +342,19 @@ pub(crate) fn render_scaled(
         });
     }
     let viewport_overflow = viewport_overflow_node(document, &styles);
+    fonts.clear_families();
+    for sheet in &document.stylesheets {
+        for (family, reference) in crate::document::font_face_rules(&sheet.css) {
+            if let Ok(mut url) =
+                url::Url::parse(&sheet.base_url).and_then(|base| base.join(reference.trim()))
+            {
+                url.set_fragment(None);
+                if let Some(resource) = document.resources.get(url.as_str()) {
+                    fonts.register_family(&family, resource.bytes.clone());
+                }
+            }
+        }
+    }
     let mut layout = Layout {
         document,
         fonts,
@@ -469,7 +482,7 @@ pub(crate) fn render_scaled(
                 }
                 let style = &layout.styles[*node];
                 canvas.text_weight(
-                    layout.fonts,
+                    layout.fonts.select_family(&style.font_families),
                     (
                         rect.x.round() as i32,
                         rect.y.round() as i32 - viewport.scroll,
@@ -1158,7 +1171,11 @@ impl Layout<'_, '_> {
     fn line_height(&self, node: usize) -> f32 {
         let s = &self.styles[node];
         s.line_height
-            .unwrap_or_else(|| self.fonts.css_line_height(s.font_size))
+            .unwrap_or_else(|| {
+                self.fonts
+                    .select_family_ref(&s.font_families)
+                    .css_line_height(s.font_size)
+            })
             .clamp(0.0, 1024.0)
     }
     fn edges(&self, node: usize, basis: f32) -> ([f32; 4], [f32; 4]) {
@@ -1615,6 +1632,7 @@ impl Layout<'_, '_> {
             let text = collapse(&node.text);
             let max = self
                 .fonts
+                .select_family(&s.font_families)
                 .width_weight(&text, s.font_size, s.font_weight >= 600);
             let min = if matches!(s.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre) {
                 max
@@ -1622,6 +1640,7 @@ impl Layout<'_, '_> {
                 text.split(is_css_space)
                     .map(|word| {
                         self.fonts
+                            .select_family(&s.font_families)
                             .width_weight(word, s.font_size, s.font_weight >= 600)
                     })
                     .fold(0.0, f32::max)
@@ -2269,9 +2288,10 @@ impl Layout<'_, '_> {
                 }
                 if is_css_space(ch) {
                     if !word.is_empty() {
-                        let width =
-                            self.fonts
-                                .width_weight(&word, s.font_size, s.font_weight >= 600);
+                        let width = self
+                            .fonts
+                            .select_family(&s.font_families)
+                            .width_weight(&word, s.font_size, s.font_weight >= 600);
                         out.push(Token::Word {
                             node: id,
                             text: std::mem::take(&mut word),
@@ -2283,6 +2303,7 @@ impl Layout<'_, '_> {
                             node: id,
                             width: self
                                 .fonts
+                                .select_family(&s.font_families)
                                 .width_weight(" ", s.font_size, s.font_weight >= 600),
                         });
                     }
@@ -2293,6 +2314,7 @@ impl Layout<'_, '_> {
             if !word.is_empty() {
                 let width = self
                     .fonts
+                    .select_family(&s.font_families)
                     .width_weight(&word, s.font_size, s.font_weight >= 600);
                 out.push(Token::Word {
                     node: id,
@@ -3736,5 +3758,33 @@ mod tests {
         assert_eq!((main.y, main.height), (0, 100));
         assert_eq!((top.y, top.height), (0, 25));
         assert_eq!((bottom.y, bottom.height), (75, 25));
+    }
+
+    #[test]
+    fn font_face_family_measures_and_paints_matching_glyphs() {
+        let mut doc = crate::document::parse(
+            "<style>@font-face { font-family: 'Ahem'; src: url('/fonts/Ahem.ttf'); } body { margin: 0 } #flexbox { font: 50px/1 Ahem; display: flex; flex-direction: column; align-items: flex-start; width: 300px; height: 100px; }</style><div id=flexbox><div id=item>XXXX</div></div>",
+            "https://example.test/css/test.html",
+        );
+        let ahem = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tools/wpt/upstream/fonts/Ahem.ttf"),
+        )
+        .unwrap();
+        doc.resources.insert(
+            "https://example.test/fonts/Ahem.ttf".into(),
+            crate::document::ResourceData {
+                bytes: ahem,
+                content_type: "font/ttf".into(),
+            },
+        );
+        let frame = render_test(
+            &doc,
+            crate::style::compute_styles(&doc, &doc.stylesheets, (400.0, 200.0)).unwrap(),
+            400,
+            0,
+        );
+        let item = element_box(&doc, &frame, "#item");
+        assert_eq!((item.x, item.y, item.width, item.height), (0, 0, 200, 50));
     }
 }

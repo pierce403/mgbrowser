@@ -569,6 +569,114 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
     }
 }
 
+/// Discover bounded `@font-face` `(font-family, src_url)` pairs for `.ttf`/`.otf`
+/// sources without network I/O.
+pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
+    let mut rules = Vec::new();
+    let mut at = 0;
+    while at < css.len() && rules.len() < 16 {
+        let rest = &css[at..];
+        if rest.starts_with("/*") {
+            at = rest.find("*/").map_or(css.len(), |end| at + end + 2);
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        if matches!(ch, '\'' | '"') {
+            at += 1;
+            while at < css.len() {
+                let c = css[at..].chars().next().unwrap();
+                at += c.len_utf8();
+                if c == ch {
+                    break;
+                }
+                if c == '\\' && at < css.len() {
+                    at += css[at..].chars().next().unwrap().len_utf8();
+                }
+            }
+            continue;
+        }
+        if rest
+            .get(..10)
+            .is_some_and(|s| s.eq_ignore_ascii_case("@font-face"))
+        {
+            at += 10;
+            while at < css.len() && css[at..].chars().next().unwrap().is_ascii_whitespace() {
+                at += 1;
+            }
+            if css[at..].starts_with('{') {
+                at += 1;
+                let block_start = at;
+                let mut depth = 1usize;
+                while at < css.len() && depth > 0 {
+                    let r = &css[at..];
+                    if r.starts_with("/*") {
+                        at = r.find("*/").map_or(css.len(), |end| at + end + 2);
+                        continue;
+                    }
+                    let c = r.chars().next().unwrap();
+                    at += c.len_utf8();
+                    if matches!(c, '\'' | '"') {
+                        while at < css.len() {
+                            let qc = css[at..].chars().next().unwrap();
+                            at += qc.len_utf8();
+                            if qc == c {
+                                break;
+                            }
+                            if qc == '\\' && at < css.len() {
+                                at += css[at..].chars().next().unwrap().len_utf8();
+                            }
+                        }
+                    } else if c == '{' {
+                        depth += 1;
+                    } else if c == '}' {
+                        depth -= 1;
+                    }
+                }
+                let block_end = at.saturating_sub(usize::from(depth == 0));
+                let block = &css[block_start..block_end];
+                let mut family = None;
+                let mut src = None;
+                for decl in block.split(';') {
+                    let Some((prop, val)) = decl.split_once(':') else {
+                        continue;
+                    };
+                    let prop = prop.trim();
+                    let val = val.trim();
+                    if prop.eq_ignore_ascii_case("font-family") {
+                        let name = val.trim_matches(['\'', '"']).trim();
+                        if !name.is_empty() && name.len() <= 256 {
+                            family = Some(name.to_owned());
+                        }
+                    } else if prop.eq_ignore_ascii_case("src") {
+                        let lower = val.to_ascii_lowercase();
+                        if let Some(u_pos) = lower.find("url(") {
+                            let after_url = &val[u_pos + 4..];
+                            if let Some(close) = after_url.find(')') {
+                                let raw =
+                                    after_url[..close].trim().trim_matches(['\'', '"']).trim();
+                                let path = raw.split(['?', '#']).next().unwrap_or("");
+                                let path_lower = path.to_ascii_lowercase();
+                                if (path_lower.ends_with(".ttf") || path_lower.ends_with(".otf"))
+                                    && !raw.is_empty()
+                                    && raw.len() <= 4096
+                                {
+                                    src = Some(raw.to_owned());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let (Some(f), Some(s)) = (family, src) {
+                    rules.push((f, s));
+                }
+                continue;
+            }
+        }
+        at += ch.len_utf8();
+    }
+    rules
+}
+
 fn project_arena(nodes: Vec<Node>, page_url: &str, scripting: bool) -> (Document, bool) {
     let mut tree_order = Vec::new();
     let mut pending = vec![0usize];

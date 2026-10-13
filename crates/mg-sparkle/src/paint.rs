@@ -244,6 +244,7 @@ pub struct Fonts {
     cache: HashMap<(u16, u32), (fontdue::Metrics, Vec<u8>)>,
     cached_bytes: usize,
     bold: Option<Box<Fonts>>,
+    families: HashMap<String, Box<Fonts>>,
 }
 
 impl Fonts {
@@ -258,6 +259,7 @@ impl Fonts {
             cache: HashMap::new(),
             cached_bytes: 0,
             bold: None,
+            families: HashMap::new(),
         })
     }
 
@@ -266,6 +268,43 @@ impl Fonts {
         let mut fonts = Self::from_bytes(bytes)?;
         fonts.bold = bold.map(Self::from_bytes).transpose()?.map(Box::new);
         Ok(fonts)
+    }
+
+    pub fn clear_families(&mut self) {
+        self.families.clear();
+    }
+
+    pub fn register_family(&mut self, name: &str, bytes: Vec<u8>) {
+        if self.families.len() >= 8 {
+            return;
+        }
+        let key = name.trim().to_ascii_lowercase();
+        if key.is_empty() || self.families.contains_key(&key) {
+            return;
+        }
+        if let Ok(font) = Self::from_bytes(bytes) {
+            self.families.insert(key, Box::new(font));
+        }
+    }
+
+    pub fn select_family(&mut self, families: &[String]) -> &mut Fonts {
+        for family in families {
+            let key = family.trim().to_ascii_lowercase();
+            if self.families.contains_key(&key) {
+                return self.families.get_mut(&key).unwrap();
+            }
+        }
+        self
+    }
+
+    pub fn select_family_ref(&self, families: &[String]) -> &Fonts {
+        for family in families {
+            let key = family.trim().to_ascii_lowercase();
+            if let Some(font) = self.families.get(&key) {
+                return font;
+            }
+        }
+        self
     }
 
     /// Measure the same selected face used by `Canvas::text_weight`.

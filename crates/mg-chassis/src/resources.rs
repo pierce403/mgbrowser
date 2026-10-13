@@ -44,6 +44,7 @@ pub fn load(
         omitted_warnings: 0,
     };
     let mut image_urls = Vec::new();
+    let mut font_urls = Vec::new();
     let mut css_cache = HashMap::<String, usize>::new();
     for (index, request) in requests.into_iter().enumerate() {
         if index == MAX_SHEETS {
@@ -129,6 +130,11 @@ pub fn load(
                 image_urls.push((sheet.base_url.clone(), value));
             }
         }
+        for (_, value) in mg_sparkle::document::font_face_rules(&sheet.css) {
+            if font_urls.len() < MAX_REQUESTS * 2 {
+                font_urls.push((sheet.base_url.clone(), value));
+            }
+        }
         document.stylesheets.push(sheet);
     }
     for id in document.resource_nodes() {
@@ -151,6 +157,49 @@ pub fn load(
         }
     }
     let mut seen = HashSet::new();
+    for (base, reference) in font_urls {
+        if loader.stopped() {
+            break;
+        }
+        let Ok(mut url) = Url::parse(&base).and_then(|base| base.join(reference.trim())) else {
+            loader.warn(format!(
+                "Invalid font resource URL; skipped: {} at {}",
+                label(&reference),
+                label(&base)
+            ));
+            continue;
+        };
+        url.set_fragment(None);
+        let url = url.to_string();
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Stylesheet) else {
+            continue;
+        };
+        if !matches!(
+            mime(&response.content_type).as_str(),
+            "font/ttf"
+                | "font/otf"
+                | "application/font-sfnt"
+                | "application/x-font-ttf"
+                | "application/octet-stream"
+        ) {
+            loader.warn(format!(
+                "Unsupported page font type: {} at {}",
+                label(&response.content_type),
+                label(&url)
+            ));
+            continue;
+        }
+        document.resources.insert(
+            url,
+            ResourceData {
+                bytes: response.body,
+                content_type: response.content_type,
+            },
+        );
+    }
     for (base, reference) in image_urls {
         if loader.stopped() {
             break;
