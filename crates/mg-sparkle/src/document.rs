@@ -978,6 +978,54 @@ fn build_tree(source: &str) -> Vec<Node> {
             stack.push(id);
         }
     }
+    if nodes.len() < MAX_NODES
+        && !nodes
+            .iter()
+            .any(|n| matches!(n.tag.as_str(), "body" | "frameset"))
+        && !nodes[0]
+            .children
+            .iter()
+            .any(|&id| nodes[id].tag == "svg")
+    {
+        let container = nodes[0]
+            .children
+            .iter()
+            .copied()
+            .find(|&id| nodes[id].tag == "html")
+            .unwrap_or(0);
+        let is_head_item = |id: usize| {
+            matches!(
+                nodes[id].tag.as_str(),
+                "head" | "title" | "meta" | "link" | "style" | "base"
+            )
+        };
+        if let Some(first_body) = nodes[container].children.iter().position(|&id| {
+            !is_head_item(id) && !(nodes[id].tag == "#text" && nodes[id].text.trim().is_empty())
+        }) {
+            let mut head_children = nodes[container].children[..first_body].to_vec();
+            let mut body_children = Vec::new();
+            for &id in &nodes[container].children[first_body..] {
+                if is_head_item(id) {
+                    head_children.push(id);
+                } else {
+                    body_children.push(id);
+                }
+            }
+            let body_id = nodes.len();
+            for &id in &body_children {
+                nodes[id].parent = body_id;
+            }
+            head_children.push(body_id);
+            nodes[container].children = head_children;
+            nodes.push(Node {
+                tag: "body".to_owned(),
+                attributes: Vec::new(),
+                text: String::new(),
+                parent: container,
+                children: body_children,
+            });
+        }
+    }
     nodes
 }
 
@@ -1956,5 +2004,12 @@ mod tests {
         let rejected_malformed = parse(malformed, "https://example.org/test.xhtml");
         assert_eq!(rejected_malformed.nodes.len(), 1);
         assert!(rejected_malformed.items.is_empty());
+
+        let implicit_body = parse(
+            "<!DOCTYPE html><link rel='match' href='ref.xht'><style>.box{width:100px}</style><p>Hello</p><div class='box'></div>",
+            "https://example.org/test.html",
+        );
+        assert!(implicit_body.query_selector(0, "body p").unwrap().is_some());
+        assert!(implicit_body.query_selector(0, "body div.box").unwrap().is_some());
     }
 }

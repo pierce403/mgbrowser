@@ -2246,7 +2246,11 @@ impl Layout<'_, '_> {
             self.styles[id].layout.position,
             crate::style::Position::Absolute | crate::style::Position::Fixed
         ) {
-            if out.len() < MAX_OPS && self.styles[id].display != Display::None {
+            if out.len() < MAX_OPS
+                && self.styles[id].layout.position == crate::style::Position::Absolute
+                && self.styles[id].layout.z_index.is_none()
+                && self.styles[id].display == Display::Block
+            {
                 out.push(Token::StaticPos(id));
             }
             return;

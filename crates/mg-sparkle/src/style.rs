@@ -1852,10 +1852,7 @@ fn report_unsupported(
         Position::Absolute | Position::Fixed
     ) && !(rendered.layout.position == Position::Absolute
         && rendered.layout.z_index.is_none()
-        && matches!(
-            rendered.display,
-            Display::Block | Display::Flex | Display::Grid | Display::Table | Display::ListItem
-        ))
+        && rendered.display == Display::Block)
     {
         for (axis, before, after) in [("horizontal", 3, 1), ("vertical", 0, 2)] {
             if rendered.layout.inset[before] == Length::Auto
