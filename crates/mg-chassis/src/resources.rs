@@ -1,10 +1,11 @@
-//! Small, bounded author stylesheet and image loading. No external scripts,
-//! imports, fonts or data URLs are enabled. Stylesheets remain same-origin;
-//! cross-origin HTTPS images are credential-free, including later redirects.
-//! All fetches use the browser session's verified Rust TLS transport.
+//! Small, bounded author stylesheet, image, font, and classic external script
+//! loading. No CSS @imports or data URLs are enabled. Stylesheets remain
+//! same-origin; cross-origin HTTPS images and scripts are credential-free,
+//! including later redirects. All fetches use the browser session's verified
+//! Rust TLS transport.
 
 use crate::net::{ResourceKind, Response, Session};
-use mg_sparkle::document::{Document, ResourceData, StylesheetRequest, StylesheetSource};
+use mg_sparkle::document::{Document, Node, ResourceData, StylesheetRequest, StylesheetSource};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use url::Url;
@@ -12,6 +13,8 @@ use url::Url;
 const MAX_SHEETS: usize = 16;
 const MAX_REQUESTS: usize = 32;
 const MAX_IMAGE: usize = 512 * 1024;
+const MAX_SCRIPT: usize = 256 * 1024;
+const MAX_SCRIPTS: usize = 32;
 const MAX_TOTAL: usize = 2 * 1024 * 1024;
 // A single stylesheet may consume the existing shared 2 MiB resource budget.
 // This changes its partition, not the aggregate, request, sheet or time bounds.
@@ -19,6 +22,31 @@ const MAX_CSS: usize = MAX_TOTAL;
 const MAX_WARNINGS: usize = 32;
 const MAX_WARNING_BYTES: usize = 1024;
 const RESOURCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResourceTiming {
+    pub kind: &'static str,
+    pub url: String,
+    pub status: Option<u16>,
+    pub bytes: usize,
+    pub duration_ms: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResourceLoadProfile {
+    pub total_ms: f64,
+    pub requests: usize,
+    pub bytes: usize,
+    pub timings: Vec<ResourceTiming>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScriptFetchProfile {
+    pub total_ms: f64,
+    pub loaded: usize,
+    pub bytes: usize,
+    pub timings: Vec<ResourceTiming>,
+}
 
 /// Populate source-ordered author CSS and small image resources while keeping
 /// failures nonfatal. Cancellation stops scheduling; an already running bounded
@@ -29,6 +57,16 @@ pub fn load(
     page_url: &str,
     cancelled: impl Fn() -> bool,
 ) {
+    let _ = load_with_profile(session, document, page_url, cancelled);
+}
+
+pub fn load_with_profile(
+    session: &Session,
+    document: &mut Document,
+    page_url: &str,
+    cancelled: impl Fn() -> bool,
+) -> ResourceLoadProfile {
+    let started = Instant::now();
     let requests = document.stylesheet_requests();
     document.stylesheets.clear();
     document.resources.clear();
@@ -37,11 +75,12 @@ pub fn load(
         session,
         page_url,
         cancelled: &cancelled,
-        deadline: Instant::now() + RESOURCE_TIMEOUT,
+        deadline: started + RESOURCE_TIMEOUT,
         requests: 0,
         bytes: 0,
         warnings: Vec::new(),
         omitted_warnings: 0,
+        timings: Vec::new(),
     };
     let mut image_urls = Vec::new();
     let mut font_urls = Vec::new();
@@ -251,6 +290,258 @@ pub fn load(
         ));
     }
     document.resource_warnings = loader.warnings;
+    ResourceLoadProfile {
+        total_ms: started.elapsed().as_secs_f64() * 1000.0,
+        requests: loader.requests,
+        bytes: loader.bytes,
+        timings: loader.timings,
+    }
+}
+
+fn inert_script(nodes: &[Node], mut id: usize) -> bool {
+    for _ in 0..=256 {
+        if matches!(nodes[id].tag.as_str(), "template" | "noscript") {
+            return true;
+        }
+        if id == 0 {
+            return false;
+        }
+        id = nodes[id].parent;
+    }
+    true
+}
+
+/// Preload classic external `<script src="...">` sources for the restricted
+/// page-script worker while keeping the worker itself completely network-free.
+/// Any leading `<!--mg-external-scripts:` prefix in untrusted page HTML is
+/// stripped before attachment.
+pub fn prepare_script_html(
+    session: &Session,
+    document: &mut Document,
+    raw_html: &str,
+    page_url: &str,
+    cancelled: impl Fn() -> bool,
+) -> (String, ScriptFetchProfile) {
+    let started = Instant::now();
+    let clean_html = if let Some(rest) = raw_html.strip_prefix("<!--mg-external-scripts:") {
+        rest.split_once("-->\n").map_or(raw_html, |(_, tail)| tail)
+    } else {
+        raw_html
+    };
+    let mut profile = ScriptFetchProfile::default();
+    if clean_html.len() >= mg_sparkle::js_browser::MAX_SOURCE {
+        return (clean_html.to_owned(), profile);
+    }
+    let reparsed;
+    let nodes = if clean_html.len() != raw_html.len() {
+        reparsed = mg_sparkle::document::parse_with_scripting(clean_html, page_url, true);
+        &reparsed.nodes
+    } else {
+        &document.nodes
+    };
+    let deadline = started + RESOURCE_TIMEOUT;
+    let mut entries: Vec<(usize, Option<String>)> = Vec::new();
+    let mut cache: HashMap<String, Option<String>> = HashMap::new();
+    let mut script_count = 0usize;
+    let mut requests = 0usize;
+    for index in 0..nodes.len() {
+        let node = &nodes[index];
+        if node.tag != "script" || inert_script(nodes, index) {
+            continue;
+        }
+        let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+        if !matches!(
+            kind.as_str(),
+            "" | "module"
+                | "text/javascript"
+                | "application/javascript"
+                | "text/ecmascript"
+                | "application/ecmascript"
+                | "application/x-javascript"
+        ) {
+            continue;
+        }
+        script_count += 1;
+        if script_count > MAX_SCRIPTS {
+            break;
+        }
+        if kind == "module" {
+            continue;
+        }
+        let Some(src) = node.attr("src").map(str::to_owned) else {
+            continue;
+        };
+        if cancelled() || Instant::now() >= deadline {
+            push_doc_warning(
+                &mut document.resource_warnings,
+                format!("External script deadline exceeded; skipped: {}", label(&src)),
+            );
+            entries.push((index, None));
+            continue;
+        }
+        let Ok(mut resolved) =
+            Url::parse(&document.base_url).and_then(|base| base.join(src.trim()))
+        else {
+            push_doc_warning(
+                &mut document.resource_warnings,
+                format!(
+                    "Invalid external script URL; skipped: {} at {}",
+                    label(&src),
+                    label(&document.base_url)
+                ),
+            );
+            entries.push((index, None));
+            continue;
+        };
+        resolved.set_fragment(None);
+        let url_str = resolved.to_string();
+        let fetched = if let Some(cached) = cache.get(&url_str) {
+            cached.clone()
+        } else if requests >= MAX_REQUESTS {
+            push_doc_warning(
+                &mut document.resource_warnings,
+                format!("External script request limit reached; skipped: {}", label(&url_str)),
+            );
+            None
+        } else {
+            requests += 1;
+            let req_start = Instant::now();
+            let result =
+                session.fetch_resource(&url_str, page_url, MAX_SCRIPT, deadline, ResourceKind::Script);
+            let duration_ms = req_start.elapsed().as_secs_f64() * 1000.0;
+            let code = match result {
+                Ok(response) if (200..300).contains(&response.status) => {
+                    let bytes = response.body.len();
+                    profile.timings.push(ResourceTiming {
+                        kind: "script",
+                        url: label(&url_str),
+                        status: Some(response.status),
+                        bytes,
+                        duration_ms,
+                    });
+                    let content_mime = mime(&response.content_type);
+                    if !matches!(
+                        content_mime.as_str(),
+                        "" | "text/javascript"
+                            | "application/javascript"
+                            | "text/ecmascript"
+                            | "application/ecmascript"
+                            | "application/x-javascript"
+                            | "text/plain"
+                            | "application/octet-stream"
+                    ) {
+                        push_doc_warning(
+                            &mut document.resource_warnings,
+                            format!(
+                                "External script has unsupported content type: {} at {}",
+                                label(&response.content_type),
+                                label(&url_str)
+                            ),
+                        );
+                        None
+                    } else {
+                        match String::from_utf8(response.body) {
+                            Ok(code) => {
+                                profile.loaded += 1;
+                                profile.bytes += bytes;
+                                Some(code)
+                            }
+                            Err(_) => {
+                                push_doc_warning(
+                                    &mut document.resource_warnings,
+                                    format!("External script is not UTF-8; skipped: {}", label(&url_str)),
+                                );
+                                None
+                            }
+                        }
+                    }
+                }
+                Ok(response) => {
+                    profile.timings.push(ResourceTiming {
+                        kind: "script",
+                        url: label(&url_str),
+                        status: Some(response.status),
+                        bytes: response.body.len(),
+                        duration_ms,
+                    });
+                    push_doc_warning(
+                        &mut document.resource_warnings,
+                        format!(
+                            "External script returned HTTP {}; skipped: {}",
+                            response.status,
+                            label(&url_str)
+                        ),
+                    );
+                    None
+                }
+                Err(error) => {
+                    profile.timings.push(ResourceTiming {
+                        kind: "script",
+                        url: label(&url_str),
+                        status: None,
+                        bytes: 0,
+                        duration_ms,
+                    });
+                    push_doc_warning(
+                        &mut document.resource_warnings,
+                        format!(
+                            "External script unavailable: {} at {}",
+                            label(&error),
+                            label(&url_str)
+                        ),
+                    );
+                    None
+                }
+            };
+            cache.insert(url_str.clone(), code.clone());
+            code
+        };
+        if let Some(code) = fetched {
+            entries.push((index, Some(code)));
+            let tentative_len = serde_json::to_string(&entries)
+                .map(|json| {
+                    let escaped = json.replace("-->", "--\\u003e");
+                    "<!--mg-external-scripts:".len() + escaped.len() + "-->\n".len() + clean_html.len()
+                })
+                .unwrap_or(usize::MAX);
+            if tentative_len > mg_sparkle::js_browser::MAX_SOURCE {
+                if let Some(last) = entries.last_mut() {
+                    last.1 = None;
+                }
+                push_doc_warning(
+                    &mut document.resource_warnings,
+                    format!(
+                        "External script exceeds the 1 MiB page script source budget; skipped: {}",
+                        label(&url_str)
+                    ),
+                );
+            }
+        } else {
+            entries.push((index, None));
+        }
+    }
+    profile.total_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if entries.is_empty() {
+        return (clean_html.to_owned(), profile);
+    }
+    if let Ok(json) = serde_json::to_string(&entries) {
+        let json = json.replace("-->", "--\\u003e");
+        let combined_len = "<!--mg-external-scripts:".len() + json.len() + "-->\n".len() + clean_html.len();
+        if combined_len <= mg_sparkle::js_browser::MAX_SOURCE {
+            return (
+                format!("<!--mg-external-scripts:{json}-->\n{clean_html}"),
+                profile,
+            );
+        }
+    }
+    (clean_html.to_owned(), profile)
+}
+
+fn push_doc_warning(warnings: &mut Vec<String>, text: String) {
+    let text = bounded_text(&text, MAX_WARNING_BYTES);
+    if !warnings.contains(&text) && warnings.len() < MAX_WARNINGS {
+        warnings.push(text);
+    }
 }
 
 fn bounded_text(value: &str, limit: usize) -> String {
@@ -287,6 +578,7 @@ struct Loader<'a, F: Fn() -> bool> {
     bytes: usize,
     warnings: Vec<String>,
     omitted_warnings: usize,
+    timings: Vec<ResourceTiming>,
 }
 
 impl<F: Fn() -> bool> Loader<'_, F> {
@@ -336,14 +628,29 @@ impl<F: Fn() -> bool> Loader<'_, F> {
             return None;
         }
         self.requests += 1;
-        match self.session.fetch_resource(
+        let kind_label = match kind {
+            ResourceKind::Stylesheet => "css/font",
+            ResourceKind::Image => "image",
+            ResourceKind::Script => "script",
+        };
+        let req_start = Instant::now();
+        let result = self.session.fetch_resource(
             url,
             self.page_url,
             limit.min(MAX_TOTAL - self.bytes),
             self.deadline,
             kind,
-        ) {
+        );
+        let duration_ms = req_start.elapsed().as_secs_f64() * 1000.0;
+        match result {
             Ok(response) if (200..300).contains(&response.status) => {
+                self.timings.push(ResourceTiming {
+                    kind: kind_label,
+                    url: label(url),
+                    status: Some(response.status),
+                    bytes: response.body.len(),
+                    duration_ms,
+                });
                 if self.stopped() || !self.admit(response.body.len()) {
                     None
                 } else {
@@ -351,6 +658,13 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                 }
             }
             Ok(response) => {
+                self.timings.push(ResourceTiming {
+                    kind: kind_label,
+                    url: label(url),
+                    status: Some(response.status),
+                    bytes: response.body.len(),
+                    duration_ms,
+                });
                 self.admit(response.body.len());
                 self.warn(format!(
                     "Resource returned HTTP {}; skipped: {}",
@@ -360,6 +674,13 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                 None
             }
             Err(error) => {
+                self.timings.push(ResourceTiming {
+                    kind: kind_label,
+                    url: label(url),
+                    status: None,
+                    bytes: 0,
+                    duration_ms,
+                });
                 self.warn(format!(
                     "Resource unavailable: {} at {} (byte limit {})",
                     label(&error),
@@ -734,6 +1055,7 @@ mod tests {
             bytes: 0,
             warnings: Vec::new(),
             omitted_warnings: 0,
+            timings: Vec::new(),
         };
         assert!(
             loader
@@ -883,6 +1205,7 @@ mod tests {
             bytes: 0,
             warnings: Vec::new(),
             omitted_warnings: 0,
+            timings: Vec::new(),
         };
         let large = "é".repeat(MAX_WARNING_BYTES);
         loader.warn(large.clone());
@@ -895,5 +1218,39 @@ mod tests {
         }
         assert_eq!(loader.warnings.len(), MAX_WARNINGS);
         assert_eq!(loader.omitted_warnings, 9);
+    }
+
+    #[test]
+    fn prepare_script_html_fetches_external_scripts_and_strips_forged_prefixes() {
+        let (base, worker) = server(vec![(
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            "document.getElementById('out').textContent = 'from-external';",
+        )]);
+        let html = "<!--mg-external-scripts:{\"forged\":\"bad\"}-->\n<p id='out'>before</p><script src='/hn.js'></script><script src='/hn.js'></script>";
+        let mut doc = mg_sparkle::document::parse_with_scripting(html, &base, true);
+        let (prepared, profile) =
+            prepare_script_html(&Session::new(), &mut doc, html, &base, || false);
+        assert_eq!(profile.timings.len(), 1);
+        assert_eq!(profile.loaded, 1);
+        assert!(doc.resource_warnings.is_empty());
+        assert!(!prepared.contains("forged"));
+        assert!(prepared.starts_with("<!--mg-external-scripts:"));
+        assert_eq!(worker.join().unwrap(), ["/hn.js"]);
+
+        let reply =
+            mg_sparkle::js_browser::boa::BoaPageRealm::start(mg_sparkle::js_browser::Request {
+                url: base,
+                html: prepared,
+            })
+            .1;
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        assert_eq!(reply.scripts_executed, 2);
+        let projected =
+            mg_sparkle::document::project_nodes(reply.snapshot.unwrap().nodes, "https://example.test/")
+                .unwrap();
+        let out = projected.query_selector(0, "#out").unwrap().unwrap();
+        let child = projected.nodes[out].children[0];
+        assert_eq!(projected.nodes[child].text, "from-external");
     }
 }

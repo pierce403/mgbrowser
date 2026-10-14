@@ -307,6 +307,7 @@ fn render(
     render_scaled(document, fonts, viewport, controls, styles, 1.0).ok()
 }
 
+#[cfg(test)]
 pub(crate) fn render_scaled(
     document: &Document,
     fonts: &mut Fonts,
@@ -315,6 +316,19 @@ pub(crate) fn render_scaled(
     styles: Vec<ComputedStyle>,
     scale: f32,
 ) -> Result<Frame, LayoutFailure> {
+    render_scaled_profiled(document, fonts, viewport, controls, styles, scale)
+        .map(|(frame, ..)| frame)
+}
+
+pub(crate) fn render_scaled_profiled(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    controls: &Controls<'_>,
+    styles: Vec<ComputedStyle>,
+    scale: f32,
+) -> Result<(Frame, f64, f64, usize), LayoutFailure> {
+    let layout_started = std::time::Instant::now();
     // Reject this path as a whole rather than silently dropping long text.
     if styles.len() != document.nodes.len()
         || document.nodes.iter().enumerate().any(|(id, node)| {
@@ -434,6 +448,9 @@ pub(crate) fn render_scaled(
             }
         })
         .clamp(0.0, MAX_EXTENT);
+    let layout_ms = layout_started.elapsed().as_secs_f64() * 1000.0;
+    let paint_ops = layout.scene.paints.len();
+    let paint_started = std::time::Instant::now();
     let mut canvas = Canvas::new_scaled(viewport.width, viewport.height, background.rgb, scale);
     let mut decoded = HashMap::new();
     let mut decoded_bytes = 0usize;
@@ -669,13 +686,19 @@ pub(crate) fn render_scaled(
     for b in &mut layout.scene.boxes {
         b.y -= viewport.scroll;
     }
-    Ok(Frame {
-        canvas,
-        hits,
-        boxes: layout.scene.boxes,
-        content_height: height.ceil().max(0.0) as i32,
-        diagnostics: layout.diagnostics,
-    })
+    let paint_ms = paint_started.elapsed().as_secs_f64() * 1000.0;
+    Ok((
+        Frame {
+            canvas,
+            hits,
+            boxes: layout.scene.boxes,
+            content_height: height.ceil().max(0.0) as i32,
+            diagnostics: layout.diagnostics,
+        },
+        layout_ms,
+        paint_ms,
+        paint_ops,
+    ))
 }
 
 fn visible(r: Rect, v: Viewport) -> bool {

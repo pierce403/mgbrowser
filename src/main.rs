@@ -26,13 +26,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Toolbar: Back, Forward, Refresh, Bookmark, URL, Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nHover a link for its URL; Ctrl+click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: inspector.\n"
+                "Toolbar: Back, Forward, Refresh, Bookmark, URL, Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nHover a link for its URL; Ctrl+click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: inspector.\nCtrl+Shift+P: performance dashboard (load, script, style, layout & paint timings).\n"
             );
             println!(
                 "Ctrl+T: new tab; Ctrl+W: close tab; Ctrl+Tab / Ctrl+Shift+Tab: switch tabs.\nDrag tabs to reorder, detach into windows or split left/right.\nMenu > Settings: theme and browser size (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
-                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --disable-scripts             Disable isolated Boa page JavaScript\n  --enable-scripts              Explicitly enable isolated Boa page JavaScript (default)\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
+                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --profile [URL]              Profile page load, external scripts, and render cache\n  --disable-scripts             Disable isolated Boa page JavaScript\n  --enable-scripts              Explicitly enable isolated Boa page JavaScript (default)\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
                 env!("CARGO_PKG_VERSION")
             );
             return Ok(());
@@ -77,10 +77,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut restart_scripts = true;
     let mut restore_tabs = Vec::new();
     let mut debug_port: Option<u16> = None;
+    let mut profile_mode = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--no-auto-update" => auto_update = false,
+            "--profile" => {
+                profile_mode = true;
+                if let Some(next) = args.get(i + 1)
+                    && !next.starts_with('-')
+                {
+                    initial = next.clone();
+                    i += 1;
+                }
+            }
             "--restore-tab" => {
                 i += 1;
                 let url = args.get(i).ok_or("--restore-tab requires an HTTP(S) URL")?;
@@ -136,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--disable-scripts | --enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nBoa page JavaScript runs in a restricted worker by default; see docs/BOA.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--profile] [--disable-scripts | --enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nBoa page JavaScript runs in a restricted worker by default; see docs/BOA.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
             }
@@ -146,6 +156,40 @@ fn main() -> Result<(), Box<dyn Error>> {
             value => initial = value.to_string(),
         }
         i += 1;
+    }
+    if profile_mode {
+        app.navigate(initial, None, true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.is_loading() {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!("Profile navigation timed out: {}", app.status()).into());
+            }
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = app.paint();
+        let uncached = app.performance_profile().last_frame.clone();
+        app.scroll_by(120);
+        let _ = app.paint();
+        let scroll_cached = app.performance_profile().last_frame.clone();
+        app.request_redraw();
+        let _ = app.paint();
+        let ui_cached = app.performance_profile().last_frame.clone();
+        println!("{}", app.performance_report());
+        println!(
+            "Repaint Benchmark:\n  Uncached initial render: {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  Scroll repaint (Stylo cached): {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  UI/hover repaint (Frame cached): {:.2} ms\nStatus: {}",
+            uncached.total_ms,
+            uncached.style_ms,
+            uncached.layout_ms,
+            uncached.paint_ms,
+            scroll_cached.total_ms,
+            scroll_cached.style_ms,
+            scroll_cached.layout_ms,
+            scroll_cached.paint_ms,
+            ui_cached.total_ms,
+            app.status()
+        );
+        return Ok(());
     }
     // Test journeys/CDP are deterministic and never initiate unattended updates.
     if journey.query.is_some() || debug_port.is_some() {

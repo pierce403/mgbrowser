@@ -2,13 +2,17 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.4 Experimental Preview
+## v0.9.5 Experimental Preview
 
-v0.9.4 enables pure-Rust Boa ECMAScript execution by default (`--disable-scripts`
-opts out), adds bottom-left link hover URL previews, supports **Open link in new tab**
-from the right-click context menu and **Ctrl+click** on links, and expands DOM
-bindings (`Element.classList`, `Element.dataset`, collection iteration via
-`[Symbol.iterator]` and boolean attribute properties). The initial 24-test WPT
+v0.9.5 adds bounded classic external script loading (`<script src="...">`), a
+native **Performance Dashboard** (`F12` / `Ctrl+Shift+I` → **Performance**, or
+`Ctrl+Shift+P`) and headless **CLI profiler** (`mgbrowser --profile <URL>`), and
+multi-tier rendering caches (Frame cache, Stylo computed-style cache and
+RustyBuzz shaping/width cache) that eliminate hover and scroll hangs. Pure-Rust
+Boa ECMAScript execution runs inline and classic external scripts by default
+(`--disable-scripts` opts out), alongside bottom-left link hover URL previews,
+**Open link in new tab** from the right-click context menu and **Ctrl+click** on
+links. The initial 24-test WPT
 flexbox reftest selection continues to pass completely (**24 pass, 0 fail,
 0 unsupported out of 24**). This is measured progress on a fixed reftest cohort,
 not broad standards conformance. [Scope and remaining gaps](docs/WPT.md).
@@ -23,9 +27,10 @@ Search, menus, account actions and personalization remain later work.
 [Reading scope and evidence](docs/GOOGLE_NEWS.md).
 
 Right-click a page and choose **Inspect element** (or **Open link in new tab**
-on a hyperlink), or press **F12** /
-**Ctrl+Shift+I**. The native read-only inspector shows DOM attributes, text and
-painted bounds, plus bounded CSS, resource and script diagnostics. This is not
+on a hyperlink), press **F12** / **Ctrl+Shift+I**, or press **Ctrl+Shift+P** for
+the **Performance** tab. The native read-only inspector shows DOM attributes, text and
+painted bounds, bounded CSS, resource and script diagnostics, and live page-load,
+render-cache and subresource profiling. This is not
 the Chrome DevTools frontend or a JavaScript debugger. [Inspector guide](docs/INSPECTOR.md).
 
 **Ctrl+T** opens a blank tab; **Ctrl+W** closes the current tab, and
@@ -72,7 +77,7 @@ immediately and are saved for the next launch. Page colors and the red plain-HTT
 warning stay unchanged. [Appearance details](docs/APPEARANCE.md).
 
 Boa now runs page JavaScript by default (`--disable-scripts` opts out): modern
-inline scripts, Promise checkpoints and retained click/submit handlers operate
+inline and classic external `<script src>` scripts, Promise checkpoints and retained click/submit handlers operate
 on Mg's real Rust DOM. Mg keeps its own HTML parser, layout and renderer, with
 Rust Stylo for CSS. No native JS backend or full Servo browser embedding.
 [Scope and resource profile](docs/BOA.md).
@@ -104,7 +109,7 @@ resource-loading, painting and restricted script-worker code. [Method and comman
 The website reruns the selection before every commit's Pages deployment and
 publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
 The goal is more genuine passes, without hiding failures or losing old passes.
-v0.9.2 completed all 24 tests in the initial cohort, and v0.9.4 preserves 24/24 passes. Current-source website scores may
+v0.9.2 completed all 24 tests in the initial cohort, and v0.9.5 preserves 24/24 passes. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
@@ -132,9 +137,10 @@ See [updater behavior and trust](docs/UPDATES.md).
   News still has font/icon/corner differences and destination fallbacks. Mobile
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
-- Boa-backed JavaScript integration runs inline scripts by default (use
-  `--disable-scripts` to opt out). External scripts, modules, timers, fetch/XHR
-  and general browser event-loop behavior are not implemented. No React/Vue
+- Boa-backed JavaScript integration runs inline and bounded classic external
+  `<script src>` scripts by default (use `--disable-scripts` to opt out). ES
+  modules (`type="module"`), dynamic script injection, timers, fetch/XHR and
+  general browser event-loop behavior are not implemented. No React/Vue
   browser-app compatibility is claimed.
 - Script budgets include cumulative opcodes, sources/jobs and 32/64 MiB
   outstanding/cumulative worker allocation requests. This is not GC/RSS

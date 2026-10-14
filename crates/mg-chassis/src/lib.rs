@@ -57,6 +57,7 @@ enum Action {
     OpenLinkInNewTab(String),
     InspectElement,
     InspectorSection(bool),
+    InspectorPerformance,
     InspectorScroll(bool),
     Address,
     Back,
@@ -65,6 +66,43 @@ enum Action {
     Input(usize),
     Submit(usize),
     Link { node: usize, href: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PerformanceProfile {
+    pub fetch_html_ms: f64,
+    pub html_bytes: usize,
+    pub parse_html_ms: f64,
+    pub resources_ms: f64,
+    pub resource_requests: usize,
+    pub resource_bytes: usize,
+    pub external_scripts_ms: f64,
+    pub external_scripts_loaded: usize,
+    pub external_scripts_bytes: usize,
+    pub script_worker_ms: f64,
+    pub scripts_executed: usize,
+    pub boa_opcodes: u64,
+    pub boa_alloc_bytes: usize,
+    pub boa_peak_bytes: usize,
+    pub slowest_resources: Vec<resources::ResourceTiming>,
+    pub last_frame: mg_sparkle::render::RenderTimings,
+    pub last_full_render: mg_sparkle::render::RenderTimings,
+    pub frames_painted: u64,
+    pub frame_cache_hits: u64,
+    pub style_cache_hits: u64,
+    pub max_frame_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FrameCacheKey {
+    doc_key: u64,
+    width: u32,
+    viewport_height: u32,
+    scroll: i32,
+    scale_percent: u16,
+    focused_input: Option<usize>,
+    select_all: bool,
+    controls_hash: u64,
 }
 #[derive(Clone)]
 struct Hit {
@@ -90,6 +128,11 @@ struct Loaded {
     document: Option<Document>,
     result: Result<net::Response, String>,
     script: Option<Result<ScriptLoad, String>>,
+    fetch_html_ms: f64,
+    parse_html_ms: f64,
+    resource_profile: resources::ResourceLoadProfile,
+    script_fetch_profile: resources::ScriptFetchProfile,
+    script_worker_ms: f64,
 }
 struct ScriptLoad {
     session: Option<Box<dyn scripts::ScriptSession>>,
@@ -142,6 +185,8 @@ pub struct Browser {
     page_mime: String,
     page_loader: u64,
     dom_epoch: u64,
+    style_cache: mg_sparkle::render::StyleCache,
+    frame_cache: Option<(FrameCacheKey, mg_sparkle::render::Frame)>,
     boxes: Vec<mg_sparkle::render::LayoutBox>,
     cdp_enabled: bool,
     cdp_events: Vec<cdp_browser::Event>,
@@ -296,6 +341,7 @@ impl Browser {
             vec![
                 Action::InspectorSection(false),
                 Action::InspectorSection(true),
+                Action::InspectorPerformance,
                 Action::CloseMenu,
                 Action::InspectorScroll(false),
                 Action::InspectorScroll(true),
@@ -343,7 +389,9 @@ impl Browser {
                 self.devtools.context.is_some() && self.devtools.context_link.is_some()
             }
             Action::InspectElement => self.devtools.context.is_some(),
-            Action::InspectorSection(_) | Action::InspectorScroll(_) => self.devtools.open,
+            Action::InspectorSection(_)
+            | Action::InspectorPerformance
+            | Action::InspectorScroll(_) => self.devtools.open,
             Action::Menu | Action::CloseMenu => true,
             Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
             Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
@@ -530,6 +578,8 @@ impl Browser {
             page_mime: "text/html".into(),
             page_loader: 0,
             dom_epoch: 1,
+            style_cache: Default::default(),
+            frame_cache: None,
             boxes: Vec::new(),
             cdp_enabled: false,
             cdp_events: Vec::new(),
@@ -649,7 +699,14 @@ impl Browser {
             // Join/reap a retired manager on this already bounded navigation job,
             // not by blocking the window thread or creating per-event threads.
             drop(retired);
+            let fetch_started = Instant::now();
             let result = session.submit(&target, body.as_deref());
+            let fetch_html_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
+            let mut parse_html_ms = 0.0;
+            let mut resource_profile = resources::ResourceLoadProfile::default();
+            let mut script_fetch_profile = resources::ScriptFetchProfile::default();
+            let mut script_worker_ms = 0.0;
+            let mut prepared_script_html = None;
             let document = result
                 .as_ref()
                 .ok()
@@ -657,14 +714,32 @@ impl Browser {
                     response.content_type.contains("html") || response.content_type.is_empty()
                 })
                 .map(|response| {
+                    let html = decode_text(&response.body, &response.content_type);
+                    let parse_started = Instant::now();
                     let mut document = document::parse_with_scripting(
-                        &decode_text(&response.body, &response.content_type),
+                        &html,
                         response.url.as_str(),
                         scripts_enabled,
                     );
-                    resources::load(&session, &mut document, response.url.as_str(), || {
-                        resource_generation.load(Ordering::Relaxed) != generation
-                    });
+                    parse_html_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
+                    let cancel = || resource_generation.load(Ordering::Relaxed) != generation;
+                    resource_profile = resources::load_with_profile(
+                        &session,
+                        &mut document,
+                        response.url.as_str(),
+                        cancel,
+                    );
+                    if scripts_enabled {
+                        let (prepared, profile) = resources::prepare_script_html(
+                            &session,
+                            &mut document,
+                            &html,
+                            response.url.as_str(),
+                            cancel,
+                        );
+                        prepared_script_html = Some(prepared);
+                        script_fetch_profile = profile;
+                    }
                     document
                 });
             let script = if scripts_enabled {
@@ -675,17 +750,24 @@ impl Browser {
                         response.content_type.contains("html") || response.content_type.is_empty()
                     })
                     .map(|response| {
-                        pool.start(
-                            mg_sparkle::js_browser::Request {
-                                url: response.url.to_string(),
-                                html: decode_text(&response.body, &response.content_type),
-                            },
-                            generation,
-                        )
-                        .map(|(session, reply)| ScriptLoad {
-                            session: Some(session),
-                            reply,
-                        })
+                        let html = prepared_script_html.unwrap_or_else(|| {
+                            decode_text(&response.body, &response.content_type)
+                        });
+                        let worker_started = Instant::now();
+                        let started = pool
+                            .start(
+                                mg_sparkle::js_browser::Request {
+                                    url: response.url.to_string(),
+                                    html,
+                                },
+                                generation,
+                            )
+                            .map(|(session, reply)| ScriptLoad {
+                                session: Some(session),
+                                reply,
+                            });
+                        script_worker_ms = worker_started.elapsed().as_secs_f64() * 1000.0;
+                        started
                     })
             } else {
                 None
@@ -695,6 +777,11 @@ impl Browser {
                 document,
                 result,
                 script,
+                fetch_html_ms,
+                parse_html_ms,
+                resource_profile,
+                script_fetch_profile,
+                script_worker_ms,
             });
         });
     }
@@ -719,6 +806,25 @@ impl Browser {
             let mut script_navigation = None;
             match loaded.result {
                 Ok(response) => {
+                    self.devtools.performance.fetch_html_ms = loaded.fetch_html_ms;
+                    self.devtools.performance.html_bytes = response.body.len();
+                    self.devtools.performance.parse_html_ms = loaded.parse_html_ms;
+                    self.devtools.performance.resources_ms = loaded.resource_profile.total_ms;
+                    self.devtools.performance.resource_requests = loaded.resource_profile.requests;
+                    self.devtools.performance.resource_bytes = loaded.resource_profile.bytes;
+                    self.devtools.performance.external_scripts_ms =
+                        loaded.script_fetch_profile.total_ms;
+                    self.devtools.performance.external_scripts_loaded =
+                        loaded.script_fetch_profile.loaded;
+                    self.devtools.performance.external_scripts_bytes =
+                        loaded.script_fetch_profile.bytes;
+                    self.devtools.performance.script_worker_ms = loaded.script_worker_ms;
+                    let mut slowest = loaded.resource_profile.timings;
+                    slowest.extend(loaded.script_fetch_profile.timings);
+                    slowest.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
+                    slowest.truncate(8);
+                    self.devtools.performance.slowest_resources = slowest;
+
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
                     self.page_mime = response
@@ -876,6 +982,18 @@ impl Browser {
         self.poll_page_session();
     }
     fn script_summary(&mut self, reply: &SessionReply) -> String {
+        self.devtools.performance.scripts_executed = reply.scripts_executed;
+        if let Some(report) = &reply.boa {
+            self.devtools.performance.boa_opcodes =
+                1_000_000usize.saturating_sub(report.opcodes_remaining) as u64;
+            if let Some(mem) = &report.worker_memory {
+                self.devtools.performance.boa_alloc_bytes = mem.cumulative_bytes as usize;
+                self.devtools.performance.boa_peak_bytes = mem.peak_bytes as usize;
+            }
+        }
+        if let Some(report) = &reply.allocations {
+            self.devtools.performance.boa_alloc_bytes = report.accepted_bytes as usize;
+        }
         for diagnostic in &reply.errors {
             self.devtools.record("JavaScript", diagnostic);
         }
@@ -909,7 +1027,7 @@ impl Browser {
             )
         } else {
             eprintln!("SCRIPT_COMPLETE executed={}", reply.scripts_executed);
-            format!("JS: {} inline scripts", reply.scripts_executed)
+            format!("JS: {} scripts", reply.scripts_executed)
         }
     }
     fn checked_navigation(target: &str) -> Result<String, String> {
@@ -1412,6 +1530,12 @@ impl Browser {
             Action::InspectElement => self.open_inspector(),
             Action::InspectorSection(diagnostics) => {
                 self.devtools.diagnostics = diagnostics;
+                self.devtools.performance_tab = false;
+                self.devtools.row = 0;
+            }
+            Action::InspectorPerformance => {
+                self.devtools.performance_tab = true;
+                self.devtools.diagnostics = false;
                 self.devtools.row = 0;
             }
             Action::InspectorScroll(next) => self.inspector_scroll(if next { 6 } else { -6 }),
@@ -1660,6 +1784,10 @@ impl Browser {
             self.toggle_devtools();
             return;
         }
+        if self.chrome && !alt && ctrl && shift && matches!(sym, 0x70 | 0x50) {
+            self.toggle_performance_dashboard();
+            return;
+        }
         if self.devtools.visible() {
             if self.devtools.open && matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
                 self.inspector_scroll(match sym {
@@ -1836,34 +1964,102 @@ impl Browser {
             self.document.title.clone()
         }
     }
+    fn document_cache_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.dom_epoch.hash(&mut hasher);
+        self.document.title.hash(&mut hasher);
+        self.document.nodes.len().hash(&mut hasher);
+        self.document.items.len().hash(&mut hasher);
+        self.document.stylesheets.len().hash(&mut hasher);
+        self.document.resources.len().hash(&mut hasher);
+        for node in self.document.nodes.iter().take(32) {
+            node.tag.hash(&mut hasher);
+            node.text.hash(&mut hasher);
+            node.attributes.hash(&mut hasher);
+            node.children.hash(&mut hasher);
+        }
+        if self.document.nodes.len() > 32 {
+            for node in self.document.nodes.iter().rev().take(32) {
+                node.tag.hash(&mut hasher);
+                node.text.hash(&mut hasher);
+                node.attributes.hash(&mut hasher);
+                node.children.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+    fn controls_cache_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut entries: Vec<_> = self.values.iter().collect();
+        entries.sort_by_key(|(k, _)| **k);
+        entries.hash(&mut hasher);
+        hasher.finish()
+    }
     pub fn paint(&mut self) -> Canvas {
         let reflow = std::mem::take(&mut self.scroll_reflow_pending);
         self.paint_with_scroll_clamp(reflow)
     }
     fn paint_with_scroll_clamp(&mut self, clamp_scroll: bool) -> Canvas {
         let top = self.page_top();
-        let scale = self.effective_scale();
-        let controls = mg_sparkle::render::Controls {
-            values: Some(&self.values),
-            focused_input: if let Focus::Input(node) = self.focus {
-                Some(node)
-            } else {
-                None
-            },
-            select_all: self.select_all,
+        let scale_percent = self.effective_scale_percent();
+        let scale = f32::from(scale_percent) / 100.;
+        let focused_input = if let Focus::Input(node) = self.focus {
+            Some(node)
+        } else {
+            None
         };
-        let viewport = mg_sparkle::render::Viewport {
+        let viewport_height = self.viewport_height();
+        let doc_key = self.document_cache_key();
+        let cache_key = FrameCacheKey {
+            doc_key,
             width: self.width,
-            height: self.viewport_height(),
+            viewport_height,
             scroll: self.scroll,
+            scale_percent,
+            focused_input,
+            select_all: self.select_all,
+            controls_hash: self.controls_cache_hash(),
         };
-        let frame = mg_sparkle::render::render_scaled(
-            &self.document,
-            &mut self.fonts,
-            viewport,
-            &controls,
-            scale,
-        );
+        let (frame, timings) = if let Some((cached_key, cached_frame)) = &self.frame_cache
+            && *cached_key == cache_key
+        {
+            let clone_started = Instant::now();
+            let frame = cached_frame.clone();
+            let total_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
+            let mut timings = self.devtools.performance.last_full_render.clone();
+            timings.style_ms = 0.0;
+            timings.layout_ms = 0.0;
+            timings.paint_ms = 0.0;
+            timings.total_ms = total_ms;
+            timings.style_cached = true;
+            timings.frame_cached = true;
+            (frame, timings)
+        } else {
+            let controls = mg_sparkle::render::Controls {
+                values: Some(&self.values),
+                focused_input,
+                select_all: self.select_all,
+            };
+            let viewport = mg_sparkle::render::Viewport {
+                width: self.width,
+                height: viewport_height,
+                scroll: self.scroll,
+            };
+            let (frame, timings) = mg_sparkle::render::render_scaled_cached(
+                &self.document,
+                &mut self.fonts,
+                viewport,
+                &controls,
+                scale,
+                doc_key,
+                &mut self.style_cache,
+            );
+            self.frame_cache = Some((cache_key, frame.clone()));
+            (frame, timings)
+        };
+        self.devtools.record_frame_timings(timings);
         self.devtools.rendering = frame.diagnostics;
         self.content_height = frame.content_height + top;
         let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
@@ -2456,6 +2652,11 @@ mod tests {
                         content_type: "text/html".into(),
                         body: b"<title>Loaded page</title><p>Readable</p>".to_vec(),
                     }),
+                    fetch_html_ms: 0.0,
+                    parse_html_ms: 0.0,
+                    resource_profile: Default::default(),
+                    script_fetch_profile: Default::default(),
+                    script_worker_ms: 0.0,
                 })
                 .unwrap();
             app.poll();
@@ -2583,6 +2784,11 @@ mod tests {
                     content_type: "text/html".into(),
                     body: b"<p>new page</p>".to_vec(),
                 }),
+                fetch_html_ms: 0.0,
+                parse_html_ms: 0.0,
+                resource_profile: Default::default(),
+                script_fetch_profile: Default::default(),
+                script_worker_ms: 0.0,
             })
             .unwrap();
         app.poll();
@@ -2674,6 +2880,11 @@ mod tests {
                         content_type: "text/html".into(),
                         body: html.as_bytes().to_vec(),
                     }),
+                    fetch_html_ms: 0.0,
+                    parse_html_ms: 0.0,
+                    resource_profile: Default::default(),
+                    script_fetch_profile: Default::default(),
+                    script_worker_ms: 0.0,
                 })
                 .unwrap();
             app.poll();
@@ -2743,6 +2954,11 @@ mod tests {
                     content_type: "text/html".into(),
                     body: vec![],
                 }),
+                fetch_html_ms: 0.0,
+                parse_html_ms: 0.0,
+                resource_profile: Default::default(),
+                script_fetch_profile: Default::default(),
+                script_worker_ms: 0.0,
             })
             .unwrap();
         app.poll();
@@ -2969,6 +3185,12 @@ impl Browser {
     }
     pub fn page_url(&self) -> &str {
         &self.page_url
+    }
+    pub fn performance_profile(&self) -> &PerformanceProfile {
+        &self.devtools.performance
+    }
+    pub fn performance_report(&self) -> String {
+        self.performance_lines().join("\n")
     }
     pub fn request_redraw(&mut self) {
         self.dirty = true;

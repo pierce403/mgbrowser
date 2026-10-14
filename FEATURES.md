@@ -158,7 +158,11 @@ Shipped in v0.8.0 at 8b84604c83541beade431cfbedaa2dc449878011. All existing
 CI/embedding/worker gates and public installation pass. Public native Inspector
 light/dark 100/200% repeats pass in tmp/inspector-smoke.h6S3QS, including compact
 controls, real diagnostics, modal isolation and navigation invalidation.
-See the 2026-09-17 log. This does not complete Playwright or full CSS inspection.
+See the 2026-09-17 log. v0.9.5 extends the Inspector with a third **Performance**
+tab (`Ctrl+Shift+P` or `F12` → `Performance`) and headless `mgbrowser --profile <URL>`
+CLI profiler reporting page-load phases, slowest subresources/external scripts,
+and Frame/Stylo/shaping cache hit metrics. This does not complete Playwright or
+full CSS inspection.
 
 ## F-021 : Smooth wheel scrolling
 
@@ -406,6 +410,12 @@ at 7,240,140 bytes, below existing updaters' unchanged 8 MiB download ceiling.
 The exact public installer, modern worker/session and native/CDP checks pass;
 actual v0.3.0 and v0.4.0 binaries both upgrade themselves and then report no newer
 release. Engine source, dependency graph and resource assertions are unchanged.
+v0.9.4 (at b3a92d656565) enables Boa page scripting by default (`--disable-scripts`
+opts out) and adds `Element.classList`, `Element.dataset`, collection iteration
+and boolean attribute reflection. v0.9.5 adds parent-preloaded classic external
+`<script src="...">` execution (up to 16 scripts, 256 KiB each within the 1 MiB
+page source budget) while keeping the restricted Linux worker network-free, and
+makes `Window` `onclick`/`onsubmit` accessors configurable per WebIDL.
 
 ## F-015 : Self-updates and build identity
 

@@ -4,10 +4,16 @@
 //! A host may supply a separate bold face; mixed-direction bidi layout and
 //! script fallback faces are not implemented. Callers split text into lines.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
+};
 
 const GLYPH_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const GLYPH_CACHE_ENTRIES: usize = 4096;
+const SHAPE_CACHE_BYTES: usize = 1024 * 1024;
+const SHAPE_CACHE_ENTRIES: usize = 4096;
 
 /// Opaque saved physical clip. Callers own nesting tokens; Canvas allocates no
 /// clip stack. Restore on the same surface to recover its previous exact bounds.
@@ -19,6 +25,7 @@ pub struct CanvasClip {
     bottom: u32,
 }
 
+#[derive(Clone)]
 pub struct Canvas {
     /// Physical output pixels. All painting coordinates remain logical pixels.
     pub width: u32,
@@ -156,7 +163,7 @@ impl Canvas {
             .map_or(size, |metrics| metrics.ascent);
         let baseline = y as f32 + ascent;
         let mut pen = x as f32;
-        for glyph in fonts.shape(text, size) {
+        for glyph in fonts.shape(text, size).iter() {
             // Shape and advance in logical units, but rasterize the outline at
             // the actual output resolution. Do not enlarge a 1x glyph bitmap.
             let cached = fonts.glyph(glyph.id, size * self.scale);
@@ -243,6 +250,8 @@ pub struct Fonts {
     font: fontdue::Font,
     cache: HashMap<(u16, u32), (fontdue::Metrics, Vec<u8>)>,
     cached_bytes: usize,
+    shape_cache: HashMap<(u64, u32), (Box<str>, f32, Rc<[PositionedGlyph]>)>,
+    shape_cached_bytes: usize,
     bold: Option<Box<Fonts>>,
     families: HashMap<String, Box<Fonts>>,
 }
@@ -258,6 +267,8 @@ impl Fonts {
             font,
             cache: HashMap::new(),
             cached_bytes: 0,
+            shape_cache: HashMap::new(),
+            shape_cached_bytes: 0,
             bold: None,
             families: HashMap::new(),
         })
@@ -318,7 +329,18 @@ impl Fonts {
 
     /// Measure the same shaped advances that `Canvas::text` paints.
     pub fn width(&mut self, text: &str, size: f32) -> f32 {
-        self.shape(text, font_size(size))
+        let size = font_size(size);
+        if text.len() <= 256 {
+            let mut hasher = DefaultHasher::new();
+            text.hash(&mut hasher);
+            let key = (hasher.finish(), size.to_bits());
+            if let Some((cached_text, width, _)) = self.shape_cache.get(&key)
+                && &**cached_text == text
+            {
+                return *width;
+            }
+        }
+        self.shape(text, size)
             .iter()
             .map(|glyph| glyph.advance)
             .sum::<f32>()
@@ -344,7 +366,20 @@ impl Fonts {
             })
     }
 
-    fn shape(&self, text: &str, size: f32) -> Vec<PositionedGlyph> {
+    fn shape(&mut self, text: &str, size: f32) -> Rc<[PositionedGlyph]> {
+        let key = if text.len() <= 256 {
+            let mut hasher = DefaultHasher::new();
+            text.hash(&mut hasher);
+            let key = (hasher.finish(), size.to_bits());
+            if let Some((cached_text, _, glyphs)) = self.shape_cache.get(&key)
+                && &**cached_text == text
+            {
+                return glyphs.clone();
+            }
+            Some(key)
+        } else {
+            None
+        };
         // The face was validated when the font was loaded and bytes are private.
         let face = rustybuzz::Face::from_slice(&self.bytes, 0).expect("validated font face");
         let scale = size / face.units_per_em() as f32;
@@ -352,7 +387,7 @@ impl Fonts {
         buffer.push_str(text);
         buffer.guess_segment_properties();
         let glyphs = rustybuzz::shape(&face, &[], buffer);
-        glyphs
+        let positioned: Rc<[PositionedGlyph]> = glyphs
             .glyph_infos()
             .iter()
             .zip(glyphs.glyph_positions())
@@ -362,7 +397,26 @@ impl Fonts {
                 x_offset: position.x_offset as f32 * scale,
                 y_offset: position.y_offset as f32 * scale,
             })
-            .collect()
+            .collect();
+        if let Some(key) = key {
+            let width = positioned
+                .iter()
+                .map(|glyph| glyph.advance)
+                .sum::<f32>()
+                .max(0.0);
+            let entry_bytes =
+                text.len() + positioned.len() * std::mem::size_of::<PositionedGlyph>();
+            if self.shape_cached_bytes + entry_bytes > SHAPE_CACHE_BYTES
+                || self.shape_cache.len() >= SHAPE_CACHE_ENTRIES
+            {
+                self.shape_cache.clear();
+                self.shape_cached_bytes = 0;
+            }
+            self.shape_cached_bytes += entry_bytes;
+            self.shape_cache
+                .insert(key, (text.into(), width, positioned.clone()));
+        }
+        positioned
     }
 
     fn glyph(&mut self, id: u16, size: f32) -> &(fontdue::Metrics, Vec<u8>) {

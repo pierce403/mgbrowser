@@ -44,6 +44,7 @@ pub struct Controls<'a> {
     pub focused_input: Option<usize>,
     pub select_all: bool,
 }
+#[derive(Clone)]
 pub struct Frame {
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
@@ -52,6 +53,27 @@ pub struct Frame {
     /// Bounded diagnostics from this frame's actual style/layout pass. Resource
     /// loading and script execution have separate reports owned by their callers.
     pub diagnostics: crate::style::StyleDiagnostics,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RenderTimings {
+    pub style_ms: f64,
+    pub layout_ms: f64,
+    pub paint_ms: f64,
+    pub chrome_ms: f64,
+    pub total_ms: f64,
+    pub style_cached: bool,
+    pub frame_cached: bool,
+    pub paint_ops: usize,
+    pub layout_boxes: usize,
+    pub dom_nodes: usize,
+}
+
+#[derive(Clone, Default)]
+pub struct StyleCache {
+    key: Option<(u64, u32, u32)>,
+    styles: Vec<crate::style::ComputedStyle>,
+    diagnostics: crate::style::StyleDiagnostics,
 }
 
 /// Render a document without a window, network service, or JavaScript execution.
@@ -74,7 +96,33 @@ pub fn render_scaled(
     controls: &Controls<'_>,
     scale: f32,
 ) -> Frame {
+    render_scaled_cached(
+        document,
+        fonts,
+        viewport,
+        controls,
+        scale,
+        0,
+        &mut StyleCache::default(),
+    )
+    .0
+}
+
+pub fn render_scaled_cached(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    controls: &Controls<'_>,
+    scale: f32,
+    doc_key: u64,
+    style_cache: &mut StyleCache,
+) -> (Frame, RenderTimings) {
+    let total_started = std::time::Instant::now();
     let mut diagnostics = crate::style::StyleDiagnostics::default();
+    let mut timings = RenderTimings {
+        dom_nodes: document.nodes.len(),
+        ..Default::default()
+    };
     let styled = !document.stylesheets.is_empty()
         || !document.resources.is_empty()
         || document
@@ -82,17 +130,44 @@ pub fn render_scaled(
             .iter()
             .any(|node| node.has("style") || node.tag == "svg");
     if styled {
-        match crate::style::compute_styles_with_diagnostics(
-            document,
-            &document.stylesheets,
-            (viewport.width as f32, viewport.height as f32),
-            &mut diagnostics,
-        ) {
+        let cache_key = (doc_key, viewport.width, viewport.height);
+        let computed = if doc_key != 0
+            && style_cache.key == Some(cache_key)
+            && style_cache.styles.len() == document.nodes.len()
+        {
+            timings.style_cached = true;
+            diagnostics = style_cache.diagnostics.clone();
+            Ok(style_cache.styles.clone())
+        } else {
+            let style_started = std::time::Instant::now();
+            let result = crate::style::compute_styles_with_diagnostics(
+                document,
+                &document.stylesheets,
+                (viewport.width as f32, viewport.height as f32),
+                &mut diagnostics,
+            );
+            timings.style_ms = style_started.elapsed().as_secs_f64() * 1000.0;
+            if let Ok(styles) = &result {
+                if doc_key != 0 {
+                    style_cache.key = Some(cache_key);
+                    style_cache.styles = styles.clone();
+                    style_cache.diagnostics = diagnostics.clone();
+                }
+            } else {
+                style_cache.key = None;
+            }
+            result
+        };
+        match computed {
             Ok(styles) => {
-                match crate::styled_layout::render_scaled(
+                match crate::styled_layout::render_scaled_profiled(
                     document, fonts, viewport, controls, styles, scale,
                 ) {
-                    Ok(mut frame) => {
+                    Ok((mut frame, layout_ms, paint_ms, paint_ops)) => {
+                        timings.layout_ms = layout_ms;
+                        timings.paint_ms = paint_ms;
+                        timings.paint_ops = paint_ops;
+                        timings.layout_boxes = frame.boxes.len();
                         diagnostics.omitted = diagnostics
                             .omitted
                             .saturating_add(frame.diagnostics.omitted);
@@ -106,7 +181,8 @@ pub fn render_scaled(
                             }
                         }
                         frame.diagnostics = diagnostics;
-                        return frame;
+                        timings.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
+                        return (frame, timings);
                     }
                     Err(failure) => {
                         eprintln!(
@@ -138,6 +214,7 @@ pub fn render_scaled(
             }
         }
     }
+    let paint_started = std::time::Instant::now();
     let mut frame = Renderer {
         document,
         fonts,
@@ -152,8 +229,11 @@ pub fn render_scaled(
         scale,
     }
     .paint();
+    timings.paint_ms = paint_started.elapsed().as_secs_f64() * 1000.0;
+    timings.layout_boxes = frame.boxes.len();
     frame.diagnostics = diagnostics;
-    frame
+    timings.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
+    (frame, timings)
 }
 struct Renderer<'a> {
     document: &'a Document,

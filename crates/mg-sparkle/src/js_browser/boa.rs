@@ -7,7 +7,9 @@
 //! teardown, within the unchanged 32-registration/300-second session bounds.
 //! This bounded retention policy is not full DOM ephemeron garbage collection.
 use super::events::{Kind, Target};
-use super::{BrowserHost, MAX_SOURCE, Request, bounded, inert, text_content};
+use super::{
+    BrowserHost, MAX_SOURCE, Request, bounded, inert, split_external_scripts, text_content,
+};
 use crate::{document, page_session::*};
 use mg_butane::{
     modern::{self, Engine},
@@ -556,7 +558,8 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        let document = document::parse_with_scripting(&request.html, url.as_str(), true);
+        let (external_scripts, html_source) = split_external_scripts(&request.html);
+        let document = document::parse_with_scripting(html_source, url.as_str(), true);
         let mut sources = Vec::new();
         let mut count = 0;
         for (index, node) in document.nodes.iter().enumerate() {
@@ -571,6 +574,7 @@ impl BoaPageRealm {
                     | "application/javascript"
                     | "text/ecmascript"
                     | "application/ecmascript"
+                    | "application/x-javascript"
             ) {
                 continue;
             }
@@ -586,12 +590,18 @@ impl BoaPageRealm {
                 continue;
             }
             if node.attr("src").is_some() {
-                reply
-                    .errors
-                    .push("External script loading is not implemented".into());
+                if let Some(map) = &external_scripts {
+                    if let Some(Some(source)) = map.get(&index) {
+                        sources.push((true, source.clone()));
+                    }
+                } else {
+                    reply
+                        .errors
+                        .push("External script loading is not implemented".into());
+                }
                 continue;
             }
-            sources.push(text_content(&document.nodes, index));
+            sources.push((false, text_content(&document.nodes, index)));
         }
         let host = BrowserHost {
             document,
@@ -610,11 +620,12 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        for (index, source) in sources.iter().enumerate() {
+        for (index, (is_external, source)) in sources.iter().enumerate() {
+            let label = if *is_external { "External" } else { "Inline" };
             match realm.engine.evaluate(source) {
                 Ok(_) => reply.scripts_executed += 1,
                 Err(error) => reply.errors.push(format!(
-                    "Inline script {}: {}",
+                    "{label} script {}: {}",
                     index + 1,
                     bounded(&error.to_string(), 512)
                 )),
@@ -733,7 +744,7 @@ impl BoaPageRealm {
                         .get(getter)
                         .set(setter)
                         .enumerable(true)
-                        .configurable(false),
+                        .configurable(name != "location"),
                     context,
                 )
                 .map_err(|_| "Global accessor failed")?;

@@ -42,6 +42,7 @@ pub struct Session {
 pub(crate) enum ResourceKind {
     Stylesheet,
     Image,
+    Script,
 }
 
 impl Session {
@@ -216,6 +217,14 @@ fn submit_with_limits_progress(
                     if url.scheme() != "https" && (!same_origin || visited_https) {
                         return Err(
                             "Images require HTTPS across origins and cannot downgrade from HTTPS, including redirects".into(),
+                        );
+                    }
+                    credentials_allowed &= same_origin;
+                }
+                ResourceKind::Script => {
+                    if url.scheme() != "https" && (!same_origin || visited_https) {
+                        return Err(
+                            "Scripts require HTTPS across origins and cannot downgrade from HTTPS, including redirects".into(),
                         );
                     }
                     credentials_allowed &= same_origin;

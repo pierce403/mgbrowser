@@ -89,7 +89,9 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
             return (None, reply);
         }
     };
-    let document = document::parse_with_scripting(&request.html, url.as_str(), true);
+    let (external_scripts, html_source) = split_external_scripts(&request.html);
+    reply.html = html_source.to_owned();
+    let document = document::parse_with_scripting(html_source, url.as_str(), true);
     let mut scripts = Vec::new();
     let mut script_count = 0;
     for (index, node) in document.nodes.iter().enumerate() {
@@ -104,6 +106,7 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
                 | "application/javascript"
                 | "text/ecmascript"
                 | "application/ecmascript"
+                | "application/x-javascript"
         ) {
             script_count += 1;
             if script_count > 32 {
@@ -117,6 +120,7 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
                 | "application/javascript"
                 | "text/ecmascript"
                 | "application/ecmascript"
+                | "application/x-javascript"
         ) {
             if kind == "module" {
                 reply
@@ -126,12 +130,18 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
             continue;
         }
         if node.attr("src").is_some() {
-            reply
-                .errors
-                .push("External script loading is not implemented".into());
+            if let Some(map) = &external_scripts {
+                if let Some(Some(source)) = map.get(&index) {
+                    scripts.push((true, source.clone()));
+                }
+            } else {
+                reply
+                    .errors
+                    .push("External script loading is not implemented".into());
+            }
             continue;
         }
-        scripts.push(text_content(&document.nodes, index));
+        scripts.push((false, text_content(&document.nodes, index)));
     }
     let mut host = BrowserHost {
         document,
@@ -169,11 +179,12 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
             Value::Native(format!("host.window.get.{name}")),
         );
     }
-    for (index, source) in scripts.iter().enumerate() {
+    for (index, (is_external, source)) in scripts.iter().enumerate() {
+        let label = if *is_external { "External" } else { "Inline" };
         match runtime.execute(source, &mut host) {
             Ok(_) => reply.scripts_executed += 1,
             Err(error) => reply.errors.push(format!(
-                "Inline script {}: {}",
+                "{label} script {}: {}",
                 index + 1,
                 bounded(&error, 512)
             )),
@@ -289,6 +300,17 @@ impl PageRealm {
     }
 }
 
+pub(super) fn split_external_scripts(
+    raw_html: &str,
+) -> (Option<std::collections::HashMap<usize, Option<String>>>, &str) {
+    if let Some(rest) = raw_html.strip_prefix("<!--mg-external-scripts:")
+        && let Some((json, html)) = rest.split_once("-->\n")
+        && let Ok(entries) = serde_json::from_str::<Vec<(usize, Option<String>)>>(json)
+    {
+        return (Some(entries.into_iter().collect()), html);
+    }
+    (None, raw_html)
+}
 fn bounded(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
@@ -739,6 +761,7 @@ impl Host for BrowserHost {
             | "host.dom.querySelector"
             | "host.dom.querySelectorAll"
             | "host.dom.getElementsByTagName"
+            | "host.dom.getElementsByClassName"
             | "host.dom.createElement"
             | "host.dom.createTextNode"
             | "host.dom.getAttribute"
@@ -908,6 +931,7 @@ impl Host for BrowserHost {
                 | "querySelector"
                 | "querySelectorAll"
                 | "getElementsByTagName"
+                | "getElementsByClassName"
                 | "createElement"
                 | "createTextNode"
                 | "addEventListener"
@@ -932,6 +956,7 @@ impl Host for BrowserHost {
             "nodeName" | "tagName" => Value::text(&node.tag.to_ascii_uppercase()),
             "textContent" | "innerText" => Value::text(&text_content(&self.document.nodes, id)),
             "innerHTML" => Value::text(&self.serialize(id, false)?),
+            "outerHTML" => Value::text(&self.serialize(id, true)?),
             "id" | "className" | "name" | "type" | "method" => Value::text(
                 node.attr(if key == "className" { "class" } else { key })
                     .unwrap_or(""),
@@ -960,11 +985,60 @@ impl Host for BrowserHost {
                     self.element(node.parent)
                 }
             }
+            "parentElement" => {
+                if id == 0 || node.parent == id || node.parent == 0 {
+                    Value::Null
+                } else {
+                    self.element(node.parent)
+                }
+            }
             "firstChild" => node
                 .children
                 .first()
                 .map(|i| self.element(*i))
                 .unwrap_or(Value::Null),
+            "lastChild" => node
+                .children
+                .last()
+                .map(|i| self.element(*i))
+                .unwrap_or(Value::Null),
+            "firstElementChild" => node
+                .children
+                .iter()
+                .find(|i| self.document.nodes[**i].tag != "#text")
+                .map(|i| self.element(*i))
+                .unwrap_or(Value::Null),
+            "lastElementChild" => node
+                .children
+                .iter()
+                .rev()
+                .find(|i| self.document.nodes[**i].tag != "#text")
+                .map(|i| self.element(*i))
+                .unwrap_or(Value::Null),
+            "nextSibling" | "previousSibling" | "nextElementSibling" | "previousElementSibling" => {
+                if id == 0 || node.parent == id {
+                    return Ok(Value::Null);
+                }
+                let siblings = &self.document.nodes[node.parent].children;
+                let Some(pos) = siblings.iter().position(|c| *c == id) else {
+                    return Ok(Value::Null);
+                };
+                let target = match key {
+                    "nextSibling" => siblings.get(pos + 1).copied(),
+                    "previousSibling" => pos.checked_sub(1).and_then(|p| siblings.get(p).copied()),
+                    "nextElementSibling" => siblings[pos + 1..]
+                        .iter()
+                        .copied()
+                        .find(|i| self.document.nodes[*i].tag != "#text"),
+                    "previousElementSibling" => siblings[..pos]
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|i| self.document.nodes[*i].tag != "#text"),
+                    _ => None,
+                };
+                target.map(|i| self.element(i)).unwrap_or(Value::Null)
+            }
             "children" | "childNodes" => {
                 let nodes = node
                     .children
@@ -982,6 +1056,8 @@ impl Host for BrowserHost {
             | "querySelector"
             | "querySelectorAll"
             | "getElementsByTagName"
+            | "getElementsByClassName"
+            | "scrollIntoView"
             | "addEventListener"
             | "removeEventListener"
             | "dispatchEvent"
@@ -1269,6 +1345,36 @@ impl Host for BrowserHost {
                     .query_selector_all(root, &text.to_ascii_lowercase())?;
                 self.collection(ids)
             }
+            "host.dom.getElementsByClassName" => {
+                let wanted: Vec<&str> = text.split_ascii_whitespace().collect();
+                if wanted.is_empty() {
+                    return self.collection(vec![]);
+                }
+                let mut ids = Vec::new();
+                let mut pending: Vec<usize> = self.document.nodes[root]
+                    .children
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect();
+                for _ in 0..MAX_NODES {
+                    let Some(id) = pending.pop() else { break };
+                    let node = &self.document.nodes[id];
+                    if node.tag != "#text" && node.tag != "#document" {
+                        let classes = node.attr("class").unwrap_or("");
+                        if wanted.iter().all(|w| {
+                            classes
+                                .split_ascii_whitespace()
+                                .any(|existing| existing == *w)
+                        }) {
+                            ids.push(id);
+                        }
+                    }
+                    pending.extend(node.children.iter().rev().copied());
+                }
+                self.collection(ids)
+            }
+            "host.dom.scrollIntoView" => Ok(Value::Undefined),
             "host.dom.createElement" => {
                 if !valid_name(&text) || !text.as_bytes()[0].is_ascii_alphabetic() {
                     return Err("Invalid element name".into());

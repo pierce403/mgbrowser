@@ -286,3 +286,24 @@ fn classlist_dataset_collection_iteration_and_boolean_attributes_update_dom() {
     assert_eq!(doc.nodes[out].attr("hidden"), None);
     assert!(reply.html.contains(">dark final|dark|true|P,A,SCRIPT</p>"));
 }
+
+#[test]
+fn external_scripts_and_global_event_handler_function_declarations_succeed() {
+    let html = "<html><body><p id=out>before</p><script src='/hn.js'></script></body></html>";
+    let header = serde_json::to_string(&vec![(
+        5usize,
+        Some(
+            "function onclick(ev) { return ev; } function onsubmit(ev) { return ev; } document.getElementById('out').textContent = typeof onclick;"
+                .to_owned(),
+        ),
+    )])
+    .unwrap();
+    let reply = execute(Request {
+        url: "https://example.test/owned".into(),
+        html: format!("<!--mg-external-scripts:{header}-->\n{html}"),
+    });
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.html.contains(">function</p>"));
+}

@@ -22,12 +22,21 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    camelCase normalization. All 24 selected tests pass (24 PASS, 0 FAIL,
    0 UNSUPPORTED / 24), released at `36119044b7c6` with exact-commit CI, Pages,
    release and public installer checks verified.
-4. **In release validation:** v0.9.4 enables pure-Rust Boa ECMAScript execution
+4. **Complete:** v0.9.4 enables pure-Rust Boa ECMAScript execution
    by default (`--disable-scripts` opts out), adds bottom-left link hover URL
    previews, right-click **Open link in new tab** and **Ctrl+click** on links,
    and expands DOM `classList`, `dataset`, collection iteration and boolean
-   attribute bindings while preserving 24/24 WPT passes.
-5. Expand pinned cohorts and implement full testharness/WebDriver integration in
+   attribute bindings while preserving 24/24 WPT passes. Released at
+   `b3a92d656565` with exact-commit CI, Pages, release and public installer
+   checks verified.
+5. **In release validation:** v0.9.5 implements bounded classic external script
+   loading (`<script src="...">`), a native **Performance Dashboard**
+   (`F12` / `Ctrl+Shift+I` → **Performance**, or **Ctrl+Shift+P**) and headless
+   **CLI profiler** (`mgbrowser --profile <URL>`), configurable `Window`
+   `onclick`/`onsubmit` accessors per WebIDL, and multi-tier rendering caches
+   (Frame cache, Stylo computed-style cache and RustyBuzz shaping/width cache)
+   while preserving 24/24 WPT passes.
+6. Expand pinned cohorts and implement full testharness/WebDriver integration in
    separate milestones. Keep worker/resource limits and old regressions; each
    browser behavior improvement finishes with a verified public feature release.
 

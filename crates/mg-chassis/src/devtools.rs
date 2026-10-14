@@ -12,12 +12,14 @@ pub(super) struct State {
     pub context: Option<(i32, i32)>,
     pub context_link: Option<String>,
     pub diagnostics: bool,
+    pub performance_tab: bool,
     pub row: usize,
     pub painted_epoch: u64,
     selected: Option<(u64, usize)>,
     messages: Vec<String>,
     omitted: usize,
     pub rendering: mg_sparkle::style::StyleDiagnostics,
+    pub performance: PerformanceProfile,
 }
 
 #[cfg(test)]
@@ -359,6 +361,53 @@ mod tests {
             }
         }
     }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn performance_dashboard_and_render_caches_track_frame_and_style_hits() {
+        let mut app = test_app();
+        app.document = document::parse(
+            &format!(
+                "<style>p{{color:#123456;margin:8px}}</style>{}",
+                "<p><a href='/story'>Story link</a></p>".repeat(40)
+            ),
+            "https://example.com/",
+        );
+        app.page_url = "https://example.com/".into();
+        app.dom_epoch += 1;
+
+        app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert!(!app.performance_profile().last_frame.style_cached);
+        assert_eq!(app.performance_profile().frame_cache_hits, 0);
+        assert_eq!(app.performance_profile().style_cache_hits, 0);
+
+        // UI-only redraw (such as hover or chrome update) hits the frame cache.
+        app.request_redraw();
+        app.paint();
+        assert!(app.performance_profile().last_frame.frame_cached);
+        assert_eq!(app.performance_profile().frame_cache_hits, 1);
+
+        // Scroll redraw misses the frame cache but hits the Stylo style cache.
+        app.scroll_by(80);
+        app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert!(app.performance_profile().last_frame.style_cached);
+        assert_eq!(app.performance_profile().style_cache_hits, 1);
+
+        // Ctrl+Shift+P opens the Performance Dashboard tab directly.
+        app.handle_key(Key::Character('P'), true, true, false);
+        assert!(app.devtools.open && app.devtools.performance_tab);
+        let report = app.inspector_lines().join("\n");
+        assert!(report.contains("Performance Dashboard"));
+        assert!(report.contains("Page Load Breakdown"));
+        assert!(report.contains("Render & Frame Cache Pipeline"));
+        assert!(report.contains("Frame cache hits: 1 | Style cache hits: 1"));
+        app.paint();
+        assert!(app.hits.iter().all(|hit| app.modal_action(&hit.action)));
+        app.handle_key(Key::Character('P'), true, true, false);
+        assert!(!app.devtools.visible());
+    }
 }
 
 impl State {
@@ -378,6 +427,23 @@ impl State {
         self.messages.clear();
         self.omitted = 0;
         self.rendering = Default::default();
+        self.performance = Default::default();
+    }
+    pub fn record_frame_timings(&mut self, timings: mg_sparkle::render::RenderTimings) {
+        self.performance.frames_painted = self.performance.frames_painted.saturating_add(1);
+        if timings.frame_cached {
+            self.performance.frame_cache_hits = self.performance.frame_cache_hits.saturating_add(1);
+        } else {
+            if timings.style_cached {
+                self.performance.style_cache_hits =
+                    self.performance.style_cache_hits.saturating_add(1);
+            }
+            self.performance.last_full_render = timings.clone();
+        }
+        if timings.total_ms > self.performance.max_frame_ms {
+            self.performance.max_frame_ms = timings.total_ms;
+        }
+        self.performance.last_frame = timings;
     }
     pub fn invalidate_selection(&mut self, epoch: u64) {
         if self
@@ -477,6 +543,28 @@ impl Browser {
         self.dirty = true;
     }
 
+    /// Toggle the native Performance Dashboard (`Ctrl+Shift+P`).
+    pub fn toggle_performance_dashboard(&mut self) {
+        if !self.chrome {
+            return;
+        }
+        self.cancel_pointer_input();
+        if self.devtools.open && self.devtools.performance_tab {
+            self.devtools.close();
+        } else {
+            if self.devtools.context.is_none() && self.devtools.selected.is_none() {
+                self.devtools.selected =
+                    (!self.document.nodes.is_empty()).then_some((self.dom_epoch, 0));
+            }
+            self.open_inspector();
+            self.devtools.performance_tab = true;
+            self.devtools.diagnostics = false;
+            self.modal_focus = 2;
+        }
+        self.hits.clear();
+        self.dirty = true;
+    }
+
     /// Cancel transient input when a host switches or moves the owning pane.
     /// The focused control, page session and native dialogs are preserved.
     pub fn cancel_pointer_input(&mut self) {
@@ -494,6 +582,7 @@ impl Browser {
         self.devtools.context = None;
         self.devtools.context_link = None;
         self.devtools.diagnostics = false;
+        self.devtools.performance_tab = false;
         self.devtools.row = 0;
         self.menu_open = false;
         self.about_open = false;
@@ -607,7 +696,112 @@ impl Browser {
         lines
     }
 
+    pub(super) fn performance_lines(&self) -> Vec<String> {
+        let p = &self.devtools.performance;
+        let full = &p.last_full_render;
+        let last = &p.last_frame;
+        let load_total = p.fetch_html_ms
+            + p.parse_html_ms
+            + p.resources_ms
+            + p.external_scripts_ms
+            + p.script_worker_ms;
+        let mut lines = vec![
+            format!("Performance Dashboard : {}", bounded(&self.page_url, 240)),
+            "Shortcut: Ctrl+Shift+P (or F12 -> Performance) | CLI: mgbrowser --profile <URL>"
+                .into(),
+            format!("Page Load Breakdown (total {:.1} ms):", load_total),
+            format!(
+                "  HTML fetch: {:.1} ms ({} bytes)",
+                p.fetch_html_ms, p.html_bytes
+            ),
+            format!(
+                "  HTML parse: {:.1} ms ({} DOM nodes)",
+                p.parse_html_ms,
+                self.document.nodes.len()
+            ),
+            format!(
+                "  Subresources (CSS/images): {:.1} ms ({} requests, {} bytes)",
+                p.resources_ms, p.resource_requests, p.resource_bytes
+            ),
+            format!(
+                "  External scripts (<script src>): {:.1} ms ({} loaded, {} bytes)",
+                p.external_scripts_ms, p.external_scripts_loaded, p.external_scripts_bytes
+            ),
+            format!(
+                "  Boa JS worker: {:.1} ms ({} scripts executed, {} opcodes, {} KiB peak)",
+                p.script_worker_ms,
+                p.scripts_executed,
+                p.boa_opcodes,
+                p.boa_peak_bytes / 1024
+            ),
+            format!(
+                "Render & Frame Cache Pipeline (viewport {}x{} @ {}%):",
+                self.width,
+                self.viewport_height(),
+                self.effective_scale_percent()
+            ),
+            format!(
+                "  Last full render: {:.2} ms (style {:.2} ms [{}], layout {:.2} ms, paint {:.2} ms)",
+                full.total_ms,
+                full.style_ms,
+                if full.style_cached {
+                    "cached"
+                } else {
+                    "Stylo"
+                },
+                full.layout_ms,
+                full.paint_ms
+            ),
+            format!(
+                "  Last frame repaint: {:.2} ms [{}] | Peak frame: {:.2} ms",
+                last.total_ms,
+                if last.frame_cached {
+                    "frame cache hit"
+                } else if last.style_cached {
+                    "style cache hit"
+                } else {
+                    "uncached render"
+                },
+                p.max_frame_ms
+            ),
+            format!(
+                "  Frames painted: {} | Frame cache hits: {} | Style cache hits: {}",
+                p.frames_painted, p.frame_cache_hits, p.style_cache_hits
+            ),
+            format!(
+                "  Scene complexity: {} DOM nodes, {} layout boxes, {} paint ops",
+                full.dom_nodes, full.layout_boxes, full.paint_ops
+            ),
+        ];
+        if p.slowest_resources.is_empty() {
+            lines.push("Slowest Subresources & External Scripts: (none fetched)".into());
+        } else {
+            lines.push("Slowest Subresources & External Scripts:".into());
+            for r in &p.slowest_resources {
+                let status = r
+                    .status
+                    .map(|code| format!("HTTP {code}"))
+                    .unwrap_or_else(|| "err".into());
+                lines.push(bounded(
+                    &format!(
+                        "  {:>6.1} ms  [{:<10}] {:>7} B  {} ({status})",
+                        r.duration_ms,
+                        r.kind,
+                        r.bytes,
+                        bounded(&r.url, 120),
+                    ),
+                    512,
+                ));
+            }
+        }
+        lines.truncate(MAX_LINES);
+        lines
+    }
+
     fn inspector_lines(&self) -> Vec<String> {
+        if self.devtools.performance_tab {
+            return self.performance_lines();
+        }
         if self.devtools.diagnostics {
             let mut lines = vec![
                 format!(
@@ -852,10 +1046,11 @@ impl Browser {
             17.,
             palette.ink,
         );
-        let button_width = (width - 40) / 3;
+        let button_width = (width - 48) / 4;
         for (index, (label, action)) in [
             ("Elements", Action::InspectorSection(false)),
             ("Diagnostics", Action::InspectorSection(true)),
+            ("Performance", Action::InspectorPerformance),
             ("Close", Action::CloseMenu),
         ]
         .into_iter()
@@ -873,7 +1068,11 @@ impl Browser {
                 index,
             );
         }
-        let selected = usize::from(self.devtools.diagnostics);
+        let selected = if self.devtools.performance_tab {
+            2
+        } else {
+            usize::from(self.devtools.diagnostics)
+        };
         canvas.rect(
             x + 16 + selected as i32 * (button_width as i32 + 8),
             y + 70,
@@ -901,14 +1100,14 @@ impl Browser {
             (x + 12, footer, 92),
             "Previous",
             Action::InspectorScroll(false),
-            3,
+            4,
         );
         self.inspector_button(
             canvas,
             (x + 112, footer, 72),
             "Next",
             Action::InspectorScroll(true),
-            4,
+            5,
         );
         let label = format!(
             "{}-{} of {}",
@@ -929,7 +1128,7 @@ impl Browser {
             canvas,
             x + 12,
             y + height as i32 - 26,
-            "Wheel/arrows: scroll. Tab/Enter: controls. Esc/F12: close.",
+            "Wheel/arrows: scroll. Tab/Enter: controls. Ctrl+Shift+P: performance. Esc/F12: close.",
             width - 24,
             12.,
             palette.muted,
