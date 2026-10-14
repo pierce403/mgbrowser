@@ -255,3 +255,34 @@ fn source_and_projection_rejection_keep_original_fallback() {
             .any(|e| e.contains("Serialized DOM byte limit"))
     );
 }
+
+#[test]
+fn classlist_dataset_collection_iteration_and_boolean_attributes_update_dom() {
+    let reply = execute(page(
+        r#"
+        const html = document.documentElement;
+        html.className = 'light legacy';
+        html.classList.remove('light', 'dark');
+        html.classList.add('dark', 'ready');
+        if (!html.classList.contains('dark') || html.classList.contains('light')) throw 'classList state';
+        if (html.classList.toggle('legacy') !== false) throw 'toggle remove';
+        if (html.classList.replace('ready', 'final') !== true) throw 'replace';
+        const out = document.getElementById('out');
+        out.dataset.themeMode = 'dark';
+        out.hidden = true;
+        const collected = [];
+        for (const el of document.body.children) {
+            collected.push(el.tagName);
+        }
+        out.textContent = `${html.classList.value}|${out.dataset.themeMode}|${out.hidden}|${collected.join(',')}`;
+        out.hidden = false;
+    "#,
+    ));
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    let doc = document::parse(&reply.html, "https://example.test/owned");
+    let out = doc.query_selector(0, "#out").unwrap().unwrap();
+    assert_eq!(doc.nodes[out].attr("data-theme-mode"), Some("dark"));
+    assert_eq!(doc.nodes[out].attr("hidden"), None);
+    assert!(reply.html.contains(">dark final|dark|true|P,A,SCRIPT</p>"));
+}

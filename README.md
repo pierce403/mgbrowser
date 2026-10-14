@@ -2,21 +2,16 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.3 Experimental Preview
+## v0.9.4 Experimental Preview
 
-This security maintenance release updates the locked `rustls` dependency from
-0.23.44 to 0.23.45. It keeps the v0.9.2 browser behavior and the 24/24 pinned
-WPT flexbox score; see the [v0.9.3 release notes](docs/RELEASE-v0.9.3.md).
-
-The initial 24-test WPT flexbox reftest selection now passes completely (**24 pass,
-0 fail, 0 unsupported out of 24**). v0.9.2 added bounded XML/XHTML document
-parsing, signed vertical margin-box block advancement, column flex `fit-content`
-cross sizing, block static-position resolution for `inset: auto` overlays,
-aspect-ratio-only SVG flex item sizing, implicit `<body>` synthesis, row flex
-first-baseline alignment, bounded same-origin `@font-face` `.ttf`/`.otf` font
-loading and DOM `element.style` camelCase normalization. This is measured
-progress on a fixed reftest cohort, not broad standards conformance.
-[Scope and remaining gaps](docs/WPT.md).
+v0.9.4 enables pure-Rust Boa ECMAScript execution by default (`--disable-scripts`
+opts out), adds bottom-left link hover URL previews, supports **Open link in new tab**
+from the right-click context menu and **Ctrl+click** on links, and expands DOM
+bindings (`Element.classList`, `Element.dataset`, collection iteration via
+`[Symbol.iterator]` and boolean attribute properties). The initial 24-test WPT
+flexbox reftest selection continues to pass completely (**24 pass, 0 fail,
+0 unsupported out of 24**). This is measured progress on a fixed reftest cohort,
+not broad standards conformance. [Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,
 positioned headers, clipping, inline SVG and JPEG thumbnails now render the
@@ -27,7 +22,8 @@ icons are missing; topic destinations can still fall back to readable flow.
 Search, menus, account actions and personalization remain later work.
 [Reading scope and evidence](docs/GOOGLE_NEWS.md).
 
-Right-click a page and choose **Inspect element**, or press **F12** /
+Right-click a page and choose **Inspect element** (or **Open link in new tab**
+on a hyperlink), or press **F12** /
 **Ctrl+Shift+I**. The native read-only inspector shows DOM attributes, text and
 painted bounds, plus bounded CSS, resource and script diagnostics. This is not
 the Chrome DevTools frontend or a JavaScript debugger. [Inspector guide](docs/INSPECTOR.md).
@@ -75,17 +71,18 @@ Browser controls now follow your desktop's light/dark preference. Open
 immediately and are saved for the next launch. Page colors and the red plain-HTTP
 warning stay unchanged. [Appearance details](docs/APPEARANCE.md).
 
-Boa now runs opt-in page JavaScript: modern inline scripts, Promise checkpoints
-and retained click/submit handlers operate on Mg's real Rust DOM. Mg keeps its
-own HTML parser, layout and renderer, with Rust Stylo for CSS. No native JS
-backend or full Servo browser embedding. [Scope and resource profile](docs/BOA.md).
+Boa now runs page JavaScript by default (`--disable-scripts` opts out): modern
+inline scripts, Promise checkpoints and retained click/submit handlers operate
+on Mg's real Rust DOM. Mg keeps its own HTML parser, layout and renderer, with
+Rust Stylo for CSS. No native JS backend or full Servo browser embedding.
+[Scope and resource profile](docs/BOA.md).
 
 The size-optimized, symbol-stripped release stays within older builds' unchanged
 8 MiB updater limit. Layout and resource limits remain explicit; this does not
 establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded in the [dated work log](memory/logs/2026-10-13.md).
+installation receipts are recorded in the [dated work log](memory/logs/2026-10-14.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -107,7 +104,7 @@ resource-loading, painting and restricted script-worker code. [Method and comman
 The website reruns the selection before every commit's Pages deployment and
 publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
 The goal is more genuine passes, without hiding failures or losing old passes.
-v0.9.2 completes all 24 tests in the initial cohort. Current-source website scores may
+v0.9.2 completed all 24 tests in the initial cohort, and v0.9.4 preserves 24/24 passes. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
@@ -135,8 +132,8 @@ See [updater behavior and trust](docs/UPDATES.md).
   News still has font/icon/corner differences and destination fallbacks. Mobile
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
-- Boa-backed JavaScript integration is incomplete and disabled by default;
-  use `--enable-scripts` to opt in. External scripts, modules, timers, fetch/XHR
+- Boa-backed JavaScript integration runs inline scripts by default (use
+  `--disable-scripts` to opt out). External scripts, modules, timers, fetch/XHR
   and general browser event-loop behavior are not implemented. No React/Vue
   browser-app compatibility is claimed.
 - Script budgets include cumulative opcodes, sources/jobs and 32/64 MiB
@@ -162,7 +159,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.3.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.4.md) for manual install and uninstall.
 
 ## Components
 

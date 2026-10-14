@@ -352,6 +352,20 @@ fn css_property_name(name: &str) -> String {
     }
     out
 }
+fn bool_attr_name(key: &str) -> Option<&'static str> {
+    match key {
+        "defer" => Some("defer"),
+        "async" => Some("async"),
+        "hidden" => Some("hidden"),
+        "disabled" => Some("disabled"),
+        "checked" => Some("checked"),
+        "required" => Some("required"),
+        "readOnly" => Some("readonly"),
+        "multiple" => Some("multiple"),
+        "selected" => Some("selected"),
+        _ => None,
+    }
+}
 fn void(tag: &str) -> bool {
     matches!(
         tag,
@@ -680,8 +694,11 @@ impl Host for BrowserHost {
         if object == "location" {
             return key == "href";
         }
-        if object.starts_with("style:") {
+        if object.starts_with("style:") || object.starts_with("dataset:") {
             return valid_name(key);
+        }
+        if object.starts_with("classlist:") {
+            return key == "value";
         }
         (object == "document" && matches!(key, "title" | "location"))
             || ((object == "document" || object.starts_with("node:"))
@@ -706,7 +723,8 @@ impl Host for BrowserHost {
         // Only these positions are text. Node arguments, callbacks and unused
         // arguments must not run coercion hooks as a side effect of dispatch.
         match name {
-            "host.dom.setAttribute" => &[0, 1],
+            "host.dom.setAttribute" | "host.classlist.replace" => &[0, 1],
+            "host.classlist.add" | "host.classlist.remove" => &[0, 1, 2, 3, 4, 5, 6, 7],
             "host.location.assign"
             | "host.location.replace"
             | "host.window.addEventListener"
@@ -714,6 +732,9 @@ impl Host for BrowserHost {
             | "host.window.removeEventListener"
             | "host.dom.removeEventListener"
             | "host.collection.item"
+            | "host.classlist.item"
+            | "host.classlist.contains"
+            | "host.classlist.toggle"
             | "host.dom.getElementById"
             | "host.dom.querySelector"
             | "host.dom.querySelectorAll"
@@ -830,6 +851,42 @@ impl Host for BrowserHost {
             };
             return Ok(Value::text(value));
         }
+        if let Some(id) = object
+            .strip_prefix("classlist:")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            let classes = self
+                .document
+                .nodes
+                .get(id)
+                .ok_or("Stale classList handle")?
+                .attr("class")
+                .unwrap_or("");
+            return Ok(match key {
+                "value" => Value::text(classes),
+                "length" => Value::Number(classes.split_ascii_whitespace().count() as f64),
+                "item" | "contains" | "add" | "remove" | "toggle" | "replace" | "toString" => {
+                    Value::Native(format!("host.classlist.{key}"))
+                }
+                _ => key
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| classes.split_ascii_whitespace().nth(i))
+                    .map(Value::text)
+                    .unwrap_or(Value::Undefined),
+            });
+        }
+        if let Some(id) = object
+            .strip_prefix("dataset:")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            let node = self.document.nodes.get(id).ok_or("Stale dataset handle")?;
+            let attr = format!("data-{}", css_property_name(key));
+            return Ok(node
+                .attr(&attr)
+                .map(Value::text)
+                .unwrap_or(Value::Undefined));
+        }
         let id = self.node(object)?;
         if object == "document" {
             match key {
@@ -859,6 +916,11 @@ impl Host for BrowserHost {
             }
         }
         let node = &self.document.nodes[id];
+        if id != 0 && node.tag != "#text" {
+            if let Some(attr) = bool_attr_name(key) {
+                return Ok(Value::Bool(node.attr(attr).is_some()));
+            }
+        }
         Ok(match key {
             "nodeType" => Value::Number(if id == 0 {
                 9.
@@ -887,6 +949,8 @@ impl Host for BrowserHost {
                     .unwrap_or_default(),
             ),
             "style" => Value::Host(format!("style:{id}")),
+            "classList" if id != 0 && node.tag != "#text" => Value::Host(format!("classlist:{id}")),
+            "dataset" if id != 0 && node.tag != "#text" => Value::Host(format!("dataset:{id}")),
             "offsetTop" | "offsetLeft" | "offsetWidth" | "offsetHeight" | "clientTop"
             | "clientLeft" | "clientWidth" | "clientHeight" => Value::Number(0.),
             "parentNode" => {
@@ -934,6 +998,19 @@ impl Host for BrowserHost {
             };
             return self.event_property_set(target, key, value).map(|_| ());
         }
+        if let (Some(attr), Value::Bool(flag)) = (bool_attr_name(key), &value) {
+            let id = self.node(object)?;
+            if id == 0 || self.document.nodes[id].tag == "#text" {
+                return Err(format!("Setting DOM property {key} is not implemented"));
+            }
+            if *flag {
+                return self.attr(id, attr, String::new());
+            }
+            self.document.nodes[id]
+                .attributes
+                .retain(|(n, _)| n != attr);
+            return Ok(());
+        }
         // Runtime has applied true ToString for declared string-valued setters.
         // This fallible final conversion also rejects a directly supplied Symbol.
         let text = value.as_dom_text()?;
@@ -974,6 +1051,31 @@ impl Host for BrowserHost {
                 declarations.join(";")
             };
             return self.attr(id, "style", style);
+        }
+        if let Some(id) = object
+            .strip_prefix("classlist:")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            if key != "value" {
+                return Err(format!("Setting classList.{key} is not implemented"));
+            }
+            let _ = self
+                .document
+                .nodes
+                .get(id)
+                .ok_or("Stale classList handle")?;
+            return self.attr(id, "class", text);
+        }
+        if let Some(id) = object
+            .strip_prefix("dataset:")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            if !valid_name(key) {
+                return Err("Unsupported dataset property name".into());
+            }
+            let _ = self.document.nodes.get(id).ok_or("Stale dataset handle")?;
+            let attr = format!("data-{}", css_property_name(key));
+            return self.attr(id, &attr, text);
         }
         let id = self.node(object)?;
         if object == "document" {
@@ -1049,6 +1151,99 @@ impl Host for BrowserHost {
                 .and_then(|i| self.collections.get(id)?.get(i))
                 .map(|i| self.element(*i))
                 .unwrap_or(Value::Null));
+        }
+        if let Some(method) = name.strip_prefix("host.classlist.") {
+            let id = handle
+                .strip_prefix("classlist:")
+                .and_then(|s| s.parse::<usize>().ok())
+                .ok_or("Expected DOMTokenList receiver")?;
+            let current = self
+                .document
+                .nodes
+                .get(id)
+                .ok_or("Stale classList handle")?
+                .attr("class")
+                .unwrap_or("")
+                .to_string();
+            let mut tokens: Vec<String> = current
+                .split_ascii_whitespace()
+                .map(str::to_string)
+                .collect();
+            return match method {
+                "toString" => Ok(Value::text(&current)),
+                "item" => Ok(text
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| tokens.get(i))
+                    .map(|s| Value::text(s))
+                    .unwrap_or(Value::Null)),
+                "contains" => Ok(Value::Bool(tokens.iter().any(|t| t == &text))),
+                "add" => {
+                    for arg in &args {
+                        let token = arg.as_dom_text()?;
+                        if token.is_empty() || token.chars().any(|c| c.is_ascii_whitespace()) {
+                            return Err("Invalid classList token".into());
+                        }
+                        if !tokens.contains(&token) {
+                            tokens.push(token);
+                        }
+                    }
+                    self.attr(id, "class", tokens.join(" "))?;
+                    Ok(Value::Undefined)
+                }
+                "remove" => {
+                    for arg in &args {
+                        let token = arg.as_dom_text()?;
+                        if token.is_empty() || token.chars().any(|c| c.is_ascii_whitespace()) {
+                            return Err("Invalid classList token".into());
+                        }
+                        tokens.retain(|t| t != &token);
+                    }
+                    self.attr(id, "class", tokens.join(" "))?;
+                    Ok(Value::Undefined)
+                }
+                "toggle" => {
+                    if text.is_empty() || text.chars().any(|c| c.is_ascii_whitespace()) {
+                        return Err("Invalid classList token".into());
+                    }
+                    let present = tokens.contains(&text);
+                    let next = match args.get(1) {
+                        Some(Value::Bool(force)) => *force,
+                        _ => !present,
+                    };
+                    if next && !present {
+                        tokens.push(text);
+                        self.attr(id, "class", tokens.join(" "))?;
+                    } else if !next && present {
+                        tokens.retain(|t| t != &text);
+                        self.attr(id, "class", tokens.join(" "))?;
+                    }
+                    Ok(Value::Bool(next))
+                }
+                "replace" => {
+                    let replacement = args.get(1).unwrap_or(&Value::Undefined).as_dom_text()?;
+                    if text.is_empty()
+                        || replacement.is_empty()
+                        || text.chars().any(|c| c.is_ascii_whitespace())
+                        || replacement.chars().any(|c| c.is_ascii_whitespace())
+                    {
+                        return Err("Invalid classList token".into());
+                    }
+                    let Some(pos) = tokens.iter().position(|t| t == &text) else {
+                        return Ok(Value::Bool(false));
+                    };
+                    tokens[pos] = replacement;
+                    let mut deduped = Vec::with_capacity(tokens.len());
+                    for tok in tokens {
+                        if !deduped.contains(&tok) {
+                            deduped.push(tok);
+                        }
+                    }
+                    self.attr(id, "class", deduped.join(" "))?;
+                    Ok(Value::Bool(true))
+                }
+                _ => Err(format!("Browser method {name} is not implemented")),
+            };
         }
         let root = self.node(&handle)?;
         match name {

@@ -47,8 +47,11 @@ Initial integration: a4e3692bc527b8f89814034a7dbc182254bc0aa3, verified by
 Pages/WPT35940400295 and its exact-commit public report. First gain released as
 v0.9.1 at a89747f927c83e4ae9715198b5b66437b9a6f422: Rust35942827577,
 JSPLAN35942827541, Pages/WPT35942827584 and release35944507465 pass.
-v0.9.2 completes the 24-test initial cohort (24/24 PASS); see the 2026-10-13
-log. Broader cohort expansion and testharness/WebDriver prerequisites remain unfinished.
+v0.9.2 completed the 24-test initial cohort (24/24 PASS) at 36119044b7c6; v0.9.4
+enables Boa ECMAScript by default, adds bottom-left link hover URL previews,
+right-click and Ctrl+click open-in-new-tab, and expands DOM bindings while
+preserving 24/24 WPT passes (see the 2026-10-14 log). Broader cohort expansion
+and testharness/WebDriver prerequisites remain unfinished.
 
 ## F-025 : Google News desktop reading
 

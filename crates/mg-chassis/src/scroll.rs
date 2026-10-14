@@ -76,6 +76,7 @@ impl Browser {
             self.hits.clear();
             self.boxes.clear();
             self.pointer_press = None;
+            self.hovered_link = None;
             self.dirty = true;
         }
     }

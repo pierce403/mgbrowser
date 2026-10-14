@@ -160,14 +160,23 @@ impl Browser {
             29,
             palette.background,
         );
-        let status = fit_head(&mut self.fonts, &self.status, 12., self.width as f32 - 20.);
+        let has_hovered_link = self.hovered_link().is_some();
+        let raw_status = self
+            .hovered_link()
+            .map(|url| devtools::bounded(url, 512))
+            .unwrap_or_else(|| self.status.clone());
+        let status = fit_head(&mut self.fonts, &raw_status, 12., self.width as f32 - 20.);
         c.text(
             &mut self.fonts,
             10,
             self.height as i32 - 22,
             &status,
             12.,
-            palette.muted,
+            if has_hovered_link {
+                palette.ink
+            } else {
+                palette.muted
+            },
         );
         if self.content_height > self.height as i32 {
             let area = (self.height as i32 - TOP - 30).max(1);

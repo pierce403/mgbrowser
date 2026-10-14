@@ -36,6 +36,7 @@ const BG: u32 = 0xfafbf8;
 const HTTP_CHROME: u32 = 0x9f202b;
 const MAX_EDIT_BYTES: usize = 8191;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 enum Action {
     Menu,
@@ -53,6 +54,7 @@ enum Action {
     Update,
     Restart,
     CloseMenu,
+    OpenLinkInNewTab(String),
     InspectElement,
     InspectorSection(bool),
     InspectorScroll(bool),
@@ -154,6 +156,10 @@ pub struct Browser {
     values: HashMap<usize, String>,
     hits: Vec<Hit>,
     pointer_press: Option<(i32, i32)>,
+    pointer_press_ctrl: bool,
+    pointer_position: Option<(i32, i32)>,
+    hovered_link: Option<String>,
+    new_tab_request: Option<String>,
     focus: Focus,
     select_all: bool,
     scroll: i32,
@@ -236,6 +242,7 @@ impl Browser {
         self.hits.clear();
         self.boxes.clear();
         self.pointer_press = None;
+        self.hovered_link = None;
         self.dirty = true;
     }
     fn choose_scale(&mut self, preference: ScalePreference) {
@@ -278,7 +285,13 @@ impl Browser {
     }
     fn modal_actions(&self) -> Vec<Action> {
         if self.devtools.context.is_some() {
-            vec![Action::InspectElement, Action::CloseMenu]
+            let mut actions = Vec::new();
+            if let Some(url) = &self.devtools.context_link {
+                actions.push(Action::OpenLinkInNewTab(url.clone()));
+            }
+            actions.push(Action::InspectElement);
+            actions.push(Action::CloseMenu);
+            actions
         } else if self.devtools.open {
             vec![
                 Action::InspectorSection(false),
@@ -326,6 +339,9 @@ impl Browser {
     }
     fn modal_action(&self, action: &Action) -> bool {
         match action {
+            Action::OpenLinkInNewTab(_) => {
+                self.devtools.context.is_some() && self.devtools.context_link.is_some()
+            }
             Action::InspectElement => self.devtools.context.is_some(),
             Action::InspectorSection(_) | Action::InspectorScroll(_) => self.devtools.open,
             Action::Menu | Action::CloseMenu => true,
@@ -396,10 +412,15 @@ impl Browser {
         self.restart_requested = false;
         self.hits.clear();
         self.pointer_press = None;
+        self.hovered_link = None;
         self.dirty = true;
     }
     pub fn take_restart_request(&mut self) -> bool {
         std::mem::take(&mut self.restart_requested)
+    }
+    /// Consume a user-initiated request to open a validated HTTP(S) link in a new tab.
+    pub fn take_new_tab_request(&mut self) -> Option<String> {
+        self.new_tab_request.take()
     }
     /// Host-supplied scope of a restart; no tab ownership belongs to Chassis.
     pub fn set_restart_tab_count(&mut self, count: usize) {
@@ -431,6 +452,7 @@ impl Browser {
         self.modal_focus = 0;
         self.hits.clear();
         self.pointer_press = None;
+        self.hovered_link = None;
         self.dirty = true;
     }
     pub fn take_bookmark_change(&mut self) -> Option<bookmarks::BookmarkChange> {
@@ -498,7 +520,7 @@ impl Browser {
             width: 1100,
             height: 820,
             address: String::new(),
-            status: "Experimental browser · Rust document flow · JavaScript is opt-in".into(),
+            status: "Experimental browser · Rust document flow · Boa ECMAScript".into(),
             document: document::parse(
                 "<title>mgbrowser</title><h1>mgbrowser</h1><p>Enter a URL above to begin browsing.</p>",
                 "https://mgbrowser.org/",
@@ -521,6 +543,10 @@ impl Browser {
             next_edit: 0,
             hits: Vec::new(),
             pointer_press: None,
+            pointer_press_ctrl: false,
+            pointer_position: None,
+            hovered_link: None,
+            new_tab_request: None,
             focus: if cfg!(feature = "chrome") {
                 Focus::Address
             } else {
@@ -766,8 +792,14 @@ impl Browser {
                     {
                         if self.scripts_enabled && !scripting {
                             // Rejected workers retain the original no-script
-                            // projection, not the resource discovery projection.
-                            document::parse(&source, &self.address)
+                            // projection, while preserving fetched page resources.
+                            let mut document = document::parse(&source, &self.address);
+                            if let Some(resources) = loaded.document {
+                                document.stylesheets = resources.stylesheets;
+                                document.resources = resources.resources;
+                                document.resource_warnings = resources.resource_warnings;
+                            }
+                            document
                         } else {
                             loaded.document.unwrap_or_else(|| {
                                 document::parse_with_scripting(&source, &self.address, scripting)
@@ -1357,15 +1389,26 @@ impl Browser {
                 | Action::Settings
                 | Action::Update
                 | Action::CloseMenu
+                | Action::OpenLinkInNewTab(_)
                 | Action::Bookmarks
                 | Action::OpenBookmark(_)
                 | Action::BookmarkPage(_)
         ) {
             self.hits.clear();
             self.pointer_press = None;
+            self.hovered_link = None;
             self.bookmarks_open = false;
         }
         match action {
+            Action::OpenLinkInNewTab(url) => {
+                self.devtools.close();
+                if self.chrome
+                    && url::Url::parse(&url)
+                        .is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+                {
+                    self.new_tab_request = Some(url);
+                }
+            }
             Action::InspectElement => self.open_inspector(),
             Action::InspectorSection(diagnostics) => {
                 self.devtools.diagnostics = diagnostics;
@@ -1770,6 +1813,7 @@ impl Browser {
     }
     #[cfg(test)]
     fn hit(&mut self, x: i32, y: i32, w: u32, h: u32, action: Action) {
+        self.devtools.painted_epoch = self.dom_epoch;
         let top = y.max(self.page_top());
         let bottom = (y + h as i32).min(self.page_top() + self.viewport_height() as i32 - 1);
         if bottom > top {
@@ -1853,6 +1897,7 @@ impl Browser {
                 },
             })
             .collect();
+        self.refresh_hovered_link();
         if !self.chrome {
             self.dirty = false;
             return frame.canvas;
@@ -2971,6 +3016,7 @@ impl Browser {
         self.stop_scroll();
         self.chrome = enabled && cfg!(feature = "chrome");
         self.restart_requested = false;
+        self.new_tab_request = None;
         self.bookmarks_open = false;
         self.bookmark_change = None;
         self.bookmark_refresh = false;
@@ -2979,6 +3025,8 @@ impl Browser {
         self.focus = Focus::Page;
         self.select_all = false;
         self.pointer_press = None;
+        self.pointer_position = None;
+        self.hovered_link = None;
         self.menu_open = false;
         self.about_open = false;
         self.settings_open = false;
@@ -2990,16 +3038,74 @@ impl Browser {
     fn page_footer(&self) -> u32 {
         if self.chrome { 29 } else { 0 }
     }
+    pub(crate) fn link_at(&self, x: i32, y: i32) -> Option<String> {
+        if !self.chrome
+            || self.modal_open()
+            || self.loading
+            || self.devtools.painted_epoch != self.dom_epoch
+            || x < 0
+            || x >= self.width as i32
+            || y < self.page_top()
+            || y >= self.page_top() + self.viewport_height() as i32
+        {
+            return None;
+        }
+        match &self.hits.get(self.topmost_hit(x, y)?)?.action {
+            Action::Link { href, .. } => Some(href.clone()),
+            _ => None,
+        }
+    }
+    pub(crate) fn refresh_hovered_link(&mut self) {
+        let next = self.pointer_position.and_then(|(x, y)| self.link_at(x, y));
+        if self.hovered_link != next {
+            self.hovered_link = next;
+            self.dirty = true;
+        }
+    }
+    /// Update the logical pointer position for link destination previews.
+    pub fn pointer_move(&mut self, x: i32, y: i32) {
+        if !self.chrome {
+            return;
+        }
+        self.pointer_position = Some((x, y));
+        self.refresh_hovered_link();
+    }
+    /// The destination URL of the currently hovered or context-targeted page link.
+    pub fn hovered_link(&self) -> Option<&str> {
+        self.devtools
+            .context_link
+            .as_deref()
+            .or(self.hovered_link.as_deref())
+    }
     pub fn pointer_down(&mut self, x: i32, y: i32) {
+        self.pointer_down_with_modifiers(x, y, false);
+    }
+    pub fn pointer_down_with_modifiers(&mut self, x: i32, y: i32, ctrl: bool) {
         self.stop_scroll();
         self.pointer_press = Some((x, y));
+        self.pointer_press_ctrl = ctrl;
     }
     pub fn pointer_up(&mut self, x: i32, y: i32) {
+        self.pointer_up_with_modifiers(x, y, false);
+    }
+    pub fn pointer_up_with_modifiers(&mut self, x: i32, y: i32, ctrl: bool) {
+        let press_ctrl = std::mem::replace(&mut self.pointer_press_ctrl, false);
         if let Some((px, py)) = self.pointer_press.take() {
             let press = self.topmost_hit(px, py);
             let release = self.topmost_hit(x, y);
             if press.is_some() && press == release {
-                self.click(x, y);
+                if (press_ctrl || ctrl)
+                    && self.chrome
+                    && !self.modal_open()
+                    && !self.loading
+                    && let Some(index) = release
+                    && let Action::Link { href, .. } = &self.hits[index].action
+                {
+                    let href = href.clone();
+                    self.activate(Action::OpenLinkInNewTab(href));
+                } else {
+                    self.click(x, y);
+                }
             }
         }
     }

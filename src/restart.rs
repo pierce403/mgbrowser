@@ -50,6 +50,8 @@ fn restart_command(
     }
     if scripts {
         command.arg("--enable-scripts");
+    } else {
+        command.arg("--disable-scripts");
     }
     if !auto_update {
         command.arg("--no-auto-update");

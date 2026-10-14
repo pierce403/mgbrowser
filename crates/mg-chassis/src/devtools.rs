@@ -10,6 +10,7 @@ const MAX_LINES: usize = 128;
 pub(super) struct State {
     pub open: bool,
     pub context: Option<(i32, i32)>,
+    pub context_link: Option<String>,
     pub diagnostics: bool,
     pub row: usize,
     pub painted_epoch: u64,
@@ -128,6 +129,82 @@ mod tests {
         assert!(app.hits.iter().all(|hit| app.modal_action(&hit.action)));
         app.handle_key(Key::Escape, false, false, false);
         assert!(!app.modal_open());
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn hover_link_shows_bottom_left_status_and_right_click_opens_in_new_tab() {
+        let mut app = test_app();
+        app.document = document::parse(
+            "<style>body{margin:12px}</style><p><a id='story' href='/stories/42'>Read story</a></p>",
+            "https://example.com/news/",
+        );
+        app.page_url = "https://example.com/news/".into();
+        let baseline = app.paint();
+        assert_eq!(app.hovered_link(), None);
+        let link_hit = app
+            .hits
+            .iter()
+            .find(|hit| matches!(hit.action, Action::Link { .. }))
+            .cloned()
+            .unwrap();
+        let bottom_left = |canvas: &Canvas| -> Vec<u32> {
+            let mut pixels = Vec::new();
+            for y in (canvas.height - 29)..canvas.height {
+                let row = y as usize * canvas.width as usize;
+                pixels.extend_from_slice(&canvas.pixels[row..row + 260]);
+            }
+            pixels
+        };
+        let baseline_footer = bottom_left(&baseline);
+
+        app.pointer_move(link_hit.x + 2, link_hit.y + 2);
+        assert_eq!(app.hovered_link(), Some("https://example.com/stories/42"));
+        let hovered = app.paint();
+        assert_ne!(
+            bottom_left(&hovered),
+            baseline_footer,
+            "hovering a link must render its destination URL in the bottom-left status bar"
+        );
+
+        app.pointer_move(10, 10);
+        assert_eq!(app.hovered_link(), None);
+        let unhovered = app.paint();
+        assert_eq!(bottom_left(&unhovered), baseline_footer);
+
+        app.pointer_move(link_hit.x + 2, link_hit.y + 2);
+        app.context_menu_at(link_hit.x + 2, link_hit.y + 2);
+        assert_eq!(app.hovered_link(), Some("https://example.com/stories/42"));
+        let menu_canvas = app.paint();
+        assert_ne!(bottom_left(&menu_canvas), baseline_footer);
+        assert_eq!(app.hits.len(), 3);
+        let open_new_tab_hit = app.hits[0].clone();
+        app.pointer_down(open_new_tab_hit.x + 4, open_new_tab_hit.y + 4);
+        app.pointer_up(open_new_tab_hit.x + 4, open_new_tab_hit.y + 4);
+        assert!(!app.modal_open());
+        assert_eq!(app.page_url, "https://example.com/news/");
+        assert_eq!(
+            app.take_new_tab_request().as_deref(),
+            Some("https://example.com/stories/42")
+        );
+        assert_eq!(app.take_new_tab_request(), None);
+
+        app.paint();
+        let link_hit = app
+            .hits
+            .iter()
+            .find(|hit| matches!(hit.action, Action::Link { .. }))
+            .cloned()
+            .unwrap();
+        app.pointer_down_with_modifiers(link_hit.x + 2, link_hit.y + 2, true);
+        app.pointer_up_with_modifiers(link_hit.x + 2, link_hit.y + 2, true);
+        assert!(!app.loading);
+        assert_eq!(app.page_url, "https://example.com/news/");
+        assert_eq!(
+            app.take_new_tab_request().as_deref(),
+            Some("https://example.com/stories/42")
+        );
+        assert_eq!(app.take_new_tab_request(), None);
     }
 
     #[cfg(feature = "chrome")]
@@ -291,6 +368,7 @@ impl State {
     pub fn close(&mut self) {
         self.open = false;
         self.context = None;
+        self.context_link = None;
         self.row = 0;
     }
     pub fn new_navigation(&mut self) {
@@ -308,6 +386,7 @@ impl State {
         {
             self.selected = None;
             self.context = None;
+            self.context_link = None;
             self.row = 0;
         }
     }
@@ -328,7 +407,7 @@ impl State {
 }
 
 /// Plain text only: page strings cannot insert new rows or terminal controls.
-fn bounded(value: &str, limit: usize) -> String {
+pub(super) fn bounded(value: &str, limit: usize) -> String {
     if limit < 3 {
         return String::new();
     }
@@ -365,12 +444,14 @@ impl Browser {
         {
             return;
         }
+        let context_link = self.link_at(x, y);
         self.cancel_pointer_input();
         self.select_all = false;
         self.focus = Focus::Page;
         self.devtools.selected = self
             .inspected_node_at(x, y)
             .map(|node| (self.dom_epoch, node));
+        self.devtools.context_link = context_link;
         self.devtools.context = Some((x, y));
         self.modal_focus = 0;
         self.hits.clear();
@@ -401,12 +482,17 @@ impl Browser {
     pub fn cancel_pointer_input(&mut self) {
         self.stop_scroll();
         self.pointer_press = None;
+        self.pointer_position = None;
+        if self.hovered_link.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     pub(super) fn open_inspector(&mut self) {
         self.devtools.invalidate_selection(self.dom_epoch);
         self.devtools.open = true;
         self.devtools.context = None;
+        self.devtools.context_link = None;
         self.devtools.diagnostics = false;
         self.devtools.row = 0;
         self.menu_open = false;
@@ -529,7 +615,7 @@ impl Browser {
                     if self.scripts_enabled {
                         "enabled (bounded Boa)"
                     } else {
-                        "disabled; use --enable-scripts"
+                        "disabled (--disable-scripts)"
                     }
                 ),
                 format!(
@@ -707,22 +793,48 @@ impl Browser {
         if let Some((x, y)) = self.devtools.context {
             let width = self.width.saturating_sub(12).min(226);
             let x = x.clamp(6, self.width.saturating_sub(width + 6) as i32);
-            let y = y.clamp(6, self.height.saturating_sub(86) as i32);
-            canvas.rect(x, y, width, 80, palette.border);
-            self.inspector_button(
-                canvas,
-                (x + 4, y + 4, width - 8),
-                "Inspect element",
-                Action::InspectElement,
-                0,
-            );
-            self.inspector_button(
-                canvas,
-                (x + 4, y + 42, width - 8),
-                "Close",
-                Action::CloseMenu,
-                1,
-            );
+            if let Some(url) = self.devtools.context_link.clone() {
+                let y = y.clamp(6, self.height.saturating_sub(124) as i32);
+                canvas.rect(x, y, width, 118, palette.border);
+                self.inspector_button(
+                    canvas,
+                    (x + 4, y + 4, width - 8),
+                    "Open link in new tab",
+                    Action::OpenLinkInNewTab(url),
+                    0,
+                );
+                self.inspector_button(
+                    canvas,
+                    (x + 4, y + 42, width - 8),
+                    "Inspect element",
+                    Action::InspectElement,
+                    1,
+                );
+                self.inspector_button(
+                    canvas,
+                    (x + 4, y + 80, width - 8),
+                    "Close",
+                    Action::CloseMenu,
+                    2,
+                );
+            } else {
+                let y = y.clamp(6, self.height.saturating_sub(86) as i32);
+                canvas.rect(x, y, width, 80, palette.border);
+                self.inspector_button(
+                    canvas,
+                    (x + 4, y + 4, width - 8),
+                    "Inspect element",
+                    Action::InspectElement,
+                    0,
+                );
+                self.inspector_button(
+                    canvas,
+                    (x + 4, y + 42, width - 8),
+                    "Close",
+                    Action::CloseMenu,
+                    1,
+                );
+            }
             return;
         }
         let width = self.width.saturating_sub(16).min(860);

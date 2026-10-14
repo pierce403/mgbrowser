@@ -133,6 +133,7 @@ impl Desktop {
                     | EventMask::BUTTON_PRESS
                     | EventMask::BUTTON_RELEASE
                     | EventMask::POINTER_MOTION
+                    | EventMask::LEAVE_WINDOW
                     | EventMask::FOCUS_CHANGE,
             ),
         )?
@@ -600,12 +601,42 @@ impl Desktop {
             }
             let app = self.space.get_mut(tab).unwrap();
             match e.detail {
-                1 => app.pointer_down(x, y),
+                1 => app.pointer_down_with_modifiers(x, y, e.state.contains(KeyButMask::CONTROL)),
                 3 => app.context_menu_at(x, y),
                 4 => app.wheel_scroll_by(-100),
                 5 => app.wheel_scroll_by(100),
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    fn clear_hover(&mut self) {
+        for (_, app) in self.space.tabs_mut() {
+            app.pointer_move(-1, -1);
+        }
+    }
+
+    fn pointer_motion(
+        &mut self,
+        e: MotionNotifyEvent,
+        conn: &RustConnection,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.drag.is_some() {
+            return self.motion((e.root_x, e.root_y), conn);
+        }
+        if let Some(window) = self.window_id(e.event)
+            && let Some((_, tab, x, y)) = self.page_hit(window, e.event_x, e.event_y)
+        {
+            for (id, app) in self.space.tabs_mut() {
+                if id == tab {
+                    app.pointer_move(x, y);
+                } else {
+                    app.pointer_move(-1, -1);
+                }
+            }
+        } else {
+            self.clear_hover();
         }
         Ok(())
     }
@@ -714,7 +745,11 @@ impl Desktop {
                 Err(error) => self.notify(error.to_string()),
             }
         } else if let Some((_, tab, x, y)) = self.page_hit(window, e.event_x, e.event_y) {
-            self.space.get_mut(tab).unwrap().pointer_up(x, y);
+            self.space.get_mut(tab).unwrap().pointer_up_with_modifiers(
+                x,
+                y,
+                e.state.contains(KeyButMask::CONTROL),
+            );
         }
         Ok(())
     }
@@ -1204,6 +1239,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                 | EventMask::BUTTON_PRESS
                 | EventMask::BUTTON_RELEASE
                 | EventMask::POINTER_MOTION
+                | EventMask::LEAVE_WINDOW
                 | EventMask::FOCUS_CHANGE,
         ),
     )?;
@@ -1345,7 +1381,10 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                         desktop.release(id, e, &conn, &atoms, screen_num)?;
                     }
                 }
-                Event::MotionNotify(e) => desktop.motion((e.root_x, e.root_y), &conn)?,
+                Event::MotionNotify(e) => desktop.pointer_motion(e, &conn)?,
+                Event::LeaveNotify(e) if e.mode == NotifyMode::NORMAL && desktop.drag.is_none() => {
+                    desktop.clear_hover();
+                }
                 Event::KeyPress(e) => {
                     if let Some(id) = desktop.window_id(e.event) {
                         let shift = e.state.contains(KeyButMask::SHIFT);
@@ -1388,6 +1427,11 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         }
         let ids = desktop.space.tabs().map(|(id, _)| id).collect::<Vec<_>>();
         for id in ids {
+            if let Some(url) = desktop.space.get_mut(id).unwrap().take_new_tab_request()
+                && let Some(location) = desktop.space.location(id)
+            {
+                desktop.fresh_tab(location.pane, Some(url), &bookmarks, &conn)?;
+            }
             let refresh = desktop.space.get_mut(id).unwrap().take_bookmark_refresh();
             let change = desktop.space.get_mut(id).unwrap().take_bookmark_change();
             if refresh || change.is_some() {

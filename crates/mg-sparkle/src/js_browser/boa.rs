@@ -312,8 +312,28 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
     let Some(name) = property_name(&property) else {
+        if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
+            && property == PropertyKey::Symbol(modern::boa_engine::JsSymbol::iterator())
+        {
+            return context
+                .intrinsics()
+                .constructors()
+                .array()
+                .prototype()
+                .get(modern::boa_engine::JsSymbol::iterator(), context);
+        }
         return fallback_get(args, context);
     };
+    if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
+        && matches!(name.as_str(), "forEach" | "values" | "entries" | "keys")
+    {
+        return context
+            .intrinsics()
+            .constructors()
+            .array()
+            .prototype()
+            .get(JsString::from(name.as_str()), context);
+    }
     if matches!(name.as_str(), "onclick" | "onsubmit") {
         let target = property_target(&handle, context)?;
         return Ok(property_callback(target, &name, context)
@@ -339,6 +359,13 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     };
     if matches!(name.as_str(), "onclick" | "onsubmit") {
         property_set(property_target(&handle, context)?, &name, &args[2], context)?;
+    } else if handle.starts_with("node:") && super::bool_attr_name(&name).is_some() {
+        let flag = args[2].to_boolean();
+        state(context)
+            .borrow_mut()
+            .host
+            .set(&handle, &name, Value::Bool(flag))
+            .map_err(failure)?;
     } else {
         let is_string = state(context)
             .borrow()
@@ -473,7 +500,8 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
     // Do not convert unused arguments: an ignored arbitrary object is not a node
     // and must not gain observable conversion or receiver-validation effects.
     let count = match name {
-        "host.dom.setAttribute" => 2,
+        "host.classlist.add" | "host.classlist.remove" => args.len().min(8),
+        "host.dom.setAttribute" | "host.classlist.replace" | "host.classlist.toggle" => 2,
         "host.dom.appendChild" | "host.dom.removeChild" => 1,
         _ if strings.contains(&0) => 1,
         _ => 0,

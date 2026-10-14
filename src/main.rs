@@ -26,13 +26,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Toolbar: Back, Forward, Refresh, Bookmark, URL, Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: inspector.\n"
+                "Toolbar: Back, Forward, Refresh, Bookmark, URL, Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nHover a link for its URL; Ctrl+click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: inspector.\n"
             );
             println!(
                 "Ctrl+T: new tab; Ctrl+W: close tab; Ctrl+Tab / Ctrl+Shift+Tab: switch tabs.\nDrag tabs to reorder, detach into windows or split left/right.\nMenu > Settings: theme and browser size (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
-                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --enable-scripts              Enable incomplete experimental JavaScript\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
+                "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --disable-scripts             Disable isolated Boa page JavaScript\n  --enable-scripts              Explicitly enable isolated Boa page JavaScript (default)\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
                 env!("CARGO_PKG_VERSION")
             );
             return Ok(());
@@ -67,13 +67,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::sync::Arc::new(platform::LinuxScripts::default()),
         session.clone(),
     );
+    app.set_scripts_enabled(true);
     let mut journey = JourneyOptions::default();
     app.set_build_info(env!("CARGO_PKG_VERSION"), COMPILED, REVISION);
     let executable = std::env::current_exe()?;
     let mut auto_update = updater::automatic_enabled(&executable);
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut initial = "https://example.com/".to_string();
-    let mut restart_scripts = false;
+    let mut restart_scripts = true;
     let mut restore_tabs = Vec::new();
     let mut debug_port: Option<u16> = None;
     let mut i = 0;
@@ -135,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" => {
                 println!(
-                    "mgbrowser [URL] [--enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nBoa page JavaScript is experimental and opt-in; see docs/BOA.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
+                    "mgbrowser [URL] [--disable-scripts | --enable-scripts] [--remote-debugging-port PORT] [--smoke-search QUERY | --smoke-events] [--exit-after-smoke] [--evidence-dir DIR]\nBoa page JavaScript runs in a restricted worker by default; see docs/BOA.md.\nCDP is opt-in, loopback-only, partial; port 0 selects an available port. See docs/CDP.md.\nCtrl+L address; Enter navigate/submit; Tab fields; mouse click links; wheel scroll; Alt+Left back.\nRequires X11/XWayland and a font file (MGBROWSER_FONT can override)."
                 );
                 return Ok(());
             }
