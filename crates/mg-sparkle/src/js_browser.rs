@@ -302,7 +302,10 @@ impl PageRealm {
 
 pub(super) fn split_external_scripts(
     raw_html: &str,
-) -> (Option<std::collections::HashMap<usize, Option<String>>>, &str) {
+) -> (
+    Option<std::collections::HashMap<usize, Option<String>>>,
+    &str,
+) {
     if let Some(rest) = raw_html.strip_prefix("<!--mg-external-scripts:")
         && let Some((json, html)) = rest.split_once("-->\n")
         && let Ok(entries) = serde_json::from_str::<Vec<(usize, Option<String>)>>(json)

@@ -750,9 +750,8 @@ impl Browser {
                         response.content_type.contains("html") || response.content_type.is_empty()
                     })
                     .map(|response| {
-                        let html = prepared_script_html.unwrap_or_else(|| {
-                            decode_text(&response.body, &response.content_type)
-                        });
+                        let html = prepared_script_html
+                            .unwrap_or_else(|| decode_text(&response.body, &response.content_type));
                         let worker_started = Instant::now();
                         let started = pool
                             .start(

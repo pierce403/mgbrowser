@@ -744,11 +744,7 @@ impl Browser {
                 "  Last full render: {:.2} ms (style {:.2} ms [{}], layout {:.2} ms, paint {:.2} ms)",
                 full.total_ms,
                 full.style_ms,
-                if full.style_cached {
-                    "cached"
-                } else {
-                    "Stylo"
-                },
+                if full.style_cached { "cached" } else { "Stylo" },
                 full.layout_ms,
                 full.paint_ms
             ),

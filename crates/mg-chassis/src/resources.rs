@@ -374,7 +374,10 @@ pub fn prepare_script_html(
         if cancelled() || Instant::now() >= deadline {
             push_doc_warning(
                 &mut document.resource_warnings,
-                format!("External script deadline exceeded; skipped: {}", label(&src)),
+                format!(
+                    "External script deadline exceeded; skipped: {}",
+                    label(&src)
+                ),
             );
             entries.push((index, None));
             continue;
@@ -400,14 +403,22 @@ pub fn prepare_script_html(
         } else if requests >= MAX_REQUESTS {
             push_doc_warning(
                 &mut document.resource_warnings,
-                format!("External script request limit reached; skipped: {}", label(&url_str)),
+                format!(
+                    "External script request limit reached; skipped: {}",
+                    label(&url_str)
+                ),
             );
             None
         } else {
             requests += 1;
             let req_start = Instant::now();
-            let result =
-                session.fetch_resource(&url_str, page_url, MAX_SCRIPT, deadline, ResourceKind::Script);
+            let result = session.fetch_resource(
+                &url_str,
+                page_url,
+                MAX_SCRIPT,
+                deadline,
+                ResourceKind::Script,
+            );
             let duration_ms = req_start.elapsed().as_secs_f64() * 1000.0;
             let code = match result {
                 Ok(response) if (200..300).contains(&response.status) => {
@@ -449,7 +460,10 @@ pub fn prepare_script_html(
                             Err(_) => {
                                 push_doc_warning(
                                     &mut document.resource_warnings,
-                                    format!("External script is not UTF-8; skipped: {}", label(&url_str)),
+                                    format!(
+                                        "External script is not UTF-8; skipped: {}",
+                                        label(&url_str)
+                                    ),
                                 );
                                 None
                             }
@@ -501,7 +515,10 @@ pub fn prepare_script_html(
             let tentative_len = serde_json::to_string(&entries)
                 .map(|json| {
                     let escaped = json.replace("-->", "--\\u003e");
-                    "<!--mg-external-scripts:".len() + escaped.len() + "-->\n".len() + clean_html.len()
+                    "<!--mg-external-scripts:".len()
+                        + escaped.len()
+                        + "-->\n".len()
+                        + clean_html.len()
                 })
                 .unwrap_or(usize::MAX);
             if tentative_len > mg_sparkle::js_browser::MAX_SOURCE {
@@ -526,7 +543,8 @@ pub fn prepare_script_html(
     }
     if let Ok(json) = serde_json::to_string(&entries) {
         let json = json.replace("-->", "--\\u003e");
-        let combined_len = "<!--mg-external-scripts:".len() + json.len() + "-->\n".len() + clean_html.len();
+        let combined_len =
+            "<!--mg-external-scripts:".len() + json.len() + "-->\n".len() + clean_html.len();
         if combined_len <= mg_sparkle::js_browser::MAX_SOURCE {
             return (
                 format!("<!--mg-external-scripts:{json}-->\n{clean_html}"),
@@ -1246,9 +1264,11 @@ mod tests {
             .1;
         assert!(reply.errors.is_empty(), "{:?}", reply.errors);
         assert_eq!(reply.scripts_executed, 2);
-        let projected =
-            mg_sparkle::document::project_nodes(reply.snapshot.unwrap().nodes, "https://example.test/")
-                .unwrap();
+        let projected = mg_sparkle::document::project_nodes(
+            reply.snapshot.unwrap().nodes,
+            "https://example.test/",
+        )
+        .unwrap();
         let out = projected.query_selector(0, "#out").unwrap().unwrap();
         let child = projected.nodes[out].children[0];
         assert_eq!(projected.nodes[child].text, "from-external");
