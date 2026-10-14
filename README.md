@@ -2,10 +2,14 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.2 Experimental Preview
+## v0.9.3 Experimental Preview
+
+This security maintenance release updates the locked `rustls` dependency from
+0.23.44 to 0.23.45. It keeps the v0.9.2 browser behavior and the 24/24 pinned
+WPT flexbox score; see the [v0.9.3 release notes](docs/RELEASE-v0.9.3.md).
 
 The initial 24-test WPT flexbox reftest selection now passes completely (**24 pass,
-0 fail, 0 unsupported out of 24**). v0.9.2 adds bounded XML/XHTML document
+0 fail, 0 unsupported out of 24**). v0.9.2 added bounded XML/XHTML document
 parsing, signed vertical margin-box block advancement, column flex `fit-content`
 cross sizing, block static-position resolution for `inset: auto` overlays,
 aspect-ratio-only SVG flex item sizing, implicit `<body>` synthesis, row flex
@@ -158,7 +162,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.2.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.3.md) for manual install and uninstall.
 
 ## Components
 

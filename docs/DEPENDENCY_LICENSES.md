@@ -174,10 +174,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.9.2 | Apache-2.0 |
-| mg-butane | 0.9.2 | Apache-2.0 |
-| mg-chassis | 0.9.2 | Apache-2.0 |
-| mg-sparkle | 0.9.2 | Apache-2.0 |
+| mg-browser | 0.9.3 | Apache-2.0 |
+| mg-butane | 0.9.3 | Apache-2.0 |
+| mg-chassis | 0.9.3 | Apache-2.0 |
+| mg-sparkle | 0.9.3 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
@@ -257,7 +257,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| rustls | 0.23.44 | Apache-2.0 OR ISC OR MIT |
+| rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
 | rustls-rustcrypto | 0.0.2-alpha | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.15 | ISC |
