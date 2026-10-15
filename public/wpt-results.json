@@ -1,0 +1,1957 @@
+{
+  "binary_sha256": "990539949d9c53759f09f3a648cde12d6e1fe17752034434fd57056e116de7a6",
+  "complete": true,
+  "controls": {
+    "green": {
+      "artifact": "0363bf3b67266fc58c35",
+      "elapsed_ms": 618.79,
+      "metadata": {
+        "browser_replay_equal": true,
+        "content_height": 20,
+        "diagnostics": [],
+        "diagnostics_omitted": 0,
+        "final_url": "http://127.0.0.1:43435/_mg_wpt_control/green.html",
+        "height": 600,
+        "non_uniform": true,
+        "resource_warnings": [],
+        "resources": 0,
+        "scale": 1,
+        "schema_version": 1,
+        "scripts": false,
+        "status": "HTTP 200 \u00b7 67 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+        "stylesheets": 1,
+        "url": "http://127.0.0.1:43435/_mg_wpt_control/green.html",
+        "width": 800
+      },
+      "reason": "",
+      "rgb_sha256": "8706ea7460f7ec190996fc7cc172f628349f40397b5ca4a3e445df3b7279970c",
+      "status": "OK"
+    },
+    "note": "Authored controls, excluded from WPT counts",
+    "passed": true,
+    "red": {
+      "artifact": "e1168df6b97ee8bc2211",
+      "elapsed_ms": 617.86,
+      "metadata": {
+        "browser_replay_equal": true,
+        "content_height": 20,
+        "diagnostics": [],
+        "diagnostics_omitted": 0,
+        "final_url": "http://127.0.0.1:43435/_mg_wpt_control/red.html",
+        "height": 600,
+        "non_uniform": true,
+        "resource_warnings": [],
+        "resources": 0,
+        "scale": 1,
+        "schema_version": 1,
+        "scripts": false,
+        "status": "HTTP 200 \u00b7 114 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+        "stylesheets": 1,
+        "url": "http://127.0.0.1:43435/_mg_wpt_control/red.html",
+        "width": 800
+      },
+      "reason": "",
+      "rgb_sha256": "be0cefdcb5b551441fcee7757e586693b61527757a4c419f53dded0dc98dedb8",
+      "status": "OK"
+    }
+  },
+  "corpus_sha256": "a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd",
+  "counts": {
+    "CRASH": 0,
+    "ERROR": 0,
+    "FAIL": 0,
+    "PASS": 24,
+    "TIMEOUT": 0,
+    "UNSUPPORTED": 0,
+    "total": 24
+  },
+  "finished_utc": "2026-10-15T01:22:49.927514+00:00",
+  "font_sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+  "git_commit": "369d919504d058203254ceb789dcbecb9cd23644",
+  "git_dirty": false,
+  "infrastructure_errors": [],
+  "limitations": [
+    "Selected reftests only, not full WPT or wptrunner",
+    "No testharness.js, WebDriver, external scripts, fuzzy matching or scrollbar protocol",
+    "Reftest equality is not an independent proof that all reference features are implemented"
+  ],
+  "requests": [
+    {
+      "path": "/_mg_wpt_control/green.html",
+      "status": 200
+    },
+    {
+      "path": "/_mg_wpt_control/square.css",
+      "status": 200
+    },
+    {
+      "path": "/_mg_wpt_control/red.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-baseline.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/flexbox.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-baseline-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/flexbox.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content-wrap-004.html",
+      "status": 200
+    },
+    {
+      "path": "/css/reference/ref-filled-green-100px-square.xht",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_center.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_center-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_flex-end.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_flex-end-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_flex-start.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_flex-start-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_space-around.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_space-around-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_space-between.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_space-between-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-content_stretch.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content_stretch-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/support/test-style.css",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-items-006.html",
+      "status": 200
+    },
+    {
+      "path": "/fonts/ahem.css",
+      "status": 200
+    },
+    {
+      "path": "/fonts/Ahem.ttf",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-content-001-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-items-007.html",
+      "status": 200
+    },
+    {
+      "path": "/css/support/red-rect.svg",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-items-008.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-items-009.html",
+      "status": 200
+    },
+    {
+      "path": "/fonts/ahem.css",
+      "status": 200
+    },
+    {
+      "path": "/fonts/Ahem.ttf",
+      "status": 200
+    },
+    {
+      "path": "/css/reference/ref-filled-green-100px-square-only.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+      "status": 200
+    },
+    {
+      "path": "/fonts/ahem.css",
+      "status": 200
+    },
+    {
+      "path": "/fonts/Ahem.ttf",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html",
+      "status": 200
+    },
+    {
+      "path": "/fonts/ahem.css",
+      "status": 200
+    },
+    {
+      "path": "/fonts/Ahem.ttf",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-001.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-002.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-003.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-004.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-005.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-007.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-008.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-009.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-011.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-012.html",
+      "status": 200
+    },
+    {
+      "path": "/css/css-flexbox/align-self-013.html",
+      "status": 200
+    }
+  ],
+  "results": [
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-baseline-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-baseline-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-baseline.html": {
+          "artifact": "ac46b7c67027466f9963",
+          "elapsed_ms": 667.97,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 264,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-baseline.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 718 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-baseline.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "867e2353c1da717432441a183148dfa2196488055ed3082d14db053290d7da4e",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-baseline-ref.html": {
+          "artifact": "fde936a0878d4487725a",
+          "elapsed_ms": 667.74,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 264,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-baseline-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 426 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-baseline-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "867e2353c1da717432441a183148dfa2196488055ed3082d14db053290d7da4e",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-baseline.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content-wrap-004.html": {
+          "artifact": "f158fce824e8c71b120a",
+          "elapsed_ms": 667.92,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content-wrap-004.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1169 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content-wrap-004.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content-wrap-004.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_center-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_center-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_center.html": {
+          "artifact": "c5a3295ef79150e1d076",
+          "elapsed_ms": 717.39,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_center.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 968 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_center.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "4507d11aeeba4c4b07aa5e92a10de05b64e69e907ad83a07dbd7459b6cffd35c",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_center-ref.html": {
+          "artifact": "e449fdeb95ebf8e82a59",
+          "elapsed_ms": 716.87,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_center-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 580 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_center-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "4507d11aeeba4c4b07aa5e92a10de05b64e69e907ad83a07dbd7459b6cffd35c",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_center.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_flex-end-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_flex-end-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_flex-end.html": {
+          "artifact": "f7922aadb2f5b686e04a",
+          "elapsed_ms": 717.37,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_flex-end.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 976 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_flex-end.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "ea844ab1069a0a1b9e02f16395364fc69f47d920f85256afe1a36bb2eea9110d",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_flex-end-ref.html": {
+          "artifact": "3c2e0d14246c38f67d06",
+          "elapsed_ms": 718.09,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_flex-end-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 582 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_flex-end-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "ea844ab1069a0a1b9e02f16395364fc69f47d920f85256afe1a36bb2eea9110d",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_flex-end.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_flex-start-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_flex-start-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_flex-start.html": {
+          "artifact": "7c1727c273c7d070b8d9",
+          "elapsed_ms": 717.78,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_flex-start.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1006 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_flex-start.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "ca7bacbedd1a7e0048f438227fde475067881961b0914e3d21d9265285bf3506",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_flex-start-ref.html": {
+          "artifact": "d773ab2be13d9117cb43",
+          "elapsed_ms": 717.95,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 343,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_flex-start-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 519 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_flex-start-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "ca7bacbedd1a7e0048f438227fde475067881961b0914e3d21d9265285bf3506",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_flex-start.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_space-around-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_space-around-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_space-around.html": {
+          "artifact": "f796a4a2f0d3d0369e1f",
+          "elapsed_ms": 767.61,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 372,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_space-around.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1139 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_space-around.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "9fb0995ec27b1bc54abb9134f775b1596772d03a789103569c8bd806152030a4",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_space-around-ref.html": {
+          "artifact": "0169230293af1f699fe8",
+          "elapsed_ms": 767.51,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 372,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_space-around-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 830 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_space-around-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "9fb0995ec27b1bc54abb9134f775b1596772d03a789103569c8bd806152030a4",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_space-around.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_space-between-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_space-between-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_space-between.html": {
+          "artifact": "c62a488df48f0b0f1c55",
+          "elapsed_ms": 717.76,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 362,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_space-between.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1139 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_space-between.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "66b946c11be7e4371ef7ac6b090f8db5c26382050b4071a2d5db21cd4331fb9c",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_space-between-ref.html": {
+          "artifact": "eb18fbaf535cb9b34d81",
+          "elapsed_ms": 717.33,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 362,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_space-between-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 773 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_space-between-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "66b946c11be7e4371ef7ac6b090f8db5c26382050b4071a2d5db21cd4331fb9c",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_space-between.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content_stretch-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content_stretch-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-content_stretch.html": {
+          "artifact": "f94b6ff6e6288b4b5f1b",
+          "elapsed_ms": 717.99,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 353,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-content_stretch.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1079 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-content_stretch.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "a30c3c9e99200d9ed21dda1ae431ac2c4af9777e04b46504add0eb46539c323c",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content_stretch-ref.html": {
+          "artifact": "6f6af2efb769c7ac9f5d",
+          "elapsed_ms": 718.01,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 353,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_stretch-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 743 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content_stretch-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "a30c3c9e99200d9ed21dda1ae431ac2c4af9777e04b46504add0eb46539c323c",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-content_stretch.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-content-001-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-content-001-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-items-006.html": {
+          "artifact": "1b5ede724346032ad301",
+          "elapsed_ms": 667.37,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-items-006.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 1,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1692 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-items-006.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "6892d46191a6504839addcf70e8f0cbf93beafa62ebeb34fb4c6b486d8a2c98c",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-content-001-ref.html": {
+          "artifact": "1e2d20d5702328f4b8b0",
+          "elapsed_ms": 666.63,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content-001-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 309 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-content-001-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "6892d46191a6504839addcf70e8f0cbf93beafa62ebeb34fb4c6b486d8a2c98c",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-items-006.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-items-007.html": {
+          "artifact": "cce48ea9990edaf401f3",
+          "elapsed_ms": 667.27,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-items-007.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 1,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 843 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 0 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 0,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-items-007.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-items-007.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-items-008.html": {
+          "artifact": "d7b7f79a101279125f0e",
+          "elapsed_ms": 667.87,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 267,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-items-008.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": true,
+            "status": "HTTP 200 \u00b7 592 bytes \u00b7 0 links \u00b7 JS: 1 scripts \u00b7 0 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 0,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-items-008.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-items-008.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square-only.html",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square-only.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-items-009.html": {
+          "artifact": "215696f20771a6b88c0d",
+          "elapsed_ms": 667.34,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-items-009.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 1,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 502 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-items-009.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "4ae428b420c3e9b397b0803c38fd01e5c4c1c6eec78a4c702b767b4f558dc67e",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square-only.html": {
+          "artifact": "21d657aee727c28a59c6",
+          "elapsed_ms": 666.83,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square-only.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 210 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 0 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 0,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square-only.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "4ae428b420c3e9b397b0803c38fd01e5c4c1c6eec78a4c702b767b4f558dc67e",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-items-009.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "reference/align-items-baseline-overflow-non-visible-ref.html",
+          "max_channel_difference": 0,
+          "path": "css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-items-baseline-overflow-non-visible.html": {
+          "artifact": "caf5be19ba1a1880dadd",
+          "elapsed_ms": 616.97,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 66,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 1,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1066 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "972631d0ae8d5027669f7c2e1436e91b36f6191eef4f9acbdf1bed8316477053",
+          "status": "OK"
+        },
+        "css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html": {
+          "artifact": "b0cbca963df205e2b337",
+          "elapsed_ms": 666.94,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 41,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 1,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 256 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 2 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 2,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "972631d0ae8d5027669f7c2e1436e91b36f6191eef4f9acbdf1bed8316477053",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-items-baseline-overflow-non-visible.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-001.html": {
+          "artifact": "f6572eb3a21905c8417b",
+          "elapsed_ms": 668.1,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-001.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1223 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-001.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-001.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-002.html": {
+          "artifact": "f09e82d72bbc706e3c45",
+          "elapsed_ms": 667.33,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 159,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-002.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1216 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-002.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-002.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-003.html": {
+          "artifact": "1c9f2edd031f6b58efed",
+          "elapsed_ms": 667.44,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-003.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1341 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-003.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-003.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-004.html": {
+          "artifact": "6f93e18f93be59e405f4",
+          "elapsed_ms": 667.79,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-004.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1135 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-004.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-004.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-005.html": {
+          "artifact": "06b05dc3306c53904033",
+          "elapsed_ms": 667.18,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 217,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-005.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1262 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-005.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-005.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-007.html": {
+          "artifact": "e7996ae13840eee880ee",
+          "elapsed_ms": 667.39,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-007.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1373 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-007.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-007.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-008.html": {
+          "artifact": "d093d1d742419fd8453f",
+          "elapsed_ms": 667.86,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 159,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-008.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1284 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-008.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-008.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-009.html": {
+          "artifact": "7e69f6af807676ae1fc5",
+          "elapsed_ms": 667.69,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-009.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1415 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-009.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-009.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-011.html": {
+          "artifact": "79f6c8ba1f5c69462897",
+          "elapsed_ms": 667.29,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-011.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1186 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-011.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-011.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-012.html": {
+          "artifact": "96e6622d1890a2a149de",
+          "elapsed_ms": 668.04,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-012.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1103 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-012.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-012.html"
+    },
+    {
+      "comparisons": [
+        {
+          "different_pixels": 0,
+          "equal": true,
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "max_channel_difference": 0,
+          "path": "css/reference/ref-filled-green-100px-square.xht",
+          "relation": "=="
+        }
+      ],
+      "pages": {
+        "css/css-flexbox/align-self-013.html": {
+          "artifact": "8cc355f17bfb5897b3fe",
+          "elapsed_ms": 667.56,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/css-flexbox/align-self-013.html",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 1245 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/css-flexbox/align-self-013.html",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        },
+        "css/reference/ref-filled-green-100px-square.xht": {
+          "artifact": "e2fdcece0f30699f6cee",
+          "elapsed_ms": 667.72,
+          "metadata": {
+            "browser_replay_equal": true,
+            "content_height": 167,
+            "diagnostics": [],
+            "diagnostics_omitted": 0,
+            "final_url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "height": 600,
+            "non_uniform": true,
+            "resource_warnings": [],
+            "resources": 0,
+            "scale": 1,
+            "schema_version": 1,
+            "scripts": false,
+            "status": "HTTP 200 \u00b7 568 bytes \u00b7 0 links \u00b7 JavaScript disabled \u00b7 1 stylesheets \u00b7 0 resource warnings",
+            "stylesheets": 1,
+            "url": "http://127.0.0.1:43435/css/reference/ref-filled-green-100px-square.xht",
+            "width": 800
+          },
+          "reason": "",
+          "rgb_sha256": "95a71929d3bc7816ec200606a766592b2d86446e2c0555c99eed681f7f14dcf5",
+          "status": "OK"
+        }
+      },
+      "reasons": [],
+      "status": "PASS",
+      "test": "css/css-flexbox/align-self-013.html"
+    }
+  ],
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "schema_version": 1,
+  "scope": "static-reftest-pilot",
+  "selection": {
+    "cutoff_path": "css/css-flexbox/align-self-013.html",
+    "directory_tree_sha": "9ad051e4d7244fb68fc346148daa8e369ebb4844",
+    "examined_candidates_count": 59,
+    "id": "css-flexbox-first-24-v1",
+    "limit": 24,
+    "max_files": 100,
+    "max_total_bytes": 10485760,
+    "rationale": "A bounded initial CSS layout reftest cohort, fixed before any mgbrowser execution, selected mechanically rather than for known passes. This is not the full WPT suite.",
+    "rule": "First 24 lexicographically ordered top-level css/css-flexbox/*.html files with at least one link rel=match or rel=mismatch. No filter based on flags, scripts, references, or mgbrowser results.",
+    "top_level_html_candidates_count": 1340
+  },
+  "source_sha256": "30ff58fad573baf36dcfcfa91467c3f8ee9c9b064856dd345e8eb83e3d4c07be",
+  "started_utc": "2026-10-15T01:22:19.388837+00:00",
+  "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea",
+  "viewport": {
+    "height": 600,
+    "scale": 1,
+    "width": 800
+  }
+}

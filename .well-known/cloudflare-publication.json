@@ -1,5 +1,50 @@
 {
   "repository": "pierce403/mgbrowser",
+  "sourceRevision": "369d919504d058203254ceb789dcbecb9cd23644",
   "branch": "codex/cloudflare-static",
-  "bootstrapOnly": true
+  "workflow": "pierce403/mgbrowser/.github/workflows/pages.yml@refs/heads/main",
+  "runId": "38665078956",
+  "runAttempt": "1",
+  "files": [
+    {
+      "path": ".nojekyll",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "CNAME",
+      "bytes": 14,
+      "sha256": "91f6c26524211fbc0d34835e4bc3dd141a4d72a74118c8a6a5b04e1313393d69"
+    },
+    {
+      "path": "assets/mgbrowser-256.png",
+      "bytes": 42356,
+      "sha256": "0434baccb95c00339054685a739e67d6b68d3842f6d74c81504e9fd202a3b2ba"
+    },
+    {
+      "path": "assets/mgbrowser-32.png",
+      "bytes": 2290,
+      "sha256": "a28fcc13555ffc5e7c24cbace5e986a380eef7d1e2fb7efc9e615d8a41949cb4"
+    },
+    {
+      "path": "assets/mgbrowser.svg",
+      "bytes": 1721,
+      "sha256": "67655e944c85a5da150424d68d30b385889e9e6d816bb49f21b14e1e00cac73c"
+    },
+    {
+      "path": "index.html",
+      "bytes": 17097,
+      "sha256": "f9ddec19edf92b64f724312a533595b80b1dd059b4e3dbbabb4b33f342f327d4"
+    },
+    {
+      "path": "install.sh",
+      "bytes": 4605,
+      "sha256": "aa71cd46cd1723fa08bff0383ec86c45fccaae7cd50c96ace0e1f55e1c6231e4"
+    },
+    {
+      "path": "wpt-results.json",
+      "bytes": 71602,
+      "sha256": "047f1d1980beb9a1873d8d964df97bdfdac0220ec5acabe284120f0a005ffa8a"
+    }
+  ]
 }
