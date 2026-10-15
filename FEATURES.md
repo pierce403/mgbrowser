@@ -947,3 +947,7 @@ Opt-in, loopback-only CDP controls the actual native browser. The subset covers 
 Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate still explicitly returns -32601: the new script worker does not yet expose persistent execution contexts or remote objects. Initial subset is working; full protocol remains in-progress.
 
 Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.
+
+## Native static hosting
+
+- [ ] Verify canonical CI output, automatic publication-branch native build, exact active version, public HTTPS/assets/404, browser privacy and request metrics.

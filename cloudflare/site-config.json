@@ -1,0 +1,11 @@
+{
+  "repository": "pierce403/mgbrowser",
+  "worker": "mgbrowser-org",
+  "domain": "mgbrowser.org",
+  "branch": "codex/cloudflare-static",
+  "requiredFiles": [
+    "index.html",
+    "install.sh",
+    "wpt-results.json"
+  ]
+}
