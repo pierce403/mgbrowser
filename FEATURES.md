@@ -948,6 +948,8 @@ Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (
 
 Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.
 
-## Native static hosting
+## Static deployment pipeline
 
-- [ ] Verify canonical CI output, automatic publication-branch native build, exact active version, public HTTPS/assets/404, browser privacy and request metrics.
+Native Cloudflare main builds consume only the matching validated canonical public
+artifact. Existing score, release and Pages recovery gates remain. Hosting
+acceptance is recorded separately from application and hardware readiness.
