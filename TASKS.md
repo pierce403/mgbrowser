@@ -46,10 +46,14 @@ following dependency order, updating evidence as each increment ships:
    v0.9.6 self-upgrade and public native/CDP acceptance including hidden tabs.
    Fresh static WPT remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011.
    Bundled Init does not finish full queued lifecycle, error/rejection delivery
-   or typed harness reporting. **Current increment: v0.9.8**, [trusted source
-   provenance and bounded uncaught Window errors](docs/WINDOW_ERRORS.md).
-   Finish its regression, package, exact-commit and public release gates before
-   queued rejection delivery. Genuine
+   or typed harness reporting. **Shipped v0.9.8** at
+   `3e2955800de32e6442412734398d5cbdf6f884cd`: [trusted source provenance and
+   bounded uncaught Window errors](docs/WINDOW_ERRORS.md). Exact-commit
+   Rust/JSPLAN/website and tagged-package gates pass; checksum-verified public
+   install/reinstall, actual v0.9.7 self-upgrade/no-op and public native/CDP error
+   acceptance pass. The static WPT counts remain unchanged. **Next increment:**
+   independently review bounded queued Promise rejection notification before
+   writing its authored controls and implementation. Genuine
    messaging, queued lifecycle and typed observation remain open; corpus and
    observer/scoring changes require separate frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

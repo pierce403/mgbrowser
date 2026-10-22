@@ -16,8 +16,9 @@ existing cumulative limits. Startup is still **bundled**, not a complete HTML
 lifecycle. Rejection notification, messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
-The installer below selects the latest published release. Exact-commit CI,
-package and public-install verification receipts are recorded in the
+Released at `3e2955800de32e6442412734398d5cbdf6f884cd`; the installer below
+selects the latest published release. Exact-commit CI, package and public-install
+verification receipts are recorded in the
 [dated work log](memory/logs/2026-10-22.md).
 [Release notes](docs/RELEASE-v0.9.8.md).
 

@@ -1,7 +1,7 @@
 # Next milestone: genuine Window testharness readiness
 
 Original plan: 2026-10-21. The 1,011-case flexbox reftest corpus remains separate.
-The first timer increment is shipped; see the implementation receipt below.
+The timer and bounded Window-error increments are shipped; see the receipts below.
 No JavaScript testharness result or complete Window readiness is claimed here.
 Remaining browser services require separate feature contributions and versioned
 releases after the published expanded static baseline.
@@ -201,11 +201,17 @@ passing scripted cases. See the [dated receipts](../memory/logs/2026-10-21.md).
 This is only the first increment: full Window readiness still requires the
 remaining services and independently reviewed typed observation above.
 
-The next bounded increment, v0.9.8, implements genuine Window uncaught-error
-dispatch with parent-owned provenance, conservative whole-realm muting, traced
+The next bounded increment shipped as v0.9.8 at
+`3e2955800de32e6442412734398d5cbdf6f884cd`. It implements genuine Window
+uncaught-error dispatch with parent-owned provenance, conservative whole-realm muting, traced
 exception retention and five-argument `onerror`. It deliberately does not guess
 source locations, notify Promise rejections, provide messaging, separate the
 bundled lifecycle into tasks or add a typed testharness observer. See
 [the reviewed error contract](WINDOW_ERRORS.md) and the 2026-10-22 work log for
 authored controls and separate release gates. The pinned scored selection and
 observer/scoring protocol remain unchanged; full readiness is still open.
+Exact-source CI, normal release/public installation and actual v0.9.7
+self-upgrade pass; the public native/CDP error fixture retains its expected
+diagnostic and proves actual callback/checkpoint/exception identity. Queued
+Promise rejection notification is the next separately reviewed increment, not
+implemented or accepted by this release.

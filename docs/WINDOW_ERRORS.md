@@ -1,7 +1,9 @@
-# Next browser increment: bounded Window error reporting
+# Bounded Window error reporting
 
 Reviewed contract and frozen authored acceptance plan, 2026-10-22.
-The v0.9.8 implementation follows this policy; release/public verification
+The implementation shipped in
+[v0.9.8](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.8) at
+`3e2955800de32e6442412734398d5cbdf6f884cd`; release/public verification
 receipts are recorded separately in the dated work log.
 This follows the shipped v0.9.7 timer increment in
 [Window-testharness readiness](WPT_TESTHARNESS.md). It does not change the pinned
@@ -174,3 +176,13 @@ request multiset is unchanged and passing scripted pages have no pending work.
 These controls do not complete full Window testharness readiness. Exact-commit,
 tagged-public and old-binary upgrade receipts belong in the
 [dated work log](../memory/logs/2026-10-22.md).
+
+Exact-source Rust, JSPLAN and website checks and the normal tagged release pass.
+The public archive is 8,383,843 bytes, only 4,765 below the unchanged 8 MiB
+updater ceiling. Its SHA-256, exact advertised install/reinstall, real
+worker/session/Boa execution, desktop/icon files and direct release links pass.
+The public executable passes the authored native/CDP error journey with one
+retained diagnostic each, identity/checkpoint/cancellation proof, zero traps and
+confirmed cleanup. An actual old v0.9.7 executable runs its own updater to
+v0.9.8, then passes one no-op recheck and worker/session selftests. These release
+receipts do not complete the remaining Window-readiness services.

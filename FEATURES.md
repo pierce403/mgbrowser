@@ -488,16 +488,21 @@ packaged and public installation, actual v0.9.6 self-upgrade, and public native/
 acceptance including hidden-tab task completion pass; receipts are in the
 2026-10-21 work log. This increment does not complete F-016 or Window readiness.
 
-v0.9.8 adds bounded native Window error dispatch and five-argument `onerror`,
-GC-traced exception retention, recursion protection and diagnostics surviving
+Shipped v0.9.8 at `3e2955800de32e6442412734398d5cbdf6f884cd`: bounded native
+Window error dispatch and five-argument `onerror`, GC-traced exception retention,
+recursion protection and diagnostics surviving
 cancellation. Parent-supplied whole-redirect-chain provenance and a sticky
 realm-wide floor conservatively mute all errors after foreign/unknown sources
 or dynamic string compilation. Locations remain unknown rather than fabricated.
 Modern v4 rejects old v3 sessions; explicit legacy v1 encoding/admission remains
 unchanged. No quotas, syscall authority or third-party graph are expanded.
 See [contract and acceptance](docs/WINDOW_ERRORS.md) and the 2026-10-22 log for
-local and publication gates. Rejection notification, messaging, queued lifecycle,
-typed harness results and the wider unchecked F-016 criteria remain open.
+local and publication gates. Exact-commit Rust/JSPLAN/website and tagged release
+checks, public install/reinstall and native/CDP error acceptance, and actual
+v0.9.7 self-upgrade/no-op pass. Static WPT remains 317/632/62 of 1,011; these
+authored controls add no upstream passes. Rejection notification, messaging,
+queued lifecycle, typed harness results and the wider unchecked F-016 criteria
+remain open.
 
 ## F-015 : Self-updates and build identity
 
