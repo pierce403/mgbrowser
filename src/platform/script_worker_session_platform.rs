@@ -1,7 +1,7 @@
 use super::super::linux::{
     INPUT_LIMIT, OUTPUT_LIMIT, OwnedChild, WALL_LIMIT, encode, install_isolation, nonblocking,
 };
-use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate};
+use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
 use mg_sparkle::page_session::{
     DefaultAction, MAX_EDIT_BYTES, MAX_EDITS, MAX_EVENT_BYTES, RealmState,
@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -50,6 +50,7 @@ struct RequestFrame {
 enum FrameCommand {
     Init(Request),
     Event(SessionInput),
+    TaskPump(TaskPump),
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -137,11 +138,15 @@ impl Shared {
     }
 }
 
+enum TransactionCommand {
+    Event(SessionInput),
+    TaskPump(TaskPump),
+}
 enum Control {
-    Event {
+    Transaction {
         sequence: u64,
         expected_revision: u64,
-        input: SessionInput,
+        command: TransactionCommand,
         started: Instant,
     },
     Cancel,
@@ -154,6 +159,7 @@ pub struct Session {
     next_sequence: u64,
     pending: Option<u64>,
     validation_pending: bool,
+    task_wake: Option<mg_sparkle::page_session::TaskWake>,
     closure_reported: bool,
     tx: Option<SyncSender<Control>>,
     rx: Receiver<SessionUpdate>,
@@ -199,6 +205,7 @@ impl Session {
             next_sequence: 1,
             pending: None,
             validation_pending: true,
+            task_wake: None,
             closure_reported: false,
             tx: Some(tx),
             rx,
@@ -216,6 +223,7 @@ impl Session {
         }
         let reply = update.reply?;
         session.revision = reply.revision;
+        session.task_wake = reply.task_wake.clone();
         session.validation_pending = true;
         Ok((session, reply))
     }
@@ -251,6 +259,22 @@ impl Session {
         input: SessionInput,
         expected_revision: u64,
     ) -> Result<u64, String> {
+        self.try_submit(TransactionCommand::Event(input), expected_revision)
+    }
+    pub fn try_task_pump(&mut self, pump: TaskPump, expected_revision: u64) -> Result<u64, String> {
+        if super::super::legacy_test_mode() {
+            return Err("The legacy test runtime does not support task pumping".into());
+        }
+        if self.task_wake.as_ref().map(|wake| wake.token) != Some(pump.wake_token) {
+            return Err("Task pump does not match the advertised wake".into());
+        }
+        self.try_submit(TransactionCommand::TaskPump(pump), expected_revision)
+    }
+    fn try_submit(
+        &mut self,
+        command: TransactionCommand,
+        expected_revision: u64,
+    ) -> Result<u64, String> {
         let started = Instant::now();
         if self.pending.is_some() || self.validation_pending {
             return Err("A script transaction or projection is already pending".into());
@@ -266,7 +290,7 @@ impl Session {
         if expected_revision != self.revision {
             return Err("Stale script-session revision".into());
         }
-        if let Err(error) = validate_input(&input) {
+        if let Err(error) = validate_command(&command) {
             let _ = self.shared.charge(started.elapsed());
             self.shared.fail(error.clone());
             self.cancel();
@@ -280,10 +304,10 @@ impl Session {
             return Err(error);
         }
         let sequence = self.next_sequence;
-        let command = Control::Event {
+        let command = Control::Transaction {
             sequence,
             expected_revision,
-            input,
+            command,
             started,
         };
         match self
@@ -295,6 +319,7 @@ impl Session {
             Ok(()) => {
                 self.next_sequence += 1;
                 self.pending = Some(sequence);
+                self.task_wake = None;
                 Ok(sequence)
             }
             Err(TrySendError::Full(_)) => Err("Script-session command queue is full".into()),
@@ -313,8 +338,10 @@ impl Session {
                 if let Ok(reply) = &update.reply {
                     self.revision = reply.revision;
                     self.validation_pending = true;
+                    self.task_wake = reply.task_wake.clone();
                 } else {
                     self.validation_pending = false;
+                    self.task_wake = None;
                     self.closure_reported = true;
                 }
                 Some(update)
@@ -323,6 +350,7 @@ impl Session {
                 if !self.closure_reported && self.shared.closed.load(Ordering::Acquire) {
                     self.closure_reported = true;
                     self.validation_pending = false;
+                    self.task_wake = None;
                     Some(SessionUpdate {
                         generation: self.generation,
                         session_id: self.id,
@@ -367,6 +395,7 @@ struct Worker {
     pool: ChildPool,
     last_report: Option<AllocationReport>,
     last_boa: Option<mg_butane::modern::Report>,
+    last_wake_token: u64,
     legacy: bool,
 }
 impl Worker {
@@ -435,6 +464,7 @@ impl Worker {
             pool,
             last_report: None,
             last_boa: None,
+            last_wake_token: 0,
             legacy: super::super::legacy_test_mode(),
         })
     }
@@ -486,7 +516,9 @@ impl Worker {
         shared: &Shared,
         started: Instant,
     ) -> Result<SessionReply, String> {
-        let deadline = started + shared.remaining()?;
+        let deadline = started
+            .checked_add(shared.remaining()?)
+            .ok_or("Script active deadline exceeds the monotonic clock range")?;
         let limit = if matches!(request.command, FrameCommand::Init(_)) {
             INPUT_LIMIT
         } else {
@@ -572,6 +604,11 @@ impl Worker {
                 let frame: ReplyFrame = serde_json::from_slice(output)
                     .map_err(|error| format!("Invalid script-session reply: {error}"))?;
                 validate_reply(request, &frame)?;
+                if let Some(wake) = &frame.reply.task_wake {
+                    if self.legacy || wake.token <= self.last_wake_token {
+                        return Err("Invalid or nonmonotonic script task wake".into());
+                    }
+                }
                 validate_cumulative(self.last_report, frame.reply.allocations)?;
                 validate_engine_profile(&frame.reply, self.legacy, self.last_boa.as_ref())?;
                 self.check(shared, Some(deadline))?;
@@ -595,6 +632,9 @@ impl Worker {
                 }
                 self.last_report = frame.reply.allocations;
                 self.last_boa = frame.reply.boa.clone();
+                if let Some(wake) = &frame.reply.task_wake {
+                    self.last_wake_token = wake.token;
+                }
                 return Ok(frame.reply);
             }
             if !progressed {
@@ -709,10 +749,10 @@ fn manage(
         match commands
             .recv_timeout(IDLE_TICK.min(LIFETIME.saturating_sub(worker.spawned.elapsed())))
         {
-            Ok(Control::Event {
+            Ok(Control::Transaction {
                 sequence,
                 expected_revision,
-                input,
+                command,
                 started,
             }) => {
                 let result = (|| {
@@ -724,14 +764,17 @@ fn manage(
                             "Invalid script-session transaction sequence or revision".into()
                         );
                     }
-                    validate_input(&input)?;
+                    validate_command(&command)?;
                     let request = RequestFrame {
                         version: wire_version(),
                         generation,
                         session_id: id,
                         sequence,
                         expected_revision,
-                        command: FrameCommand::Event(input),
+                        command: match command {
+                            TransactionCommand::Event(input) => FrameCommand::Event(input),
+                            TransactionCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+                        },
                     };
                     worker.transaction(&request, &shared, started)
                 })();
@@ -797,7 +840,17 @@ fn validate_input(input: &SessionInput) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate_command(command: &TransactionCommand) -> Result<(), String> {
+    match command {
+        TransactionCommand::Event(input) => validate_input(input),
+        TransactionCommand::TaskPump(pump) if pump.wake_token != 0 => Ok(()),
+        TransactionCommand::TaskPump(_) => Err("Task wake token must be nonzero".into()),
+    }
+}
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
+    if matches!(request.command, FrameCommand::TaskPump(_)) && request.version != VERSION {
+        return Err("Legacy script session does not support task pumping".into());
+    }
     if frame.version != request.version
         || frame.generation != request.generation
         || frame.session_id != request.session_id
@@ -811,7 +864,10 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     let expected = if initial {
         0
     } else {
-        request.expected_revision + 1
+        request
+            .expected_revision
+            .checked_add(1)
+            .ok_or("Script-session revision exhausted")?
     };
     let rejected_input = !initial
         && reply.state == RealmState::Closed
@@ -854,9 +910,34 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
         return Err("Ready script session reported a latched allocation rejection".into());
     }
     if reply.state != RealmState::Ready
-        && (reply.navigation.is_some() || reply.default_action != DefaultAction::None)
+        && (reply.navigation.is_some()
+            || reply.default_action != DefaultAction::None
+            || reply.task_wake.is_some())
     {
         return Err("Closed script session proposed a default or navigation".into());
+    }
+    if reply.task_wake.as_ref().is_some_and(|wake| wake.token == 0) {
+        return Err("Invalid zero script task wake token".into());
+    }
+    if reply.task_wake.is_some() && (request.version != VERSION || reply.boa.is_none()) {
+        return Err("Legacy script session advertised a task wake".into());
+    }
+    if reply.state == RealmState::Ready
+        && reply
+            .boa
+            .as_ref()
+            .is_some_and(|report| (report.pending_jobs > 0) != reply.task_wake.is_some())
+    {
+        return Err("Inconsistent script task wake and resource report".into());
+    }
+    if matches!(request.command, FrameCommand::TaskPump(_))
+        && (!reply.acknowledgements.is_empty()
+            || reply.default_action != DefaultAction::None
+            || reply.outcome.click_canceled.is_some()
+            || reply.outcome.submit_canceled.is_some()
+            || reply.scripts_executed != 0)
+    {
+        return Err("Task pump returned activation effects or startup-script counts".into());
     }
     if rejected_input
         && (reply.snapshot.is_some()
@@ -1053,6 +1134,13 @@ impl PageEngine {
             Self::Legacy(realm) => realm.dispatch(input),
         }
     }
+    fn pump_tasks(&mut self, pump: TaskPump) -> Result<SessionReply, String> {
+        match self {
+            Self::Boa(realm) => Ok(realm.pump_tasks(pump)),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(_) => Err("The legacy test runtime does not support task pumping".into()),
+        }
+    }
 }
 fn attach_memory(reply: &mut SessionReply) {
     if let Some(report) = &mut reply.boa {
@@ -1114,14 +1202,17 @@ fn child_loop_for(
         {
             return Err("Invalid script-session event envelope".into());
         }
-        let FrameCommand::Event(input) = event.command else {
-            return Err("Repeated session initialization".into());
+        let realm = realm.as_mut().ok_or("Script realm is unavailable")?;
+        let mut reply = match event.command {
+            FrameCommand::Event(input) => {
+                validate_input(&input)?;
+                realm.dispatch(input)
+            }
+            FrameCommand::TaskPump(pump) if !legacy && pump.wake_token != 0 => {
+                realm.pump_tasks(pump)?
+            }
+            _ => return Err("Repeated initialization or unsupported task command".into()),
         };
-        validate_input(&input)?;
-        let mut reply = realm
-            .as_mut()
-            .ok_or("Script realm is unavailable")?
-            .dispatch(input);
         attach_memory(&mut reply);
         revision = reply.revision;
         terminal = reply.state != RealmState::Ready;
@@ -1243,6 +1334,127 @@ pub fn session_selftest() -> Result<(), String> {
     println!(
         "SCRIPT_SESSION_CHECK retained: two real callbacks; projection acknowledgement and single-flight enforced; drop reaped"
     );
+
+    if !super::super::legacy_test_mode() {
+        let timed = Request {
+            external_scripts: None,
+            url: "https://example.test/task-selftest".into(),
+            html: "<p id=o data-count=0></p><script>var n=0;var canceled=setTimeout(function(){throw Error('canceled timer ran');},0);clearTimeout(canceled);function task(){n++;document.getElementById('o').setAttribute('data-count',String(n));Promise.resolve().then(function(){document.getElementById('o').setAttribute('data-micro',String(n));});}setTimeout(task,0);setTimeout(task,0);</script>".into(),
+        };
+        let (mut session, mut reply) = Session::start(timed, 1, pool.clone())?;
+        let mut received = Instant::now();
+        if reply.state != RealmState::Ready
+            || !reply.errors.is_empty()
+            || reply.boa.as_ref().map(|report| report.pending_jobs) != Some(2)
+            || !reply.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .nodes
+                    .iter()
+                    .any(|node| node.attr("data-count") == Some("0"))
+            })
+        {
+            return Err("Task selftest startup ran or lost a timer".into());
+        }
+        let first_wake = reply.task_wake.clone().ok_or("Task wake missing")?;
+        if session
+            .try_task_pump(
+                TaskPump {
+                    wake_token: first_wake.token,
+                },
+                0,
+            )
+            .is_ok()
+        {
+            return Err("Task bypassed initial projection acknowledgement".into());
+        }
+        session.charge_active(Duration::ZERO)?;
+        for revision in 0..2 {
+            let wake = reply
+                .task_wake
+                .clone()
+                .ok_or("Retained task wake missing")?;
+            let due = received
+                .checked_add(Duration::from_millis(u64::from(wake.delay_ms)))
+                .ok_or("Task selftest clock overflow")?;
+            while Instant::now() < due {
+                thread::sleep(TICK);
+            }
+            if session.try_recv().is_some() {
+                return Err("Idle worker emitted an unsolicited task reply".into());
+            }
+            let sequence = session.try_task_pump(
+                TaskPump {
+                    wake_token: wake.token,
+                },
+                revision,
+            )?;
+            if session.try_dispatch(event(), revision).is_ok()
+                || session
+                    .try_task_pump(
+                        TaskPump {
+                            wake_token: wake.token,
+                        },
+                        revision,
+                    )
+                    .is_ok()
+            {
+                return Err("Task bypassed activation/task shared backpressure".into());
+            }
+            let update = wait(&mut session)?;
+            received = Instant::now();
+            let next = update.reply?;
+            if update.sequence != Some(sequence)
+                || next.revision != revision + 1
+                || next.state != RealmState::Ready
+                || !next.errors.is_empty()
+                || !next.acknowledgements.is_empty()
+                || next.default_action != DefaultAction::None
+                || next.outcome.click_canceled.is_some()
+                || next.outcome.submit_canceled.is_some()
+                || next.scripts_executed != 0
+                || !next.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.nodes.iter().any(|node| {
+                        node.attr("data-count") == Some((revision + 1).to_string().as_str())
+                            && node.attr("data-micro") == Some((revision + 1).to_string().as_str())
+                    })
+                })
+            {
+                return Err("Task or its checkpoint returned invalid effects".into());
+            }
+            next.boa
+                .as_ref()
+                .ok_or("Task resource report missing")?
+                .validate_after(reply.boa.as_ref().ok_or("Previous task report missing")?)?;
+            if session
+                .try_task_pump(
+                    TaskPump {
+                        wake_token: wake.token,
+                    },
+                    revision + 1,
+                )
+                .is_ok()
+            {
+                return Err("Task bypassed projection acknowledgement or replayed its wake".into());
+            }
+            session.charge_active(Duration::ZERO)?;
+            if session.charge_active(Duration::ZERO).is_ok() {
+                return Err("Task projection was acknowledged twice".into());
+            }
+            reply = next;
+        }
+        if reply.task_wake.is_some()
+            || reply.boa.as_ref().map(|report| report.pending_jobs) != Some(0)
+        {
+            return Err("Completed task session retained a phantom wake".into());
+        }
+        let pid = session.shared.pid.load(Ordering::Acquire);
+        drop(session);
+        reaped(pid)?;
+        empty(&pool)?;
+        println!(
+            "SCRIPT_SESSION_CHECK tasks: parent-issued pumps; one task plus checkpoint; shared single-flight/projection charge; canceled timer absent; monotonic reports; drop reaped"
+        );
+    }
 
     let (first, _) = Session::start(request(), 1, pool.clone())?;
     let (second, _) = Session::start(request(), 1, pool.clone())?;
@@ -1415,6 +1627,7 @@ mod tests {
                 boa: None,
                 state: RealmState::Ready,
                 acknowledgements: Vec::new(),
+                task_wake: None,
             },
         }
     }
@@ -1542,6 +1755,92 @@ mod tests {
         assert!(validate_reply(&request, &frame).is_err());
         frame.reply.errors = vec!["small".into(); 65];
         assert!(validate_reply(&request, &frame).is_err());
+    }
+    #[test]
+    fn task_frames_require_modern_consistent_wakes_and_no_activation_effects() {
+        let mut request = request(1);
+        request.version = VERSION;
+        request.command = FrameCommand::TaskPump(TaskPump { wake_token: 7 });
+        let mut frame = response(&request);
+        frame.reply.scripts_executed = 0;
+        frame.reply.allocations = None;
+        frame.reply.boa = Some(mg_butane::modern::Engine::new().unwrap().report());
+        validate_reply(&request, &frame).unwrap();
+        for change in [
+            "ack",
+            "default",
+            "click",
+            "submit",
+            "scripts",
+            "missing-wake",
+            "empty-jobs",
+            "zero",
+            "closed",
+            "legacy",
+            "overflow",
+        ] {
+            let mut changed_request: RequestFrame =
+                serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+            let mut changed: ReplyFrame =
+                serde_json::from_value(serde_json::to_value(&frame).unwrap()).unwrap();
+            match change {
+                "ack" => changed.reply.acknowledgements.push(ControlAck {
+                    node: 1,
+                    version: 1,
+                }),
+                "default" => changed.reply.default_action = DefaultAction::FollowLink { node: 1 },
+                "click" => changed.reply.outcome.click_canceled = Some(false),
+                "submit" => changed.reply.outcome.submit_canceled = Some(false),
+                "scripts" => changed.reply.scripts_executed = 1,
+                "missing-wake" => {
+                    let report = changed.reply.boa.as_mut().unwrap();
+                    report.pending_jobs = 1;
+                    report.jobs_admitted = 1;
+                }
+                "empty-jobs" => {
+                    changed.reply.task_wake = Some(mg_sparkle::page_session::TaskWake {
+                        token: 8,
+                        delay_ms: 0,
+                    })
+                }
+                "zero" | "closed" | "legacy" => {
+                    let report = changed.reply.boa.as_mut().unwrap();
+                    report.pending_jobs = 1;
+                    report.jobs_admitted = 1;
+                    changed.reply.task_wake = Some(mg_sparkle::page_session::TaskWake {
+                        token: if change == "zero" { 0 } else { 8 },
+                        delay_ms: 0,
+                    });
+                    if change == "closed" {
+                        changed.reply.state = RealmState::Closed;
+                    }
+                    if change == "legacy" {
+                        changed_request.version = 1;
+                        changed.version = 1;
+                    }
+                }
+                "overflow" => {
+                    changed_request.expected_revision = u64::MAX;
+                    changed.expected_revision = u64::MAX;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_reply(&changed_request, &changed).is_err(),
+                "{change}"
+            );
+        }
+        frame.reply.task_wake = Some(mg_sparkle::page_session::TaskWake {
+            token: 8,
+            delay_ms: u32::MAX,
+        });
+        let report = frame.reply.boa.as_mut().unwrap();
+        report.pending_jobs = 1;
+        report.jobs_admitted = 1;
+        validate_reply(&request, &frame).unwrap();
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["command"]["kind"], "TaskPump");
+        assert!(encoded["command"]["payload"].get("edits").is_none());
     }
     #[test]
     fn every_allocation_phase_is_monotonic_and_first_rejection_cannot_reset() {

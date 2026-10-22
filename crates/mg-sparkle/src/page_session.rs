@@ -43,6 +43,21 @@ pub enum InputKind {
     },
 }
 
+/// A parent-issued request to run one advertised, eligible task. No JS handles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPump {
+    pub wake_token: u64,
+}
+
+/// Relative monotonic wake hint. Receipt plus delay can be late, never early.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskWake {
+    pub token: u64,
+    pub delay_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum DefaultAction {
@@ -93,6 +108,9 @@ pub struct SessionReply {
     pub boa: Option<mg_butane::modern::Report>,
     pub state: RealmState,
     pub acknowledgements: Vec<ControlAck>,
+    /// Modern parent task scheduling only; absent in the legacy protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_wake: Option<TaskWake>,
 }
 
 impl SessionReply {

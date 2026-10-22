@@ -2,7 +2,23 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.6 Experimental Preview
+## v0.9.7 Experimental Preview
+
+The v0.9.7 increment adds function-valued `setTimeout` and `clearTimeout`.
+Callbacks and their arguments stay in the restricted worker until a genuine
+later parent-issued task transaction runs them, followed by Promise checkpoints.
+Cancellation releases their roots without renewing cumulative work limits.
+Single-Window identities, document/Window event targets, property-handler order
+and readiness before deferred scripts are corrected within the existing
+**bundled snapshot startup**, not a streaming parser or fully task-separated
+HTML lifecycle. String timers, intervals, error/rejection event delivery and
+the testharness result observer remain unfinished.
+[Timer scope and remaining readiness work](docs/WPT_TESTHARNESS.md).
+
+The installer below selects the latest published release. Exact-commit CI,
+package and public-install verification receipts are recorded in the
+[dated work log](memory/logs/2026-10-21.md).
+[Release notes](docs/RELEASE-v0.9.7.md).
 
 v0.9.6 corrects classic external script loading (`<script src="...">`) with
 typed parent-supplied sources, shared resource admission and explicit handling
@@ -18,12 +34,13 @@ guarantee. [Performance measurements and limits](docs/PERFORMANCE.md).
 Pure-Rust Boa ECMAScript execution runs inline and classic external scripts by default
 (`--disable-scripts` opts out), alongside bottom-left link hover URL previews,
 **Open link in new tab** from the right-click context menu and **Ctrl+click** on
-links. All 24 original WPT flexbox reftests remain passing. Current-source
-measurement now covers the complete pinned **1,011-case flexbox markup reftest
-selection**, with failures and unsupported cases retained. The larger corpus is
-a tooling change measured against the unchanged v0.9.6 engine, not a browser
-compatibility improvement. Its initial baseline is **317 PASS, 632 FAIL and
-62 UNSUPPORTED / 1,011**, with no errors, timeouts or crashes.
+links. The freshly measured WPT selection retains all 24 original passing
+flexbox reftests and covers the complete pinned **1,011-case flexbox markup
+reftest selection**, with failures and unsupported cases retained. That separate
+selection reports **317 PASS, 632 FAIL and 62 UNSUPPORTED / 1,011**, with
+no errors, timeouts or crashes. Timer fixtures are authored controls, not new
+upstream or JavaScript testharness passes. All case outcomes, rendered-page RGB
+hashes and per-page request records match the prior static-cohort baseline.
 [Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,
@@ -91,8 +108,8 @@ on Mg's real Rust DOM. Mg keeps its own HTML parser, layout and renderer, with
 Rust Stylo for CSS. No native JS backend or full Servo browser embedding.
 [Scope and resource profile](docs/BOA.md).
 
-The size-optimized, symbol-stripped release stays within older builds' unchanged
-8 MiB updater limit. Layout and resource limits remain explicit; this does not
+Release packages must fit older builds' unchanged 8 MiB updater limit. Layout
+and resource limits remain explicit; this does not
 establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
@@ -161,14 +178,22 @@ See [updater behavior and trust](docs/UPDATES.md).
   Deferred sources run after ordinary sources; `nomodule` provides the classic
   fallback while modules remain unsupported. Async scripts, nonempty integrity
   metadata and `crossorigin` are skipped with diagnostics. External sources
-  require UTF-8 and a supported JavaScript MIME type. ES modules
-  (`type="module"`), dynamic script injection, timers, fetch/XHR and
-  general browser event-loop behavior are not implemented. No React/Vue
-  browser-app compatibility is claimed.
-- Script budgets include cumulative opcodes, sources/jobs and 32/64 MiB
-  outstanding/cumulative worker allocation requests. This is not GC/RSS
-  measurement or complete cooperative budgeting; native work retains final
-  OS/parent containment. Active detached listeners persist until removal/teardown.
+  require UTF-8 and a supported JavaScript MIME type. The v0.9.7 candidate adds
+  function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
+  Startup remains bundled; fully task-separated lifecycle, error/rejection
+  event delivery and typed JavaScript testharness results remain unfinished.
+  ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
+  browser event loop remain unsupported. No React/Vue browser-app compatibility
+  is claimed.
+- Script budgets remain cumulative: 1,000,000 opcodes, 1 MiB per source / 4 MiB
+  lifetime source admission, 256 pending / 2,048 lifetime jobs and host tasks,
+  and 32/64 MiB outstanding/cumulative requested worker allocation. Cancellation
+  does not refund lifetime work. Sessions retain two seconds total active time,
+  300 seconds absolute lifetime, 64 transactions and 32 MiB aggregate wire bytes;
+  DOM and OS CPU/address-space limits also remain unchanged. These are per-worker
+  limits, not GC/RSS measurement, complete cooperative budgeting or a global
+  browser quota. Native work retains final OS/parent containment. Active detached
+  listeners persist until removal/teardown.
 - Full CSS is not implemented. Flex/grid, positioning and stacking are bounded
   subsets; rounded corners, transforms and independently scrolling elements are
   not implemented. Stylesheets remain same-origin with no imports; `@font-face`
@@ -188,7 +213,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.6.md) for manual install and uninstall.
+See [candidate preview details](docs/RELEASE-v0.9.7.md) for manual install and uninstall.
 
 ## Components
 
@@ -324,7 +349,7 @@ browser API and storage-ownership work is needed.
 
 Own the browser's integration and original components, reusing reviewed Rust crates where useful. Build a useful document browser on Linux, expanding compatibility behind explicit acceptance gates. See the plan for the Rust dependency boundary and deferred decisions.
 
-TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS, Taffy sizes bounded flex/grid contexts and Boa supplies page JavaScript. Fonts, PNG/JPEG/GIF and restricted SVG use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS and policy-checked images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --features legacy-test-engine --all-targets` for modern and preserved-baseline tests. Full CSS and broad browser compatibility remain unimplemented. Script execution requires `--enable-scripts` and supported Linux x86_64 isolation; it does not sandbox the whole browser.
+TLS uses the experimental rustls-rustcrypto provider. Stylo computes CSS, Taffy sizes bounded flex/grid contexts and Boa supplies page JavaScript. Fonts, PNG/JPEG/GIF and restricted SVG use Rust implementations with native backends disabled. Chassis fetches bounded same-origin CSS and policy-checked images; Sparkle has no network access. See [dependency policy](docs/DEPENDENCIES.md); run `cargo test --locked --workspace --features legacy-test-engine --all-targets` for modern and preserved-baseline tests. Full CSS and broad browser compatibility remain unimplemented. Boa scripting is enabled by default (`--disable-scripts` opts out) and requires supported Linux x86_64 isolation; it does not sandbox the whole browser.
 
 ## Website development
 

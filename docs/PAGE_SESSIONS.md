@@ -55,11 +55,44 @@ lifetime bounds; this is not full DOM ephemeron GC. See [BOA.md](BOA.md).
   Limit registrations cumulatively to 32 (removed records do not renew slots),
   and event records to 256. Admit actual retained storage before allocation.
 - Object-form listener options, synthetic dispatchEvent/element.click(), content
-attribute handler compilation, timers, keyboard/input events and general
+attribute handler compilation, string timers/intervals, keyboard/input events and general
 DOM/Event conformance are outside this slice. Bounded startup external sources
 now enter through the parent-owned typed request described in BOA.md; later
 event requests still cannot supply sources or network authority. Unsupported
-  APIs must not report fake success. Startup approximations remain documented.
+  APIs must not report fake success. Snapshot startup is still bundled, although
+  v0.9.7 corrects event targeting, handler-slot order and readiness before deferred
+  sources. Function timers use the separate bounded transaction below.
+
+## Parent-issued timer tasks: v0.9.7 increment
+
+`setTimeout(function, delay, ...arguments)` retains traced callback/argument roots
+under the same shared work admission as Promise jobs; `clearTimeout` cancels
+without renewing cumulative allowance. A private monotonic deadline and unique
+internal handle determine eligibility. Each accepted reply replaces/disarms its
+`TaskWake { token, delay_ms }`, whose relative delay is rounded upward. The parent
+schedules from receipt, then validates and acknowledges projection once before
+admitting new input or work. A wake can be late but must never authorize early
+execution.
+
+Modern protocol v3 adds `TaskPump { wake_token }`, not a fabricated activation.
+It shares the activation's one pending command, sequence/revision, lifetime,
+active-time, wire and child ledgers. A valid pump executes at most one eligible
+timer and its microtask checkpoint. Reject early/stale/replayed tokens without
+callback effects. The reply has no control acknowledgements, activation outcome,
+default action or startup-script count. Newer native form edits remain pending;
+independent script navigation remains parent-validated and hop-limited.
+
+`Browser::poll` schedules tasks for every polled live page, including hidden
+native tabs. Embedders must keep polling; CDP event draining and painting alone
+do not drive tasks. `script_work_status` exposes explicit pending/scheduled work
+for bounded host waits; `is_loading` retains its navigation meaning and does not
+wait for arbitrary timers. A one-shot worker only returns Init. No child sleeps,
+unsolicited callbacks/output, replay or automatic restart are introduced.
+
+This is not a general HTML event loop: startup remains bundled in Init, and
+string timers, intervals, fully queued lifecycle and general message/error/
+rejection-event delivery remain unsupported. The non-scoring full-harness
+readiness milestone remains open in [WPT_TESTHARNESS.md](WPT_TESTHARNESS.md).
 
 These semantics are a bounded subset of the [DOM event dispatch algorithm](https://dom.spec.whatwg.org/#dispatching-events)
 and [HTML form submission](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm).
@@ -75,15 +108,15 @@ The old 2-second one-shot deadline does not become renewable. New session limits
 | Transactions including initialization | 64 |
 | Request / response frame payload | 2 MiB / 4 MiB |
 | Combined lifetime wire bytes including four-byte frame headers | 32 MiB |
-| Later event request including envelope | 64 KiB |
-| Pending commands and completions | Capacity one; one event in flight |
+| Later activation or task request including envelope | 64 KiB |
+| Pending commands and completions | Capacity one; one activation or task in flight |
 | Owned script children, active/pending/retiring combined, per browser | 2 |
 
 The 32 MiB wire allowance and retained lifetime are explicit new interaction
 policies, not claims of unchanged protocol capacity. Encoding, startup, transfer,
 decoding and projection validation count toward active time. Idle time does not.
 The Boa page lane uses cumulative 1,000,000 opcodes, 4 MiB admitted source,
-256 pending/2,048 lifetime jobs and 32/64 MiB outstanding/cumulative requested
+256 pending/2,048 lifetime shared job/task admissions and 32/64 MiB outstanding/cumulative requested
 System-allocation caps. These are not the original 4 MiB logical allocation
 phases, GC live heap or RSS. Original fuel/allocation assertions remain unchanged
 in the legacy test lane. DOM 4 MiB, node/depth, 256 MiB address-space and one
@@ -96,7 +129,7 @@ Use strict versioned, length-prefixed JSON envelopes with parent-issued generati
 session identity, monotonically increasing sequence and expected revision. Reject
 extra, stale, malformed, oversized, truncated or unsolicited replies. New input
 never carries scripts, replacement HTML, callback handles or network authority.
-Production protocol v2 requires a valid Boa profile report, including platform
+Production protocol v3 requires a valid Boa profile report, including platform
 allocator counters. The explicit test-only legacy lane keeps v1 and the original
 allocation phases. Reports must stay cumulative; neither lane can impersonate
 the other's accounting or silently switch engines.

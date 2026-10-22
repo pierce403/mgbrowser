@@ -101,7 +101,8 @@ no credential store, HTTP/2, proxy configuration or persistent browsing profile.
 
 ## Experimental scripting
 
-Scripting defaults to off. On Linux x86_64, opt in explicitly:
+Boa scripting is enabled by default since v0.9.4. On Linux x86_64, it can also
+be selected explicitly for fixture reproduction (`--disable-scripts` opts out):
 
 ```sh
 cargo run --locked --bin mgbrowser -- http://127.0.0.1:7878/script-boa --enable-scripts
@@ -112,8 +113,11 @@ modern language state, and a Promise checkpoint creates the actual form, title
 and status. Boa runs modern syntax and builtins against Mg's bounded real DOM,
 then retains the realm for real later click/submit handlers. The bridge supports
 startup callbacks and bounded Promise checkpoints, not a general browser event
-loop. External scripts, modules, timers, fetch/XHR and script cookie access are
-not implemented. Most modern sites will still fail. [BOA.md](BOA.md) records the
+loop. Parent-preloaded classic external scripts and, in the v0.9.7 increment,
+function-valued `setTimeout`/`clearTimeout` are supported. String timers,
+intervals, modules, fetch/XHR and script cookie access are not implemented.
+Startup remains bundled in Init; timers require later parent polling. Most
+modern sites will still fail. [BOA.md](BOA.md) records the
 current integration and explicit `boa-page-process-v1` resource profile.
 
 Every script document uses a fresh worker with an empty environment, closed
@@ -131,7 +135,7 @@ so a first parser failure does not hide other missing capabilities in that respo
 `SCRIPT_BOA` contains the modern engine report: cumulative opcode, source and job
 admissions plus the actual worker's requested-allocation snapshot. The explicit
 profile allows 1,000,000 VM opcodes, 1 MiB per source/4 MiB cumulative sources,
-256 pending/2,048 cumulative jobs, and 32/64 MiB outstanding/cumulative requests
+256 pending/2,048 cumulative shared job/task admissions, and 32/64 MiB outstanding/cumulative requests
 to Rust's System allocator including its header/alignment. The latter is not GC
 live-heap or RSS; it is sampled before reply encoding, while enforcement remains
 active. Native builtin/parser/regex/GC work retains final OS/parent containment;
@@ -150,6 +154,16 @@ cargo run --locked --bin mgbrowser -- --script-worker-selftest
 This checks denied worker capabilities, memory/CPU/wall/output limits and bounded
 pipe exchange. It is not an audit of the whole browser or authorization to treat
 it as production-safe.
+
+For the timer increment, build the existing `journey_server` and `cdp_journey`
+examples, then run `python3 tools/task-services-smoke.py /absolute/path/to/mgbrowser`.
+It owns a private Xvfb/profile/server and tests the supplied packaged or installed
+binary: startup/task/microtask order, canceled timers, timer-created controls,
+retained handlers, real form submissions and destination navigation through
+native input and the external CDP client. Its authored fixture is not a WPT test.
+Timers consume the same 64 total session transactions and cumulative execution
+bounds as input. The profiler and static WPT adapter do not wait for arbitrary
+delayed tasks; full lifecycle/harness readiness remains separately unfinished.
 
 The original interpreter remains a research baseline with unchanged logical
 4 MiB/fuel assertions. Worker/native reproduction of that baseline requires

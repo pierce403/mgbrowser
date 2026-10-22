@@ -11,7 +11,7 @@ use mg_chassis::{
 };
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{DefaultAction, SessionInput, SessionReply},
+    page_session::{DefaultAction, SessionInput, SessionReply, TaskPump},
     paint::{Canvas, Fonts},
     render::{self, Controls, Viewport},
 };
@@ -193,6 +193,12 @@ impl ScriptSession for NoNavigationSession {
     fn try_dispatch(&mut self, input: SessionInput, revision: u64) -> Result<u64, String> {
         self.host_failures
             .observe(self.inner.try_dispatch(input, revision))
+    }
+    fn try_task_pump(&mut self, pump: TaskPump, revision: u64) -> Result<u64, String> {
+        // Preserve the production host API. Replies still pass through the
+        // same navigation/default guard and exactly-one combined charge below.
+        self.host_failures
+            .observe(self.inner.try_task_pump(pump, revision))
     }
     fn try_recv(&mut self) -> Option<SessionUpdate> {
         let mut update = self.inner.try_recv()?;
@@ -516,6 +522,14 @@ mod tests {
             );
             Ok(1)
         }
+        fn try_task_pump(&mut self, pump: TaskPump, revision: u64) -> Result<u64, String> {
+            if self.validation_pending {
+                return Err("Fixture projection is still pending".into());
+            }
+            assert_eq!(pump.wake_token, 7);
+            assert_eq!(revision, 0);
+            Ok(1)
+        }
         fn try_recv(&mut self) -> Option<SessionUpdate> {
             assert!(
                 !self.validation_pending,
@@ -580,6 +594,7 @@ mod tests {
             boa: None,
             state: RealmState::Ready,
             acknowledgements: Vec::new(),
+            task_wake: None,
         }
     }
     fn guarded(
@@ -770,6 +785,28 @@ mod tests {
         assert_eq!(charges.lock().unwrap().len(), 2);
         session.cancel();
         assert!(canceled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_host_forwards_task_pumps_without_consuming_a_projection_charge() {
+        let (runtime, canceled, charges) =
+            guarded(reply("<p>owned</p>"), Some(reply("<p>task</p>")));
+        let (mut session, _) = runtime.start(request(), 3).unwrap();
+        assert!(charges.lock().unwrap().is_empty());
+        session.charge_active(Duration::ZERO).unwrap();
+        assert_eq!(
+            session
+                .try_task_pump(TaskPump { wake_token: 7 }, 0)
+                .unwrap(),
+            1
+        );
+        assert_eq!(charges.lock().unwrap().len(), 1);
+        assert!(session.try_recv().unwrap().reply.is_ok());
+        assert_eq!(charges.lock().unwrap().len(), 1);
+        session.charge_active(Duration::ZERO).unwrap();
+        assert_eq!(charges.lock().unwrap().len(), 2);
+        assert!(session.charge_active(Duration::ZERO).is_err());
+        assert!(!canceled.load(Ordering::SeqCst));
     }
 
     #[test]

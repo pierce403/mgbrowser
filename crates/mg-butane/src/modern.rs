@@ -11,6 +11,7 @@ pub use boa_gc;
 
 use boa_engine::{
     Context, JsError, JsResult, JsString, JsValue, Script, Source,
+    builtins::promise::{OperationType, Promise},
     context::HostHooks,
     error::{EngineError, JsNativeErrorKind},
     job::{Job, JobExecutor},
@@ -19,7 +20,12 @@ use boa_engine::{
     realm::Realm,
 };
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::VecDeque, fmt, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    fmt,
+    rc::{Rc, Weak},
+};
 
 /// The profile is deliberately versioned separately from ECMAScript support.
 pub const PROFILE: &str = "boa-page-process-v1";
@@ -35,7 +41,8 @@ pub const WORKER_OUTSTANDING_LIMIT: u64 = 32 * 1024 * 1024;
 pub const WORKER_CUMULATIVE_LIMIT: u64 = 64 * 1024 * 1024;
 
 const SOURCE_FAILURE: &str = "Boa source admission budget exhausted";
-const JOB_FAILURE: &str = "Boa Promise job budget exhausted";
+const JOB_FAILURE: &str = "Boa shared job/task budget exhausted";
+const INVALID_PERMIT: &str = "Invalid Boa host work permit";
 const OPCODE_FAILURE: &str = "Boa cumulative opcode budget exhausted";
 const ENGINE_FAILURE: &str = "Boa engine runtime limit reached";
 const UNSUPPORTED_JOB: &str = "Boa job type is outside the page profile";
@@ -72,7 +79,37 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// A worker-local failure retaining the genuine exception, without coercion.
+///
+/// This is deliberately not serializable. Fatal policy/engine failures never
+/// expose a dispatchable exception. The data-only public methods discard this
+/// local value and retain their existing safe diagnostic contract.
+#[derive(Debug)]
+pub struct ExecutionFailure {
+    pub diagnostic: Error,
+    pub exception: Option<JsError>,
+}
+
+impl ExecutionFailure {
+    fn diagnostic(diagnostic: Error) -> Self {
+        Self {
+            diagnostic,
+            exception: None,
+        }
+    }
+}
+
+/// A non-capturing worker-local bridge. It must not execute JavaScript, retain
+/// values in untraced storage, or hold native borrows across re-entry. A binding
+/// retaining a rejection candidate must first admit shared host work.
+pub type RejectionObserver = fn(&JsObject<Promise>, OperationType, &mut Context);
+
+#[derive(Clone, Copy)]
+struct RejectionHook(RejectionObserver);
+
 /// Cumulative, monotonic engine-policy counters. These are not GC heap/RSS data.
+/// Job fields include Promise/native jobs and admitted host tasks, not separate
+/// allowances for each kind of work. Cancellation never refunds lifetime work.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceStats {
@@ -185,6 +222,8 @@ struct State {
     source_admissions: usize,
     jobs_admitted: usize,
     jobs_executed: usize,
+    pending_work: usize,
+    epoch: u64,
     fatal: Option<&'static str>,
 }
 
@@ -192,6 +231,10 @@ impl State {
     fn latch(&mut self, reason: &'static str) {
         if self.fatal.is_none() {
             self.fatal = Some(reason);
+            // There is no recovery or renewed epoch. Old permits become inert
+            // before their queues/roots are dropped at the owning boundary.
+            self.epoch += 1;
+            self.pending_work = 0;
         }
     }
 
@@ -214,10 +257,80 @@ impl State {
     }
 }
 
+/// One reservation from the shared pending/lifetime work allowance.
+///
+/// No JavaScript or GC value lives here, and the weak policy reference cannot
+/// keep an Engine alive. Bindings may ignore this scalar field when tracing a
+/// record, but must trace the record's callbacks, arguments and rejection values.
+/// Drop/cancel releases pending storage only; lifetime admission is never renewed.
+#[derive(Debug)]
+pub struct WorkPermit {
+    state: Weak<RefCell<State>>,
+    epoch: u64,
+    armed: bool,
+}
+
+impl WorkPermit {
+    /// Cancel without executing. No cumulative counter is refunded.
+    pub fn cancel(self) {
+        drop(self);
+    }
+}
+
+impl Drop for WorkPermit {
+    fn drop(&mut self) {
+        if self.armed {
+            self.armed = false;
+            if let Some(state) = self.state.upgrade() {
+                let mut state = state.borrow_mut();
+                if state.epoch == self.epoch {
+                    state.pending_work -= 1;
+                }
+            }
+        }
+    }
+}
+
+fn admit_work(state: &Rc<RefCell<State>>) -> JsResult<WorkPermit> {
+    let epoch = {
+        let mut state = state.borrow_mut();
+        if state.fatal.is_some() {
+            return Err(policy_error());
+        }
+        if state.pending_work >= PENDING_JOB_LIMIT || state.jobs_admitted >= CUMULATIVE_JOB_LIMIT {
+            state.latch(JOB_FAILURE);
+            return Err(policy_error());
+        }
+        state.pending_work += 1;
+        state.jobs_admitted += 1;
+        state.epoch
+    };
+    Ok(WorkPermit {
+        state: Rc::downgrade(state),
+        epoch,
+        armed: true,
+    })
+}
+
 #[derive(Clone)]
 struct Policy(Rc<RefCell<State>>);
 
 impl HostHooks for Policy {
+    fn promise_rejection_tracker(
+        &self,
+        promise: &JsObject<Promise>,
+        operation: OperationType,
+        context: &mut Context,
+    ) {
+        // Copy the scalar bridge out before any binding accesses context data.
+        // The hook must complete normally; a binding may latch policy failure,
+        // but may not dispatch callbacks from this hook.
+        let observer = context.get_data::<RejectionHook>().copied();
+        if let Some(RejectionHook(observer)) = observer {
+            observer(promise, operation, context);
+        }
+    }
+
     fn ensure_can_compile_strings(
         &self,
         _realm: Realm,
@@ -276,21 +389,57 @@ pub fn latch_context(context: &mut Context, reason: &'static str) -> JsError {
     policy_error()
 }
 
+/// Admit a host task BEFORE retaining its callback, arguments or other GC roots.
+pub fn admit_host_task(context: &mut Context) -> JsResult<WorkPermit> {
+    check_context(context)?;
+    let policy = context
+        .get_data::<Policy>()
+        .cloned()
+        .ok_or_else(policy_error)?;
+    admit_work(&policy.0)
+}
+
+/// Consume a reservation before callback execution, freeing its pending slot.
+///
+/// This does not invoke code or perform a microtask checkpoint. Both remain the
+/// binding's explicit guarded operations. Reusing, crossing or replaying a
+/// permit latches the receiving policy; no foreign policy counter is changed.
+pub fn begin_host_task(context: &mut Context, permit: &mut WorkPermit) -> JsResult<()> {
+    check_context(context)?;
+    let policy = context
+        .get_data::<Policy>()
+        .cloned()
+        .ok_or_else(policy_error)?;
+    let mut state = policy.0.borrow_mut();
+    if !permit.armed
+        || !Weak::ptr_eq(&permit.state, &Rc::downgrade(&policy.0))
+        || permit.epoch != state.epoch
+    {
+        state.latch(INVALID_PERMIT);
+        return Err(policy_error());
+    }
+    permit.armed = false;
+    state.pending_work -= 1;
+    state.jobs_executed += 1;
+    Ok(())
+}
+
 struct Jobs {
     state: Rc<RefCell<State>>,
-    queue: RefCell<VecDeque<Job>>,
+    queue: RefCell<VecDeque<(Job, WorkPermit)>>,
 }
 
 impl Jobs {
     fn clear(&self) {
-        self.queue.borrow_mut().clear();
+        // End the queue borrow before permits release their policy reservations.
+        let queued = std::mem::take(&mut *self.queue.borrow_mut());
+        drop(queued);
     }
 }
 
 impl JobExecutor for Jobs {
     fn enqueue_job(self: Rc<Self>, job: Job, _context: &mut Context) {
-        let mut state = self.state.borrow_mut();
-        if state.fatal.is_some() {
+        if self.state.borrow().fatal.is_some() {
             return;
         }
         // FinalizationRegistry cleanup callbacks are optional in ECMAScript.
@@ -300,16 +449,13 @@ impl JobExecutor for Jobs {
             return;
         }
         if !matches!(job, Job::PromiseJob(_) | Job::GenericJob(_)) {
-            state.latch(UNSUPPORTED_JOB);
+            self.state.borrow_mut().latch(UNSUPPORTED_JOB);
             return;
         }
-        let mut queue = self.queue.borrow_mut();
-        if queue.len() >= PENDING_JOB_LIMIT || state.jobs_admitted >= CUMULATIVE_JOB_LIMIT {
-            state.latch(JOB_FAILURE);
+        let Ok(permit) = admit_work(&self.state) else {
             return;
-        }
-        state.jobs_admitted += 1;
-        queue.push_back(job);
+        };
+        self.queue.borrow_mut().push_back((job, permit));
     }
 
     fn run_jobs(self: Rc<Self>, context: &mut Context) -> JsResult<()> {
@@ -319,10 +465,10 @@ impl JobExecutor for Jobs {
                 return Err(error);
             }
             // Release all RefCell borrows before executing arbitrary callbacks.
-            let Some(job) = self.queue.borrow_mut().pop_front() else {
+            let Some((job, mut permit)) = self.queue.borrow_mut().pop_front() else {
                 return Ok(());
             };
-            self.state.borrow_mut().jobs_executed += 1;
+            begin_host_task(context, &mut permit)?;
             let result = match job {
                 Job::PromiseJob(job) => job.call(context),
                 Job::GenericJob(job) => job.call(context),
@@ -391,6 +537,14 @@ impl Engine {
         &mut self.context
     }
 
+    /// Install a worker-local, non-capturing rejection observer. The bridge runs
+    /// synchronously in Boa's hook, not as a task or JavaScript callback.
+    pub fn set_rejection_observer(&mut self, observer: RejectionObserver) -> Result<(), Error> {
+        self.check()?;
+        self.context.insert_data(RejectionHook(observer));
+        Ok(())
+    }
+
     #[must_use]
     pub fn is_fatal(&self) -> bool {
         self.state.borrow().fatal.is_some() || self.context.instructions_remaining() == 0
@@ -404,18 +558,25 @@ impl Engine {
     pub fn latch_failure(&mut self, reason: &'static str) -> Error {
         self.state.borrow_mut().latch(reason);
         self.jobs.clear();
+        self.context.clear_kept_objects();
         Error::fatal(self.state.borrow().fatal.unwrap_or(ENGINE_FAILURE))
     }
 
     /// Evaluate one classic source; callers choose the HTML job checkpoint.
     pub fn evaluate(&mut self, source: &str) -> Result<JsValue, Error> {
-        self.check()?;
+        self.evaluate_raw(source)
+            .map_err(|failure| failure.diagnostic)
+    }
+
+    /// Guarded evaluation retaining any ordinary exception inside this worker.
+    pub fn evaluate_raw(&mut self, source: &str) -> Result<JsValue, ExecutionFailure> {
+        self.check().map_err(ExecutionFailure::diagnostic)?;
         let admitted = self.state.borrow_mut().admit_source(source.len());
-        self.finish(admitted)?;
+        self.finish_raw(admitted)?;
         let parsed = Script::parse(Source::from_bytes(source), None, &mut self.context);
-        let script = self.finish(parsed)?;
+        let script = self.finish_raw(parsed)?;
         let result = script.evaluate(&mut self.context);
-        self.finish(result)
+        self.finish_raw(result)
     }
 
     /// Invoke a retained listener/function without renewing any resource budget.
@@ -425,39 +586,68 @@ impl Engine {
         this: &JsValue,
         arguments: &[JsValue],
     ) -> Result<JsValue, Error> {
-        self.check()?;
+        self.call_raw(function, this, arguments)
+            .map_err(|failure| failure.diagnostic)
+    }
+
+    /// Guarded callback invocation preserving the genuine exception, without
+    /// admitting a task or running a checkpoint implicitly.
+    pub fn call_raw(
+        &mut self,
+        function: &JsObject,
+        this: &JsValue,
+        arguments: &[JsValue],
+    ) -> Result<JsValue, ExecutionFailure> {
+        self.check().map_err(ExecutionFailure::diagnostic)?;
         let result = function.call(this, arguments, &mut self.context);
-        self.finish(result)
+        self.finish_raw(result)
     }
 
     /// Read the actual realm global, not a script-reassignable `globalThis`
     /// alias. Accessors can execute JS, so this shares all fatal guards.
     pub fn get_global(&mut self, name: &str) -> Result<JsValue, Error> {
-        self.check()?;
+        self.get_global_raw(name)
+            .map_err(|failure| failure.diagnostic)
+    }
+
+    /// Guarded actual-global read retaining a thrown getter value worker-locally.
+    pub fn get_global_raw(&mut self, name: &str) -> Result<JsValue, ExecutionFailure> {
+        self.check().map_err(ExecutionFailure::diagnostic)?;
         let result = self
             .context
             .global_object()
             .get(JsString::from(name), &mut self.context);
-        self.finish(result)
+        self.finish_raw(result)
     }
 
     /// Drain the FIFO checkpoint, including newly queued jobs, within one budget.
     pub fn checkpoint(&mut self) -> Result<(), Error> {
+        self.checkpoint_raw().map_err(|failure| failure.diagnostic)
+    }
+
+    /// Drain only the microtask queue, retaining any ordinary failure locally.
+    /// Host tasks remain separate and must be externally selected and begun.
+    pub fn checkpoint_raw(&mut self) -> Result<(), ExecutionFailure> {
         if let Err(error) = self.check() {
             // No JavaScript stack is active at this host boundary, including
             // when a preceding script already terminated the realm.
             self.context.clear_kept_objects();
-            return Err(error);
+            return Err(ExecutionFailure::diagnostic(error));
         }
         let result = self.context.run_jobs();
         // Boa delegates run_jobs to our executor but does not perform the HTML
         // checkpoint's ClearKeptObjects step. Keep WeakRef dereferences alive
         // through the complete checkpoint, never indefinitely across inputs.
         self.context.clear_kept_objects();
-        self.finish(result)
+        self.finish_raw(result)
     }
 
     fn finish<T>(&mut self, result: JsResult<T>) -> Result<T, Error> {
+        self.finish_raw(result)
+            .map_err(|failure| failure.diagnostic)
+    }
+
+    fn finish_raw<T>(&mut self, result: JsResult<T>) -> Result<T, ExecutionFailure> {
         if self.context.instructions_remaining() == 0 {
             self.state.borrow_mut().latch(OPCODE_FAILURE);
         }
@@ -467,12 +657,18 @@ impl Engine {
         {
             self.state.borrow_mut().latch(ENGINE_FAILURE);
         }
-        if let Some(reason) = self.state.borrow().fatal {
+        // A temporary Ref must not span queue clearing: permit Drop accesses
+        // scalar policy state. Copy the reason out before releasing any roots.
+        let fatal = self.state.borrow().fatal;
+        if let Some(reason) = fatal {
             self.jobs.clear();
             self.context.clear_kept_objects();
-            return Err(Error::fatal(reason));
+            return Err(ExecutionFailure::diagnostic(Error::fatal(reason)));
         }
-        result.map_err(|error| safe_error(&error))
+        result.map_err(|error| ExecutionFailure {
+            diagnostic: safe_error(&error),
+            exception: Some(error),
+        })
     }
 
     #[must_use]
@@ -485,7 +681,7 @@ impl Engine {
             source_admissions: state.source_admissions,
             jobs_admitted: state.jobs_admitted,
             jobs_executed: state.jobs_executed,
-            pending_jobs: self.jobs.queue.borrow().len(),
+            pending_jobs: state.pending_work,
             fatal_reason: state.fatal.map(str::to_owned),
             worker_memory: None,
         }
@@ -531,5 +727,35 @@ pub fn safe_error(error: &JsError) -> Error {
         fatal: false,
         kind: "ThrownValue".into(),
         message: "JavaScript threw a value (not coerced by the host)".into(),
+    }
+}
+
+#[cfg(test)]
+mod permit_tests {
+    use super::*;
+
+    #[test]
+    fn a_permit_does_not_keep_the_policy_alive_after_engine_drop() {
+        let mut engine = Engine::new().unwrap();
+        let permit = admit_host_task(engine.context_mut()).unwrap();
+        let weak = permit.state.clone();
+        assert!(weak.upgrade().is_some());
+        drop(engine);
+        assert!(weak.upgrade().is_none());
+        permit.cancel();
+    }
+
+    #[test]
+    fn expired_epoch_cannot_execute_or_decrement_a_fatal_ledger() {
+        let mut engine = Engine::new().unwrap();
+        let mut permit = admit_host_task(engine.context_mut()).unwrap();
+        let original_epoch = permit.epoch;
+        engine.latch_failure("owned test fatal");
+        assert_ne!(engine.state.borrow().epoch, original_epoch);
+        assert!(begin_host_task(engine.context_mut(), &mut permit).is_err());
+        drop(permit);
+        assert_eq!(engine.stats().pending_jobs, 0);
+        assert_eq!(engine.stats().jobs_admitted, 1);
+        assert_eq!(engine.stats().jobs_executed, 0);
     }
 }

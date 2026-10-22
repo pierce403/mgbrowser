@@ -1,0 +1,71 @@
+<!doctype html><html><head><title>Authored timer task fixture</title></head><body>
+<h1>Authored timer tasks with retained events</h1>
+<p id="state">Waiting for a real later timer task</p>
+<div id="controls"></div><div id="parking"></div>
+<script>
+// Authored acceptance input: not an upstream WPT test or scored harness control.
+var starts = 1;
+var taskOrder = ['script'];
+Promise.resolve().then(function () { taskOrder.push('script-microtask'); });
+window.addEventListener('DOMContentLoaded', function (event) {
+  if (event.target !== document || event.currentTarget !== window || event.eventPhase !== 1)
+    throw new Error('Wrong document-ready capture target');
+  taskOrder.push('document-ready-capture');
+}, true);
+document.addEventListener('DOMContentLoaded', function (event) {
+  if (event.target !== document || event.currentTarget !== document || document.readyState !== 'interactive')
+    throw new Error('Wrong document-ready target or state');
+  taskOrder.push('document-ready');
+});
+window.addEventListener('DOMContentLoaded', function () { taskOrder.push('document-ready-bubble'); });
+document.addEventListener('load', function () { throw new Error('Window load incorrectly delivered to document'); });
+window.onload = function () { taskOrder.push('load-property'); };
+window.addEventListener('load', function (event) {
+  if (window !== self || window !== parent || window !== top || opener !== null ||
+      event.target !== document || event.currentTarget !== window || document.readyState !== 'complete')
+    throw new Error('Wrong single-Window load identity');
+  taskOrder.push('load');
+  var canceled = setTimeout(function () { throw new Error('Canceled task ran'); }, 1000);
+  clearTimeout(canceled);
+  Promise.resolve().then(function () { taskOrder.push('load-microtask'); });
+  setTimeout(function (argument) {
+    if (this !== window || argument.proof !== 'retained argument') throw new Error('Timer callback roots/receiver failed');
+    taskOrder.push('timer');
+    Promise.resolve().then(function () {
+      taskOrder.push('timer-microtask');
+      var expected = 'script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask';
+      if (taskOrder.join(',') !== expected) throw new Error('Task/microtask order: ' + taskOrder.join(','));
+      document.getElementById('controls').innerHTML = '<a id="cancel" href="/event-trap">Cancel this link</a><form id="search" action="/event-trap" method="get"><input id="query" name="q" type="text"><button id="submit" type="submit" name="submit" value="events">Search</button></form>';
+      var count = 0, clicked = false;
+      var form = document.getElementById('search');
+      var query = document.getElementById('query');
+      var state = document.getElementById('state');
+      document.getElementById('cancel').onclick = function (event) {
+        event.preventDefault();
+        if (query.value !== 'Rust & café') throw new Error('Typed value did not reach timer-created handler');
+        clicked = true;
+        state.textContent = 'link canceled';
+      };
+      form.onsubmit = function (event) {
+        count++;
+        if (!clicked || starts !== 1) { event.preventDefault(); throw new Error('Retained timer state failed'); }
+        if (count === 1) {
+          event.preventDefault();
+          document.getElementById('parking').appendChild(query);
+          form.appendChild(query);
+          var proof = document.createElement('input');
+          proof.id = 'proof'; proof.type = 'hidden'; proof.name = 'proof';
+          proof.value = 'pending'; form.appendChild(proof);
+          state.textContent = 'first submit canceled';
+        } else if (count === 2 && query.value === 'Rust & café again') {
+          document.getElementById('proof').value = 'retained-1-2';
+          form.action = '/event-search';
+        } else { event.preventDefault(); throw new Error('Unexpected timer activation'); }
+      };
+      document.body.setAttribute('data-task-order', expected);
+      document.title = 'Timer task controls ready';
+      state.textContent = 'timer task ready';
+    });
+  }, 60, {proof: 'retained argument'});
+});
+</script></body></html>

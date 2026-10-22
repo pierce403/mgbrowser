@@ -1,7 +1,7 @@
 //! Parent-owned, bounded sessions; the legacy EOF-delimited worker is separate.
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{SessionInput, SessionReply},
+    page_session::{SessionInput, SessionReply, TaskPump},
 };
 use std::sync::{Arc, Mutex};
 
@@ -121,6 +121,9 @@ impl Session {
     }
     pub fn try_recv(&mut self) -> Option<SessionUpdate> {
         None
+    }
+    pub fn try_task_pump(&mut self, _: TaskPump, _: u64) -> Result<u64, String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }
     pub fn cancel(&self) {}
     pub fn charge_active(&mut self, _: std::time::Duration) -> Result<(), String> {

@@ -4,7 +4,7 @@
 //! Implementations must reject unavailable isolation; Chassis has no in-process fallback.
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{SessionInput, SessionReply},
+    page_session::{SessionInput, SessionReply, TaskPump},
 };
 use std::time::Duration;
 
@@ -18,6 +18,10 @@ pub struct SessionUpdate {
 pub trait ScriptSession: Send {
     fn id(&self) -> u64;
     fn try_dispatch(&mut self, input: SessionInput, revision: u64) -> Result<u64, String>;
+    /// Tasks are not activations and carry no control edits or default actions.
+    fn try_task_pump(&mut self, _: TaskPump, _: u64) -> Result<u64, String> {
+        Err("This script runtime does not support task pumping".into())
+    }
     fn try_recv(&mut self) -> Option<SessionUpdate>;
     fn cancel(&self);
     fn charge_active(&mut self, duration: Duration) -> Result<(), String>;

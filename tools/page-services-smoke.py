@@ -124,10 +124,19 @@ class Run:
         return (self.root / log).read_text(errors="replace")
 
     def close(self):
+        failures = []
         for process in reversed(self.children):
-            stop(process)
+            try:
+                stop(process)
+            except BaseException as error:
+                failures.append(f"owned process {process.pid}: {type(error).__name__}: {error}")
         for output in self.files:
-            output.close()
+            try:
+                output.close()
+            except BaseException as error:
+                failures.append(f"acceptance log: {type(error).__name__}: {error}")
+        if failures:
+            raise RuntimeError("Acceptance cleanup failed: " + "; ".join(failures))
 
 
 def start_display(run):
@@ -161,12 +170,20 @@ def start_display(run):
     run.env.update(DISPLAY=f":{display}", XAUTHORITY=str(authority))
 
 
-def start_journey(run, helper):
+def require_journey_port_free(port=7878):
     with socket.socket() as probe:
+        # Match the fixture listener's reusable-address bind: a previous owned
+        # run may leave TIME_WAIT connections, but an active listener still
+        # prevents this bind. Never enable SO_REUSEPORT or reuse another server.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            probe.bind(("127.0.0.1", 7878))
+            probe.bind(("127.0.0.1", port))
         except OSError as error:
-            raise RuntimeError("127.0.0.1:7878 is occupied; refusing to reuse it") from error
+            raise RuntimeError(f"127.0.0.1:{port} is occupied; refusing to reuse it") from error
+
+
+def start_journey(run, helper):
+    require_journey_port_free()
     process = run.start([helper], "journey-server.log")
     wait_for(process, lambda: listener_owned(process.pid, 7878),
              "owned journey_server loopback bind")
@@ -203,15 +220,15 @@ def check_worker(log, name):
             f"{name}: missing nonfatal restricted-worker execution/accounting proof")
 
 
-def journeys(run, binary, client):
+def journeys(run, binary, client, fixture=FIXTURE, worker_check=check_worker):
     native_dir = run.root / "native"
     native = run.command(
-        [binary, FIXTURE, "--enable-scripts", "--smoke-events", "--exit-after-smoke",
+        [binary, fixture, "--enable-scripts", "--smoke-events", "--exit-after-smoke",
          "--evidence-dir", native_dir], "native.log",
     )
     require("JOURNEY_EVENTS_COMPLETE" in native and "JOURNEY_INCOMPLETE" not in native,
             "Native retained-event journey did not finish")
-    check_worker(native, "native")
+    worker_check(native, "native")
     for name in ("01-event-query.png", "02-link-canceled.png", "03-submit-canceled.png",
                  "04-event-results.png", "05-event-destination.png"):
         require((native_dir / name).read_bytes().startswith(b"\x89PNG\r\n\x1a\n"),
@@ -244,12 +261,12 @@ def journeys(run, binary, client):
 
     wait_for(browser, debugger_ready, "owned browser CDP listener")
     client_log = run.command(
-        [client, endpoint[0], FIXTURE, run.root / "cdp-destination.png"], "cdp-client.log",
+        [client, endpoint[0], fixture, run.root / "cdp-destination.png"], "cdp-client.log",
     )
     for marker in ("CDP_EVENTS_STATE link canceled", "CDP_EVENTS_STATE first submit canceled",
                    "CDP_EVENTS_DESTINATION", "CDP_EVENTS_OK"):
         require(marker in client_log, f"Missing unchanged CDP acceptance: {marker}")
-    check_worker((run.root / "cdp-browser.log").read_text(errors="replace"), "CDP")
+    worker_check((run.root / "cdp-browser.log").read_text(errors="replace"), "CDP")
     require((run.root / "cdp-destination.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"),
             "CDP did not save an actual PNG")
     stop(browser)
@@ -347,7 +364,8 @@ def main():
     env = dict(os.environ, HOME=str(private), XDG_CONFIG_HOME=str(private / "config"),
                XDG_DATA_HOME=str(private / "data"), XDG_CACHE_HOME=str(private / "cache"),
                XDG_STATE_HOME=str(private / "state"), XDG_RUNTIME_DIR=str(private / "runtime"),
-               DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-page-services-session")
+               DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-page-services-session",
+               MGBROWSER_NO_AUTO_UPDATE="1")
     for key in ("DISPLAY", "XAUTHORITY", "MGBROWSER_INSTALL_DIR"):
         env.pop(key, None)
     Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
@@ -379,8 +397,14 @@ def main():
         report["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
-        run.close()
-        (root / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        try:
+            run.close()
+        except BaseException as error:
+            report["status"] = "ERROR"
+            report["cleanup_error"] = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            (root / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PAGE_SERVICES_SMOKE_OK {initial_hash} {root}", flush=True)
 
 

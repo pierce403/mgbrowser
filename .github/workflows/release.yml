@@ -26,6 +26,7 @@ jobs:
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
           cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
           python3 tools/page-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          python3 tools/task-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -46,7 +47,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-page-services
-          path: tmp/page-services-smoke-*/
+          path: |
+            tmp/page-services-smoke-*/
+            tmp/task-services-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

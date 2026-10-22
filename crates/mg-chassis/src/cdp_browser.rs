@@ -1696,11 +1696,13 @@ mod tests {
             // the independent restricted-process tests.
             match condition {
                 "pending" => {
-                    app.pending_event = Some(crate::PendingEvent {
-                        generation: app.generation,
-                        session_id: 7,
-                        sequence: 1,
-                        revision: app.page_revision,
+                    app.pending_transaction = Some(crate::PendingTransaction::Activation {
+                        identity: crate::TransactionIdentity {
+                            generation: app.generation,
+                            session_id: 7,
+                            sequence: 1,
+                            revision: app.page_revision,
+                        },
                         input: SessionInput {
                             kind: InputKind::Click { target: node },
                             edits: vec![],
@@ -1769,7 +1771,7 @@ mod tests {
             assert_eq!(app.dom_epoch, epoch);
             assert_eq!(app.edit_versions[&node], version);
             assert_eq!(app.values[&node], "newer café");
-            assert_eq!(app.pending_event.is_some(), condition == "pending");
+            assert_eq!(app.pending_transaction.is_some(), condition == "pending");
 
             // Backpressure applies to activation, not subsequent typing or
             // nonactivation mouse events. A release without a press is a no-op.

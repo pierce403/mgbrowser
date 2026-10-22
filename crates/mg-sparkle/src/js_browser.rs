@@ -447,6 +447,7 @@ impl PageRealm {
             boa: None,
             state,
             acknowledgements: Vec::new(),
+            task_wake: None,
         };
         (realm, reply)
     }

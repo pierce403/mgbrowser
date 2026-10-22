@@ -37,6 +37,7 @@ impl Target {
 pub(super) enum Kind {
     DomReady,
     Load,
+    ReadyState,
     Click,
     Submit,
 }
@@ -45,6 +46,7 @@ impl Kind {
         match self {
             Self::DomReady => "DOMContentLoaded",
             Self::Load => "load",
+            Self::ReadyState => "readystatechange",
             Self::Click => "click",
             Self::Submit => "submit",
         }
@@ -63,6 +65,21 @@ impl Kind {
             "onclick" => Some(Self::Click),
             "onsubmit" => Some(Self::Submit),
             _ => None,
+        }
+    }
+    // The original interpreter's event/serialization contract stays unchanged.
+    pub(super) fn modern_parse(name: &str) -> Result<Self, String> {
+        if name == "readystatechange" {
+            Ok(Self::ReadyState)
+        } else {
+            Self::parse(name)
+        }
+    }
+    pub(super) fn modern_property(name: &str) -> Option<Self> {
+        match name {
+            "onload" => Some(Self::Load),
+            "onreadystatechange" => Some(Self::ReadyState),
+            _ => Self::property(name),
         }
     }
 }
@@ -608,6 +625,7 @@ impl PageRealm {
             boa: None,
             state: RealmState::Closed,
             acknowledgements: Vec::new(),
+            task_wake: None,
         };
         if self.closed || self.runtime.is_fatal() {
             self.closed = true;

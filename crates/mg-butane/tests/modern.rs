@@ -2,7 +2,8 @@
 
 use mg_butane::modern::{
     CUMULATIVE_JOB_LIMIT, CUMULATIVE_SOURCE_LIMIT, Engine, OPCODE_LIMIT, PENDING_JOB_LIMIT,
-    SOURCE_LIMIT, WORKER_CUMULATIVE_LIMIT, WORKER_OUTSTANDING_LIMIT, WorkerMemory,
+    SOURCE_LIMIT, WORKER_CUMULATIVE_LIMIT, WORKER_OUTSTANDING_LIMIT, WorkPermit, WorkerMemory,
+    admit_host_task, begin_host_task,
     boa_engine::{JsValue, NativeFunction, Source, js_string},
     boa_gc, check_context,
 };
@@ -284,4 +285,379 @@ fn ordinary_exceptions_are_not_fatal_and_reports_reject_renewal() {
     assert!(current.validate_after(&report).is_err());
     report.worker_memory.as_mut().unwrap().peak_bytes = WORKER_OUTSTANDING_LIMIT + 1;
     assert!(!report.is_valid());
+}
+
+#[test]
+fn promise_and_host_tasks_share_one_pending_limit_in_both_directions() {
+    for host_count in [0, 1, 128, 255, 256] {
+        let mut engine = Engine::new().unwrap();
+        let permits: Vec<_> = (0..host_count)
+            .map(|_| admit_host_task(engine.context_mut()).unwrap())
+            .collect();
+        let promises = PENDING_JOB_LIMIT - host_count;
+        engine
+            .evaluate(&format!(
+                "for(let i=0;i<{promises};i++) Promise.resolve().then(()=>0);"
+            ))
+            .unwrap();
+        assert_eq!(engine.stats().pending_jobs, PENDING_JOB_LIMIT);
+        assert_eq!(engine.stats().jobs_admitted, PENDING_JOB_LIMIT);
+        if host_count % 2 == 0 {
+            assert!(admit_host_task(engine.context_mut()).is_err());
+        } else {
+            assert!(engine.evaluate("Promise.resolve().then(()=>0);").is_err());
+        }
+        assert!(engine.check().unwrap_err().is_fatal());
+        assert_eq!(engine.stats().pending_jobs, 0);
+        assert_eq!(engine.stats().jobs_admitted, PENDING_JOB_LIMIT);
+        assert_eq!(engine.stats().jobs_executed, 0);
+        // Every remaining permit has an expired epoch. Dropping it must not
+        // double-release the already-cleared pending ledger.
+        drop(permits);
+        engine.stats().validate().unwrap();
+    }
+}
+
+#[test]
+fn cancelled_host_admissions_and_promises_share_the_lifetime_limit() {
+    let mut engine = Engine::new().unwrap();
+    for _ in 0..(CUMULATIVE_JOB_LIMIT / 2) {
+        admit_host_task(engine.context_mut()).unwrap().cancel();
+    }
+    let canceled = engine.stats();
+    assert_eq!(canceled.pending_jobs, 0);
+    assert_eq!(canceled.jobs_admitted, CUMULATIVE_JOB_LIMIT / 2);
+    assert_eq!(canceled.jobs_executed, 0);
+    for _ in 0..4 {
+        engine
+            .evaluate("for(let i=0;i<256;i++) Promise.resolve().then(()=>0);")
+            .unwrap();
+        engine.checkpoint().unwrap();
+    }
+    let exhausted = engine.stats();
+    assert_eq!(exhausted.jobs_admitted, CUMULATIVE_JOB_LIMIT);
+    assert_eq!(exhausted.jobs_executed, CUMULATIVE_JOB_LIMIT / 2);
+    assert_eq!(exhausted.pending_jobs, 0);
+    exhausted.validate_after(&canceled).unwrap();
+    assert!(admit_host_task(engine.context_mut()).is_err());
+    assert!(engine.check().unwrap_err().is_fatal());
+    assert_eq!(engine.stats().jobs_admitted, CUMULATIVE_JOB_LIMIT);
+    assert_eq!(engine.stats().jobs_executed, exhausted.jobs_executed);
+    assert_eq!(engine.stats().source_bytes, exhausted.source_bytes);
+    assert_eq!(
+        engine.stats().opcodes_remaining,
+        exhausted.opcodes_remaining
+    );
+}
+
+#[test]
+fn beginning_host_work_frees_one_slot_without_running_a_callback_or_checkpoint() {
+    let mut engine = Engine::new().unwrap();
+    let mut permits: Vec<_> = (0..PENDING_JOB_LIMIT)
+        .map(|_| admit_host_task(engine.context_mut()).unwrap())
+        .collect();
+    let callback = engine
+        .evaluate("var order='sync'; (()=>{order+=',task';Promise.resolve().then(()=>order+=',microtask')})")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    begin_host_task(engine.context_mut(), &mut permits[0]).unwrap();
+    assert_eq!(engine.stats().pending_jobs, PENDING_JOB_LIMIT - 1);
+    assert_eq!(engine.stats().jobs_executed, 1);
+    assert_eq!(
+        engine
+            .get_global("order")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .to_std_string_escaped(),
+        "sync"
+    );
+    engine
+        .call_raw(&callback, &JsValue::undefined(), &[])
+        .unwrap();
+    assert_eq!(engine.stats().pending_jobs, PENDING_JOB_LIMIT);
+    assert_eq!(engine.stats().jobs_executed, 1);
+    assert_eq!(
+        engine
+            .get_global("order")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .to_std_string_escaped(),
+        "sync,task"
+    );
+    engine.checkpoint_raw().unwrap();
+    assert_eq!(engine.stats().pending_jobs, PENDING_JOB_LIMIT - 1);
+    assert_eq!(engine.stats().jobs_executed, 2);
+    assert_eq!(
+        engine
+            .get_global("order")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .to_std_string_escaped(),
+        "sync,task,microtask"
+    );
+    drop(permits);
+    assert_eq!(engine.stats().pending_jobs, 0);
+    assert_eq!(engine.stats().jobs_admitted, PENDING_JOB_LIMIT + 1);
+    engine.stats().validate().unwrap();
+}
+
+#[test]
+fn foreign_and_double_used_permits_fail_without_counter_refunds() {
+    let mut first = Engine::new().unwrap();
+    let mut foreign = admit_host_task(first.context_mut()).unwrap();
+    let first_before = first.stats();
+    let mut second = Engine::new().unwrap();
+    let own = admit_host_task(second.context_mut()).unwrap();
+    assert!(begin_host_task(second.context_mut(), &mut foreign).is_err());
+    assert!(second.check().unwrap_err().is_fatal());
+    assert_eq!(first.stats(), first_before);
+    drop(own);
+    foreign.cancel();
+    assert_eq!(first.stats().pending_jobs, 0);
+    assert_eq!(first.stats().jobs_admitted, 1);
+    assert_eq!(second.stats().pending_jobs, 0);
+    assert_eq!(second.stats().jobs_executed, 0);
+
+    let mut engine = Engine::new().unwrap();
+    let mut permit = admit_host_task(engine.context_mut()).unwrap();
+    begin_host_task(engine.context_mut(), &mut permit).unwrap();
+    assert!(begin_host_task(engine.context_mut(), &mut permit).is_err());
+    assert!(engine.check().unwrap_err().is_fatal());
+    drop(permit);
+    assert_eq!(engine.stats().jobs_admitted, 1);
+    assert_eq!(engine.stats().jobs_executed, 1);
+    assert_eq!(engine.stats().pending_jobs, 0);
+    engine.stats().validate().unwrap();
+}
+
+#[test]
+fn raw_execution_retains_actual_values_without_hostile_property_access() {
+    let mut engine = Engine::new().unwrap();
+    engine.evaluate("var effects=0;var marker=new Proxy({},{get(){effects++;throw 1},getPrototypeOf(){effects++;throw 2}}); function fail(){throw marker} Object.defineProperty(this,'failedGetter',{get:fail});").unwrap();
+    let marker = engine.get_global("marker").unwrap();
+    let callback = engine.get_global("fail").unwrap().as_object().unwrap();
+    let failures = [
+        engine.evaluate_raw("throw marker;").unwrap_err(),
+        engine
+            .call_raw(&callback, &JsValue::undefined(), &[])
+            .unwrap_err(),
+        engine.get_global_raw("failedGetter").unwrap_err(),
+    ];
+    for failure in failures {
+        assert!(!failure.diagnostic.is_fatal());
+        assert_eq!(failure.diagnostic.kind, "ThrownValue");
+        assert_eq!(failure.exception.unwrap().as_opaque(), Some(&marker));
+    }
+    assert_eq!(engine.get_global("effects").unwrap().as_number(), Some(0.0));
+    let primitive = engine.evaluate_raw("throw 42;").unwrap_err();
+    assert_eq!(
+        primitive
+            .exception
+            .unwrap()
+            .as_opaque()
+            .unwrap()
+            .as_number(),
+        Some(42.0)
+    );
+    let native = engine.evaluate_raw("missingBinding;").unwrap_err();
+    assert_eq!(native.diagnostic.kind, "ReferenceError");
+    assert!(native.exception.unwrap().as_native().is_some());
+    let fatal = engine.evaluate_raw("for(;;){}").unwrap_err();
+    assert!(fatal.diagnostic.is_fatal());
+    assert!(fatal.exception.is_none());
+    let later = engine.get_global_raw("marker").unwrap_err();
+    assert!(later.diagnostic.is_fatal());
+    assert!(later.exception.is_none());
+}
+
+#[test]
+fn raw_checkpoint_preserves_an_ordinary_native_job_exception_and_cancels_queue() {
+    use mg_butane::modern::boa_engine::{JsError, job::GenericJob};
+    let mut engine = Engine::new().unwrap();
+    let mut permit = admit_host_task(engine.context_mut()).unwrap();
+    let realm = engine.context().realm().clone();
+    engine
+        .context_mut()
+        .enqueue_job(GenericJob::new(|_| Err(JsError::from_opaque(42.into())), realm).into());
+    engine
+        .evaluate("var effect=0;Promise.resolve().then(()=>effect++);")
+        .unwrap();
+    let failure = engine.checkpoint_raw().unwrap_err();
+    assert!(!failure.diagnostic.is_fatal());
+    assert_eq!(
+        failure.exception.unwrap().as_opaque().unwrap().as_number(),
+        Some(42.0)
+    );
+    assert_eq!(engine.get_global("effect").unwrap().as_number(), Some(0.0));
+    assert_eq!(engine.stats().pending_jobs, 1); // Only the separate host task remains.
+    assert_eq!(engine.stats().jobs_admitted, 3);
+    assert_eq!(engine.stats().jobs_executed, 1);
+    begin_host_task(engine.context_mut(), &mut permit).unwrap();
+    assert_eq!(engine.stats().pending_jobs, 0);
+    assert_eq!(engine.stats().jobs_executed, 2);
+    engine.stats().validate().unwrap();
+}
+
+#[test]
+fn fatal_boundary_releases_native_job_roots_and_expires_host_permits() {
+    use mg_butane::modern::{
+        boa_engine::job::GenericJob,
+        boa_gc::{Finalize, Gc, Trace},
+    };
+    #[derive(Trace)]
+    struct Probe(#[unsafe_ignore_trace] Rc<Cell<usize>>);
+    impl Finalize for Probe {
+        fn finalize(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let finalized = Rc::new(Cell::new(0));
+    let mut engine = Engine::new().unwrap();
+    let permit = admit_host_task(engine.context_mut()).unwrap();
+    let probe = Gc::new(Probe(finalized.clone()));
+    let realm = engine.context().realm().clone();
+    engine.context_mut().enqueue_job(
+        GenericJob::new(
+            move |_| {
+                let _keep_root = &probe;
+                Ok(JsValue::undefined())
+            },
+            realm,
+        )
+        .into(),
+    );
+    boa_gc::force_collect();
+    assert_eq!(finalized.get(), 0);
+    assert_eq!(engine.stats().pending_jobs, 2);
+    engine.latch_failure("owned root-release test");
+    boa_gc::force_collect();
+    assert_eq!(finalized.get(), 1);
+    permit.cancel();
+    assert_eq!(engine.stats().pending_jobs, 0);
+    assert_eq!(engine.stats().jobs_admitted, 2);
+    assert_eq!(engine.stats().jobs_executed, 0);
+    engine.stats().validate().unwrap();
+}
+
+mod rejection_bridge {
+    use super::*;
+    use mg_butane::modern::{
+        boa_engine::{
+            Context,
+            builtins::promise::{OperationType, Promise},
+            object::{JsObject, builtins::JsPromise},
+        },
+        boa_gc::{Finalize, Gc, GcRefCell, Trace},
+    };
+
+    #[derive(Trace, Finalize)]
+    struct Candidate {
+        promise: JsObject<Promise>,
+        reason: JsValue,
+        #[unsafe_ignore_trace]
+        _permit: WorkPermit,
+    }
+
+    #[derive(Default, Trace, Finalize)]
+    struct Candidates {
+        entries: Vec<Candidate>,
+        rejected: usize,
+        handled: usize,
+    }
+
+    fn observer(promise: &JsObject<Promise>, operation: OperationType, context: &mut Context) {
+        if check_context(context).is_err() {
+            return;
+        }
+        let state = context
+            .get_data::<Gc<GcRefCell<Candidates>>>()
+            .unwrap()
+            .clone();
+        match operation {
+            OperationType::Reject => {
+                let Ok(permit) = admit_host_task(context) else {
+                    return;
+                };
+                let reason = JsPromise::from(promise.clone())
+                    .state()
+                    .as_rejected()
+                    .unwrap()
+                    .clone();
+                let mut state = state.borrow_mut();
+                state.rejected += 1;
+                state.entries.push(Candidate {
+                    promise: promise.clone(),
+                    reason,
+                    _permit: permit,
+                });
+            }
+            OperationType::Handle => {
+                let mut state = state.borrow_mut();
+                state.handled += 1;
+                state
+                    .entries
+                    .retain(|candidate| candidate.promise != *promise);
+            }
+        }
+    }
+
+    #[test]
+    fn rejection_hook_preserves_native_identity_and_values_without_reentry() {
+        let mut engine = Engine::new().unwrap();
+        let candidates = Gc::new(GcRefCell::new(Candidates::default()));
+        engine.context_mut().insert_data(candidates.clone());
+        engine.set_rejection_observer(observer).unwrap();
+        engine.evaluate("var effects=0;var reason=new Proxy({},{get(){effects++;throw 1}});var rejected=Promise.reject(reason);").unwrap();
+        let reason = engine.get_global("reason").unwrap();
+        assert_eq!(candidates.borrow().entries[0].reason, reason);
+        assert_eq!(candidates.borrow().rejected, 1);
+        assert_eq!(engine.stats().jobs_admitted, 1);
+        assert_eq!(engine.stats().pending_jobs, 1);
+        engine.checkpoint().unwrap();
+        boa_gc::force_collect();
+        assert_eq!(candidates.borrow().entries[0].reason, reason);
+        assert_eq!(engine.get_global("effects").unwrap().as_number(), Some(0.0));
+
+        engine.evaluate("rejected.catch(()=>0);").unwrap();
+        assert_eq!(candidates.borrow().handled, 1);
+        assert!(candidates.borrow().entries.is_empty());
+        assert_eq!(engine.stats().jobs_admitted, 2); // Canceled notice + Promise reaction.
+        assert_eq!(engine.stats().pending_jobs, 1);
+        engine.checkpoint().unwrap();
+        assert_eq!(engine.stats().jobs_admitted, 2);
+        assert_eq!(engine.stats().jobs_executed, 1);
+        assert_eq!(engine.stats().pending_jobs, 0);
+        engine.stats().validate().unwrap();
+    }
+
+    #[test]
+    fn synchronous_rejections_cannot_bypass_shared_pending_admission() {
+        let mut engine = Engine::new().unwrap();
+        let candidates = Gc::new(GcRefCell::new(Candidates::default()));
+        engine.context_mut().insert_data(candidates.clone());
+        engine.set_rejection_observer(observer).unwrap();
+        let failure = engine
+            .evaluate_raw("for(let i=0;i<257;i++) Promise.reject(i);")
+            .unwrap_err();
+        assert!(failure.diagnostic.is_fatal());
+        assert!(failure.exception.is_none());
+        assert_eq!(candidates.borrow().entries.len(), PENDING_JOB_LIMIT);
+        assert_eq!(engine.stats().jobs_admitted, PENDING_JOB_LIMIT);
+        assert_eq!(engine.stats().jobs_executed, 0);
+        assert_eq!(engine.stats().pending_jobs, 0);
+        // The embedding layer owns and clears its traced values at fatal exit.
+        candidates.borrow_mut().entries.clear();
+        assert_eq!(engine.stats().pending_jobs, 0);
+        engine.stats().validate().unwrap();
+        assert!(
+            engine
+                .set_rejection_observer(observer)
+                .unwrap_err()
+                .is_fatal()
+        );
+    }
 }

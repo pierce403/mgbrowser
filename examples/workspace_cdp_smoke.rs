@@ -57,8 +57,16 @@ impl Fixture {
                             "first"
                         };
                         let color = if name == "second" { SECOND } else { FIRST };
+                        // Only the initial page has the authored hidden-task
+                        // control. The original navigation/edit/movement pages
+                        // below retain their exact markup and assertions.
+                        let hidden_task = if target == "/start" {
+                            "<p><a id='arm-hidden-task' href='/hidden-task-trap'>Arm hidden-tab task</a></p><p id='hidden-task-proof' data-hidden-task='unarmed'>Authored hidden task not armed</p><script>var hiddenTaskArmed=false;document.getElementById('arm-hidden-task').onclick=function(event){event.preventDefault();if(hiddenTaskArmed)throw new Error('Hidden task armed twice');hiddenTaskArmed=true;var proof=document.getElementById('hidden-task-proof');proof.setAttribute('data-hidden-task','armed');setTimeout(function(){proof.setAttribute('data-hidden-task','complete');proof.textContent='Authored hidden task completed';},3000);};</script>"
+                        } else {
+                            ""
+                        };
                         let body = format!(
-                            "<!doctype html><html><head><title>CDP {name} fixture</title><style>body{{background:#{color:06x};margin:12px;font-size:16px}}</style></head><body><h1 id='identity'>OWNED {name} TARGET</h1><form action='/{name}/submit'><input id='query' name='q'><button>Submit retained edit</button></form><p>Native workspace/CDP fixture only, not a public-site or Playwright claim.</p></body></html>"
+                            "<!doctype html><html><head><title>CDP {name} fixture</title><style>body{{background:#{color:06x};margin:12px;font-size:16px}}</style></head><body><h1 id='identity'>OWNED {name} TARGET</h1><form action='/{name}/submit'><input id='query' name='q'><button>Submit retained edit</button></form><p>Native workspace/CDP fixture only, not a public-site or Playwright claim.</p>{hidden_task}</body></html>"
                         );
                         let _ = write!(
                             stream,
@@ -186,6 +194,60 @@ impl Cdp {
         }
         Ok(())
     }
+    fn click(&mut self, session: &str, selector: &str) -> Result<()> {
+        let root = self.rpc("DOM.getDocument", json!({}), Some(session))?["root"]["nodeId"].clone();
+        let node = self.rpc(
+            "DOM.querySelector",
+            json!({"nodeId":root,"selector":selector}),
+            Some(session),
+        )?["nodeId"]
+            .clone();
+        if node.as_u64().filter(|id| *id != 0).is_none() {
+            return Err(format!("Missing real click target: {selector}").into());
+        }
+        let model = self.rpc("DOM.getBoxModel", json!({"nodeId":node}), Some(session))?;
+        let quad = model
+            .pointer("/model/content")
+            .and_then(Value::as_array)
+            .filter(|quad| quad.len() == 8)
+            .ok_or("Missing click target content quad")?;
+        let (mut x, mut y) = (0.0, 0.0);
+        for pair in quad.chunks_exact(2) {
+            x += pair[0]
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .ok_or("Invalid click x")?;
+            y += pair[1]
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .ok_or("Invalid click y")?;
+        }
+        for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+            self.rpc("Input.dispatchMouseEvent", json!({"type":kind,"x":x / 4.0,"y":y / 4.0,"button":"left","buttons":buttons,"clickCount":1}), Some(session))?;
+        }
+        Ok(())
+    }
+    fn hidden_task(&mut self, session: &str) -> Result<(String, Value)> {
+        fn proof(tree: &Value) -> Option<String> {
+            if let Some(attributes) = tree["attributes"].as_array()
+                && attributes
+                    .chunks_exact(2)
+                    .any(|pair| pair[0] == "id" && pair[1] == "hidden-task-proof")
+            {
+                return attributes
+                    .chunks_exact(2)
+                    .find(|pair| pair[0] == "data-hidden-task")?[1]
+                    .as_str()
+                    .map(str::to_owned);
+            }
+            tree["children"].as_array()?.iter().find_map(proof)
+        }
+        // A task projection invalidates old node IDs. Read both identity and
+        // state from one complete snapshot, never cache an ID across the pump.
+        let document = self.rpc("DOM.getDocument", json!({"depth":-1}), Some(session))?;
+        let state = proof(&document["root"]).ok_or("Missing authored hidden-task state")?;
+        Ok((state, document))
+    }
     fn input(&mut self, session: &str) -> Result<(Value, Value)> {
         let root = self.rpc("DOM.getDocument", json!({}), Some(session))?["root"]["nodeId"].clone();
         let node = self.rpc(
@@ -259,7 +321,12 @@ impl Native {
         let log = scratch.join("browser.log");
         let output = File::create(&log)?;
         let child = Command::new(payload)
-            .args([url, "--no-auto-update", "--remote-debugging-port=0"])
+            .args([
+                url,
+                "--enable-scripts",
+                "--no-auto-update",
+                "--remote-debugging-port=0",
+            ])
             .env("HOME", scratch.join("home"))
             .env("XDG_CONFIG_HOME", scratch.join("config"))
             .env("XDG_DATA_HOME", scratch.join("data"))
@@ -493,20 +560,21 @@ impl Native {
         }
         Ok((geometry.width, geometry.height, bytes))
     }
+    fn shows_frame(&self, window: u32, color: u32) -> Result<bool> {
+        let (width, height, bytes) = self.capture(window)?;
+        if width != 800 || height != 634 {
+            return Ok(false);
+        }
+        let pixel = |x: usize, y: usize| {
+            let start = (y * usize::from(width) + x) * 4;
+            u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap()) & 0xffffff
+        };
+        Ok(pixel(80, 300) == color && pixel(12, 50) == 0xe3e9df)
+    }
     fn frame(&self, window: u32, color: u32, path: &Path) -> Result<()> {
         // Require the requested page color plus its real navigation button,
         // not merely identical stale/empty pixels while a paint is pending.
-        wait("native target pixels", || {
-            let (width, height, bytes) = self.capture(window)?;
-            if width != 800 || height != 634 {
-                return Ok(false);
-            }
-            let pixel = |x: usize, y: usize| {
-                let start = (y * usize::from(width) + x) * 4;
-                u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap()) & 0xffffff
-            };
-            Ok(pixel(80, 300) == color && pixel(12, 50) == 0xe3e9df)
-        })?;
+        wait("native target pixels", || self.shows_frame(window, color))?;
         let (width, height, bytes) = self.capture(window)?;
         let rgb = bytes
             .chunks_exact(4)
@@ -536,6 +604,21 @@ fn run(payload: &Path, scratch: &Path) -> Result<()> {
     let endpoint = native.endpoint()?;
     let mut cdp = Cdp::connect(&endpoint)?;
     assert_eq!(ids(&cdp.targets()?), ["page-1"]);
+    let first_session = cdp.attach("page-1")?;
+    assert_eq!(cdp.hidden_task(&first_session)?.0, "unarmed");
+    cdp.click(&first_session, "#arm-hidden-task")?;
+    wait("real click arms later hidden task", || {
+        let (state, _) = cdp.hidden_task(&first_session)?;
+        match state.as_str() {
+            "unarmed" => Ok(false),
+            "armed" => Ok(true),
+            _ => Err("Task completed before the tab was hidden".into()),
+        }
+    })?;
+    assert!(
+        !fixture.saw("/hidden-task-trap"),
+        "Arming link default was not canceled"
+    );
     native.key(original, b't'.into(), true)?;
     let mut targets = Vec::new();
     wait("Ctrl+T creates a real second CDP target", || {
@@ -548,10 +631,83 @@ fn run(payload: &Path, scratch: &Path) -> Result<()> {
         .find(|id| id.as_str() != "page-1")
         .unwrap()
         .clone();
-    let first_session = cdp.attach("page-1")?;
     let second_session = cdp.attach(&second_id)?;
-    cdp.navigate(&first_session, &format!("{}/first", fixture.base))?;
     cdp.navigate(&second_session, &format!("{}/second", fixture.base))?;
+    native.frame(
+        original,
+        SECOND,
+        &scratch.join("hidden-task-pending-second-visible.png"),
+    )?;
+    let (pending, pending_document) = cdp.hidden_task(&first_session)?;
+    assert_eq!(
+        pending, "armed",
+        "Timer fired before hidden-tab acceptance began"
+    );
+    let mut completed_document = Value::Null;
+    wait("hidden native tab completes its later task", || {
+        if !native.shows_frame(original, SECOND)? {
+            return Err("Hidden task target became the visible native page".into());
+        }
+        let (state, document) = cdp.hidden_task(&first_session)?;
+        match state.as_str() {
+            "armed" => Ok(false),
+            "complete" => {
+                completed_document = document;
+                Ok(true)
+            }
+            _ => Err("Hidden task lost its armed state".into()),
+        }
+    })?;
+    native.frame(
+        original,
+        SECOND,
+        &scratch.join("hidden-task-complete-second-visible.png"),
+    )?;
+    assert!(
+        fs::read_to_string(&native.log)?
+            .lines()
+            .any(|line| line.starts_with("PAGE_TASK_APPLIED ")),
+        "Hidden marker lacks an accepted real worker task transaction"
+    );
+    assert!(!fixture.saw("/hidden-task-trap"));
+    fs::write(
+        scratch.join("hidden-task.json"),
+        serde_json::to_string_pretty(&json!({
+            "targetId":"page-1", "visibleTargetId":second_id,
+            "pending":pending_document, "completed":completed_document,
+            "trapRequests":0, "workerTaskApplied":true,
+            "scope":"authored native hidden-tab task control, not WPT or a timing benchmark"
+        }))?,
+    )?;
+    println!(
+        "WORKSPACE_HIDDEN_TASK_OK page-1 : real click armed; pending after SECOND visible; completed while SECOND stayed visible; zero trap requests"
+    );
+    // Do not retain node IDs until the timer projection has finished. Resume
+    // the original named-page, retained-edit and detach/close checks unchanged.
+    let first_url = format!("{}/first", fixture.base);
+    cdp.navigate(&first_session, &first_url)?;
+    wait(
+        "new first document replaces the completed start fixture",
+        || {
+            fn has_hidden_proof(tree: &Value) -> bool {
+                tree["attributes"].as_array().is_some_and(|attributes| {
+                    attributes
+                        .chunks_exact(2)
+                        .any(|pair| pair[0] == "id" && pair[1] == "hidden-task-proof")
+                }) || tree["children"]
+                    .as_array()
+                    .is_some_and(|children| children.iter().any(has_hidden_proof))
+            }
+            // Title and #query are deliberately shared by /start and /first.
+            // Prove URL and document identity from one complete fresh snapshot,
+            // not an old root ID or absence alone while navigation is pending.
+            let document = cdp.rpc("DOM.getDocument", json!({"depth":-1}), Some(&first_session))?;
+            Ok(
+                document["root"]["documentURL"].as_str() == Some(first_url.as_str())
+                    && !has_hidden_proof(&document["root"]),
+            )
+        },
+    )?;
     let named = cdp.targets()?;
     assert!(
         named
@@ -666,6 +822,7 @@ fn run(payload: &Path, scratch: &Path) -> Result<()> {
         scratch.join("requests.txt"),
         fixture.requests.lock().unwrap().join("\n"),
     )?;
+    assert!(!fixture.saw("/hidden-task-trap"));
     fs::write(
         scratch.join("targets.json"),
         serde_json::to_string_pretty(

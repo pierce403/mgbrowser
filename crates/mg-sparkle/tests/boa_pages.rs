@@ -160,7 +160,7 @@ fn dom_string_conversion_replaces_lone_surrogates_and_ignores_unused_arguments()
 }
 
 #[test]
-fn startup_uses_actual_global_and_guards_an_onload_getter() {
+fn startup_does_not_dispatch_an_arbitrary_replacement_onload_getter() {
     let reply = execute(page(
         r#"
         globalThis = {};
@@ -171,8 +171,46 @@ fn startup_uses_actual_global_and_guards_an_onload_getter() {
     "#,
     ));
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert!(!reply.html.contains("<title>actual global load</title>"));
+    assert!(!reply.html.contains("proof=\"getter\""));
+}
+
+#[test]
+fn registered_load_handler_uses_actual_global_and_guards_reentry_and_jobs() {
+    let reply = execute(page(
+        r#"
+        globalThis = {};
+        window.onload = function(event) {
+            if (this !== window || event.currentTarget !== window || event.target !== document)
+                throw 'wrong actual Window';
+            document.getElementById('out').setAttribute('proof', { toString() {
+                document.title = 'nested load';
+                Promise.resolve().then(() => document.title = 'actual global load');
+                return 'reentered';
+            }});
+        };
+    "#,
+    ));
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     assert!(reply.html.contains("<title>actual global load</title>"));
-    assert!(reply.html.contains("proof=\"getter\""));
+    assert!(reply.html.contains("proof=\"reentered\""));
+}
+
+#[test]
+fn fatal_load_handler_stops_later_handlers_and_suppresses_timer_work() {
+    let (realm, reply) = BoaPageRealm::start(page(
+        r#"
+        window.onload = function() { while (true) {} };
+        window.addEventListener('load', () => document.title = 'must not run');
+        setTimeout(() => document.title = 'timer must not run', 0);
+    "#,
+    ));
+    assert_eq!(reply.state, RealmState::Fatal);
+    assert!(reply.boa.as_ref().unwrap().fatal_reason.is_some());
+    assert!(reply.task_wake.is_none());
+    assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+    assert!(!projected(&reply).title.contains("must not run"));
+    assert!(realm.is_some());
 }
 
 #[test]

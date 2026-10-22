@@ -73,6 +73,25 @@ test-only ClearKeptObjects. Distinguish requested System allocation counters,
 GC reachability and RSS; parser/native/regex/GC work still relies on hard process
 containment where cooperative hooks are absent. This is not full JSPLAN P1/P4.
 
+For function timers or parent-task scheduling, read the reviewed increment in
+docs/WPT_TESTHARNESS.md as well as BOA.md/PAGE_SESSIONS.md. Run boa_timers and
+script_tasks in debug and release, existing modern/Boa/legacy event/projection
+and actual-worker tests, strict Chassis task controls and independent no-chrome
+embedding. Preserve shared pending/lifetime work, CPU/active/lifetime/wire/child
+bounds. Canceled work never refunds cumulative admission. Test real checkpoints
+and traced callback/argument release, hostile delay conversion, direct versus
+Promise-created nesting, stale/early/replayed wakes, exactly-one projection
+charge, native edit preservation and owned-child cleanup. Do not repair roots
+with test-only checkpoint cleanup or sleep inside active worker execution.
+Run tools/task-services-smoke.py on packaged and public-installed bytes: its
+authored timer-created controls must complete the unchanged native and external
+CDP cancellation/form/destination assertions. This is not upstream WPT coverage.
+The static adapter still does not await arbitrary timers; audit current-cohort
+passing script logs for unfinished work before score adoption. A new asynchronous
+scoring prerequisite/corpus requires its own frozen contribution, not a silent
+change to waits or exceptions while scoring an engine fix. Bundled Init is not
+fully task-separated lifecycle or completed Window-testharness readiness.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

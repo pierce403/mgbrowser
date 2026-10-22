@@ -47,3 +47,19 @@
 - 2026-09-07: Certificate approval and HTTPS enforcement settings propagated before an already cached HTTP response changed. Check live HTTPS independently and avoid treating a successful settings mutation as proof of redirect behavior.
 - 2026-09-07: One documentation-only CI run hit the shared 50-second scripted-CDP deadline on its final fixture after all tests/native journeys and 16 total CDP journeys passed. The same implementation previously passed. Two eight-fixture browser batches pass the exact local replay with17 native/17 CDP destinations; remote verification follows. Every check is retained and harness scheduling remains distinct from browser/worker resource limits. This is a single observed timeout, not general guidance to relax limits.
 - 2026-09-07: One core-intrinsic local CI replay exited when a CDP readiness loop read the child launch log before background redirection created it. Missing log is a pending readiness state, not browser failure. Guarded the five identical reads while preserving process checks, deadlines, HTTP readiness, read errors and final assertions. Independent shell cases and corrected replay are recorded in the daily log. Curator leaves this single observation here; no broader skill or limit change.
+- 2026-10-21: Timer eligibility belongs to the currently running HTML task, not
+  every callback's ancestry. A Promise checkpoint is not a timer task; its newly
+  created timer must not inherit direct timer nesting. The v0.9.7 controls pair
+  direct nesting with Promise-created timers. Shared pending/lifetime admission
+  and traced callback/argument roots are independent of that eligibility rule.
+- 2026-10-21: The new hidden-tab timer fixture initially navigated between two
+  documents with identical title/input markup before caching CDP node IDs.
+  Review required one full snapshot proving the exact destination URL and
+  disappearance of the old document's unique marker, followed by fresh IDs.
+  A matching title alone was not proof that asynchronous navigation completed.
+- 2026-10-21: Sequential packaged page/task acceptance found no live fixture
+  listener but two server-side TIME_WAIT sockets. Its non-reusable Python bind
+  incorrectly called the port occupied. A reusable-address probe plus unchanged
+  exact child/listener ownership fixes this particular harness failure; real
+  ephemeral controls distinguish TIME_WAIT reuse from a still-active listener.
+  This is not permission to reuse an unrelated service or enable SO_REUSEPORT.

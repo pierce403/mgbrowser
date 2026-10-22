@@ -21,26 +21,30 @@ following dependency order, updating evidence as each increment ships:
    subsequent no-op check pass. See the 2026-10-21 log for public receipts.
    Release and public verification are complete; the later explicit resume
    authorizes the remaining queue below.
-2. **Expanded baseline locally verified; publishing:** the complete pinned
+2. **Expanded baseline published:** the complete pinned
    recursive flexbox reftest cohort reports **317 PASS, 632 FAIL and
    62 UNSUPPORTED / 1,011**, with no errors, timeouts or crashes. All original
    24 cases still pass. This separate tooling contribution leaves the v0.9.6
    engine unchanged and strengthens the ratchet to 317 passes / 949 runnable
    cases. Selection, input/resource review and sequencing are fixed in
    [docs/WPT_EXPANSION.md](docs/WPT_EXPANSION.md). Verify exact-commit CI and
-   public delivery before the next engine increment.
-   Source 852978a passes Rust, JSPLAN and Pages/WPT CI, but native publication
-   failed before the canonical report was ready; public delivery still points
-   to 067e430. The measured 20-minute validation exceeds the existing native
-   publisher window. The separately reviewed bounded two-lane orchestration now
-   passes local equivalence: 1,029.827 seconds sequential versus 471.514 seconds
-   parallel, identical case/pixel/request evidence and confirmed cleanup. Browser,
-   corpus, expectations and deployment authority are unchanged. Keep the denied
-   native-log API path stopped. Exact-commit cold CI and actual public delivery
-   remain the next publication gates, not claims based on this local speedup.
-   **Next:** implement non-scoring complete Window-testharness readiness through the
+   public delivery before the next engine increment: all six checks pass at
+   `86ab66dfbad1798eb304eca2ae99d7a707554ed6`, including Rust, JSPLAN, website,
+   canonical publication and native hosting. The public source receipt, page,
+   exact-commit report and installer/icons match the canonical/source bytes;
+   browser inspection shows the full 317/1,011 score and scope warning.
+   The separately reviewed two-lane runner preserves complete case/pixel/request
+   evidence and cleanup: 1,029.827 seconds sequential versus 471.514 locally,
+   with cold CI validation completed in 7m42s. Production engine, corpus and
+   expectations remain unchanged. The earlier denied native-log API stays
+   stopped; normal publication succeeded without alternate credentials/settings.
+   **Active:** implement non-scoring complete Window-testharness readiness through the
    restricted worker, following [docs/WPT_TESTHARNESS.md](docs/WPT_TESTHARNESS.md),
    before declaring another scored upstream selection (F-026/F-008/F-016).
+   The bounded v0.9.7 function-timer increment is implemented and locally verified;
+   it preserves bundled Init and does not finish full queued lifecycle,
+   error/rejection delivery or typed harness reporting. Finish its versioned
+   release/public installer/native acceptance before the remaining services.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

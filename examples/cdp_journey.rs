@@ -346,7 +346,10 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
     client.wait_for_path(&fixture, fixture.path())?;
     println!("CDP homepage loaded");
 
-    if matches!(fixture.path(), "/script-events" | "/script-external-events") {
+    if matches!(
+        fixture.path(),
+        "/script-events" | "/script-external-events" | "/script-task-events"
+    ) {
         return run_events(client, &fixture, evidence);
     }
 
@@ -520,6 +523,42 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
         }
         println!("CDP_EVENTS_STATE {expected}; stale node rejected, no navigation");
         Ok(())
+    }
+    if fixture.path() == "/script-task-events" {
+        // Only this new fixture creates controls in a later timer task. Poll
+        // ordinary public DOM state within the client's existing deadline;
+        // never execute JS or weaken the original event-journey assertions.
+        fn with_attribute<'a>(tree: &'a Value, name: &str, expected: &str) -> Option<&'a Value> {
+            if tree["attributes"].as_array().is_some_and(|values| {
+                values.chunks_exact(2).any(|pair| {
+                    pair[0].as_str() == Some(name) && pair[1].as_str() == Some(expected)
+                })
+            }) {
+                return Some(tree);
+            }
+            tree["children"]
+                .as_array()?
+                .iter()
+                .find_map(|child| with_attribute(child, name, expected))
+        }
+        let expected = "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask";
+        loop {
+            remaining(client.deadline)?;
+            let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
+            // Read one complete snapshot rather than keeping IDs across the
+            // pending task projection, which correctly invalidates old IDs.
+            if with_attribute(&document["root"], "data-task-order", expected).is_some() {
+                let state = with_attribute(&document["root"], "id", "state")
+                    .and_then(|node| node["nodeId"].as_u64())
+                    .ok_or_else(|| failure("Missing timer state node"))?;
+                if text_of(&document["root"], state).as_deref() != Some("timer task ready") {
+                    return Err(failure("Timer task proof and visible state disagree"));
+                }
+                println!("CDP_TASK_ORDER_OK {expected}");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
     let root = client.root()?;
     let input = client.query(root, "#query")?;

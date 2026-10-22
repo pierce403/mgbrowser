@@ -465,6 +465,12 @@ impl<'a> Browser<'a> {
             .filter(|l| l.starts_with("LOADED "))
             .count())
     }
+    fn applied_event_count(&self) -> Result<usize> {
+        Ok(fs::read_to_string(&self.log)?
+            .lines()
+            .filter(|line| line.starts_with("PAGE_EVENT_APPLIED "))
+            .count())
+    }
     fn loaded_after(&self, count: usize, fragment: &str) -> Result<()> {
         wait(fragment, || {
             let log = fs::read_to_string(&self.log)?;
@@ -507,7 +513,14 @@ impl<'a> Browser<'a> {
     }
     fn journey(&self) -> Result<()> {
         self.navigate("/")?;
+        let events = self.applied_event_count()?;
         self.click(100, 196)?;
+        // The field click uses the retained worker even on this script-free
+        // fixture. Wait for its actual completion before submitting another
+        // activation; fixed input delays can outrun a large native repaint.
+        wait("field click page event completion", || {
+            Ok(self.applied_event_count()? > events)
+        })?;
         self.text(&format!("scale{}", self.scale))?;
         let count = self.loaded_count()?;
         self.click(90, 243)?;

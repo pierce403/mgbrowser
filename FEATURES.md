@@ -476,6 +476,16 @@ plus no-op recheck pass. See the 2026-10-21 work log. This scoped increment
 does not complete the unchecked modules, scheduling, upstream WPT, frameworks,
 cooperative accounting or embedding criteria above.
 
+In progress, v0.9.7 timer increment: function `setTimeout`/`clearTimeout`, traced
+callbacks/arguments and parent-issued one-task pumps share the existing
+256 pending/2,048 lifetime work and session budgets. Single-window identities,
+document-ready/Window-load targeting, property-handler order and deferred-source
+readiness are corrected within still-bundled Init. Full queued lifecycle,
+string timers/intervals, error/rejection delivery and typed WPT testharness
+results remain open; authored task controls do not count as upstream passes.
+See [review and acceptance boundaries](docs/WPT_TESTHARNESS.md). Local, packaged,
+public release and installation gates must be recorded before calling it shipped.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable
@@ -775,8 +785,9 @@ docs/BOA.md specifies cumulative opcode/source/job and worker-allocation limits
 plus unchanged CPU/address-space/wall/lifetime containment. Unsupported platforms
 fail closed. This is not general ECMAScript/browser conformance. The original
 evaluator remains an explicit test baseline, not a production fallback. Broader
-events, timers and modules remain unsupported. F-016 records the bounded classic
-external-source increment and its v0.9.6 acceptance/release evidence.
+events, string timers, intervals and modules remain unsupported. F-016 records
+the bounded classic external-source increment and its v0.9.6 acceptance/release
+evidence, plus the in-progress v0.9.7 function-timer increment.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 

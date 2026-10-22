@@ -24,13 +24,48 @@ lexical bindings, arrows, classes, templates, destructuring, Map/WeakMap, Proxy,
 Reflect and Promise callbacks. Bounded FIFO microtask checkpoints run after
 scripts and delivered callbacks. Scripts can create real controls, change text,
 register later listeners and propose navigation that the parent validates.
-The existing DOM API and startup-event approximations remain deliberately small.
+The DOM API remains deliberately small. Snapshot startup is still bundled in
+initialization rather than a fully task-separated HTML lifecycle.
 
-Module loading, timers, fetch/XHR, script cookie access,
+Module loading, string timers/intervals, fetch/XHR, script cookie access,
 synthetic dispatch and a general browser task loop are not implemented. An idle
 module loader cannot acquire filesystem/network access. Passing the separate
 Vue reactivity experiment does not establish a Vue DOM or React browser app.
 Google search to first result remains unfinished and deferred.
+
+## Bounded Window timers: v0.9.7 increment
+
+Function-valued `setTimeout` and `clearTimeout` use real later parent-issued
+transactions, not synchronous calls or Promise aliases. Callbacks and supplied
+arguments are traced in the worker. Cancellation releases pending roots/storage
+without refunding cumulative work. Delay conversion can re-enter JS and shares
+all existing guards; deadlines use the monotonic clock, positive timer IDs and
+private unique handles. Direct nested timers receive the HTML minimum-delay
+clamp; timers created by Promise jobs do not inherit a timer task's nesting.
+
+Only the parent schedules idle waits. An advertised, non-replayable wake token
+authorizes at most one eligible callback and its microtask checkpoint. A pump
+carries no input edits, script sources or activation/default-action authority.
+The parent still validates explicit proposed navigation and every projection.
+See [session accounting and scheduling](PAGE_SESSIONS.md).
+
+Promise/native jobs and timers share the same **256 pending / 2,048 lifetime**
+work admissions. There is no additional timer allowance, renewed CPU/opcode or
+allocator budget, syscall expansion or automatic worker restart. Initialization
+and timer/input transactions share 64 total transactions, two active seconds
+and the 300-second absolute lifetime. Repeating timeout chains can exhaust these
+bounds; the last accepted readable page is retained and script execution stops.
+These are intentionally narrow research limits, not normal-browser longevity.
+
+Single-window aliases include self/parent/top with null opener. Document-ready
+capture/target/bubble, Window load's document target, property-handler slot order
+and interactive readiness before deferred scripts are corrected. These startup
+phases remain bundled inside Init; all timers run afterward. String compilation,
+intervals, fully queued lifecycle, synthetic dispatch, general message/error/
+rejection-event delivery and typed WPT testharness reporting remain unfinished.
+The one-shot `--script-worker` path returns the initial snapshot, not a task loop.
+Headless profiling measures navigation/initial paint, not completion of arbitrary
+delayed tasks. Authored timer controls are not upstream WPT results.
 
 ## Classic external sources
 
@@ -69,7 +104,7 @@ measure different things and must not be presented as equivalent budgets.
 | VM opcode work | 1,000,000 instructions cumulatively across scripts, jobs and callbacks |
 | Recursion / VM stack | 64 / 65,536 entries |
 | Source admission | 1 MiB per source, 4 MiB cumulative; includes eval/Function |
-| Promise queue | 256 pending, 2,048 lifetime admitted jobs |
+| Shared Promise/native jobs and host tasks | 256 pending, 2,048 lifetime admissions; cancellation never refunds lifetime work |
 | Requested System allocation | 32 MiB outstanding, 64 MiB cumulative per worker |
 | ArrayBuffer host ceiling | 4 MiB; worker-wide allocation limits still apply |
 | DOM logical admission | Existing 4 MiB, 50,000 nodes, depth 256 |
@@ -116,6 +151,9 @@ registration slots and the session lifetime. This is not full DOM ephemeron GC.
 Navigation/cancellation drops the realm and reaps its owned process rather than
 replaying source. Later failure retains the last accepted readable projection
 and discards the unanswered activation's navigation/defaults.
+Pending timers trace callbacks and arguments; firing, cancellation and terminal
+publication release their roots. Scalar weak work permits cannot keep the policy
+or realm alive. Fatal policy failure invalidates every outstanding permit.
 
 ## Evidence and reproduction
 

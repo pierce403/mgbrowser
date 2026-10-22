@@ -310,6 +310,7 @@ mod tests {
             boa: None,
             state: RealmState::Closed,
             acknowledgements: vec![],
+            task_wake: None,
         };
         app.script_summary(&reply);
         app.block_session("Session expired");
@@ -562,6 +563,7 @@ mod tests {
             boa: Some(report),
             state: RealmState::Ready,
             acknowledgements: vec![],
+            task_wake: None,
         };
         app.script_summary(&reply);
         assert!(app.performance_profile().worker_allocation_recorded);

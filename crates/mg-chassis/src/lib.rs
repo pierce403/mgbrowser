@@ -14,7 +14,10 @@ mod theme;
 pub use cdp_browser::BrowserCdp;
 use mg_sparkle::{
     document::{self, Document, Item},
-    page_session::{ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply},
+    page_session::{
+        ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump,
+        TaskWake,
+    },
     paint::{Canvas, Fonts},
 };
 pub use scale::ScalePreference;
@@ -30,6 +33,8 @@ use std::{
     time::{Duration, Instant},
 };
 pub use theme::{ColorScheme, ThemePreference};
+#[cfg(test)]
+mod task_tests;
 
 const TOP: i32 = 64;
 const BG: u32 = 0xfafbf8;
@@ -146,12 +151,36 @@ struct ScriptLoad {
     session: Option<Box<dyn scripts::ScriptSession>>,
     reply: SessionReply,
 }
-struct PendingEvent {
+#[derive(Clone, Copy)]
+struct TransactionIdentity {
     generation: u64,
     session_id: u64,
     sequence: u64,
     revision: u64,
-    input: SessionInput,
+}
+enum PendingTransaction {
+    Activation {
+        identity: TransactionIdentity,
+        input: SessionInput,
+    },
+    TaskPump {
+        identity: TransactionIdentity,
+        wake_token: u64,
+    },
+}
+#[derive(Clone, Copy)]
+struct ScheduledTaskWake {
+    token: u64,
+    at: Instant,
+}
+/// Explicit script scheduling state; navigation loading keeps its old meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptWorkStatus {
+    NoSession,
+    Blocked,
+    Idle,
+    Pending,
+    Scheduled(Instant),
 }
 pub struct Browser {
     devtools: devtools::State,
@@ -206,7 +235,9 @@ pub struct Browser {
     child_pool: Arc<dyn scripts::ScriptRuntime>,
     page_session: Option<Box<dyn scripts::ScriptSession>>,
     page_revision: u64,
-    pending_event: Option<PendingEvent>,
+    pending_transaction: Option<PendingTransaction>,
+    task_wake: Option<ScheduledTaskWake>,
+    last_task_wake_token: u64,
     script_blocked: bool,
     edit_versions: HashMap<usize, u64>,
     next_edit: u64,
@@ -599,7 +630,9 @@ impl Browser {
             child_pool: scripts,
             page_session: None,
             page_revision: 0,
-            pending_event: None,
+            pending_transaction: None,
+            task_wake: None,
+            last_task_wake_token: 0,
             script_blocked: false,
             edit_versions: HashMap::new(),
             next_edit: 0,
@@ -672,7 +705,9 @@ impl Browser {
         if let Some(session) = &retired {
             session.cancel();
         }
-        self.pending_event = None;
+        self.pending_transaction = None;
+        self.task_wake = None;
+        self.last_task_wake_token = 0;
         self.pointer_press = None;
         if retired.is_some() {
             self.script_blocked = true;
@@ -798,9 +833,20 @@ impl Browser {
         });
     }
     pub fn poll(&mut self) {
-        while let Ok(loaded) = self.rx.try_recv() {
+        while let Ok(mut loaded) = self.rx.try_recv() {
+            let received = Instant::now();
             self.inflight = self.inflight.saturating_sub(1);
             if loaded.generation != self.generation {
+                if let Some(Ok(startup)) = &mut loaded.script
+                    && let Some(session) = &mut startup.session
+                {
+                    // A successful Init owns its own pending acknowledgment,
+                    // even after navigation fenced that generation. Charge
+                    // that owner once (it may reject the expired generation),
+                    // never the current page's session, then cancel/drop it.
+                    let _ = session.charge_active(received.elapsed());
+                    session.cancel();
+                }
                 continue;
             }
             self.loading = false;
@@ -808,7 +854,9 @@ impl Browser {
             self.stop_scroll();
             self.values.clear();
             self.edit_versions.clear();
-            self.pending_event = None;
+            self.pending_transaction = None;
+            self.task_wake = None;
+            self.last_task_wake_token = 0;
             self.page_revision = 0;
             self.script_blocked = loaded.script.is_some();
             self.focus = Focus::Page;
@@ -852,22 +900,25 @@ impl Browser {
                     let mut projected = None;
                     let script_status = match loaded.script {
                         Some(Ok(mut startup)) => {
-                            let started = Instant::now();
+                            let wake = self.validate_task_wake(&startup.reply, received);
                             let validation = if startup.reply.revision != 0
                                 || !startup.reply.acknowledgements.is_empty()
                                 || startup.reply.default_action != DefaultAction::None
                             {
                                 Err("Invalid initial script session reply".into())
                             } else {
-                                Self::project_reply(&mut startup.reply, &self.address, None)
+                                wake.and_then(|wake| {
+                                    Self::project_reply(&mut startup.reply, &self.address, None)
+                                        .map(|document| (document, wake))
+                                })
                             };
                             let timed = startup
                                 .session
                                 .as_mut()
                                 .ok_or_else(|| "Missing script session ownership".to_string())
-                                .and_then(|session| session.charge_active(started.elapsed()));
+                                .and_then(|session| session.charge_active(received.elapsed()));
                             match validation.and_then(|document| timed.map(|_| document)) {
-                                Ok(document) => {
+                                Ok((document, wake)) => {
                                     projected = Some(document);
                                     scripting = true;
                                     self.page_revision = startup.reply.revision;
@@ -875,6 +926,7 @@ impl Browser {
                                     if !self.script_blocked {
                                         script_navigation = startup.reply.navigation.take();
                                         self.page_session = startup.session.take();
+                                        self.replace_task_wake(wake);
                                     } else if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
@@ -993,9 +1045,14 @@ impl Browser {
             }
         }
         self.poll_page_session();
+        self.poll_task_wake(Instant::now());
     }
     fn script_summary(&mut self, reply: &SessionReply) -> String {
-        self.devtools.performance.scripts_executed = reply.scripts_executed;
+        self.devtools.performance.scripts_executed = self
+            .devtools
+            .performance
+            .scripts_executed
+            .max(reply.scripts_executed);
         if let Some(report) = &reply.boa {
             self.devtools.performance.boa_opcodes =
                 1_000_000usize.saturating_sub(report.opcodes_remaining) as u64;
@@ -1123,11 +1180,83 @@ impl Browser {
         if let Some(session) = &self.page_session {
             session.cancel();
         }
-        self.pending_event = None;
+        self.pending_transaction = None;
+        self.task_wake = None;
         self.script_blocked = true;
         self.status = format!("Page script session unavailable; activation canceled: {error}");
         eprintln!("SCRIPT_SESSION_CLOSED {error:?}");
         self.dirty = true;
+    }
+    fn validate_task_wake(
+        &self,
+        reply: &SessionReply,
+        received: Instant,
+    ) -> Result<Option<ScheduledTaskWake>, String> {
+        // A completed modern checkpoint drains Promise jobs. Any retained
+        // work is a host task and needs exactly one replacement wake; silently
+        // accepting either half alone would strand work or invent a task.
+        if let Some(report) = &reply.boa {
+            if !report.is_valid()
+                || (reply.state == RealmState::Ready
+                    && (report.fatal_reason.is_some()
+                        || (report.pending_jobs > 0) != reply.task_wake.is_some()))
+            {
+                return Err("Inconsistent page task wake and resource report".into());
+            }
+        } else if reply.task_wake.is_some() {
+            return Err("Legacy script session advertised a page task wake".into());
+        }
+        let Some(TaskWake { token, delay_ms }) = &reply.task_wake else {
+            return Ok(None);
+        };
+        if reply.state != RealmState::Ready || *token == 0 || *token <= self.last_task_wake_token {
+            return Err("Invalid or nonmonotonic page task wake".into());
+        }
+        let at = received
+            .checked_add(Duration::from_millis(u64::from(*delay_ms)))
+            .ok_or("Page task wake exceeds the monotonic clock range")?;
+        Ok(Some(ScheduledTaskWake { token: *token, at }))
+    }
+    fn replace_task_wake(&mut self, wake: Option<ScheduledTaskWake>) {
+        if let Some(wake) = wake {
+            self.last_task_wake_token = wake.token;
+        }
+        self.task_wake = wake;
+    }
+    fn poll_task_wake(&mut self, now: Instant) {
+        if self.loading || self.script_blocked || self.pending_transaction.is_some() {
+            return;
+        }
+        let Some(wake) = self.task_wake.filter(|wake| now >= wake.at) else {
+            return;
+        };
+        let Some(session) = self.page_session.as_mut() else {
+            return;
+        };
+        let session_id = session.id();
+        match session.try_task_pump(
+            TaskPump {
+                wake_token: wake.token,
+            },
+            self.page_revision,
+        ) {
+            Ok(sequence) => {
+                // Do not consume a wake before the shared command queue admits it.
+                self.task_wake = None;
+                self.pending_transaction = Some(PendingTransaction::TaskPump {
+                    identity: TransactionIdentity {
+                        generation: self.generation,
+                        session_id,
+                        sequence,
+                        revision: self.page_revision,
+                    },
+                    wake_token: wake.token,
+                });
+                self.status = "Running page task".into();
+                self.dirty = true;
+            }
+            Err(error) => self.block_session(&error),
+        }
     }
     // Ok(true) means queued; Ok(false) permits native-only activation. Immediate
     // rejection must remain observable to CDP, never a successful dropped click.
@@ -1138,7 +1267,7 @@ impl Browser {
             self.dirty = true;
             return Err(self.status.clone());
         }
-        if self.pending_event.is_some() {
+        if self.pending_transaction.is_some() {
             self.status = "A page event is still running; activation not queued".into();
             self.dirty = true;
             return Err(self.status.clone());
@@ -1183,13 +1312,16 @@ impl Browser {
         let session = self.page_session.as_mut().unwrap();
         match session.try_dispatch(input.clone(), self.page_revision) {
             Ok(sequence) => {
-                self.pending_event = Some(PendingEvent {
-                    generation: self.generation,
-                    session_id: session.id(),
-                    sequence,
-                    revision: self.page_revision,
+                self.pending_transaction = Some(PendingTransaction::Activation {
+                    identity: TransactionIdentity {
+                        generation: self.generation,
+                        session_id: session.id(),
+                        sequence,
+                        revision: self.page_revision,
+                    },
                     input,
                 });
+                self.task_wake = None;
                 self.status = "Running page event".into();
                 self.dirty = true;
             }
@@ -1269,13 +1401,9 @@ impl Browser {
         let Some(update) = update else {
             return;
         };
-        let Some(session) = &self.page_session else {
-            return;
-        };
-        if update.generation != self.generation || update.session_id != session.id() {
-            self.block_session("Stale script completion identity");
-            return;
-        }
+        // Receipt precedes projection/validation. Worker delay is rounded up;
+        // scheduling from here may be late, but never moves a task earlier.
+        let received = Instant::now();
         let mut reply = match update.reply {
             Ok(reply) => reply,
             Err(error) => {
@@ -1283,53 +1411,86 @@ impl Browser {
                 return;
             }
         };
-        let Some(pending) = self.pending_event.take() else {
-            self.block_session("Script session expired or sent an unsolicited completion");
-            return;
-        };
-        if pending.generation != self.generation
-            || pending.session_id != update.session_id
-            || update.sequence != Some(pending.sequence)
-            || self.page_revision != pending.revision
-            || reply.revision != pending.revision.checked_add(1).unwrap_or(u64::MAX)
-        {
-            self.block_session("Stale script event sequence/revision");
-            return;
-        }
-        let started = Instant::now();
-        let expected: Vec<_> = pending
-            .input
-            .edits
-            .iter()
-            .map(|edit| (edit.node, edit.version))
-            .collect();
-        let mut ack: Vec<_> = reply
-            .acknowledgements
-            .iter()
-            .map(|edit| (edit.node, edit.version))
-            .collect();
-        ack.sort_unstable();
-        let projection = if ack != expected {
-            Err("Invalid control-edit acknowledgement".into())
-        } else {
-            Self::project_reply(&mut reply, &self.page_url, Some(&self.document))
-        }
-        .and_then(|document| {
-            Self::validate_default(&document, &pending.input.kind, &reply.default_action)
-                .map(|_| document)
-        });
+        let projection = (|| {
+            let session = self
+                .page_session
+                .as_ref()
+                .ok_or("Script session is missing")?;
+            if update.generation != self.generation || update.session_id != session.id() {
+                return Err("Stale script completion identity".into());
+            }
+            let pending = self
+                .pending_transaction
+                .take()
+                .ok_or("Script session expired or sent an unsolicited completion")?;
+            let (identity, activation) = match pending {
+                PendingTransaction::Activation { identity, input } => (identity, Some(input)),
+                PendingTransaction::TaskPump {
+                    identity,
+                    wake_token,
+                } => {
+                    if wake_token == 0 || wake_token != self.last_task_wake_token {
+                        return Err("Invalid pending task wake identity".into());
+                    }
+                    (identity, None)
+                }
+            };
+            if identity.generation != self.generation
+                || identity.session_id != update.session_id
+                || update.sequence != Some(identity.sequence)
+                || self.page_revision != identity.revision
+                || identity.revision.checked_add(1) != Some(reply.revision)
+            {
+                return Err("Stale script event sequence/revision".into());
+            }
+            let expected: Vec<_> = activation
+                .as_ref()
+                .into_iter()
+                .flat_map(|input| input.edits.iter())
+                .map(|edit| (edit.node, edit.version))
+                .collect();
+            let mut ack: Vec<_> = reply
+                .acknowledgements
+                .iter()
+                .map(|edit| (edit.node, edit.version))
+                .collect();
+            ack.sort_unstable();
+            if ack != expected {
+                return Err("Invalid control-edit acknowledgement".into());
+            }
+            if activation.is_none()
+                && (reply.default_action != DefaultAction::None
+                    || reply.outcome.click_canceled.is_some()
+                    || reply.outcome.submit_canceled.is_some()
+                    || reply.scripts_executed != 0)
+            {
+                return Err(
+                    "Task pump returned activation effects or startup-script counts".into(),
+                );
+            }
+            let wake = self.validate_task_wake(&reply, received)?;
+            let document = Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
+            if let Some(input) = &activation {
+                Self::validate_default(&document, &input.kind, &reply.default_action)?;
+            }
+            Ok((document, wake, identity, activation.is_some(), ack))
+        })();
+        // Every successful host frame requires exactly one acknowledgment,
+        // even if its identity or projection is rejected. Err closures have no
+        // accepted projection and never reach this path.
         let timed = self
             .page_session
             .as_mut()
             .unwrap()
-            .charge_active(started.elapsed());
-        let document = match projection.and_then(|document| timed.map(|_| document)) {
-            Ok(document) => document,
-            Err(error) => {
-                self.block_session(&error);
-                return;
-            }
-        };
+            .charge_active(received.elapsed());
+        let (document, wake, identity, activation, ack) =
+            match projection.and_then(|value| timed.map(|_| value)) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.block_session(&error);
+                    return;
+                }
+            };
         if reply.state != RealmState::Ready {
             // Later failed transactions are atomic from the parent's point of
             // view. Diagnostics survive, but the previous accepted document,
@@ -1339,20 +1500,32 @@ impl Browser {
             return;
         }
         self.acknowledge_projection(document, &ack);
+        self.replace_task_wake(wake);
         self.page_revision = reply.revision;
         self.dom_epoch += 1;
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
         }
         let _ = self.script_summary(&reply);
-        self.status = format!("Page event completed · {} diagnostics", reply.errors.len());
-        eprintln!(
-            "PAGE_EVENT_APPLIED sequence={} revision={} click_canceled={:?} submit_canceled={:?}",
-            pending.sequence,
-            reply.revision,
-            reply.outcome.click_canceled,
-            reply.outcome.submit_canceled
+        self.status = format!(
+            "Page {} completed · {} diagnostics",
+            if activation { "event" } else { "task" },
+            reply.errors.len()
         );
+        if activation {
+            eprintln!(
+                "PAGE_EVENT_APPLIED sequence={} revision={} click_canceled={:?} submit_canceled={:?}",
+                identity.sequence,
+                reply.revision,
+                reply.outcome.click_canceled,
+                reply.outcome.submit_canceled
+            );
+        } else {
+            eprintln!(
+                "PAGE_TASK_APPLIED sequence={} revision={}",
+                identity.sequence, reply.revision
+            );
+        }
         self.dirty = true;
         if let Some(target) = reply.navigation {
             if self.refresh_count < 4 {
@@ -2188,7 +2361,7 @@ impl Browser {
         }
         if self.smoke.is_none()
             || self.loading
-            || self.pending_event.is_some()
+            || self.pending_transaction.is_some()
             || self.smoke_since.elapsed() < Duration::from_millis(400)
         {
             return;
@@ -2283,7 +2456,7 @@ impl Browser {
     fn smoke_event_step(&mut self, canvas: &Canvas) {
         if self.smoke.is_none()
             || self.loading
-            || self.pending_event.is_some()
+            || self.pending_transaction.is_some()
             || self.smoke_since.elapsed() < Duration::from_millis(400)
         {
             return;
@@ -2320,6 +2493,16 @@ impl Browser {
         match self.event_smoke_stage {
             0 => {
                 let Some(query) = self.document.query_selector(0, "#query").ok().flatten() else {
+                    // Authored event journeys may create their real controls
+                    // in a later task. The external acceptance driver retains
+                    // its finite deadline; do not mistake pending work for a
+                    // missing form or weaken any final interaction assertion.
+                    if matches!(
+                        self.script_work_status(),
+                        ScriptWorkStatus::Pending | ScriptWorkStatus::Scheduled(_)
+                    ) {
+                        return;
+                    }
                     self.fail_smoke("Event journey has no real query control");
                     return;
                 };
@@ -2894,6 +3077,7 @@ mod tests {
                     scripts_executed: 0,
                     allocations: None,
                     boa: None,
+                    task_wake: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -2916,6 +3100,7 @@ mod tests {
                     scripts_executed: 0,
                     allocations: Some(invalid_report),
                     boa: None,
+                    task_wake: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -2999,6 +3184,7 @@ mod tests {
                         scripts_executed: 1,
                         allocations: None,
                         boa: None,
+                        task_wake: None,
                     },
                 })),
                 result: Ok(net::Response {
@@ -3229,6 +3415,21 @@ impl Browser {
     }
     pub fn is_loading(&self) -> bool {
         self.loading
+    }
+    /// Hosts may explicitly wait for script work under their own finite deadline.
+    /// This does not redefine navigation loading or wait for arbitrary timers.
+    pub fn script_work_status(&self) -> ScriptWorkStatus {
+        if self.script_blocked {
+            ScriptWorkStatus::Blocked
+        } else if self.pending_transaction.is_some() {
+            ScriptWorkStatus::Pending
+        } else if let Some(wake) = self.task_wake {
+            ScriptWorkStatus::Scheduled(wake.at)
+        } else if self.page_session.is_some() {
+            ScriptWorkStatus::Idle
+        } else {
+            ScriptWorkStatus::NoSession
+        }
     }
     pub fn status(&self) -> &str {
         &self.status
