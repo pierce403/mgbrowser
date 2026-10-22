@@ -124,6 +124,13 @@ test lane remain parent-owned. This is queued snapshot lifecycle, not a general
 resource-loading barrier, Runtime support or Playwright compatibility. Full
 release/public acceptance remains recorded separately in the dated log.
 
+The explicit legacy v1 test lane preserves the old delivered-document contract:
+a validated fatal script reply retains its Failed/Script initial outcome and
+readable fallback, but does not make successful HTTP delivery a navigation error.
+Its parent-owned parse/load events do not claim modern worker milestones.
+Infrastructure, transport, supersession and modern terminal-prefix failures
+remain distinguishable through `errorText`.
+
 Unknown methods return `-32601`; invalid or unsupported parameters return `-32602`. Invalidated handles and unavailable page operations return a protocol error with a useful explanation. Commands with no return fields still reply with an empty `result` object. A response must contain either `result` or `error`, never both.
 
 ## Acceptance and continued development

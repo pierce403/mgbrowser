@@ -223,7 +223,13 @@ pending Page.navigate on success or explicit failure/abort, including superseded
 or closed targets; no fabricated content/load events on a terminal prefix.
 Later projections still invalidate DOM IDs without repeating page-load events.
 Disabled-script documents retain normal parent-owned parsing/resource completion;
-do not fabricate worker progress for them. No new Runtime/locator compatibility
+the explicit legacy v1 test lane also retains parent-owned completion for a
+delivered document whose validated script reply is Fatal/Closed. Its sticky
+initial outcome remains Failed/Script and the original fallback remains readable;
+this is not modern lifecycle completion or a passing scripted result. True fetch,
+infrastructure, supersession and modern terminal-prefix failures still fail the
+pending navigation. Do not fabricate worker progress for the parent-owned lanes.
+No new Runtime/locator compatibility
 or CDP command is implied.
 
 ## Renderer integration and immutable scoring policy

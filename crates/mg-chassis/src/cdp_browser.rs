@@ -2095,6 +2095,264 @@ mod tests {
         }
     }
     #[test]
+    fn legacy_script_fatal_navigation_failure_boundary_preserves_delivered_document() {
+        check_navigation_failure_boundary("legacy-script");
+    }
+
+    #[test]
+    fn modern_script_fatal_navigation_failure_boundary_remains_terminal() {
+        check_navigation_failure_boundary("modern-script");
+    }
+
+    #[test]
+    fn legacy_worker_error_navigation_failure_boundary_remains_infrastructure() {
+        check_navigation_failure_boundary("legacy-worker");
+    }
+
+    #[test]
+    fn legacy_network_error_navigation_failure_boundary_remains_transport() {
+        check_navigation_failure_boundary("legacy-network");
+    }
+
+    fn check_navigation_failure_boundary(case: &str) {
+        use crate::{
+            InitialScriptFailure, InitialScriptStatus, Loaded, ScriptLoad,
+            scripts::{ScriptRuntime, ScriptSession, SessionUpdate, SourceWireMode},
+        };
+        use mg_sparkle::page_session::{
+            ArenaSnapshot, DefaultAction, EventOutcome, LifecyclePhase, LifecycleProgress,
+            RealmState, SessionInput, SessionReply,
+        };
+        use std::sync::{Arc, Mutex};
+
+        struct Runtime(SourceWireMode);
+        impl ScriptRuntime for Runtime {
+            fn source_wire_mode(&self) -> SourceWireMode {
+                self.0
+            }
+            fn set_generation(&self, _: u64) -> Result<(), String> {
+                Ok(())
+            }
+            fn start(
+                &self,
+                _: mg_sparkle::js_browser::Request,
+                _: u64,
+            ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+                Err("This control injects the frozen delivered reply, never starts code".into())
+            }
+            fn close(&self) {}
+            fn wait_idle(&self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        struct Session(Arc<Mutex<(usize, bool)>>);
+        impl ScriptSession for Session {
+            fn id(&self) -> u64 {
+                71
+            }
+            fn try_dispatch(&mut self, _: SessionInput, _: u64) -> Result<u64, String> {
+                Err("A terminal initial realm cannot accept events".into())
+            }
+            fn try_recv(&mut self) -> Option<SessionUpdate> {
+                None
+            }
+            fn cancel(&self) {
+                self.0.lock().unwrap().1 = true;
+            }
+            fn charge_active(&mut self, _: Duration) -> Result<(), String> {
+                let mut state = self.0.lock().unwrap();
+                state.0 += 1;
+                if state.0 == 1 {
+                    Ok(())
+                } else {
+                    Err("Initial projection charged twice".into())
+                }
+            }
+        }
+
+        let legacy = case != "modern-script";
+        let script_fatal = matches!(case, "legacy-script" | "modern-script");
+        let mut app = fixture();
+        app.child_pool = Arc::new(Runtime(if legacy {
+            SourceWireMode::Legacy
+        } else {
+            SourceWireMode::Modern
+        }));
+        app.generation = 3;
+        app.loading = true;
+        app.fetching = true;
+        app.inflight = 1;
+        app.scripts_enabled = true;
+        app.set_debugging(true);
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick(&mut app);
+        let mut socket = wire(&cdp, "/devtools/page/page-1");
+        let route = Route {
+            client: cdp.server.page_client_ids()[0],
+            session: None,
+        };
+        cdp.dispatch(&mut app, &route, false, "Page.enable", &json!({}))
+            .unwrap();
+        cdp.dispatch(&mut app, &route, false, "DOM.enable", &json!({}))
+            .unwrap();
+        cdp.pending.push(Pending {
+            target: TARGET.into(),
+            route,
+            id: json!(91),
+            generation: 3,
+        });
+        app.cdp_events.push(Event::Started);
+        let url = "http://localhost/script-loop";
+        app.address = url.into();
+        let html = "<title>Owned script limit</title><p>Fallback content remains readable</p><script>while(true){}</script>";
+        let state = Arc::new(Mutex::new((0, false)));
+        let script = if script_fatal {
+            let allocations = legacy.then_some(mg_butane::runtime::AllocationReport {
+                limit_bytes: 4 * 1024 * 1024,
+                accepted_bytes: 0,
+                phases: Default::default(),
+                first_rejected: None,
+            });
+            let boa = (!legacy).then(|| {
+                let mut report = mg_butane::modern::Engine::new().unwrap().report();
+                report.fatal_reason = Some("Owned fuel exhaustion".into());
+                report
+            });
+            Some(Ok(ScriptLoad {
+                session: Some(Box::new(Session(state.clone()))),
+                reply: SessionReply {
+                    revision: 0,
+                    snapshot: Some(ArenaSnapshot {
+                        nodes: document::parse(html, url).nodes,
+                    }),
+                    outcome: EventOutcome::default(),
+                    default_action: DefaultAction::None,
+                    navigation: None,
+                    errors: vec!["Owned fuel exhaustion".into()],
+                    scripts_executed: 0,
+                    allocations,
+                    boa,
+                    state: RealmState::Fatal,
+                    acknowledgements: Vec::new(),
+                    task_wake: None,
+                    lifecycle: (!legacy).then_some(LifecycleProgress {
+                        phase: LifecyclePhase::Initializing,
+                        initial_failure: true,
+                    }),
+                },
+            }))
+        } else if case == "legacy-worker" {
+            Some(Err("Owned opaque worker failure".into()))
+        } else {
+            None
+        };
+        app.tx
+            .send(Loaded {
+                generation: 3,
+                document: None,
+                result: if case == "legacy-network" {
+                    Err("Owned transport failure".into())
+                } else {
+                    Ok(crate::net::Response {
+                        resource_same_origin_chain: false,
+                        url: url::Url::parse(url).unwrap(),
+                        status: 200,
+                        content_type: "text/html".into(),
+                        body: html.as_bytes().to_vec(),
+                    })
+                },
+                script,
+                fetch_html_ms: 0.0,
+                parse_html_ms: 0.0,
+                resource_profile: Default::default(),
+                script_fetch_profile: Default::default(),
+                script_worker_ms: 0.0,
+            })
+            .unwrap();
+        app.poll();
+        cdp.flush_events(&mut app);
+        let mut messages = Vec::new();
+        for _ in 0..8 {
+            let message: Value =
+                serde_json::from_str(&read_wire(&mut socket).unwrap().into_text().unwrap())
+                    .unwrap();
+            let stopped = message["method"] == "Page.frameStoppedLoading";
+            messages.push(message);
+            if stopped {
+                break;
+            }
+        }
+        let response = messages.iter().find(|message| message["id"] == 91).unwrap();
+        let expected_success = case == "legacy-script";
+        assert_eq!(
+            response["result"].get("errorText").is_none(),
+            expected_success,
+            "{case}: {response}"
+        );
+        assert!(response.get("error").is_none());
+        assert_eq!(response["result"]["loaderId"], "3");
+        assert!(!app.is_loading() && cdp.pending.is_empty());
+        let milestones: Vec<_> = messages
+            .iter()
+            .filter_map(|message| message["method"].as_str())
+            .filter(|method| matches!(*method, "Page.domContentEventFired" | "Page.loadEventFired"))
+            .collect();
+        assert_eq!(
+            milestones,
+            if expected_success {
+                vec!["Page.domContentEventFired", "Page.loadEventFired"]
+            } else {
+                vec![]
+            },
+            "{case}"
+        );
+        if script_fatal {
+            assert_eq!(*state.lock().unwrap(), (1, true));
+            assert!(app.last_load_ok && app.script_blocked && app.page_session.is_none());
+            assert_eq!(
+                app.initial_script_outcome().status,
+                InitialScriptStatus::Failed
+            );
+            assert_eq!(
+                app.initial_script_outcome().failure,
+                Some(InitialScriptFailure::Script)
+            );
+            assert!(
+                app.initial_script_outcome()
+                    .diagnostics
+                    .iter()
+                    .any(|value| value == "Owned fuel exhaustion")
+            );
+            let tree = rpc_pages(
+                &mut cdp,
+                &mut [(TARGET, &mut app)],
+                &mut socket,
+                92,
+                "DOM.getDocument",
+                json!({"depth":-1}),
+                None,
+            );
+            assert!(
+                tree.get("error").is_none()
+                    && tree
+                        .to_string()
+                        .contains("Fallback content remains readable")
+            );
+            assert_eq!(
+                app.document_lifecycle().is_none(),
+                legacy,
+                "No modern progress may be invented for legacy"
+            );
+        } else if case == "legacy-worker" {
+            assert_eq!(
+                app.initial_script_outcome().failure,
+                Some(InitialScriptFailure::Infrastructure)
+            );
+            assert_eq!(*state.lock().unwrap(), (0, false));
+        }
+    }
+
+    #[test]
     fn lifecycle_events_are_gated_and_navigation_failure_has_no_load_success() {
         let mut app = fixture();
         let mut cdp = BrowserCdp::bind(0).unwrap();

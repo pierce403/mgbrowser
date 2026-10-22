@@ -82,6 +82,14 @@ following dependency order, updating evidence as each increment ships:
    queue, blanket counter adjustment or arbitrary-timer drain. Renderer readiness
    integration must preserve failure/diagnostic/pixel guards; corpus and typed
    observer/scoring expansions still require separate frozen contributions.
+   First exact-commit Rust CI exposed a legacy-only fallback/navigation
+   classification regression; no tag was created from that failing commit.
+   The narrow correction retains validated Failed/Script evidence and old
+   parent-owned legacy completion, while modern/infrastructure failures remain
+   unchanged. Focused debug/release controls, refreshed full regressions/package
+   all 25 native plus 25 external original-engine journeys and fresh full WPT
+   comparison pass locally. Corrected exact-commit/public gates remain before
+   publication.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

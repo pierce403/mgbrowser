@@ -1090,11 +1090,16 @@ impl Browser {
             }
             if let Some(error) = load_error {
                 self.finish_initial_load(Some(error));
-            } else if self.initial_script.status == InitialScriptStatus::Failed {
+            } else if self.initial_script.status == InitialScriptStatus::Failed
+                && !(self.child_pool.source_wire_mode() == scripts::SourceWireMode::Legacy
+                    && self.initial_script.failure == Some(InitialScriptFailure::Script))
+            {
                 self.finish_initial_load(Some("Initial page script execution failed".into()));
             } else if self.lifecycle.is_none() {
                 // Script-disabled and explicit legacy lanes have parent-owned
                 // resource completion / bundled Init. Never fabricate v5 data.
+                // A validated legacy script failure keeps its sticky typed
+                // outcome without turning delivered fallback into a load error.
                 if self.cdp_enabled {
                     let at = Instant::now();
                     self.cdp_events
