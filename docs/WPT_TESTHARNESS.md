@@ -215,3 +215,9 @@ self-upgrade pass; the public native/CDP error fixture retains its expected
 diagnostic and proves actual callback/checkpoint/exception identity. Queued
 Promise rejection notification is the next separately reviewed increment, not
 implemented or accepted by this release.
+
+The [queued rejection contract](PROMISE_REJECTIONS.md) records that next
+increment's shared admissions, frozen batches, weak membership, no-result-hook
+failures and conservative observation-gap policy. It is not new implementation
+or full-harness acceptance. Keep its authored controls separate from the scored
+upstream corpus and future typed observation.

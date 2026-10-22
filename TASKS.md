@@ -52,8 +52,9 @@ following dependency order, updating evidence as each increment ships:
    Rust/JSPLAN/website and tagged-package gates pass; checksum-verified public
    install/reinstall, actual v0.9.7 self-upgrade/no-op and public native/CDP error
    acceptance pass. The static WPT counts remain unchanged. **Next increment:**
-   independently review bounded queued Promise rejection notification before
-   writing its authored controls and implementation. Genuine
+   v0.9.9 [queued Promise rejection notification](docs/PROMISE_REJECTIONS.md),
+   following the reviewed admission/roots/privacy contract and frozen authored
+   controls before implementation. Genuine
    messaging, queued lifecycle and typed observation remain open; corpus and
    observer/scoring changes require separate frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

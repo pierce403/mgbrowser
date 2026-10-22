@@ -26,6 +26,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/PERFORMANCE.md`: Browser paint/CLI measurements, cache identity and
   explicit retained-payload ceilings; unavailable worker accounting stays visible.
 
+- `docs/PROMISE_REJECTIONS.md`: reviewed next-increment contract for queued
+  rejection notification, shared work, traced/weak ownership and privacy-related
+  incomplete observation. Planning is not shipped behavior or WPT acceptance.
+
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.
 - `docs/HACKER_NEWS.md`: v0.3.0's accepted desktop scope, standalone Rust Stylo,
