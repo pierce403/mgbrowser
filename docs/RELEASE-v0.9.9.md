@@ -65,8 +65,9 @@ interpreter is a separate test lane, not a production fallback.
 
 The freshly measured pinned static selection contains 1,011 upstream flexbox
 reftests: 317 PASS, 632 FAIL and 62 UNSUPPORTED, zero infrastructure failures or
-pending cases and confirmed cleanup. All case outcomes, 1,464 page pixel hashes
-and request records match v0.9.8. Selection, expectations and scoring are unchanged. Authored
+pending cases and confirmed cleanup. All case outcomes, 1,464 page records
+(1,449 RGB images and 15 structured failures) and request records match v0.9.8.
+Selection, expectations and scoring are unchanged. Authored
 rejection controls do not add WPT passes or change its denominator. Original
 24-case and expanded pass/support ratchets remain intact. The website reports
 its exact tested source commit, which can differ from an installed release.
