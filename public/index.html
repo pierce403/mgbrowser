@@ -23,7 +23,7 @@
 <span id="copy-status" role="status"></span>
 <div class="links"><a href="https://github.com/pierce403/mgbrowser/releases/latest">Release notes ↗</a><a href="https://github.com/pierce403/mgbrowser/releases/latest/download/mgbrowser-linux-x86_64.tar.gz">Download Linux tarball ↓</a><a href="/install.sh">Inspect installer</a></div>
 <p class="warning"><strong>Modern-web compatibility is poor.</strong> This is a technology preview, not a daily browser. Do not use it for banking, sensitive authenticated browsing, or arbitrary hostile websites.</p>
-<p class="muted"><strong>Measured standards progress.</strong> All 24 selected tests in the initial WPT flexbox reftest cohort pass. The pinned WPT selection is reported below, freshly measured on every commit.</p>
+<p class="muted"><strong>Measured standards progress.</strong> The initial 24 WPT flexbox reftests still pass. We now measure the complete pinned 1,011-test flexbox reftest selection below, including failures and unsupported cases. Scores are freshly measured on every commit; a larger corpus is not a browser improvement.</p>
 <p class="muted">v0.9.6 corrects bounded classic external script loading and shares resource admission across CSS, fonts, images and scripts. The Performance Dashboard reports completed browser paints, actual cache reuse and retained payload. Frame/style snapshots share immutable storage and render uncached above their 16 MiB/8 MiB payload bounds. These are per-Browser cache limits, not total memory ceilings or a scrolling-speed guarantee. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/PERFORMANCE.md">Performance scope ↗</a></p>
 <p class="muted">Hover links to preview destinations in the bottom-left status strip; right-click or Ctrl+click links to open in a new tab. Right-click Inspect element, press F12 for diagnostics, or press Ctrl+Shift+P for Performance. Use <code>mgbrowser --profile &lt;URL&gt;</code> for a headless report. Ctrl+T opens a tab; drag tabs into windows or left/right groups. Themes, sizing, bookmarks and update progress with Restart now remain.</p>
 <p class="muted">Run the command once to get automatic updates. Installed builds check on startup and daily; restart to use a new version. Menu → About shows version, compile time and commit. Use <code>--no-auto-update</code> to disable background checks. HTTP pages keep a red title/address strip in both themes; Ctrl+L selects the location. Pure-Rust Boa ECMAScript runs inline and classic external page scripts by default (use <code>--disable-scripts</code> to opt out).</p>
@@ -31,15 +31,15 @@
 <section class="detail" id="wpt" aria-labelledby="wpt-title">
 <p class="eyebrow">Measured compatibility</p><h2 id="wpt-title">Web Platform Tests</h2>
 <!-- wpt-score:start -->
-<p class="wpt-score"><strong>24 / 24 selected tests passing</strong></p>
-<p>Fail: 0 · Unsupported: 0 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
-<p class="muted">A pinned static-reftest pilot using the real Rust browser navigation, resource and rendering path. This is a selected subset, not the full Web Platform Tests suite or JavaScript testharness coverage. These are current-source measurements, not a score for the installed release.</p>
+<p class="wpt-score"><strong>317 / 1011 selected tests passing</strong></p>
+<p>Fail: 632 · Unsupported: 62 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
+<p class="muted">A pinned flexbox reftest selection using the real Rust browser navigation, resource and rendering path. This is a selected subset, not the full Web Platform Tests suite or JavaScript testharness coverage. These are current-source measurements, not a score for the installed release.</p>
 <p>Pages reruns this selection and checks the recorded score before publishing a commit. Unsupported cases stay in the denominator.</p>
 <p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/WPT.md">Method and limitations ↗</a> · <a href="/wpt-results.json">Full results and tested commit ↗</a></p>
 <details><summary>Reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
-<p>Corpus SHA-256: <code class="wpt-fingerprint">a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd</code></p>
-<p>Browser source SHA-256: <code class="wpt-fingerprint">2e4fbb20f7146991c803239ff8b0d628ef9216f4e4d40691f81794ba176e22dd</code></p>
+<p>Corpus SHA-256: <code class="wpt-fingerprint">d8c4bd6aacd93d964c10302e63b9c42576d785a055848772f9f71b2436f8075d</code></p>
+<p>Browser source SHA-256: <code class="wpt-fingerprint">e49f272b9f35d035dc5e2cf7d419b6bee1316f242bfad251cf53724f3fe97ada</code></p>
 </details>
 <!-- wpt-score:end -->
 </section>
