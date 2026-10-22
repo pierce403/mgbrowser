@@ -1,20 +1,25 @@
 # Work queue
 
-2026-10-21 active goal: **implement all features in FEATURES.md**. Keep each
+2026-10-21 closeout direction: finish the current v0.9.6 increment and push.
+Do not start the next feature during this request.
+
+The broader recorded goal is **implement all features in FEATURES.md**. Keep each
 feature's recorded acceptance criteria and release policy. Work through the
 following dependency order, updating evidence as each increment ships:
 
-1. **Release validation pending: v0.9.6 script and performance correctness.**
+1. **Shipped: v0.9.6 script and performance correctness.**
    Implemented typed parent-supplied classic sources, shared CSS/font/image/script
    resource admission, bounded source/wire admission, document/deferred ordering
    and explicit unsupported-attribute/MIME/credential handling. Complete Browser
    paint timing, actual cache-path labels, truthful CLI failure/no-op-scroll
    reporting and reviewed Frame/style retention bounds are implemented.
-   Final acceptance remains open: source/resource/worker regressions, unchanged
-   24-test WPT cohort, packaged native and external-CDP retained-event journeys,
-   headless short/tall/malformed-response profiling, native Performance at
-   100/200% in light/dark, exact-commit CI/site and release/public-installer
-   repeats. Finish this bounded increment before starting the later queue.
+   Source/resource/worker regressions, unchanged 24-test WPT cohort, packaged
+   native and external-CDP retained-event journeys, headless short/tall/malformed
+   profiling and native Performance acceptance pass. Exact-commit Rust/JSPLAN/
+   website gates are green at e5c3e32, tagged v0.9.6; the normal release and
+   checksum-verified public installer pass. Actual v0.9.5 self-upgrade and the
+   subsequent no-op check pass. See the 2026-10-21 log for public receipts.
+   Stop after this closeout; the remaining queue needs a new request.
 2. Expand the pinned WPT cohort in a separate tooling contribution, retaining all
    existing 24 cases and establishing the new baseline before engine fixes.
    Then implement testharness execution through the restricted worker and the
@@ -76,7 +81,7 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    [v0.9.5](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.5).
    This publication check does not assert a fresh old-binary native/installer
    rerun or completion of the broader feature contracts. The v0.9.6 corrections
-   and their pending final acceptance are recorded above.
+   and their release acceptance are recorded above.
 6. Expand pinned cohorts and implement full testharness/WebDriver integration in
    separate milestones. Keep worker/resource limits and old regressions; each
    browser behavior improvement finishes with a verified public feature release.

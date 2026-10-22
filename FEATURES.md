@@ -164,7 +164,7 @@ CLI profiler reporting page-load phases, slowest subresources/external scripts,
 and Frame/Stylo/shaping cache hit metrics. This does not complete Playwright or
 full CSS inspection.
 
-The v0.9.6 candidate measures complete Browser paints, including snapshot
+v0.9.6 measures complete Browser paints, including snapshot
 admission, geometry, composition and Inspector/chrome drawing. CLI rows identify
 actual Frame/style cache reuse and distinguish a short page's no-op scroll from
 real movement. Failed navigation retains diagnostics and returns nonzero.
@@ -175,11 +175,16 @@ per Browser, with uncached rendering above either threshold. These bounds are
 separate from unchanged worker, resource and render-work limits; they are not a
 whole-browser memory quota. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-v0.9.6 acceptance and release validation remain pending:
+v0.9.6 scoped acceptance:
 
-- [ ] Cached/fresh pixel and hit-geometry equivalence, invalidation and retention bounds pass final regression gates.
-- [ ] Supplied packaged binary passes headless short/tall/malformed-response profiler acceptance and native Performance at 100/200% in light/dark themes.
-- [ ] Exact-commit CI/site, versioned release and public installer/native repeats pass.
+- [x] Cached/fresh pixel and hit-geometry equivalence, invalidation and retention bounds pass final regression gates.
+- [x] Supplied packaged binary passes headless short/tall/malformed-response profiler acceptance and native Performance at 100/200% in light/dark themes.
+- [x] Exact-commit CI/site, versioned release and public installer/native repeats pass.
+
+Shipped as v0.9.6 at e5c3e3227b6ed0fd58fdd623d220bd8a8936c87c.
+Public native Performance light/dark 100/200% and compact checks pass in
+tmp/inspector-smoke.CHpyvr; public profiling/external-source evidence is in
+tmp/page-services-smoke-z5up3vks. Images inspected; see the 2026-10-21 log.
 
 ## F-021 : Smooth wheel scrolling
 
@@ -434,7 +439,7 @@ and boolean attribute reflection. v0.9.5 adds parent-preloaded classic external
 page source budget) while keeping the restricted Linux worker network-free, and
 makes `Window` `onclick`/`onsubmit` accessors configurable per WebIDL.
 
-The v0.9.6 candidate replaces executable HTML-comment metadata with typed,
+v0.9.6 replaces executable HTML-comment metadata with typed,
 parent-supplied external sources. CSS/fonts/images/scripts share the existing
 2 MiB, 32-request and ten-second resource ledger. Admission allows at most
 16 external sources within 32 eligible script elements, at most 256 KiB per
@@ -446,10 +451,12 @@ attributes outside the implemented profile produce explicit diagnostics.
 Responses require admitted JavaScript MIME/UTF-8; foreign source redirects
 retain the credential and HTTPS restrictions. The worker gains no networking.
 
-Final acceptance remains pending for typed-source forgery/admission and shared
-resource-budget regressions, actual-worker ordering and cancellation, the
-authored external-script retained-event journey through native input and the
-external CDP client, and packaged/public release repeats. This scoped increment
+Typed-source forgery/admission and shared resource-budget regressions,
+actual-worker ordering and cancellation, the authored external-script retained-
+event journey through native input and the external CDP client, and packaged/
+public release repeats pass. Shipped as v0.9.6 at e5c3e32; the public checksum,
+exact installer, worker/session/desktop checks and actual v0.9.5 self-upgrade
+plus no-op recheck pass. See the 2026-10-21 work log. This scoped increment
 does not complete the unchecked modules, scheduling, upstream WPT, frameworks,
 cooperative accounting or embedding criteria above.
 
@@ -753,7 +760,7 @@ plus unchanged CPU/address-space/wall/lifetime containment. Unsupported platform
 fail closed. This is not general ECMAScript/browser conformance. The original
 evaluator remains an explicit test baseline, not a production fallback. Broader
 events, timers and modules remain unsupported. F-016 records the bounded classic
-external-source increment and its pending v0.9.6 acceptance/release gates.
+external-source increment and its v0.9.6 acceptance/release evidence.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 
@@ -793,7 +800,7 @@ a production fallback. Current Boa acceptance is tracked in F-016 and docs/BOA.m
 - [x] Native/CDP local journeys use a script-created form; script navigation and loop-error recovery are verified in a real window.
 - [x] Source/projection rejection preserves original fallback and discards proposed navigation; stale completions cannot replace the active page.
 - [x] GitHub CI reproduces the language/DOM/worker tests and scripted native/CDP fixture journeys for the published implementation.
-- [ ] Bounded parent-brokered classic external scripts pass the v0.9.6 actual-worker, native/CDP, resource-policy and public-release gates recorded in F-016.
+- [x] Bounded parent-brokered classic external scripts pass the v0.9.6 actual-worker, native/CDP, resource-policy and public-release gates recorded in F-016.
 - [ ] General UI event dispatch, timers and longer-lived platform behavior complement the bounded retained click/submit subset with independent fixtures.
 - [ ] A pinned, licensed upstream conformance corpus and compatibility matrix complement the authored tests.
 - [ ] Sufficient language and web-platform behavior passes the actual Google journey.
