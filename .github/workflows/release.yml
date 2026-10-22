@@ -21,6 +21,7 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.91.1
         run: |
           test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
+          python3 tools/test_gzip_release.py
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
@@ -29,6 +30,7 @@ jobs:
           python3 tools/task-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/error-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/rejection-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          python3 tools/message-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -54,6 +56,7 @@ jobs:
             tmp/task-services-smoke-*/
             tmp/error-services-smoke-*/
             tmp/rejection-services-smoke-*/
+            tmp/message-services-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

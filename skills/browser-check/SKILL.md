@@ -124,6 +124,22 @@ the separately exercised authored error/rejection journeys, not WPT coverage or
 completion of general Window-testharness readiness. Release/public receipts
 still establish final delivery separately from local development success.
 
+For self-Window messaging, read docs/WINDOW_MESSAGES.md. Run boa_messages,
+boa_message_resources, private native DOMException/clone/fault controls and
+actual script_tasks in debug/release, preserving every older gate. Check genuine
+later tasks, synchronous snapshot/DFS getters, cycles/aliases/sparse lengths,
+trusted origins, conversion/IteratorClose fatal guards, traced event identity
+and terminal root/permit cleanup. No new transfer/cross-context authority is
+implied. Run tools/test_message_services_smoke.py and then
+tools/message-services-smoke.py against packaged and public-installed bytes.
+Require its exact queued/settled work, one parent task, native/CDP clone and
+checkpoint proof, retained form/cancellation/destination, zero diagnostics/trap
+requests and confirmed owned cleanup. Its private display disables Mesa's disk
+shader cache; artifact limits and browser settings remain unchanged. Do not
+relax older diagnostic checkers. A full unchanged harness bootstrap probe is
+non-scoring: successful initialization or pending work is not typed completion,
+full lifecycle readiness or an upstream pass.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

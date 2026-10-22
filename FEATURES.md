@@ -517,6 +517,17 @@ pinned Boa VM argument roots require actual Context teardown, already performed 
 worker. See [contract and limits](docs/PROMISE_REJECTIONS.md). This completes
 neither Window-testharness readiness nor any unchecked F-016 requirement.
 
+Candidate v0.9.10: [bounded Window self-messaging](docs/WINDOW_MESSAGES.md).
+The complete pinned harness was actually admitted by the public v0.9.9 browser
+but stopped at unsupported `message` registration. This is a failed-bootstrap
+diagnostic, not a new upstream pass or complete runtime-feasibility result.
+Local semantic/resource/GC, typed IteratorClose-limit and actual worker controls,
+full debug/release regressions, package installation/updater and fresh complete
+static WPT gates pass. Native/CDP messaging passes on the packaged candidate;
+exact-commit CI and public release/install/update acceptance remain open. This adds no
+upstream score, full structured clone, cross-context messaging, queued lifecycle
+or trusted typed observation claim; unchecked F-016 criteria remain open.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable

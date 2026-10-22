@@ -1,7 +1,9 @@
 # Next increment: queued Promise rejection notification
 
-Reviewed implementation contract, 2026-10-22. The v0.9.9 implementation candidate
-passes focused local controls but is not yet released. v0.9.8 at
+Reviewed implementation contract, 2026-10-22. Shipped as v0.9.9 at
+`af5d8fc3a8f14555520c07946c0c56c355921a01`, with exact-commit CI, public
+installation, actual v0.9.8 self-upgrade and public native acceptance verified.
+v0.9.8 at
 `3e2955800de32e6442412734398d5cbdf6f884cd` supplies Window errors and source
 provenance; this increment follows it toward
 [Window-testharness readiness](WPT_TESTHARNESS.md). No WPT selection, observer,

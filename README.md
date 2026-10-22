@@ -2,7 +2,23 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.9 Experimental Preview
+## v0.9.10 Experimental Preview candidate
+
+The next increment adds genuine later Window self-messaging: `postMessage`,
+`message`/`messageerror` listeners and handler slots, cloned data, trusted origins
+and noncancelable native events. Primitives, ordinary objects, arrays, sparse
+holes, cycles and aliases are supported. Other builtins and nonempty transfer
+lists fail explicitly; this is not full structured clone or cross-context
+messaging. Native DOMException preserves Error identity and private branding.
+[Messaging contract and acceptance](docs/WINDOW_MESSAGES.md).
+
+Local full debug/release regressions, restricted-worker controls, packaged
+installation/updater and the fresh complete static WPT gate pass. Authored
+native/CDP messaging also passes on the packaged candidate. Exact-commit CI and
+public installation/update/native acceptance remain required before shipment.
+The installer currently delivers the verified v0.9.9 below.
+
+### Published v0.9.9
 
 The v0.9.9 increment adds queued Window `unhandledrejection` and
 `rejectionhandled` events with real Promise/reason identity, traced pending
@@ -14,7 +30,7 @@ observation. [Rejection policy and acceptance](docs/PROMISE_REJECTIONS.md).
 
 Function timers remain real later parent-issued worker tasks, sharing the
 existing cumulative limits. Startup is still **bundled**, not a complete HTML
-lifecycle. Messaging, string timers/intervals and the
+lifecycle. Cross-context messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
 The installer below delivers [v0.9.9](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.9),
@@ -193,7 +209,7 @@ See [updater behavior and trust](docs/UPDATES.md).
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
   v0.9.8 adds conservatively muted Window errors; v0.9.9 adds bounded rejection
   notification. Startup remains bundled; fully task-separated lifecycle,
-  messaging and typed JavaScript testharness results remain unfinished.
+  cross-context messaging and typed JavaScript testharness results remain unfinished.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
   browser event loop remain unsupported. No React/Vue browser-app compatibility
   is claimed.

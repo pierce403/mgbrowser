@@ -211,6 +211,209 @@ fn no_activation(frame: &Value) {
 }
 
 #[test]
+fn real_worker_delivers_exactly_one_cloned_message_per_parent_pump() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(r#"
+        var order=['init'],original={value:42},saved;
+        original.self=original;
+        function show(){document.getElementById('o').setAttribute('data-order',order.join(','));}
+        onmessage=function(event){
+            if(event.origin!=='https://example.test'||event.source!==window||event.cancelable||event.bubbles||
+                event.data===original||event.data.self!==event.data||event.data.value!==42)
+                throw 'invalid native cloned message';
+            saved=event;order.push('message');show();
+            Promise.resolve().then(()=>{order.push('checkpoint');show();});return false;
+        };
+        addEventListener('message',event=>{
+            if(event!==saved||event.defaultPrevented||order[order.length-1]!=='checkpoint')throw 'missing message checkpoint';
+            order.push('listener');show();
+        });
+        postMessage(original,'/');postMessage(original,'*');original.value=99;
+        Promise.resolve().then(()=>{order.push('init-job');show();});
+    "#);
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(
+        attribute(&initial, "data-order").as_deref(),
+        Some("init,init-job")
+    );
+    assert_eq!(
+        (
+            report(&initial).jobs_admitted,
+            report(&initial).jobs_executed,
+            report(&initial).pending_jobs
+        ),
+        (3, 1, 2)
+    );
+    let mut previous = initial;
+    for sequence in 1..=2 {
+        let (token, delay) = wake(&previous);
+        peer.wait_due(delay);
+        peer.idle();
+        let current = peer.pump(sequence, sequence - 1, token);
+        no_activation(&current);
+        assert_eq!(current["reply"]["state"], "Ready");
+        assert_eq!(current["reply"]["errors"], json!([]));
+        let suffix = ",message,checkpoint,listener".repeat(sequence as usize);
+        assert_eq!(
+            attribute(&current, "data-order"),
+            Some(format!("init,init-job{suffix}"))
+        );
+        assert_eq!(
+            (
+                report(&current).jobs_admitted,
+                report(&current).jobs_executed,
+                report(&current).pending_jobs
+            ),
+            (
+                3 + sequence as usize,
+                1 + 2 * sequence as usize,
+                2 - sequence as usize
+            )
+        );
+        report(&current).validate_after(&report(&previous)).unwrap();
+        previous = current;
+    }
+    assert!(previous["reply"]["task_wake"].is_null());
+    peer.idle();
+    peer.finish();
+}
+
+#[test]
+fn real_worker_message_pump_replay_is_terminal_without_running_the_next_message() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("onmessage=e=>document.getElementById('o').setAttribute('data-order',e.data);postMessage('first','/');postMessage('second','/');");
+    assert_eq!(initial["reply"]["state"], "Ready");
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let first = peer.pump(1, 0, token);
+    assert_eq!(first["reply"]["state"], "Ready");
+    assert_eq!(first["reply"]["errors"], json!([]));
+    assert_eq!(attribute(&first, "data-order").as_deref(), Some("first"));
+    assert_eq!(report(&first).pending_jobs, 1);
+    let rejected = peer.pump(2, 1, token);
+    no_activation(&rejected);
+    assert_eq!(rejected["reply"]["state"], "Closed");
+    assert_eq!(report(&rejected).jobs_admitted, 2);
+    assert_eq!(report(&rejected).jobs_executed, 1);
+    assert_eq!(report(&rejected).pending_jobs, 0);
+    assert!(rejected["reply"]["task_wake"].is_null());
+    assert!(
+        rejected["reply"]["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error.as_str().unwrap().contains("replayed task wake"))
+    );
+    report(&rejected).validate_after(&report(&first)).unwrap();
+    peer.finish();
+}
+
+#[test]
+fn real_worker_message_queue_cannot_bypass_shared_pending_admission() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("onerror=()=>document.getElementById('o').setAttribute('data-reporter','wrong');for(let i=0;i<257;i++)postMessage({proof:i},'/');document.getElementById('o').setAttribute('data-after','wrong');");
+    assert_eq!(initial["reply"]["state"], "Fatal");
+    assert_eq!(report(&initial).jobs_admitted, 256);
+    assert_eq!(report(&initial).jobs_executed, 0);
+    assert_eq!(report(&initial).pending_jobs, 0);
+    assert!(report(&initial).fatal_reason.is_some());
+    assert!(attribute(&initial, "data-reporter").is_none());
+    assert!(attribute(&initial, "data-after").is_none());
+    assert!(initial["reply"]["task_wake"].is_null());
+    assert!(
+        initial["reply"]["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|error| error.as_str().unwrap().contains("EngineLimit:"))
+    );
+    peer.finish();
+}
+
+#[test]
+fn real_worker_message_pumps_share_the_unchanged_sixty_four_transaction_budget() {
+    let mut peer = Peer::start();
+    let mut reply = peer.initialize("var count=0;onmessage=()=>{count++;document.getElementById('o').setAttribute('data-count',''+count);postMessage(count,'/');};postMessage(0,'/');");
+    assert_eq!(reply["reply"]["state"], "Ready");
+    assert_eq!(reply["reply"]["errors"], json!([]));
+    assert_eq!(
+        (
+            report(&reply).jobs_admitted,
+            report(&reply).jobs_executed,
+            report(&reply).pending_jobs
+        ),
+        (1, 0, 1)
+    );
+    let initial = report(&reply);
+    for sequence in 1..64 {
+        let (token, delay) = wake(&reply);
+        peer.wait_due(delay);
+        let next = peer.pump(sequence, sequence - 1, token);
+        no_activation(&next);
+        assert_eq!(next["reply"]["state"], "Ready");
+        assert_eq!(next["reply"]["errors"], json!([]));
+        assert_eq!(next["reply"]["revision"], sequence);
+        assert_eq!(attribute(&next, "data-count"), Some(sequence.to_string()));
+        assert_eq!(
+            (
+                report(&next).jobs_admitted,
+                report(&next).jobs_executed,
+                report(&next).pending_jobs
+            ),
+            (sequence as usize + 1, sequence as usize, 1)
+        );
+        report(&next).validate_after(&report(&reply)).unwrap();
+        reply = next;
+    }
+    assert!(report(&reply).opcodes_remaining < initial.opcodes_remaining);
+    // Init + 63 pumps ends the worker even though a real message remains queued.
+    // Do not close parent stdin or renew the realm to manufacture termination.
+    assert!(peer.input.is_some());
+    loop {
+        if let Some(status) = peer.child.try_wait().unwrap() {
+            assert!(status.success(), "message transaction-bound child {status}");
+            break;
+        }
+        peer.tick();
+    }
+}
+
+#[test]
+fn real_worker_fatal_message_delivery_exits_without_next_callbacks_or_closing_parent_input() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("onerror=()=>document.getElementById('o').setAttribute('data-reporter','wrong');onmessage=()=>{document.getElementById('o').setAttribute('data-entered','yes');Promise.resolve().then(()=>document.getElementById('o').setAttribute('data-job','wrong'));while(true){}};addEventListener('message',()=>document.getElementById('o').setAttribute('data-listener','wrong'));postMessage(1,'/');postMessage(2,'/');");
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(report(&initial).pending_jobs, 2);
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let fatal = peer.pump(1, 0, token);
+    no_activation(&fatal);
+    assert_eq!(fatal["reply"]["state"], "Fatal");
+    assert_eq!(report(&fatal).jobs_admitted, 3);
+    assert_eq!(report(&fatal).jobs_executed, 1);
+    assert_eq!(report(&fatal).pending_jobs, 0);
+    assert!(report(&fatal).fatal_reason.is_some());
+    assert!(fatal["reply"]["task_wake"].is_null());
+    assert_eq!(attribute(&fatal, "data-entered").as_deref(), Some("yes"));
+    for field in ["data-reporter", "data-job", "data-listener"] {
+        assert!(attribute(&fatal, field).is_none(), "{field}");
+    }
+    report(&fatal).validate_after(&report(&initial)).unwrap();
+    assert!(peer.input.is_some());
+    loop {
+        if let Some(status) = peer.child.try_wait().unwrap() {
+            assert!(status.success(), "terminal message child {status}");
+            break;
+        }
+        peer.tick();
+    }
+    let mut byte = [0];
+    assert_eq!(peer.output.read(&mut byte).unwrap(), 0);
+}
+
+#[test]
 fn real_worker_only_runs_one_due_timer_and_its_checkpoint_per_parent_pump() {
     let mut peer = Peer::start();
     let initial = peer.initialize("var order=['init'];function show(){document.getElementById('o').setAttribute('data-order',order.join(','));}Promise.resolve().then(function(){order.push('micro');show();});var gone=setTimeout(function(){order.push('canceled');show();},0);clearTimeout(gone);setTimeout(function(){order.push('first');show();Promise.resolve().then(function(){order.push('checkpoint');show();});},0);setTimeout(function(){order.push('second');show();},0);");

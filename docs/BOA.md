@@ -57,7 +57,7 @@ constructor, synthetic dispatch, fully queued lifecycle or typed WPT reporter. L
 work, wire, source, allocation and process limits remain unchanged. Authored
 controls are not upstream WPT passes or a whole-browser security claim.
 
-## Queued Promise notifications: v0.9.9 candidate
+## Queued Promise notifications: v0.9.9
 
 Window `unhandledrejection` and `rejectionhandled` now use real later parent
 tasks. Candidates freeze after an outer checkpoint; one pump selects one batch,
@@ -75,7 +75,27 @@ observation, even if the muted rejection is caught. Losing future handled
 observation also sets that conservative flag. No new wire fields, sources,
 syscalls, network/filesystem authority or replacement engine are introduced.
 See [the contract and acceptance](PROMISE_REJECTIONS.md). Exact release/public
-verification remains separately required; full Window readiness stays open.
+installation, prior-binary self-upgrade and native acceptance pass at
+`af5d8fc3a8f14555520c07946c0c56c355921a01`; full Window readiness stays open.
+
+## Bounded Window messages: v0.9.10 candidate
+
+The candidate implements actual later self-Window `postMessage`, `message` and
+`messageerror` callbacks, with immutable trusted sender origin and delivery-time
+target checks. A partial native serializer supports primitives, ordinary objects
+and arrays, preserving UTF-16, sparse length/holes, cycles and aliases. Other
+builtins and valid transfers remain explicitly unsupported, never silently `{}`.
+Genuine Error-backed DOMException supplies guarded branded errors. Native message
+events are traced, non-bubbling and noncancelable. Existing rejection-privacy
+purging preserves independent messages and their document origin.
+
+One shared work permit precedes clone storage/getters. Native identity roots
+survive getter GC, then drop before queuing the owned scalar-edge graph; no data
+or authority crosses the wire. Getters and Web IDL conversions recheck fatal
+state, including typed VM errors during IteratorClose. Limits, protocol and
+bundled lifecycle stay unchanged. Cross-context messaging, full structured clone,
+MessageEvent/Event constructors and synthetic dispatch remain unsupported.
+See [the reviewed contract and separate release gates](WINDOW_MESSAGES.md).
 
 ## Bounded Window timers: v0.9.7 increment
 
@@ -105,7 +125,7 @@ Single-window aliases include self/parent/top with null opener. Document-ready
 capture/target/bubble, Window load's document target, property-handler slot order
 and interactive readiness before deferred scripts are corrected. These startup
 phases remain bundled inside Init; all timers run afterward. String timer compilation,
-intervals, fully queued lifecycle, synthetic dispatch, messaging
+intervals, fully queued lifecycle, synthetic dispatch, cross-context messaging
 and typed WPT testharness reporting remain unfinished.
 The one-shot `--script-worker` path returns the initial snapshot, not a task loop.
 Headless profiling measures navigation/initial paint, not completion of arbitrary

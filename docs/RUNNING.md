@@ -87,11 +87,12 @@ Rustybuzz shapes text and fontdue rasterizes regular/bold faces. Chassis downloa
 same-origin linked CSS and policy-checked PNG/JPEG/GIF/restricted static SVG images.
 After an image chain crosses origin, it sends/stores no cookies on later hops,
 including redirects back. Unsupported resources produce
-placeholders and warnings; no CSS imports or downloaded fonts. Full CSS, general
+placeholders and warnings; no CSS imports. Font loading is bounded to same-origin
+TTF/OTF sources. Full CSS, general
 positioning/stacking, font fallback and bidi layout remain incomplete. The
 [Hacker News desktop scope](HACKER_NEWS.md) and [News reading scope](GOOGLE_NEWS.md)
-are intentionally narrow. Boa-backed page JavaScript is available only with
-`--enable-scripts`; see below. None of this implies modern-web compatibility.
+are intentionally narrow. Boa-backed page JavaScript is enabled by default
+(`--disable-scripts` opts out); see below. None of this implies modern-web compatibility.
 
 HTTP(S) uses our own HTTP/1.1 transport and the selected experimental RustCrypto
 TLS provider, with public trust roots and certificate verification. Cookies are
@@ -143,7 +144,7 @@ full cooperative resource control remains open. Repeated errors can report one
 latched failure. The fixed report excludes source text and URLs and adds no page
 API. `SCRIPT_DIAGNOSTIC` can contain page-supplied exception text or URLs:
 escaping is not redaction, so keep raw live logs in ignored `tmp/`.
-`--disable-scripts` explicitly selects the default behavior.
+`--disable-scripts` explicitly selects the no-script path.
 
 The local containment self-test requires no display and starts only owned children:
 
@@ -164,6 +165,14 @@ native input and the external CDP client. Its authored fixture is not a WPT test
 Timers consume the same 64 total session transactions and cumulative execution
 bounds as input. The profiler and static WPT adapter do not wait for arbitrary
 delayed tasks; full lifecycle/harness readiness remains separately unfinished.
+
+The v0.9.10 candidate's equivalent authored self-messaging path is
+`python3 tools/message-services-smoke.py /absolute/path/to/mgbrowser` after the
+same example build. It requires the later native clone/event checkpoints before
+retained controls exist, then completes unchanged native/CDP cancellation, form
+and destination checks. It owns a private display/profile/server and verifies
+exact inline source/request receipts, not a hidden resource-warning field or a
+WPT result. See [the partial messaging contract](WINDOW_MESSAGES.md).
 
 The original interpreter remains a research baseline with unchanged logical
 4 MiB/fuel assertions. Worker/native reproduction of that baseline requires

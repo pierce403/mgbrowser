@@ -72,3 +72,11 @@ The compressed tar.gz must fit the already-installed transport's 8 MiB response
 limit as well as the separate 64 MiB unpacked limit. package-release.sh and the
 installer smoke test both enforce the compressed ceiling. Do not infer upgrade
 compatibility from a successful curl install or an unpack-only updater test.
+
+Release gzip compression uses tools/gzip-release.py with fixed standard-library
+zlib settings. Run tools/test_gzip_release.py and the actual packaged installer
+and updater checks. Compare unpacked member bytes and executable identity when
+reusing native receipts after compression-only changes; an archive-size gain
+does not authorize pruning licenses, changing browser compilation/limits or
+claiming a cold CI payload fits without measuring it. Keep the ordinary gzip
+format and existing checksum/8 MiB enforcement for older installed updaters.

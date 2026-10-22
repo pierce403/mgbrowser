@@ -353,6 +353,7 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
             | "/script-task-events"
             | "/script-error-events"
             | "/script-rejection-events"
+            | "/message-events"
     ) {
         return run_events(client, &fixture, evidence);
     }
@@ -530,7 +531,10 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
     }
     if matches!(
         fixture.path(),
-        "/script-task-events" | "/script-error-events" | "/script-rejection-events"
+        "/script-task-events"
+            | "/script-error-events"
+            | "/script-rejection-events"
+            | "/message-events"
     ) {
         // These fixtures create controls in a later timer/error dispatch. Poll
         // ordinary public DOM state within the client's existing deadline;
@@ -550,12 +554,17 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
         }
         let error_fixture = fixture.path() == "/script-error-events";
         let rejection_fixture = fixture.path() == "/script-rejection-events";
-        let expected = if error_fixture || rejection_fixture {
+        let message_fixture = fixture.path() == "/message-events";
+        let expected = if message_fixture {
+            "deep-clone-identity-noncancelable"
+        } else if error_fixture || rejection_fixture {
             "typed-identity-canceled"
         } else {
             "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask"
         };
-        let attribute = if rejection_fixture {
+        let attribute = if message_fixture {
+            "data-message-proof"
+        } else if rejection_fixture {
             "data-rejection-proof"
         } else if error_fixture {
             "data-error-proof"
@@ -566,6 +575,7 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
             "script,script-microtask,timer,property,property-microtask,listener,listener-microtask";
         let rejection_checkpoint =
             "script,script-microtask,property,property-microtask,listener,listener-microtask";
+        let message_checkpoint = "script,after-post,script-microtask,load,load-microtask,property,property-microtask,listener,listener-microtask";
         loop {
             remaining(client.deadline)?;
             let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
@@ -582,11 +592,20 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                         rejection_checkpoint,
                     )
                     .is_some())
+                && (!message_fixture
+                    || with_attribute(
+                        &document["root"],
+                        "data-message-checkpoint",
+                        message_checkpoint,
+                    )
+                    .is_some())
             {
                 let state = with_attribute(&document["root"], "id", "state")
                     .and_then(|node| node["nodeId"].as_u64())
                     .ok_or_else(|| failure("Missing timer state node"))?;
-                let expected_state = if rejection_fixture {
+                let expected_state = if message_fixture {
+                    "window message ready"
+                } else if rejection_fixture {
                     "promise rejection ready"
                 } else if error_fixture {
                     "window error ready"
@@ -596,7 +615,9 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 if text_of(&document["root"], state).as_deref() != Some(expected_state) {
                     return Err(failure("Timer task proof and visible state disagree"));
                 }
-                if rejection_fixture {
+                if message_fixture {
+                    println!("CDP_WINDOW_MESSAGE_OK {expected} checkpoint={message_checkpoint}");
+                } else if rejection_fixture {
                     println!(
                         "CDP_PROMISE_REJECTION_OK {expected} checkpoint={rejection_checkpoint}"
                     );

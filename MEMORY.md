@@ -26,10 +26,12 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/PERFORMANCE.md`: Browser paint/CLI measurements, cache identity and
   explicit retained-payload ceilings; unavailable worker accounting stays visible.
 
-- `docs/PROMISE_REJECTIONS.md`: v0.9.9 candidate's queued rejection notification,
+- `docs/PROMISE_REJECTIONS.md`: shipped v0.9.9's queued rejection notification,
   shared work, traced/weak ownership and persistent privacy-observation gaps.
   Pinned Boa fatal VM roots require actual terminal teardown, not an extra
-  kept-object clear. Local implementation is not public-release/WPT acceptance.
+  kept-object clear. Release/public acceptance is separate from WPT coverage.
+- `docs/WINDOW_MESSAGES.md`: next bounded self-messaging contract, measured
+  unchanged-harness blocker, partial clone domain and separate lifecycle review.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

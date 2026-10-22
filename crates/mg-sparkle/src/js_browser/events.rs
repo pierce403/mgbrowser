@@ -43,6 +43,8 @@ pub(super) enum Kind {
     Error,
     UnhandledRejection,
     RejectionHandled,
+    Message,
+    MessageError,
 }
 impl Kind {
     pub(super) fn name(self) -> &'static str {
@@ -53,6 +55,8 @@ impl Kind {
             Self::Error => "error",
             Self::UnhandledRejection => "unhandledrejection",
             Self::RejectionHandled => "rejectionhandled",
+            Self::Message => "message",
+            Self::MessageError => "messageerror",
             Self::Click => "click",
             Self::Submit => "submit",
         }
@@ -80,6 +84,8 @@ impl Kind {
             "error" => Ok(Self::Error),
             "unhandledrejection" => Ok(Self::UnhandledRejection),
             "rejectionhandled" => Ok(Self::RejectionHandled),
+            "message" => Ok(Self::Message),
+            "messageerror" => Ok(Self::MessageError),
             _ => Self::parse(name),
         }
     }
@@ -90,6 +96,8 @@ impl Kind {
             "onerror" => Some(Self::Error),
             "onunhandledrejection" => Some(Self::UnhandledRejection),
             "onrejectionhandled" => Some(Self::RejectionHandled),
+            "onmessage" => Some(Self::Message),
+            "onmessageerror" => Some(Self::MessageError),
             _ => Self::property(name),
         }
     }

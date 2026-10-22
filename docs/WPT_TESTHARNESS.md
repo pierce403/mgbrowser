@@ -216,11 +216,29 @@ diagnostic and proves actual callback/checkpoint/exception identity. Queued
 Promise rejection notification is the next separately reviewed increment, not
 implemented or accepted by this release.
 
-The [queued rejection contract](PROMISE_REJECTIONS.md) records the v0.9.9 candidate
-increment's shared admissions, frozen batches, weak membership, no-result-hook
-failures and conservative observation-gap policy. Focused local debug/release
-controls pass; complete regression, package and public delivery remain separate
-gates. Pinned Boa's fatal VM argument roots require terminal Context teardown,
+The [queued rejection contract](PROMISE_REJECTIONS.md) records shipped v0.9.9's
+shared admissions, frozen batches, weak membership, no-result-hook failures and
+conservative observation-gap policy. Full debug/release regressions, exact-source
+CI, tagged package, public installation, actual v0.9.8 self-upgrade and public
+native acceptance pass at `af5d8fc3a8f14555520c07946c0c56c355921a01`.
+Pinned Boa's fatal VM argument roots require terminal Context teardown,
 which the actual browser worker already performs. This is not full-harness
 acceptance. Keep its authored controls separate from the scored
 upstream corpus and future typed observation.
+
+The complete unchanged harness was subsequently measured once through the
+verified public v0.9.9 browser: the first bootstrap blocker is unsupported Window
+`message` registration. Initial parsing/admission fit, but execution stopped
+early with a pending task, so complete feasibility and typed completion remain
+unknown. [The next messaging contract](WINDOW_MESSAGES.md) records the exact
+diagnostic, deliberately limited serialization scope and unchanged resource
+policy. Genuine self-messaging comes before separately reviewed queued lifecycle
+and trusted observation; none of these authored controls adds an upstream pass.
+
+The v0.9.10 candidate's packaged executable subsequently initializes the exact
+same full harness without that registration diagnostic. It consumes 9,007
+opcodes and 18,603,428 cumulative requested-System bytes, but two jobs remain
+pending when the navigation-only profile returns. This clears an initial
+bootstrap blocker, not the queued lifecycle/typed observer gates or complete
+runtime feasibility. The exact-input/cleanup receipt is recorded in the
+messaging contract; no scored waits, inputs or expectations change.

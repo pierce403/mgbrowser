@@ -34,8 +34,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod dom_exception;
+mod message_clone;
+mod window_messages;
+
 static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
 const REJECTION_FAILURE: &str = "Promise rejection tracking invariant or storage admission failed";
+const MESSAGE_FAILURE: &str = "Window message invariant or storage admission failed";
 const UNHANDLED_REJECTION: &str = "Unhandled Promise rejection";
 const REJECTION_GAP: &str =
     "Promise rejection observation suppressed by source-exposure policy; handled status unknown.";
@@ -48,6 +53,7 @@ struct Brand {
     // record and weak wrapper cache must not become hidden exception roots.
     error: Option<ErrorPayload>,
     rejection: Option<RejectionPayload>,
+    message: Option<MessagePayload>,
     #[unsafe_ignore_trace]
     finalized: Rc<Cell<usize>>,
 }
@@ -62,6 +68,14 @@ struct ErrorPayload {
 struct RejectionPayload {
     promise: JsObject<Promise>,
     reason: JsValue,
+}
+
+#[derive(Clone, Trace, Finalize)]
+struct MessagePayload {
+    data: JsValue,
+    origin: JsString,
+    source: JsObject,
+    ports: JsObject,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -89,6 +103,16 @@ enum DomTaskKind {
         #[unsafe_ignore_trace]
         permit: modern::WorkPermit,
         payload: RejectionPayload,
+    },
+    Message {
+        #[unsafe_ignore_trace]
+        permit: modern::WorkPermit,
+        #[unsafe_ignore_trace]
+        graph: message_clone::SerializedMessage,
+        #[unsafe_ignore_trace]
+        target: window_messages::TargetOrigin,
+        #[unsafe_ignore_trace]
+        origin: String,
     },
 }
 
@@ -184,6 +208,9 @@ struct State {
     #[cfg(test)]
     #[unsafe_ignore_trace]
     test_now: Option<Instant>,
+    #[cfg(test)]
+    #[unsafe_ignore_trace]
+    test_message_restore_failure: bool,
     wrappers: HashMap<String, JsObject>, // rooted WeakRef objects, not their targets
     methods: HashMap<String, JsObject>,
     brands: JsWeakMap,
@@ -247,6 +274,20 @@ fn reserve_storage<T>(host: &mut BrowserHost, values: &mut Vec<T>, extra: usize)
             .map_err(|_| ())?;
     }
     Ok(())
+}
+
+// Message builders use the same cumulative host ledger as all DOM storage.
+// End the State borrow before latching; callers must also end callback borrows.
+fn message_charge(bytes: usize, context: &mut Context) -> JsResult<()> {
+    modern::check_context(context)?;
+    let result = state(context).borrow_mut().host.charge(bytes);
+    result.map_err(|_| modern::latch_context(context, MESSAGE_FAILURE))
+}
+
+fn message_reserve<T>(values: &mut Vec<T>, extra: usize, context: &mut Context) -> JsResult<()> {
+    modern::check_context(context)?;
+    let result = reserve_storage(&mut state(context).borrow_mut().host, values, extra);
+    result.map_err(|_| modern::latch_context(context, MESSAGE_FAILURE))
 }
 
 fn rejection_exposure(context: &Context) -> Result<bool, ()> {
@@ -498,6 +539,16 @@ fn wrap_event_payload(
     rejection: Option<RejectionPayload>,
     context: &mut Context,
 ) -> JsResult<JsValue> {
+    wrap_all_payloads(handle, error, rejection, None, context)
+}
+
+fn wrap_all_payloads(
+    handle: &str,
+    error: Option<ErrorPayload>,
+    rejection: Option<RejectionPayload>,
+    message: Option<MessagePayload>,
+    context: &mut Context,
+) -> JsResult<JsValue> {
     modern::check_context(context)?;
     let handle = if handle == "node:0" {
         "document"
@@ -521,7 +572,9 @@ fn wrap_event_payload(
     }
     let (realm, finalized, constructor, brands) = {
         let mut data = shared.borrow_mut();
-        data.host.charge(256 + handle.len()).map_err(failure)?;
+        data.host
+            .charge(256 + handle.len() + std::mem::size_of::<Option<MessagePayload>>())
+            .map_err(failure)?;
         data.wrappers_created += 1;
         (
             data.realm,
@@ -537,6 +590,7 @@ fn wrap_event_payload(
             realm,
             error,
             rejection,
+            message,
             finalized,
         },
     );
@@ -670,8 +724,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         }
         return fallback_get(args, context);
     };
-    if let Some(value) =
-        error_property(&args[0], &name).or_else(|| rejection_property(&args[0], &name))
+    if let Some(value) = error_property(&args[0], &name)
+        .or_else(|| rejection_property(&args[0], &name))
+        .or_else(|| message_property(&args[0], &name))
     {
         return Ok(value);
     }
@@ -771,6 +826,7 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     if let Some(name) = property_name(&property) {
         if error_property(&args[0], &name).is_some()
             || rejection_property(&args[0], &name).is_some()
+            || message_property(&args[0], &name).is_some()
         {
             return Ok(true.into());
         }
@@ -822,6 +878,20 @@ fn rejection_property(target: &JsValue, name: &str) -> Option<JsValue> {
     match name {
         "promise" => Some(payload.promise.clone().upcast().into()),
         "reason" => Some(payload.reason.clone()),
+        _ => None,
+    }
+}
+
+fn message_property(target: &JsValue, name: &str) -> Option<JsValue> {
+    let object = target.as_object()?;
+    let data = object.downcast_ref::<Brand>()?;
+    let payload = data.message.as_ref()?;
+    match name {
+        "data" => Some(payload.data.clone()),
+        "origin" => Some(payload.origin.clone().into()),
+        "source" => Some(payload.source.clone().into()),
+        "ports" => Some(payload.ports.clone().into()),
+        "lastEventId" => Some(js_string!("").into()),
         _ => None,
     }
 }
@@ -968,6 +1038,9 @@ fn timer_call(
 
 fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
+    if name == "host.window.postMessage" {
+        return window_messages::post(this, args, context);
+    }
     if matches!(name, "host.window.setTimeout" | "host.window.clearTimeout") {
         return timer_call(name, this, args, context);
     }
@@ -1229,6 +1302,8 @@ impl BoaPageRealm {
             reporting_error: false,
             #[cfg(test)]
             test_now: None,
+            #[cfg(test)]
+            test_message_restore_failure: false,
             wrappers: HashMap::new(),
             methods: HashMap::new(),
             brands: JsWeakMap::new(context),
@@ -1239,6 +1314,7 @@ impl BoaPageRealm {
             wrappers_created: 0,
         }));
         context.insert_data(shared.clone());
+        dom_exception::register(context).map_err(|_| "DOMException binding failed")?;
         let global = context.global_object();
         for name in ["window", "self", "globalThis", "parent"] {
             context
@@ -1274,6 +1350,7 @@ impl BoaPageRealm {
             "removeEventListener",
             "setTimeout",
             "clearTimeout",
+            "postMessage",
         ] {
             let function = method(&format!("host.window.{name}"), context)
                 .map_err(|_| "Event binding failed")?;
@@ -1290,6 +1367,8 @@ impl BoaPageRealm {
             "onerror",
             "onunhandledrejection",
             "onrejectionhandled",
+            "onmessage",
+            "onmessageerror",
         ] {
             let getter = FunctionObjectBuilder::new(
                 context.realm(),
@@ -1568,6 +1647,21 @@ impl BoaPageRealm {
         }
     }
 
+    fn message_failure(&mut self, errors: &mut Vec<String>) {
+        let error = self.engine.latch_failure(MESSAGE_FAILURE);
+        if errors.len() < 64 {
+            errors.push(bounded(&error.to_string(), 512));
+        }
+    }
+
+    fn payload_failure(&mut self, kind: Kind, errors: &mut Vec<String>) {
+        if matches!(kind, Kind::Message | Kind::MessageError) {
+            self.message_failure(errors);
+        } else {
+            self.rejection_failure(errors);
+        }
+    }
+
     fn observation_notice(&self, errors: &mut Vec<String>) {
         if self.state.borrow().rejection_observation_gap
             && errors.len() < 64
@@ -1588,7 +1682,7 @@ impl BoaPageRealm {
             DomTaskKind::Batch(ids) => ids
                 .iter()
                 .any(|id| rejections.iter().any(|candidate| candidate.id == *id)),
-            DomTaskKind::Handled { .. } => true,
+            DomTaskKind::Handled { .. } | DomTaskKind::Message { .. } => true,
         });
     }
 
@@ -1599,18 +1693,35 @@ impl BoaPageRealm {
         let discarded = {
             let mut data = self.state.borrow_mut();
             if !data.rejections.is_empty()
-                || !data.dom_tasks.is_empty()
+                || data
+                    .dom_tasks
+                    .iter()
+                    .any(|task| !matches!(task.kind, DomTaskKind::Message { .. }))
                 || data.outstanding_rejections.is_some()
             {
                 data.rejection_observation_gap = true;
             }
             (
                 std::mem::take(&mut data.rejections),
-                std::mem::take(&mut data.dom_tasks),
                 data.outstanding_rejections.take(),
             )
         };
         drop(discarded);
+        loop {
+            let discarded = {
+                let mut data = self.state.borrow_mut();
+                data.dom_tasks
+                    .iter()
+                    .position(|task| !matches!(task.kind, DomTaskKind::Message { .. }))
+                    .map(|index| data.dom_tasks.swap_remove(index))
+            };
+            if discarded.is_none() {
+                break;
+            }
+            // A rejected notice's permit must be canceled outside State borrows;
+            // legitimate messages keep their handles, roots, origin and order.
+            drop(discarded);
+        }
         Ok(true)
     }
 
@@ -1710,6 +1821,58 @@ impl BoaPageRealm {
                 return;
             }
         };
+        self.window_payload_event(event, kind, wrapper, errors);
+    }
+
+    fn message_event(
+        &mut self,
+        kind: Kind,
+        value: JsValue,
+        origin: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let prepared = (|| {
+            let context = self.engine.context_mut();
+            message_charge(origin.len(), context)?;
+            let ports = modern::boa_engine::object::builtins::JsArray::new(context)?;
+            let frozen = ports
+                .set_integrity_level(modern::boa_engine::object::IntegrityLevel::Frozen, context)?;
+            if !frozen {
+                return Err(modern::latch_context(context, MESSAGE_FAILURE));
+            }
+            let payload = MessagePayload {
+                data: value,
+                origin: JsString::from(origin),
+                source: context.global_object(),
+                ports: ports.into(),
+            };
+            let event = state(context)
+                .borrow_mut()
+                .host
+                .new_event(kind, Target::Window, None)
+                .map_err(failure)?;
+            let wrapper = wrap_all_payloads(
+                &format!("event:{event}"),
+                None,
+                None,
+                Some(payload),
+                context,
+            )?;
+            Ok((event, wrapper))
+        })();
+        match prepared {
+            Ok((event, wrapper)) => self.window_payload_event(event, kind, wrapper, errors),
+            Err(_) => self.message_failure(errors),
+        }
+    }
+
+    fn window_payload_event(
+        &mut self,
+        event: usize,
+        kind: Kind,
+        wrapper: JsValue,
+        errors: &mut Vec<String>,
+    ) {
         for capture in [true, false] {
             if self.closed
                 || self.engine.is_fatal()
@@ -1752,7 +1915,7 @@ impl BoaPageRealm {
                 }
             };
             let Some(ids) = ids else {
-                self.rejection_failure(errors);
+                self.payload_failure(kind, errors);
                 break;
             };
             for id in ids {
@@ -2194,6 +2357,46 @@ impl BoaPageRealm {
                             Err(()) => self.rejection_failure(&mut reply.errors),
                         }
                     }
+                    DomTaskKind::Message {
+                        permit,
+                        graph,
+                        target,
+                        origin,
+                    } => {
+                        if modern::begin_host_task(self.engine.context_mut(), permit).is_err() {
+                            self.message_failure(&mut reply.errors);
+                        } else if target.matches(&self.state.borrow().host.url) {
+                            #[cfg(test)]
+                            let inject_failure = std::mem::take(
+                                &mut self.state.borrow_mut().test_message_restore_failure,
+                            );
+                            #[cfg(not(test))]
+                            let inject_failure = false;
+                            let result = if inject_failure {
+                                Err(failure("Owned ordinary message restoration failure"))
+                            } else {
+                                message_clone::restore(graph, self.engine.context_mut())
+                            };
+                            if modern::check_context(self.engine.context_mut()).is_err() {
+                                self.message_failure(&mut reply.errors);
+                            } else {
+                                match result {
+                                    Ok(value) => self.message_event(
+                                        Kind::Message,
+                                        value,
+                                        origin,
+                                        &mut reply.errors,
+                                    ),
+                                    Err(_) => self.message_event(
+                                        Kind::MessageError,
+                                        JsValue::null(),
+                                        origin,
+                                        &mut reply.errors,
+                                    ),
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2511,6 +2714,246 @@ mod tests {
     fn evaluate(realm: &mut BoaPageRealm, source: &str) {
         realm.engine.evaluate(source).unwrap();
         realm.engine.checkpoint().unwrap();
+    }
+
+    // Frozen before the messaging implementation: private storage/identity
+    // controls supplement the public semantic/resource fixture files.
+    fn message_title(realm: &BoaPageRealm) -> String {
+        document::project_nodes(
+            realm.state.borrow().host.document.nodes.clone(),
+            "https://example.test/owned",
+        )
+        .unwrap()
+        .title
+    }
+
+    #[test]
+    fn message_storage_failure_latches_before_getters_or_retained_work() {
+        let mut realm = realm(
+            "var touched=0;var value={get proof(){touched++;document.title='getter ran';return 42;}};window.onerror=()=>document.title='wrong reporter';",
+        );
+        realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+        assert!(
+            realm
+                .engine
+                .evaluate("try{postMessage(value,'*');}catch(e){document.title='caught fatal';}")
+                .is_err()
+        );
+        assert!(realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(message_title(&realm), "");
+        let global = realm.engine.context().global_object();
+        let touched = global
+            .borrow()
+            .properties()
+            .get(&js_string!("touched").into())
+            .unwrap();
+        assert_eq!(touched.value().unwrap().as_number(), Some(0.0));
+        assert!(realm.state.borrow().dom_tasks.is_empty());
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    fn message_iterator_close_engine_failure(close: &str) {
+        let mut realm = realm("");
+        let result = realm.engine.evaluate(&format!(
+            "var caught=0;var transfer={{[Symbol.iterator](){{return {{next(){{return {{done:false,value:1}};}},{close}}};}}}};try{{postMessage(1,{{transfer}});}}catch(error){{caught++;document.title='caught ordinary error';}}document.title='continued after VM limit';"
+        ));
+        assert!(result.is_err(), "IteratorClose swallowed engine error");
+        assert!(realm.engine.is_fatal(), "VM limit did not latch");
+        assert_eq!(realm.engine.stats().jobs_admitted, 0);
+        assert_eq!(message_title(&realm), "");
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    #[test]
+    fn message_iterator_close_engine_error_from_return_getter_is_terminal() {
+        message_iterator_close_engine_failure(
+            "get return(){function recurse(){recurse();}return recurse();}",
+        );
+    }
+
+    #[test]
+    fn message_iterator_close_engine_error_from_return_callback_is_terminal() {
+        message_iterator_close_engine_failure(
+            "return(){function recurse(){recurse();}return recurse();}",
+        );
+    }
+
+    #[test]
+    fn message_actual_native_detached_buffer_rejects_clone_and_transfer_without_new_page_builtin() {
+        let mut realm = realm("");
+        let context = realm.engine.context_mut();
+        let detached =
+            modern::boa_engine::object::builtins::JsArrayBuffer::new(4, context).unwrap();
+        assert_eq!(detached.detach(&JsValue::undefined()).unwrap().len(), 4);
+        assert!(detached.data().is_none());
+        let detached: JsObject = detached.into();
+        context
+            .register_global_property(js_string!("ownedDetached"), detached, Attribute::all())
+            .unwrap();
+        let result = realm.engine.evaluate(r#"
+            var valid=new ArrayBuffer(8),rejected=0;
+            for(const action of [()=>postMessage({nested:ownedDetached},'/'),()=>postMessage(1,'/',[ownedDetached])]){
+                try{action();throw 'detached buffer accepted';}catch(error){
+                    if(!(error instanceof DOMException)||!(error instanceof Error)||error.name!=='DataCloneError'||error.code!==25)throw error;
+                    rejected++;
+                }
+            }
+            rejected===2 && valid.byteLength===8 && ownedDetached.byteLength===0
+        "#).unwrap();
+        assert_eq!(result.as_boolean(), Some(true));
+        assert!(!realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(realm.engine.stats().jobs_executed, 0);
+        assert_eq!(realm.engine.stats().pending_jobs, 0);
+        assert!(realm.state.borrow().dom_tasks.is_empty());
+        realm.engine.checkpoint().unwrap();
+    }
+
+    #[test]
+    fn message_handle_overflow_occurs_after_serialization_but_before_enqueue() {
+        let mut realm = realm("");
+        realm.state.borrow_mut().next_handle = u64::MAX;
+        assert!(realm.engine.evaluate(
+            "try{postMessage({get proof(){document.title='serialized before handle';return 42;}},'*');}catch(e){document.title='caught fatal';}",
+        ).is_err());
+        assert!(realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(message_title(&realm), "serialized before handle");
+        assert!(realm.state.borrow().dom_tasks.is_empty());
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    #[test]
+    fn message_explicit_target_origin_is_rechecked_at_delivery() {
+        let mut realm = realm(
+            "onmessage=()=>document.title='wrong origin delivered';postMessage({proof:42},'https://example.test/');",
+        );
+        assert_eq!(realm.engine.stats().pending_jobs, 1);
+        // Private state-transition control, not page-controlled document origin.
+        // Normal navigation instead cancels/drops the old worker entirely.
+        realm.state.borrow_mut().host.url =
+            url::Url::parse("https://different.test/owned").unwrap();
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+        assert!(reply.errors.is_empty());
+        assert_eq!(message_title(&realm), "");
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+    }
+
+    #[test]
+    fn ordinary_message_restoration_failure_dispatches_messageerror_not_message() {
+        let mut realm = realm(
+            "var calls=0;onmessage=()=>{throw 'wrong successful delivery';};onmessageerror=function(event){if(this!==window||event.type!=='messageerror'||event.data!==null||event.origin!=='https://example.test'||event.source!==window||event.bubbles||event.cancelable||event.defaultPrevented)throw 'wrong messageerror';event.preventDefault();if(event.defaultPrevented)throw 'messageerror canceled';calls++;document.title='ordinary restore failure';};postMessage({proof:42},'*');",
+        );
+        // The public supported graph has no synthetic failure trigger. This
+        // one-shot private control injects an ordinary restoration exception,
+        // not malformed wire data, a renewed budget or a fatal-resource escape.
+        realm.state.borrow_mut().test_message_restore_failure = true;
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+        assert!(reply.errors.is_empty());
+        assert_eq!(message_title(&realm), "ordinary restore failure");
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+        evaluate(&mut realm, "if(calls!==1)throw 'duplicate messageerror';");
+    }
+
+    #[test]
+    fn message_restoration_storage_failure_is_terminal_not_messageerror() {
+        let mut realm = realm(
+            "onmessage=()=>document.title='wrong delivery';onmessageerror=()=>document.title='wrong recovery';postMessage({proof:42},'*');",
+        );
+        realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Fatal, "{:?}", reply.errors);
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+        assert_eq!(message_title(&realm), "");
+        assert!(realm.state.borrow().dom_tasks.is_empty());
+    }
+
+    #[test]
+    fn queued_message_graph_does_not_keep_original_object_identity_alive() {
+        let mut realm = realm(
+            "var originalWeak;(()=>{var value={proof:42};value.self=value;originalWeak=new WeakRef(value);postMessage(value,'*');})();onmessage=event=>{if(event.data.self!==event.data||event.data.proof!==42)throw 'graph changed';document.title='clone delivered';};",
+        );
+        collect(&mut realm);
+        evaluate(
+            &mut realm,
+            "if(originalWeak.deref()!==undefined)throw 'original rooted by serialized graph';",
+        );
+        let mut advertised = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut advertised);
+        let reply = pump_next(&mut realm);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        assert_eq!(message_title(&realm), "clone delivered");
+    }
+
+    #[test]
+    fn message_source_memo_roots_identity_across_getter_reentry_and_real_gc() {
+        let mut realm = realm(
+            "var original={proof:42},weakOriginal=new WeakRef(original);var source={first:original,get second(){source.first=null;original=null;testMessageCollect();return weakOriginal.deref();}};onmessage=event=>{if(event.data.first!==event.data.second||event.data.first.proof!==42)throw 'memo identity lost during getter';document.title='rooted across getter';};",
+        );
+        // WeakRef construction happened in the completed Init job. Its normal
+        // checkpoint cleared kept objects; the getter removes the remaining JS
+        // references before actual collection in a subsequent execution job.
+        realm
+            .engine
+            .context_mut()
+            .register_global_builtin_callable(
+                js_string!("testMessageCollect"),
+                0,
+                NativeFunction::from_fn_ptr(|_, _, context| {
+                    modern::check_context(context)?;
+                    modern::boa_gc::force_collect();
+                    Ok(JsValue::undefined())
+                }),
+            )
+            .unwrap();
+        evaluate(&mut realm, "postMessage(source,'/');");
+        collect(&mut realm);
+        evaluate(
+            &mut realm,
+            "if(weakOriginal.deref()!==undefined)throw 'completed clone memo retained original';",
+        );
+        let mut advertised = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut advertised);
+        let reply = pump_next(&mut realm);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        assert_eq!(message_title(&realm), "rooted across getter");
+    }
+
+    #[test]
+    fn message_event_wrapper_is_weak_except_for_a_real_escaped_reference() {
+        for escaped in [false, true] {
+            let mut realm = realm(&format!(
+                "onmessage=event=>{{{}document.title='delivered';}};postMessage({{proof:42}},'*');",
+                if escaped {
+                    "globalThis.savedMessage=event;"
+                } else {
+                    ""
+                },
+            ));
+            collect(&mut realm);
+            let before = realm.state.borrow().finalized.get();
+            let reply = pump_next(&mut realm);
+            assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+            collect(&mut realm);
+            if escaped {
+                assert_eq!(realm.state.borrow().finalized.get(), before);
+                evaluate(
+                    &mut realm,
+                    "if(savedMessage.data.proof!==42||savedMessage.currentTarget!==null||savedMessage.eventPhase!==0)throw 'escaped payload changed';savedMessage=null;",
+                );
+                collect(&mut realm);
+            }
+            assert!(realm.state.borrow().finalized.get() > before);
+        }
     }
 
     fn terminal_rejection_snapshot(realm: &mut BoaPageRealm) -> SessionReply {
