@@ -109,10 +109,13 @@ paths and source-only evidence.
 
 ## What executes
 
-The Python standard-library runner starts a private, ephemeral loopback HTTP
-server serving only the pinned file inventory and explicitly authored controls.
-It invokes the Rust [wpt_render example](../examples/wpt_render.rs) in a fresh
-process for each unique test or reference page:
+The Python standard-library runner serves only the pinned file inventory and
+explicitly authored controls through private ephemeral loopback fixtures.
+The reviewed two-lane orchestration in [WPT_EXPANSION.md](WPT_EXPANSION.md)
+uses fresh, uniquely owned fixture contexts and renderer processes per unique
+test/reference page. One-/two-lane equivalence is an adoption gate, not permission
+to accept different outcomes. It invokes the Rust
+[wpt_render example](../examples/wpt_render.rs) for each produced page:
 
 1. Construct the real Chassis `Browser` without chrome. Static pages use
    `DisabledScripts`; supported HTML inline setup uses the real restricted Linux
@@ -134,6 +137,24 @@ same-origin TTF/OTF font resources, including pinned Ahem, are fetched and selec
 through the production resource/font pipeline. Each report also
 records the adapter binary hash, viewport, current Git commit, dirty-tree flag,
 corpus/source fingerprints, page artifacts, diagnostics and actual HTTP requests.
+
+The default is two fixed renderer lanes (`--jobs 2`); `--jobs 1` is the
+sequential equivalence control, and higher values are rejected. Assignment is
+manifest index modulo lane count, not an outcome-derived partition. Shared
+references render once through a bounded single-flight cache. Build and authored
+controls finish before these lanes start; each lane has at most one renderer
+group, conservatively up to four owned script children across both unchanged
+per-Browser allowances. This is not an aggregate RSS or whole-browser sandbox.
+
+Each produced page has a fresh fixture origin that is never reused during that
+run. Its synchronous request handler drains before its immutable audit enters
+the page cache. The report attributes global requests to page/lane and retains
+per-page request copies, requiring a successful main-document request. Partial
+or failed responses, unknown/late requests and non-200 resources invalidate the
+gate. The green control also proves its external CSS request. Two producer slots
+are reserved together under the single evidence allowance; they are released
+only after confirmed process, fixture and lane cleanup. Unknown cleanup stops
+admission and quarantines its slots, including during final-report replacement.
 
 Two authored controls run before the scored corpus. A green square must render
 using a genuinely fetched external stylesheet, a red square must differ, and
@@ -239,6 +260,13 @@ rendering, with a 20-minute build deadline. It uses the executable reported by
 that Cargo invocation, including custom target directories, not a guessed old
 binary path. There is no arbitrary prebuilt-binary
 override that could associate stale executable bytes with a new source fingerprint.
+
+For an orchestration change, run a fresh `--jobs 1` control and the normal
+two-lane run sequentially, never concurrently. Require identical complete case
+outcomes, every rendered page's raw RGB hash and original comparisons, and
+per-page request multisets after normalizing only the owned ephemeral origins.
+Counts alone are insufficient. Preserve the preceding baseline too; do not
+accept a new result simply because parallel execution is faster.
 
 `--update-score` updates only the deterministic summary, not regression
 expectations. Review all changed outcomes before committing it. The

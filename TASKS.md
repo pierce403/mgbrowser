@@ -29,6 +29,15 @@ following dependency order, updating evidence as each increment ships:
    cases. Selection, input/resource review and sequencing are fixed in
    [docs/WPT_EXPANSION.md](docs/WPT_EXPANSION.md). Verify exact-commit CI and
    public delivery before the next engine increment.
+   Source 852978a passes Rust, JSPLAN and Pages/WPT CI, but native publication
+   failed before the canonical report was ready; public delivery still points
+   to 067e430. The measured 20-minute validation exceeds the existing native
+   publisher window. The separately reviewed bounded two-lane orchestration now
+   passes local equivalence: 1,029.827 seconds sequential versus 471.514 seconds
+   parallel, identical case/pixel/request evidence and confirmed cleanup. Browser,
+   corpus, expectations and deployment authority are unchanged. Keep the denied
+   native-log API path stopped. Exact-commit cold CI and actual public delivery
+   remain the next publication gates, not claims based on this local speedup.
    **Next:** implement non-scoring complete Window-testharness readiness through the
    restricted worker, following [docs/WPT_TESTHARNESS.md](docs/WPT_TESTHARNESS.md),
    before declaring another scored upstream selection (F-026/F-008/F-016).

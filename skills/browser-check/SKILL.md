@@ -29,6 +29,16 @@ The report stores each unique page once; inspect its lossless RGB/PNG/log and
 typed failure record before accepting new passes. No source navigation or
 script-proposed navigation may escape the local test-server lane.
 
+For WPT orchestration changes, follow the separately reviewed two-lane policy
+in docs/WPT_EXPANSION.md. Keep a one-lane control and compare complete runs
+using the same binary/font/source: all case identities/statuses, every rendered
+page's raw RGB hash and original relations, and per-page HTTP request multisets.
+Aggregate counts alone cannot establish equivalence. Preserve shared run,
+evidence/report/request limits, single-flight references and bounded queues.
+Unknown process/fixture cleanup stops admission; it cannot free another renderer
+slot. Keep partial PENDING evidence honest and verify exact-commit cold CI and
+actual public report delivery after normal publication.
+
 For JSPLAN engine research, also read `experiments/jsplan/README.md` and
 `docs/jsplan/RESULTS.md`. Keep the experiment's workspace/lockfile separate from
 production. Build its release executable with Rust 1.91.1, run protocol and

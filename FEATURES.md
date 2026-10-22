@@ -64,6 +64,10 @@ The unchanged-engine expanded baseline is 317 PASS, 632 FAIL and 62 UNSUPPORTED
 out of 1,011, without infrastructure errors, timeouts or crashes. The active
 ratchet preserves all 317 passes and 949 runnable cases as well as the separate
 original 24-case contract. See the dated log for exact-commit publication gates.
+The runner's bounded two-lane orchestration preserves all complete one-lane
+case, raw-pixel and per-page-request evidence while reducing measured local
+runtime. It changes test tooling only, not browser behavior or the WPT score.
+See docs/WPT_EXPANSION.md for the separate safety/equivalence and public gates.
 
 ## F-025 : Google News desktop reading
 

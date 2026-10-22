@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import gzip
 import io
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -29,6 +29,7 @@ from import_corpus import (decode_source, parse_document, reference_edges,
                            resolved_edge, resource_edges)
 from process_control import (LOG_LIMIT, METADATA_LIMIT, PNG_LIMIT, read_artifact,
                              run_bounded)
+from parallel import FixedLanes, RequestLedger, SharedBudget, SingleFlight
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -67,6 +68,10 @@ class UpstreamSourceFailure(ValueError):
     """A reviewed dependency is absent from the complete original pinned tree."""
 
 
+class FixtureCleanupError(ValueError):
+    """A fixture owner could not confirm retirement of its thread/listener."""
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -97,7 +102,13 @@ def write_json(path, value, limit=REPORT_LIMIT):
 def evidence_bytes(output):
     total = 0
     for path in output.iterdir():
-        value = path.lstat()
+        try:
+            value = path.lstat()
+        except FileNotFoundError:
+            # Another owned lane may just have losslessly compressed/unlinked
+            # raw RGB, or the coordinator replaced its report temporary. New
+            # producer/report bytes remain covered by their held reservations.
+            continue
         if not stat.S_ISREG(value.st_mode):
             raise ValueError(f"Unexpected nonregular evidence artifact: {path}")
         total += value.st_size
@@ -142,7 +153,7 @@ def tool_output(command, label, output, environment, deadline):
     stdout = output / (label + ".out")
     result = run_bounded(command, cwd=ROOT, env=environment, log_path=output / (label + ".log"),
                          stdout_path=stdout, timeout=10, global_deadline=deadline)
-    if result["status"] != "OK":
+    if result["status"] != "OK" or result.get("cleanup_succeeded") is not True:
         raise ValueError(label + " failed: " + result["reason"])
     return read_artifact(stdout, limit=LOG_LIMIT).decode("utf-8")
 
@@ -172,17 +183,23 @@ def progress_counts(report):
     report["completed_total"] = counts["total"] - counts[PENDING]
 
 
-def checkpoint(path, report, output, deadline):
+def checkpoint(path, report, output, deadline, budget=None):
     progress_counts(report)
-    check_budget(output, deadline, reserve=REPORT_LIMIT)
+    if budget is None:
+        check_budget(output, deadline, reserve=REPORT_LIMIT)
+    else:
+        budget.check()
     write_json(path, report)
 
 
 def finish_report(path, report):
     """Final bounded evidence remains honest even if detailed JSON exceeds cap."""
+    retained = report.get("execution", {}).get("remaining_producer_reserved_bytes", 0)
     try:
+        if type(retained) is not int or not 0 <= retained <= OUTPUT_LIMIT:
+            raise ValueError("Invalid retained producer reservation in final report")
         progress_counts(report)
-        check_budget(path.parent, reserve=REPORT_LIMIT)
+        check_budget(path.parent, reserve=REPORT_LIMIT + retained)
         write_json(path, report)
         return True
     except (OSError, ValueError, TypeError) as error:
@@ -191,7 +208,12 @@ def finish_report(path, report):
         minimal["details_omitted_due_to_evidence_limit"] = True
         minimal["results"] = [{"test": item["test"], "status": item["status"]} for item in report["results"]]
         try:
-            write_json(path, minimal)
+            if type(retained) is not int or not 0 <= retained <= OUTPUT_LIMIT:
+                raise ValueError("Invalid retained producer reservation in fallback report")
+            remaining = OUTPUT_LIMIT - evidence_bytes(path.parent) - retained
+            if remaining <= 0:
+                raise ValueError("No admitted evidence bytes remain for a fallback report")
+            write_json(path, minimal, limit=min(REPORT_LIMIT, remaining))
         except (OSError, ValueError, TypeError) as final_error:
             print(f"Cannot retain bounded final WPT report: {final_error}", file=sys.stderr)
         return False
@@ -529,26 +551,89 @@ MIME_TYPES = {
 
 
 class RequestAudit(list):
-    def __init__(self, limit=REQUEST_LIMIT):
+    def __init__(self, limit=REQUEST_LIMIT, require_owner=False):
         super().__init__()
         self.limit = limit
         self.exceeded = False
         self.lock = threading.Lock()
+        self.require_owner = require_owner
+        self.ledger = None
+        self.page = None
+        self.lane = None
+        self.closed = False
+
+    def bind(self, ledger, page, lane):
+        with self.lock:
+            if self.page is not None or self.closed or self.exceeded or self:
+                raise ValueError("Fixture context was used before its unique page admission")
+            self.ledger, self.page, self.lane = ledger, page, lane
+
+    def reject(self, reason):
+        with self.lock:
+            self.exceeded = True
+            if self.ledger is not None:
+                self.ledger.fail(reason)
 
     def add(self, request):
         with self.lock:
-            if len(self) >= self.limit:
+            allowed = (not self.closed and not self.exceeded and len(self) < self.limit
+                       and (not self.require_owner or self.page is not None))
+            row = dict(request)
+            if not allowed:
                 self.exceeded = True
-                return False
-            self.append(request)
-            return True
+                row["status"] = 503
+                if self.ledger is not None:
+                    self.ledger.fail("Unknown, late/unattributed or oversized fixture request")
+            if self.ledger is not None and not self.ledger.add(self.page, self.lane, row):
+                self.exceeded = True
+                allowed = False
+                row["status"] = 503
+            if len(self) < self.limit:
+                self.append(row)
+            return allowed
+
+    def close_admission(self):
+        with self.lock:
+            self.closed = True
+
+    def snapshot(self):
+        with self.lock:
+            return [dict(row) for row in self]
+
+    def validate(self):
+        with self.lock:
+            if self.exceeded or self.page is None:
+                raise ValueError("Unknown, late/unattributed or oversized fixture request")
+            if any(row["status"] != 200 for row in self):
+                raise ValueError("Page requested an absent or rejected fixture resource")
+            expected = "/" + quote(self.page, safe="/")
+            if sum(row["path"] == expected and row["status"] == 200 for row in self) != 1:
+                raise ValueError("Fixture did not record exactly one successful main-document request")
 
 
 @contextmanager
 def serve(files):
-    requests = RequestAudit()
+    requests = RequestAudit(require_owner=True)
 
     class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            self.audited = False
+            self.request.settimeout(0.5)
+            super().setup()
+
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                if not self.audited:
+                    requests.reject("Fixture connection closed without a complete audited request")
+
+        def send_error(self, code, message=None, explain=None):
+            requests.add({"path": str(getattr(self, "path", ""))[:8192], "status": code})
+            self.audited = True
+            requests.reject("Unexpected HTTP method or malformed fixture request")
+            super().send_error(code, message, explain)
+
         def do_GET(self):
             path = urlsplit(self.path)
             name = unquote(path.path).lstrip("/")
@@ -557,10 +642,11 @@ def serve(files):
             # Request targets are separately bounded by BaseHTTPRequestHandler;
             # cap retained target text as well as the total number of entries.
             if len(self.path.encode("utf-8")) > 8192:
-                requests.exceeded = True
+                requests.reject("HTTP request target exceeded its retained byte admission")
                 status, data = 414, None
             if not requests.add({"path": self.path[:8192], "status": status}):
                 status, data = 503, None
+            self.audited = True
             self.send_response(status)
             self.send_header("Content-Length", str(len(data or b"")))
             mime = MIME_TYPES.get(PurePosixPath(name).suffix.lower(), "application/octet-stream")
@@ -573,15 +659,49 @@ def serve(files):
         def log_message(self, *_):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+        def log_error(self, *_):
+            requests.reject("Malformed or incomplete fixture request")
+
+    # One owned context/origin per produced page. A synchronous server has no
+    # detached handler threads to race a page switch; each connection is closed.
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.handle_error = lambda *_: requests.reject("Fixture response handler failed")
+    server.timeout = 0.01
+    stop = threading.Event()
+
+    def service():
+        # Unlike BaseServer.shutdown, this stop signal also fences a target
+        # that starts late after Thread.start raised/interrupted its caller.
+        try:
+            while not stop.is_set():
+                server.handle_request()
+        except BaseException:
+            if not stop.is_set():
+                requests.reject("Owned fixture service failed")
+
+    thread = threading.Thread(target=service, name="wpt-fixture")
+    started = False
     try:
+        thread.start()
+        started = True
         yield f"http://127.0.0.1:{server.server_port}/", requests
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        started = started or thread.ident is not None
+        stop.set()
+        requests.close_admission()
+        try:
+            server.server_close()
+            if started:
+                thread.join(timeout=2)
+            if started and thread.is_alive():
+                raise ValueError("Owned page fixture did not shut down")
+        except BaseException as error:
+            # Close the listener even if shutdown/join could not be confirmed.
+            try:
+                server.server_close()
+            except BaseException:
+                pass
+            raise FixtureCleanupError("Owned fixture cleanup was not confirmed: " + str(error)) from error
 
 
 def compare_pixels(left, right):
@@ -669,7 +789,8 @@ def adapter_failure(value, expected_url):
     return value["outcome"], value["reason"]
 
 
-def render_page(binary, font, base, name, output, timeout=45, scripts=False, global_deadline=None):
+def render_page(binary, font, base, name, output, timeout=45, scripts=False, global_deadline=None,
+                cancel_event=None, budget=None):
     prefix = output / digest(name.encode())[:20]
     began = time.monotonic()
     environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
@@ -678,12 +799,23 @@ def render_page(binary, font, base, name, output, timeout=45, scripts=False, glo
     if scripts:
         command.append("--enable-scripts")
     try:
-        check_budget(output, global_deadline, reserve=PAGE_RESERVATION + REPORT_LIMIT)
+        if budget is None:
+            check_budget(output, global_deadline, reserve=PAGE_RESERVATION + REPORT_LIMIT)
+        else:
+            budget.check()
         process = run_bounded(command, cwd=ROOT, env=environment, log_path=prefix.with_suffix(".log"),
                               timeout=timeout, global_deadline=global_deadline,
+                              cancel_event=cancel_event,
                               artifact_limits={prefix.with_suffix(".json"): METADATA_LIMIT,
                                                prefix.with_suffix(".rgb"): RGB_BYTES,
                                                prefix.with_suffix(".png"): PNG_LIMIT})
+        if process.get("cleanup_succeeded") is not True:
+            if cancel_event is not None:
+                cancel_event.set()
+            if budget is not None:
+                budget.fail_cleanup()
+            return {"status": "ERROR", "reason": "Owned renderer cleanup was not confirmed",
+                    "artifact": prefix.name, "cleanup_succeeded": False}
         if process["status"] != "OK":
             if (process.get("returncode") == 2 and process["status"] == "ERROR"
                     and process.get("completed") is True):
@@ -708,7 +840,10 @@ def render_page(binary, font, base, name, output, timeout=45, scripts=False, glo
             raise ValueError("Pixel content disagrees with nonuniform-frame evidence")
         failure = page_failure(metadata, scripts=scripts)
         compress_pixels(prefix, pixels)
-        check_budget(output, global_deadline, reserve=REPORT_LIMIT)
+        if budget is None:
+            check_budget(output, global_deadline, reserve=REPORT_LIMIT)
+        else:
+            budget.check()
         return {"status": failure[0] if failure else "OK", "reason": failure[1] if failure else "",
                 "artifact": prefix.name, "rgb_sha256": digest(pixels), "metadata": metadata,
                 "elapsed_ms": round((time.monotonic() - began) * 1000, 2)}
@@ -716,11 +851,15 @@ def render_page(binary, font, base, name, output, timeout=45, scripts=False, glo
         return {"status": "ERROR", "reason": f"Invalid render artifacts: {error}", "artifact": prefix.name}
 
 
-def check_controls(binary, font, base, output, global_deadline=None):
-    green = render_page(binary, font, base, CONTROL_PREFIX + "green.html", output, global_deadline=global_deadline)
-    red = render_page(binary, font, base, CONTROL_PREFIX + "red.html", output, global_deadline=global_deadline)
+def check_controls(binary, font, base, output, global_deadline=None, producer=None):
+    green = (producer(CONTROL_PREFIX + "green.html", 0) if producer is not None else
+             render_page(binary, font, base, CONTROL_PREFIX + "green.html", output, global_deadline=global_deadline))
+    red = (producer(CONTROL_PREFIX + "red.html", 0) if producer is not None else
+           render_page(binary, font, base, CONTROL_PREFIX + "red.html", output, global_deadline=global_deadline))
     if green["status"] != "OK" or red["status"] != "OK":
         raise ValueError(f"Harness rendering controls failed: {green['status']}, {red['status']}")
+    if {"path": "/" + CONTROL_PREFIX + "square.css", "status": 200} not in green.get("requests", []):
+        raise ValueError("Harness controls did not prove their external CSS request")
     a = read_pixels(output, green["artifact"])
     b = read_pixels(output, red["artifact"])
     at = lambda pixels, x, y: pixels[(y * WIDTH + x) * 3:(y * WIDTH + x) * 3 + 3]
@@ -729,6 +868,125 @@ def check_controls(binary, font, base, output, global_deadline=None):
             or compare_pixels(a, b)["equal"] or not compare_pixels(a, a)["equal"]):
         raise ValueError("Harness controls rejected blank, wrong CSS, or inverted equality")
     return {"passed": True, "green": green, "red": red, "note": "Authored controls, excluded from WPT counts"}
+
+
+def run_cases(corpus, files, missing, binary, font, output, deadline, jobs, report, report_path, cancel_event):
+    """Coordinate fixed lanes; only this thread mutates report or prints cases."""
+    ledger = RequestLedger(REQUEST_LIMIT, MAX_FILES + len(CONTROL_FILES))
+    budget = SharedBudget(output, deadline, cancel_event, evidence_bytes=evidence_bytes,
+                          output_limit=OUTPUT_LIMIT, report_reserve=REPORT_LIMIT)
+    cache = SingleFlight(MAX_FILES, cancel_event)
+    lanes = None
+
+    def produce(page, lane):
+        # A fresh owned origin makes late requests incapable of becoming the
+        # next page's evidence. Never reuse even a kernel-recycled port.
+        for _attempt in range(64):
+            budget.check()
+            try:
+                with serve(files | CONTROL_FILES) as (base, requests):
+                    if not ledger.claim_origin(base):
+                        continue
+                    requests.bind(ledger, page, lane)
+                    value = dict(render_page(binary, font, base, page, output,
+                                             scripts=uses_inline_scripts(page, files | CONTROL_FILES),
+                                             global_deadline=deadline, cancel_event=cancel_event, budget=budget))
+            except FixtureCleanupError:
+                budget.fail_cleanup()
+                raise
+            # Context shutdown has stopped/drained its only handler before
+            # snapshots enter the single-flight cache or coordinator report.
+            value.update(lane=lane, fixture_base_url=base, requests=requests.snapshot())
+            try:
+                requests.validate()
+            except ValueError as error:
+                ledger.fail(error)
+                value.update(status="ERROR", reason=str(error))
+            budget.check()
+            return value
+        raise ValueError("Could not allocate a previously unused fixture origin")
+
+    def controls(page, lane):
+        with budget.reserve(PAGE_RESERVATION):
+            return produce(page, lane)
+
+    def case(_index, test, lane):
+        budget.check()
+        item = {"test": test["path"], "status": "UNSUPPORTED", "reasons": [], "comparisons": []}
+        try:
+            item["reasons"] = test_prerequisites(test, files, missing)
+            pages = [test["path"]] + [edge["path"] for edge in test["references"] if edge["path"] is not None]
+            if not item["reasons"]:
+                values = {}
+                for page in pages:
+                    values[page] = cache.get(page, lambda page=page: produce(page, lane))
+                item["pages"] = {page: {"artifact": values[page]["artifact"], "status": values[page]["status"]} for page in pages}
+                failed = [values[page] for page in pages if values[page]["status"] != "OK"]
+                if failed:
+                    priority = {status: order for order, status in enumerate(("FAIL", "UNSUPPORTED", "ERROR", "TIMEOUT", "CRASH"))}
+                    item["status"] = max(failed, key=lambda value: priority[value["status"]])["status"]
+                    item["reasons"] = [value["reason"] for value in failed]
+                else:
+                    pixels = read_pixels(output, values[test["path"]]["artifact"])
+                    for edge in test["references"]:
+                        reference = read_pixels(output, values[edge["path"]]["artifact"])
+                        item["comparisons"].append(edge | compare_pixels(pixels, reference))
+                    item["status"] = "PASS" if relations_pass(item["comparisons"]) else "FAIL"
+        except UpstreamSourceFailure as error:
+            item["status"], item["reasons"] = "FAIL", [str(error)]
+        except (OSError, ValueError, KeyError, TypeError, LookupError) as error:
+            item["status"], item["reasons"] = "ERROR", [str(error)[:4096]]
+        return item
+
+    def snapshot():
+        # Fence both periodic and final copies against fail_cleanup(), not
+        # merely the preceding budget check. Cache/ledger never acquire the
+        # budget lock while holding their own locks, so this order is acyclic.
+        with budget.lock:
+            if budget.cleanup_confirmed:
+                report["pages"] = cache.snapshot()
+                report["requests"] = ledger.snapshot()
+            report["execution"]["peak_producer_reserved_bytes"] = budget.peak_reserved
+            report["execution"]["remaining_producer_reserved_bytes"] = budget.reserved
+            report["execution"]["cleanup_confirmed"] = budget.cleanup_confirmed and (lanes is None or lanes.joined)
+
+    try:
+        report["controls"] = check_controls(binary, font, None, output, global_deadline=deadline, producer=controls)
+        last_checkpoint = time.monotonic()
+        next_print = 0
+        received = set()
+        # Reserve both complete page-output slots atomically BEFORE launch.
+        # Holding the slots through lane cleanup is conservative: no page frees
+        # execution credit early, and no per-lane allowance multiplies the cap.
+        lanes = FixedLanes(corpus["tests"], jobs, case, cancel_event, cache, deadline)
+        with budget.reserve(jobs * PAGE_RESERVATION, cleanup_confirmed=lambda: lanes.joined):
+            with lanes:
+                for index, item in lanes:
+                    budget.check()
+                    if index in received or not 0 <= index < len(report["results"]):
+                        raise ValueError("Duplicate or invalid case completion")
+                    if item["test"] != report["results"][index]["test"]:
+                        raise ValueError("Case completion changed the selected identity")
+                    received.add(index)
+                    report["results"][index] = item
+                    while next_print < len(report["results"]) and report["results"][next_print]["status"] != PENDING:
+                        visible = report["results"][next_print]
+                        print(f"{visible['status']:11} {visible['test']}", flush=True)
+                        next_print += 1
+                    if time.monotonic() - last_checkpoint >= CHECKPOINT_SECONDS:
+                        snapshot()
+                        checkpoint(report_path, report, output, deadline, budget)
+                        last_checkpoint = time.monotonic()
+        budget.check()
+        ledger.validate()
+    finally:
+        # FixedLanes has joined process owners before any final report snapshot.
+        if budget.cleanup_confirmed and (lanes is None or lanes.joined):
+            snapshot()
+        else:
+            report["execution"].update(cleanup_confirmed=False,
+                                       peak_producer_reserved_bytes=budget.peak_reserved,
+                                       remaining_producer_reserved_bytes=budget.reserved)
 
 
 def score_from(report):
@@ -779,18 +1037,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "tmp/wpt")
     parser.add_argument("--font", type=Path, default=Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+    parser.add_argument("--jobs", type=int, choices=(1, 2), default=2,
+                        help="fixed source-assigned renderer lanes (default: 2; 1 is the equivalence control)")
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--update-score", action="store_true")
     actions.add_argument("--check-score", action="store_true")
     args = parser.parse_args()
     began = time.monotonic()
     deadline = began + RUN_TIMEOUT
+    cancel_event = threading.Event()
     args.output = args.output.resolve()
     args.font = args.font.resolve()
     # New, disposable output only: never read stale screenshots or overwrite evidence.
     args.output.mkdir(parents=True, exist_ok=False)
     report = {"schema_version": 2, "scope": SCOPE, "results": [], "pages": {}, "selected_total": 0,
               "complete": False, "started_utc": datetime.now(timezone.utc).isoformat(), "infrastructure_errors": [],
+              "execution": {"jobs": args.jobs, "case_assignment": "manifest-index-mod-jobs",
+                            "completion_capacity": 2, "max_renderer_groups": args.jobs},
               "limits": {"whole_run_seconds": RUN_TIMEOUT, "build_seconds": BUILD_TIMEOUT,
                          "page_seconds": 45, "evidence_bytes": OUTPUT_LIMIT, "report_bytes": REPORT_LIMIT,
                          "http_requests": REQUEST_LIMIT, "log_bytes": LOG_LIMIT,
@@ -819,8 +1082,8 @@ def main():
         build = run_bounded(["cargo", "build", "--locked", "--example", "wpt_render", "--message-format=json"],
                             cwd=ROOT, env=build_env, log_path=args.output / "build.log",
                             stdout_path=args.output / "build.jsonl", timeout=BUILD_TIMEOUT,
-                            global_deadline=deadline, max_output_bytes=BUILD_OUTPUT_LIMIT)
-        if build["status"] != "OK":
+                            global_deadline=deadline, max_output_bytes=BUILD_OUTPUT_LIMIT, cancel_event=cancel_event)
+        if build["status"] != "OK" or build.get("cleanup_succeeded") is not True:
             raise ValueError("WPT adapter build failed: " + build["status"] + ": " + build["reason"])
         args.binary = cargo_executable(read_artifact(args.output / "build.jsonl", limit=BUILD_OUTPUT_LIMIT).decode("utf-8"))
         report.update(upstream_revision=corpus["upstream"]["revision"], corpus_sha256=corpus_hash,
@@ -833,52 +1096,8 @@ def main():
                                    "No testharness.js, WebDriver, external scripts, fuzzy matching or scrollbar protocol",
                                    "Reftest equality is not an independent proof that all reference features are implemented"])
         checkpoint(report_path, report, args.output, deadline)
-        last_checkpoint = time.monotonic()
-        with serve(files | CONTROL_FILES) as (base, requests):
-            report["requests"] = requests
-            report["controls"] = check_controls(args.binary, args.font, base, args.output, global_deadline=deadline)
-            cache = {}
-            report["pages"] = cache
-            for index, test in enumerate(corpus["tests"]):
-                check_budget(args.output, deadline, reserve=REPORT_LIMIT)
-                item = {"test": test["path"], "status": "UNSUPPORTED", "reasons": [], "comparisons": []}
-                try:
-                    item["reasons"] = test_prerequisites(test, files, missing)
-                    pages = [test["path"]] + [edge["path"] for edge in test["references"] if edge["path"] is not None]
-                    if not item["reasons"]:
-                        for page in pages:
-                            if page not in cache:
-                                cache[page] = render_page(args.binary, args.font, base, page, args.output,
-                                                          scripts=uses_inline_scripts(page, files), global_deadline=deadline)
-                            if requests.exceeded:
-                                raise ValueError("HTTP request audit exceeded its reviewed entry/target bounds")
-                        # Normalize page evidence once rather than duplicating
-                        # all diagnostics in every test sharing a reference.
-                        item["pages"] = {page: {"artifact": cache[page]["artifact"], "status": cache[page]["status"]} for page in pages}
-                        failed = [cache[page] for page in pages if cache[page]["status"] != "OK"]
-                        if failed:
-                            priority = {status: order for order, status in enumerate(("FAIL", "UNSUPPORTED", "ERROR", "TIMEOUT", "CRASH"))}
-                            item["status"] = max(failed, key=lambda value: priority[value["status"]])["status"]
-                            item["reasons"] = [value["reason"] for value in failed]
-                        else:
-                            pixels = read_pixels(args.output, cache[test["path"]]["artifact"])
-                            for edge in test["references"]:
-                                reference = read_pixels(args.output, cache[edge["path"]]["artifact"])
-                                item["comparisons"].append(edge | compare_pixels(pixels, reference))
-                            item["status"] = "PASS" if relations_pass(item["comparisons"]) else "FAIL"
-                except UpstreamSourceFailure as error:
-                    item["status"], item["reasons"] = "FAIL", [str(error)]
-                except (OSError, ValueError, KeyError, TypeError, LookupError) as error:
-                    item["status"], item["reasons"] = "ERROR", [str(error)[:4096]]
-                report["results"][index] = item
-                if time.monotonic() - last_checkpoint >= CHECKPOINT_SECONDS:
-                    checkpoint(report_path, report, args.output, deadline)
-                    last_checkpoint = time.monotonic()
-                print(f"{item['status']:11} {item['test']}", flush=True)
-            if requests.exceeded:
-                raise ValueError("HTTP request audit exceeded its reviewed entry/target bounds")
-            if any(request["status"] != 200 for request in requests):
-                raise ValueError("Corpus requested an absent resource; see request log")
+        run_cases(corpus, files, missing, args.binary, args.font, args.output, deadline,
+                  args.jobs, report, report_path, cancel_event)
         if source_before != source_hash(deadline):
             raise ValueError("Evaluated source changed during the run")
         if report["git_commit"] != tool_output(["git", "rev-parse", "HEAD"], "git-finish", args.output, build_env, deadline).strip():
@@ -904,6 +1123,7 @@ def main():
     except KeyboardInterrupt:
         report["infrastructure_errors"].append("WPT run interrupted before acceptance")
     finally:
+        cancel_event.set()
         report["finished_utc"] = datetime.now(timezone.utc).isoformat()
         report["elapsed_seconds"] = round(time.monotonic() - began, 3)
         if not finish_report(report_path, report):

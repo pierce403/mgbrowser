@@ -29,6 +29,10 @@ class ArtifactError(ValueError):
     """An artifact is missing, unsafe, changed, or outside its byte admission."""
 
 
+class _ProcessCancelled(Exception):
+    """The owning runner requested cancellation, not a child process crash."""
+
+
 def _artifact_stat(path, limit, exact=None):
     if type(limit) is not int or limit < 0:
         raise ArtifactError("Artifact byte limit must be a nonnegative integer")
@@ -99,40 +103,56 @@ def _stop_group(process):
 
 def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
                 timeout=45.0, global_deadline=None, max_output_bytes=LOG_LIMIT,
-                artifact_limits=None):
+                artifact_limits=None, cancel_event=None):
     """Run one reviewed command without a shell in an owned process group.
 
     timeout is a local duration; global_deadline is an absolute monotonic
     deadline and can only shorten it. The default is the unchanged 45-second
     page deadline. stdout_path splits Cargo JSONL from stderr log_path; otherwise
     both streams are merged. max_output_bytes bounds their combined bytes.
+    Optional cancel_event has threading.Event-style is_set(). Cancellation is
+    checked before log/process admission and at each bounded polling iteration;
+    it returns ERROR/completed=False after the same owned-group cleanup.
 
     Returns status OK/ERROR/TIMEOUT/CRASH, reason, returncode, elapsed_ms,
-    output_bytes and completed. completed is true only for an ordinary leader
+    output_bytes, completed and cleanup_succeeded. completed is true only for an ordinary leader
     exit after successful output/artifact admission and cleanup. It lets callers
     distinguish a structured nonzero exit from an admission error whose leader
     happened to exit with the same code. TIMEOUT/output-limit errors retain their cause after cleanup;
     a command killed by a signal on its own is CRASH. The complete owned group
     is killed before reaping the leader even after an ordinary successful exit.
+    cleanup_succeeded is true only if no process was launched or owned-group
+    termination and leader wait returned successfully. A cleanup attempt alone
+    is not confirmation; callers must stop new admissions when it is false.
     """
     began = time.monotonic()
     process = None
     cleaned = False
+    cleanup_succeeded = True
     completed = False
     output_bytes = 0
     status, reason, returncode = "ERROR", "Process was not started", None
     selector = selectors.DefaultSelector()
     streams = []
     logs = []
+
+    def check_cancellation():
+        if cancel_event is not None and cancel_event.is_set():
+            raise _ProcessCancelled("Process cancelled before launch" if process is None
+                                    else "Process cancelled")
+
     try:
         if (isinstance(command, (str, bytes)) or not command
                 or not math.isfinite(timeout) or timeout <= 0
                 or (global_deadline is not None and not math.isfinite(global_deadline))
-                or type(max_output_bytes) is not int or max_output_bytes < 0):
+                or type(max_output_bytes) is not int or max_output_bytes < 0
+                or (cancel_event is not None
+                    and not callable(getattr(cancel_event, "is_set", None)))):
             raise ValueError("Invalid command, deadline or output admission")
         if not hasattr(os, "WNOWAIT"):
             raise ValueError("Owned process-group cleanup requires waitid/WNOWAIT")
         deadline = min(began + timeout, global_deadline) if global_deadline is not None else began + timeout
+        check_cancellation()
         # Exclusive creation prevents stale log reuse and symlink following.
         log = open(log_path, "xb")
         logs.append(log)
@@ -147,10 +167,12 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
         if time.monotonic() >= deadline:
             status, reason = "TIMEOUT", "Process deadline expired before launch"
         else:
+            check_cancellation()
             process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE if separate_stdout else subprocess.STDOUT,
                                        start_new_session=True, close_fds=True)
+            cleanup_succeeded = False
             for stream, destination in [(process.stdout, output), (process.stderr, log)]:
                 if stream is not None:
                     streams.append(stream)
@@ -158,6 +180,7 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
                     selector.register(stream, selectors.EVENT_READ, destination)
             status, reason = "OK", ""
             while True:
+                check_cancellation()
                 now = time.monotonic()
                 if now >= deadline:
                     status, reason = "TIMEOUT", "Process exceeded its deadline"
@@ -170,6 +193,7 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
                     # successful leader or turn its completed run into a hang.
                     cleaned = True
                     returncode = _stop_group(process)
+                    cleanup_succeeded = True
                 if cleaned and not selector.get_map():
                     break
                 for key, _ in selector.select(min(POLL_INTERVAL, deadline - now)):
@@ -192,11 +216,16 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
             if not cleaned:
                 cleaned = True
                 returncode = _stop_group(process)
+                cleanup_succeeded = True
             if status == "OK":
+                check_cancellation()
                 completed = returncode is not None and returncode >= 0
                 if returncode != 0:
                     status = "CRASH" if returncode < 0 else "ERROR"
                     reason = f"Process exit {returncode}"
+    except _ProcessCancelled as error:
+        completed = False
+        status, reason = "ERROR", str(error)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         completed = False
         status, reason = "ERROR", str(error)
@@ -205,6 +234,7 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
             try:
                 cleaned = True
                 returncode = _stop_group(process)
+                cleanup_succeeded = True
             except (OSError, subprocess.SubprocessError) as error:
                 completed = False
                 status, reason = "ERROR", f"Owned process cleanup failed: {error}"
@@ -220,4 +250,5 @@ def run_bounded(command, *, cwd, env, log_path, stdout_path=None,
                 status, reason = "ERROR", f"Cannot finish process log: {error}"
     return {"status": status, "reason": reason, "returncode": returncode,
             "elapsed_ms": round((time.monotonic() - began) * 1000, 2),
-            "output_bytes": output_bytes, "completed": completed}
+            "output_bytes": output_bytes, "completed": completed,
+            "cleanup_succeeded": cleanup_succeeded}

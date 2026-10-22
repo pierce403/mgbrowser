@@ -1,5 +1,14 @@
 # Candidate learnings
 
+- 2026-10-21: Expanded WPT validation took over 20 minutes to publish its
+  canonical artifact, exposing a race against the native publisher's 18-minute
+  wait and documented 20-minute build maximum. The old native failure's exact
+  cause remains unconfirmed because log access was denied. A separately reviewed
+  two-lane runner reproduces all case/pixel/request evidence locally in 471.514
+  seconds versus 1,029.827 sequentially, without changing engine or shared limits.
+  Actual cold CI and public delivery, not that local speedup alone, establish
+  publication success. Do not treat a denied log as permission to change authority.
+
 - 2026-10-21: Expanded-source WPT review found exact pixel matches where both
   sides ignored writing modes, element scrolling or static-position behavior.
   Empty-image controls alone did not catch these nonuniform shared failures.

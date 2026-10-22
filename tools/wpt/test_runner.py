@@ -8,6 +8,7 @@ import io
 import json
 from pathlib import Path
 import struct
+import threading
 import tempfile
 import time
 import unittest
@@ -380,12 +381,12 @@ class RenderResultTests(unittest.TestCase):
         for expected, code in cases:
             with self.subTest(expected=expected, code=code), patch.object(
                     runner, "run_bounded",
-                    return_value={"status": expected, "returncode": code, "reason": "mocked failure", "elapsed_ms": 1}) as process:
+                    return_value={"status": expected, "returncode": code, "reason": "mocked failure", "elapsed_ms": 1, "cleanup_succeeded": True}) as process:
                 self.assertEqual(self.render()["status"], expected)
                 self.assertEqual(process.call_args.kwargs["timeout"], 0.25)
                 self.assertEqual(set(process.call_args.kwargs["env"]), {"PATH", "LANG", "LC_ALL"})
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_missing_bad_and_wrong_page_artifacts_are_errors(self, _process):
         self.assertEqual(self.render()["status"], "ERROR")
         self.artifacts(pixels=b"short")
@@ -395,7 +396,7 @@ class RenderResultTests(unittest.TestCase):
         self.prefix.with_suffix(".json").write_text("not json", encoding="utf-8")
         self.assertEqual(self.render()["status"], "ERROR")
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_render_evidence_preserves_page_failures(self, _process):
         self.artifacts({"resource_warnings": ["missing CSS"]})
         self.assertEqual(self.render()["status"], "FAIL")
@@ -410,7 +411,7 @@ class RenderResultTests(unittest.TestCase):
         self.assertFalse(self.prefix.with_suffix(".rgb").exists())
         self.assertEqual(runner.read_pixels(self.output, self.prefix.name), nonuniform_pixels())
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_valid_matching_pixels_with_any_diagnostic_remain_visible_failure(self, _process):
         diagnostics = [{"kind": "future-informational", "message": "No kind is silently exempt", "truncated": False}]
         self.artifacts({"diagnostics": diagnostics})
@@ -420,7 +421,7 @@ class RenderResultTests(unittest.TestCase):
         self.assertEqual(result["metadata"]["diagnostics_omitted"], 0)
         self.assertEqual(runner.read_pixels(self.output, self.prefix.name), nonuniform_pixels())
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_scalar_or_mistyped_render_metadata_is_error(self, _process):
         self.artifacts()
         for malformed in (None, [], 1, "metadata"):
@@ -432,7 +433,7 @@ class RenderResultTests(unittest.TestCase):
                 self.artifacts(change)
                 self.assertEqual(self.render()["status"], "ERROR")
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_actual_pixels_must_agree_with_uniformity_evidence(self, _process):
         self.artifacts(pixels=bytes(runner.RGB_BYTES))
         self.assertEqual(self.render()["status"], "ERROR")
@@ -441,7 +442,7 @@ class RenderResultTests(unittest.TestCase):
         self.artifacts({"non_uniform": False}, pixels=bytes(runner.RGB_BYTES))
         self.assertEqual(self.render()["status"], "FAIL")
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_missing_or_wrong_dimension_png_is_not_accepted(self, _process):
         self.artifacts()
         self.prefix.with_suffix(".png").unlink()
@@ -450,7 +451,7 @@ class RenderResultTests(unittest.TestCase):
         self.prefix.with_suffix(".png").write_bytes(b"not a PNG")
         self.assertEqual(self.render()["status"], "ERROR")
 
-    @patch.object(runner, "run_bounded", return_value={"status": "ERROR", "returncode": 2, "reason": "exit 2", "elapsed_ms": 1, "completed": True})
+    @patch.object(runner, "run_bounded", return_value={"status": "ERROR", "returncode": 2, "reason": "exit 2", "elapsed_ms": 1, "completed": True, "cleanup_succeeded": True})
     def test_structured_exit_two_distinguishes_admitted_failure_and_infrastructure(self, _process):
         envelope = {"schema_version": 1, "outcome": "FAIL", "kind": "admitted-execution",
                     "url": self.base + self.name, "phase": "script", "reason": "Missing DOM operation"}
@@ -471,7 +472,7 @@ class RenderResultTests(unittest.TestCase):
         self.prefix.with_suffix(".json").write_text(json.dumps(envelope))
         for reason in ("Process output exceeds byte limit", "Artifact exceeds byte limit", "Owned process cleanup failed"):
             with patch.object(runner, "run_bounded", return_value={"status": "ERROR", "returncode": 2,
-                              "reason": reason, "elapsed_ms": 1, "completed": False}):
+                              "reason": reason, "elapsed_ms": 1, "completed": False, "cleanup_succeeded": True}):
                 result = self.render()
             self.assertEqual(result["status"], "ERROR")
             self.assertEqual(result["reason"], reason)
@@ -484,7 +485,7 @@ class RenderResultTests(unittest.TestCase):
             with self.assertRaises((ValueError, OSError, EOFError)):
                 runner.read_pixels(self.output, self.prefix.name)
 
-    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1})
+    @patch.object(runner, "run_bounded", return_value={"status": "OK", "returncode": 0, "reason": "", "elapsed_ms": 1, "cleanup_succeeded": True})
     def test_deadline_and_artifact_bounds_are_forwarded_to_owned_process(self, process):
         self.artifacts()
         deadline = time.monotonic() + 10
@@ -507,7 +508,7 @@ class ControlTests(unittest.TestCase):
                         frame[offset:offset + 20 * 3] = color * 20
                     return bytes(frame)
 
-                results = [{"status": "OK", "artifact": "green"},
+                results = [{"status": "OK", "artifact": "green", "requests": [{"path": "/" + runner.CONTROL_PREFIX + "square.css", "status": 200}]},
                            {"status": "OK", "artifact": "red"}]
                 (output / "green.rgb").write_bytes(square(b"\x00\xff\x00"))
                 (output / "red.rgb").write_bytes(square(b"\xff\x00\x00"))
@@ -759,11 +760,17 @@ class PartialRunTests(unittest.TestCase):
 
             def build(*_args, **kwargs):
                 kwargs["stdout_path"].write_text(json.dumps({"reason": "compiler-artifact", "target": {"name": "wpt_render", "kind": ["example"]}, "executable": str(root / "fake-adapter")}))
-                return {"status": "OK"}
+                return {"status": "OK", "cleanup_succeeded": True}
 
             @contextmanager
             def server(_files):
-                yield "http://127.0.0.1:1/", runner.RequestAudit()
+                audit = runner.RequestAudit()
+                server.origins += 1
+                yield f"http://127.0.0.1:{server.origins}/", audit
+                audit.add({"path": "/" + audit.page, "status": 200})
+                audit.close_admission()
+
+            server.origins = 1000
 
             with ExitStack() as stack:
                 for target, value in (("ROOT", root), ("HERE", here)):
@@ -820,18 +827,18 @@ class PartialRunTests(unittest.TestCase):
 
     def test_mid_loop_whole_run_deadline_keeps_finished_and_pending_cases(self):
         with self.admitted_run() as (here, output):
-            budget = runner.check_budget
+            budget = runner.SharedBudget.check
             calls = 0
 
-            def expire(*args, **kwargs):
+            def expire(shared):
                 nonlocal calls
-                calls += 1
-                # Two checkpoints, build admission, then first/second test.
-                if calls == 5:
-                    raise ValueError("Whole WPT run deadline expired")
-                return budget(*args, **kwargs)
+                if threading.current_thread() is threading.main_thread():
+                    calls += 1
+                    if calls == 2:
+                        raise ValueError("Whole WPT run deadline expired")
+                return budget(shared)
 
-            with patch.object(runner, "check_budget", side_effect=expire):
+            with patch.object(runner.SharedBudget, "check", expire):
                 self.assertEqual(runner.main(), 1)
             report = json.loads((output / "report.json").read_bytes())
             self.assertEqual(report["counts"]["total"], 2)

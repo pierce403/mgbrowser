@@ -153,3 +153,88 @@ expectation rewrite by `--update-score`. Production engine, dependencies,
 worker permissions and resource caps remain byte-for-byte those of v0.9.6.
 The source-only import/runner contribution does not require a new binary release;
 exact-commit CI and public website/report delivery remain publication gates.
+
+## Reviewed two-lane test orchestration
+
+The first full-cohort CI run on 852978a independently reproduces the baseline,
+but validation takes 20 minutes and canonical publication finishes at 03:03:14
+UTC. The native build failed at 03:02:00, before that artifact was available.
+The native log is access-denied, so its exact failure cause is not established.
+Independently, these timings expose a publisher-window race: the existing
+artifact wait is 18 minutes and Cloudflare's
+[documented build maximum](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
+is 20 minutes. Raising waits, skipping score gates or changing deployment authority is
+not the remedy adopted here.
+
+Review a substantive runner-only change before implementation: at most two fixed
+renderer lanes, each producing fresh processes sequentially, with source-derived
+case assignment and shared-reference single-flight deduplication. A sequential
+one-lane mode remains available as the equivalence control. Build and authored
+controls precede the parallel phase; no Browser instance is reused between pages.
+
+Aggregate test-infrastructure policy:
+
+- At most two renderer leaders/process groups, conservatively up to four owned
+  script children across their unchanged per-Browser two-child allowances.
+  This is a process-count bound, not a combined RSS/heap ceiling. Each worker's
+  existing allocation, address-space, active-time and syscall limits remain.
+- One shared 25-minute controlled-work deadline, 512 MiB evidence admission,
+  64 MiB report reserve and 20,000-entry HTTP audit. No per-lane multiplication
+  of those allowances. Atomically reserve both producers' worst-case page
+  output before launch and reconcile reservations only after producer cleanup.
+- Two fixed case lanes and a completion queue of capacity two. Cache ownership
+  is single-flight and bounded by the admitted file inventory; waiters cannot
+  hold a cache lock or reserve a cycle of incomplete page dependencies.
+- One coordinator writes reports and score acceptance. Retain all 1,011 slots
+  from initialization; serialize in manifest order even when completion differs.
+  Cache/report snapshots must not race producer mutation.
+- A separate owned fixture context per lane attributes requests to each active
+  page; request admission remains shared. Unknown, late/unattributed, missing or
+  non-200 requests cannot silently satisfy another page's evidence.
+- A shared cancellation signal stops admission, wakes cache/queue waits and
+  reaches both active process owners. Each owner kills its exact group before
+  reaping its leader; ordinary descendants must terminate. Do not call that
+  grandchild reaping. A typed process result must confirm cleanup independently
+  of normal completion; unknown/failed cleanup stops all further producer
+  admission and invalidates acceptance instead of freeing a new renderer slot.
+
+Every source/input/viewport, diagnostic, resource, replay, exact-pixel, process
+and artifact assertion remains in force. No production source, corpus,
+expectation, worker profile, wait window, credential or hosting setting changes.
+
+Acceptance requires fresh one- and two-lane complete runs with the same adapter
+binary, font, inputs and browser source. Compare all 1,011 case identities and
+statuses, every corresponding page's raw RGB hash, original relations, and each
+page's request multiset after owned-origin normalization. Also preserve the
+earlier strict baseline's case/page hashes and aggregate request evidence. Any
+difference needs diagnosis, not automatic expectation adoption. Exercise shared
+references, aggregate reservations, overflow/deadline/cancellation, cache-owner
+failure, bounded queues, partial PENDING evidence and child cleanup independently.
+Only measured equivalence and a fresh score/site gate permit ordinary main
+publication. Then measure exact-commit cold CI and actual public delivery;
+estimated parallel speedup is not a deployment-success claim.
+
+## Local orchestration acceptance
+
+The frozen candidate passes all 151 Python tooling tests and the unchanged
+Rust adapter's 13 tests. Fresh runs use the same adapter binary, source, font
+and inputs: one lane takes **1,029.827 seconds**, two take **471.514 seconds**.
+Both complete with 317 PASS / 632 FAIL / 62 UNSUPPORTED / 1,011 and no
+infrastructure errors, timeouts, crashes or PENDING. Cleanup is confirmed;
+producer reservations return to zero. Peak reserved producer space is
+13,431,296 / 26,862,592 bytes respectively, under the unchanged shared allowance.
+
+Independent evidence comparison re-reads all **1,449 RGB artifacts** across
+**1,464 pages**, rechecks every stored original pixel relation, and compares
+all case outcomes and normalized page metadata. Every page's HTTP multiset,
+including structured failures and controls, agrees; the global **1,711** requests
+are exactly their attributed union and all return 200. The two-lane evidence
+occupies 35,984,722 bytes with a 3,766,887-byte report. The earlier strict baseline
+B also retains identical case/page hashes, comparisons and aggregate requests.
+Only owned ephemeral origins and execution timing/lane identity differ.
+
+This accepts test orchestration locally, not broader browser conformance or
+public delivery. The fresh score changes only its evaluated-source fingerprint;
+all counts, upstream bytes and required pass/support entries are unchanged.
+Exact-commit cold CI, canonical publication and actual HTTPS delivery still
+follow through the existing native Git pipeline. The denied API remains stopped.
