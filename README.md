@@ -17,11 +17,13 @@ existing cumulative limits. Startup is still **bundled**, not a complete HTML
 lifecycle. Messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
-The installer below selects the latest actually published release. This
-candidate's exact-commit CI, package and public-install
-verification must be recorded before feature completion in the
-[dated work log](memory/logs/2026-10-22.md).
-[Release notes and publication status](docs/RELEASE-v0.9.9.md).
+The installer below delivers [v0.9.9](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.9),
+released at `af5d8fc3a8f14555520c07946c0c56c355921a01`. Exact-commit
+Rust/JSPLAN/site checks, tagged packaging, checksum-verified public install and
+reinstall, all eleven packaged/public native helpers, and actual v0.9.8
+self-upgrade/no-op verification pass. See the
+[dated work log](memory/logs/2026-10-22.md) and
+[release notes and limitations](docs/RELEASE-v0.9.9.md).
 
 The v0.9.8 Window-error/five-argument `onerror` service remains. Proven local
 errors preserve thrown-value identity; foreign/unknown sources and dynamic

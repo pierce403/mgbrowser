@@ -51,16 +51,16 @@ following dependency order, updating evidence as each increment ships:
    bounded uncaught Window errors](docs/WINDOW_ERRORS.md). Exact-commit
    Rust/JSPLAN/website and tagged-package gates pass; checksum-verified public
    install/reinstall, actual v0.9.7 self-upgrade/no-op and public native/CDP error
-   acceptance pass. The static WPT counts remain unchanged. **Active release increment:**
-   v0.9.9 [queued Promise rejection notification](docs/PROMISE_REJECTIONS.md),
-   implemented under the reviewed admission/roots/privacy contract, with old-source
-   baselines and passing focused debug/release plus initial native/CDP controls.
-   Finish complete regressions, fresh static WPT, packaging, exact-commit CI/tag,
-   public installer and actual previous-version self-upgrade before more features.
+   acceptance pass. The static WPT counts remain unchanged. **Shipped v0.9.9** at
+   `af5d8fc3a8f14555520c07946c0c56c355921a01`:
+   [queued Promise rejection notification](docs/PROMISE_REJECTIONS.md), under the
+   reviewed admission/roots/privacy contract. Full debug/release regressions,
+   fresh static WPT, exact-commit CI/site/tagged package, public install/reinstall,
+   eleven packaged/public native helpers and actual v0.9.8 self-upgrade/no-op pass.
    Binding terminal roots clear; pinned Boa VM roots require actual Context
-   teardown, which the browser worker already performs. Genuine
-   messaging, queued lifecycle and typed observation remain open; corpus and
-   observer/scoring changes require separate frozen review.
+   teardown, which the browser worker already performs.
+   **Next:** genuine Window messaging, queued lifecycle and typed observation
+   remain open. Corpus and observer/scoring changes require separate frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

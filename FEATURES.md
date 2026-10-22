@@ -500,17 +500,20 @@ See [contract and acceptance](docs/WINDOW_ERRORS.md) and the 2026-10-22 log for
 local and publication gates. Exact-commit Rust/JSPLAN/website and tagged release
 checks, public install/reinstall and native/CDP error acceptance, and actual
 v0.9.7 self-upgrade/no-op pass. Static WPT remains 317/632/62 of 1,011; these
-authored controls add no upstream passes. Rejection notification, messaging,
-queued lifecycle, typed harness results and the wider unchecked F-016 criteria
-remain open.
+authored controls add no upstream passes. At that release, rejection notification,
+messaging, queued lifecycle, typed harness results and the wider unchecked F-016
+criteria remained open.
 
-v0.9.9 candidate: queued `unhandledrejection`/`rejectionhandled` with actual
+Shipped v0.9.9 at `af5d8fc3a8f14555520c07946c0c56c355921a01`: queued
+`unhandledrejection`/`rejectionhandled` with actual
 Promise/reason payloads, frozen later batches, shared admissions and weak
 outstanding membership. Source muting keeps no rejected payload and retains an
-explicit sticky observation-gap notice. Focused debug/release and initial
-native/CDP controls pass; full regression, exact-commit release/public installer
-gates remain separate. Fatal binding work clears immediately; pinned Boa VM
-argument roots require actual Context teardown, already performed by the browser
+explicit sticky observation-gap notice. Full debug/release regressions pass
+(1,851 tests each), as do exact-commit Rust/JSPLAN/site and tagged release gates,
+public install/reinstall, eleven packaged/public native helpers, and actual
+v0.9.8 self-upgrade/no-op verification. Static WPT remains 317/632/62 of 1,011;
+no authored control is an upstream pass. Fatal binding work clears immediately;
+pinned Boa VM argument roots require actual Context teardown, already performed by the browser
 worker. See [contract and limits](docs/PROMISE_REJECTIONS.md). This completes
 neither Window-testharness readiness nor any unchecked F-016 requirement.
 
@@ -816,7 +819,8 @@ evaluator remains an explicit test baseline, not a production fallback. Broader
 events, string timers, intervals and modules remain unsupported. F-016 records
 the bounded classic external-source increment and its v0.9.6 acceptance/release
 evidence, the shipped v0.9.7 function-timer increment and v0.9.8 bounded
-Window-error/provenance controls, followed by the v0.9.9 queued-rejection candidate.
+Window-error/provenance controls, and shipped v0.9.9 bounded queued-rejection
+notifications.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 
