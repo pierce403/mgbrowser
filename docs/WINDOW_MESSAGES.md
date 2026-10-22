@@ -233,7 +233,7 @@ Review genuine lifecycle scheduling and explicit migration of approximation-only
 semantic expectations separately, retaining all quota/fatal/security assertions.
 
 In the v0.9.10 baseline, Chassis ends loading at Init and CDP emits DCL/load
-together. The separately frozen and implemented v0.9.11 candidate follows
+together. The separately reviewed and shipped v0.9.11 lifecycle follows
 [DOCUMENT_LIFECYCLE.md](DOCUMENT_LIFECYCLE.md), with release gates recorded in
 the dated log. The original next-step requirements were:
 

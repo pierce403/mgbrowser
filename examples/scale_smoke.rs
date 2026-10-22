@@ -30,6 +30,67 @@ fn physical(logical: i32, percent: u16) -> i16 {
     ((logical * i32::from(percent) + 50) / 100) as i16
 }
 
+// These owned journey pages have no scripts: their only queued work is the
+// mandatory DCL/load pair. LOADED is Init, not permission to activate the page.
+fn completed_fixture_title<'a>(
+    log: &'a str,
+    count: usize,
+    fragment: &str,
+) -> Result<Option<&'a str>> {
+    if log
+        .lines()
+        .filter(|line| line.starts_with("LOADED "))
+        .count()
+        <= count
+    {
+        return Ok(None);
+    }
+    let Some((_, navigation)) = log.rsplit_once("NAVIGATE GET ") else {
+        return Ok(None);
+    };
+    let Some(loaded) = navigation.lines().find(|line| line.starts_with("LOADED ")) else {
+        return Ok(None);
+    };
+    if !loaded.contains(fragment) {
+        return Ok(None);
+    }
+    let tasks = navigation
+        .lines()
+        .filter(|line| line.starts_with("PAGE_TASK_APPLIED "))
+        .collect::<Vec<_>>();
+    if tasks
+        != [
+            "PAGE_TASK_APPLIED sequence=1 revision=1",
+            "PAGE_TASK_APPLIED sequence=2 revision=2",
+        ]
+    {
+        return Ok(None);
+    }
+    let accounting = navigation
+        .lines()
+        .filter_map(|line| line.strip_prefix("SCRIPT_BOA "))
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if accounting.len() != 3
+        || !accounting.iter().enumerate().all(|(executed, value)| {
+            value["profile"] == "boa-page-process-v1"
+                && value["source_bytes"] == 0
+                && value["source_admissions"] == 0
+                && value["jobs_admitted"] == 2
+                && value["jobs_executed"] == executed
+                && value["pending_jobs"] == 2 - executed
+                && value["fatal_reason"].is_null()
+        })
+    {
+        return Ok(None);
+    }
+    let title = loaded
+        .split_once("title=\"")
+        .and_then(|(_, text)| text.split('"').next())
+        .ok_or("missing fixture title")?;
+    Ok(Some(title))
+}
+
 struct Display {
     conn: RustConnection,
     root: u32,
@@ -474,19 +535,12 @@ impl<'a> Browser<'a> {
     fn loaded_after(&self, count: usize, fragment: &str) -> Result<()> {
         wait(fragment, || {
             let log = fs::read_to_string(&self.log)?;
-            let lines: Vec<_> = log.lines().filter(|l| l.starts_with("LOADED ")).collect();
-            let Some(line) = lines
-                .last()
-                .filter(|line| lines.len() > count && line.contains(fragment))
-            else {
+            let Some(title) = completed_fixture_title(&log, count, fragment)? else {
                 return Ok(false);
             };
-            let title = line
-                .split_once("title=\"")
-                .and_then(|(_, text)| text.split('"').next())
-                .ok_or("missing fixture title")?;
             // The host updates WM_NAME after uploading the completed frame;
-            // LOADED alone precedes that upload, especially in large debug builds.
+            // an unchanged title alone cannot attest a new navigation. Require
+            // that navigation's lifecycle above before accepting the native title.
             let native = self
                 .display
                 .conn
@@ -857,4 +911,71 @@ fn main() -> Result<()> {
     println!("NATIVE_BOOKMARK_TOOLBAR_SMOKE_OK {}", scratch.display());
     println!("NATIVE_SCALE_SMOKE_OK {}", scratch.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace(executed: usize) -> String {
+        format!(
+            "SCRIPT_BOA {{\"profile\":\"boa-page-process-v1\",\"source_bytes\":0,\"source_admissions\":0,\"jobs_admitted\":2,\"jobs_executed\":{executed},\"pending_jobs\":{},\"fatal_reason\":null}}\n",
+            2 - executed
+        )
+    }
+    fn init() -> String {
+        format!(
+            "NAVIGATE GET {BASE}/\n{}LOADED {BASE}/ HTTP 200 title=\"fixture\" items=7 forms=1\n",
+            trace(0)
+        )
+    }
+    fn completed() -> String {
+        format!(
+            "{}{}PAGE_TASK_APPLIED sequence=1 revision=1\n{}PAGE_TASK_APPLIED sequence=2 revision=2\n",
+            init(),
+            trace(1),
+            trace(2)
+        )
+    }
+    #[test]
+    fn init_and_first_task_do_not_admit_input() -> Result<()> {
+        assert_eq!(completed_fixture_title(&init(), 0, "/")?, None);
+        let first = format!(
+            "{}{}PAGE_TASK_APPLIED sequence=1 revision=1\n",
+            init(),
+            trace(1)
+        );
+        assert_eq!(completed_fixture_title(&first, 0, "/")?, None);
+        assert_eq!(
+            completed_fixture_title(&completed(), 0, "/")?,
+            Some("fixture")
+        );
+        Ok(())
+    }
+    #[test]
+    fn old_same_title_completion_cannot_admit_new_navigation() -> Result<()> {
+        let old = completed();
+        assert_eq!(completed_fixture_title(&old, 1, "/")?, None);
+        let fetching = format!("{old}NAVIGATE GET {BASE}/\n");
+        assert_eq!(completed_fixture_title(&fetching, 1, "/")?, None);
+        let initializing = format!("{old}{}", init());
+        assert_eq!(completed_fixture_title(&initializing, 1, "/")?, None);
+        let ready = format!("{old}{}", completed());
+        assert_eq!(completed_fixture_title(&ready, 1, "/")?, Some("fixture"));
+        assert_eq!(completed_fixture_title(&ready, 1, "/destination")?, None);
+        Ok(())
+    }
+    #[test]
+    fn acknowledgements_without_settled_accounting_are_not_completion() -> Result<()> {
+        for invalid in [
+            completed().replace(&trace(2), &trace(1)),
+            completed().replace("\"pending_jobs\":0", "\"pending_jobs\":1"),
+            completed().replace("\"fatal_reason\":null", "\"fatal_reason\":\"closed\""),
+            completed().replace("\"source_bytes\":0", "\"source_bytes\":1"),
+            completed().replace("sequence=2 revision=2", "sequence=3 revision=3"),
+        ] {
+            assert_eq!(completed_fixture_title(&invalid, 0, "/")?, None);
+        }
+        Ok(())
+    }
 }

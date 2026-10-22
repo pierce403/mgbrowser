@@ -6,13 +6,11 @@ installer verification are recorded separately in the dated work log.
 This is a bounded JSPLAN integration increment, not completion of P1-P8 or a
 claim that modern web applications generally work.
 
-Local v0.9.11 candidate: [queued snapshot lifecycle](DOCUMENT_LIFECYCLE.md)
-replaces bundled Init with separate DCL/load tasks, strict modern v5 progress
-and typed sticky initial-load evidence. Full local regressions, package/install,
-all 13 native/CDP helpers, frozen JSPLAN and fresh WPT review pass; exact-commit
-CI, tagged packaging and public release gates remain.
-Historical v0.9.7-v0.9.10 sections below describe their original bundled behavior;
-public v0.9.10 is unchanged until a verified new release is published.
+Shipped v0.9.11: [queued snapshot lifecycle](DOCUMENT_LIFECYCLE.md) replaces
+bundled Init with two later DCL/load tasks, strict modern v5 progress and typed
+sticky initial-load evidence. Exact release/public and actual old-update
+receipts are in the dated log. The v0.9.7-v0.9.10 sections below retain their
+historical bundled behavior.
 
 ```sh
 mgbrowser --enable-scripts https://example.com/
@@ -33,7 +31,7 @@ Reflect and Promise callbacks. Bounded FIFO microtask checkpoints run after
 scripts and delivered callbacks. Scripts can create real controls, change text,
 register later listeners and propose navigation that the parent validates.
 The DOM API remains deliberately small. Ordinary and deferred classic sources
-are pre-parsed/preloaded; the v0.9.11 candidate queues separate DCL/load tasks
+are pre-parsed/preloaded; the v0.9.11 release queues separate DCL/load tasks
 after their checkpoints. This is not a streaming parser or dynamic-resource
 load barrier; see [the lifecycle contract](DOCUMENT_LIFECYCLE.md).
 

@@ -45,7 +45,8 @@ following dependency order, updating evidence as each increment ships:
    function timers pass exact-commit CI, release/public installation, actual
    v0.9.6 self-upgrade and public native/CDP acceptance including hidden tabs.
    Fresh static WPT remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011.
-   Bundled Init does not finish full queued lifecycle, error/rejection delivery
+   At v0.9.7, bundled Init did not finish full queued lifecycle, error/rejection
+   delivery
    or typed harness reporting. **Shipped v0.9.8** at
    `3e2955800de32e6442412734398d5cbdf6f884cd`: [trusted source provenance and
    bounded uncaught Window errors](docs/WINDOW_ERRORS.md). Exact-commit
@@ -68,17 +69,20 @@ following dependency order, updating evidence as each increment ships:
    The complete unchanged harness now initializes without the old registration
    error, but two jobs remain pending in the navigation-only probe. This is not
    typed completion, a new upstream pass or proof that full execution fits.
-   **In progress:** the local v0.9.11 candidate implements [the separately
-   reviewed queued snapshot lifecycle contract](docs/DOCUMENT_LIFECYCLE.md),
-   before typed observation. Five actual
+   **Shipped v0.9.11** at `ba28b9c5471382bd8b1c254c1add6f4bd8734193`:
+   [the separately reviewed queued snapshot lifecycle](docs/DOCUMENT_LIFECYCLE.md),
+   strict modern v5 progress and typed sticky initial outcomes, before trusted
+   harness observation. Five actual
    public-v0.9.10 worker controls freeze the old synchronous ordering, exact
    zero/256/2,048 work premises and a capture-stop phase bug. The contract fixes
    two shared mandatory permits, strict modern v5 monotonic progress, parent
    fetch-versus-lifecycle admission, sticky typed initial outcome and real
    CDP/headless completion. Full debug/release regressions, package/install/updater
-   fixture, frozen JSPLAN, all 13 packaged native/CDP helpers and fresh complete
-   WPT review pass. Exact-commit CI, tagged packaging and public release gates
-   remain. No new lifecycle behavior or protocol is shipped yet. Keep every existing limit; no free
+   fixture, frozen JSPLAN and fresh complete WPT review pass. Exact-source CI/site,
+   tagged packaging, public install/reinstall, actual v0.9.10 self-upgrade/no-op
+   and all 13 packaged/public native helpers pass; receipts are in the dated log.
+   This completes the bounded increment, not full Window readiness, a typed
+   observer or a new scored cohort. Keep every existing limit; no free
    queue, blanket counter adjustment or arbitrary-timer drain. Renderer readiness
    integration must preserve failure/diagnostic/pixel guards; corpus and typed
    observer/scoring expansions still require separate frozen contributions.
@@ -88,8 +92,9 @@ following dependency order, updating evidence as each increment ships:
    parent-owned legacy completion, while modern/infrastructure failures remain
    unchanged. Focused debug/release controls, refreshed full regressions/package
    all 25 native plus 25 external original-engine journeys and fresh full WPT
-   comparison pass locally. Corrected exact-commit/public gates remain before
-   publication.
+   comparison pass locally. The corrected exact-source/public release gates
+   subsequently pass at the immutable v0.9.11 tag source; the failed first-CI
+   receipt remains preserved.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

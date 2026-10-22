@@ -115,7 +115,7 @@ operations. This adds no commands, remote execution context or Runtime evaluatio
 
 Enabled Page sessions receive `frameStartedLoading`, `frameNavigated`, `domContentEventFired`, `loadEventFired`, and `frameStoppedLoading` as the corresponding navigation work occurs. Transport failures omit the two content/load completion events. DOM sessions receive `documentUpdated` when their node references become stale. Attach/detach events describe actual session changes. Navigation errors stay distinguishable from successful content delivery. Event timestamps use monotonic seconds; load events cannot establish that unsupported scripts or images completed.
 
-The local v0.9.11 lifecycle candidate separates these notifications: document
+Since v0.9.11, queued snapshot lifecycle separates these notifications: document
 commit does not settle Page.navigate, DCL/load follow accepted worker milestones,
 and loading stops on load or explicit failure/abort. An aborted terminal prefix
 does not fabricate either missing milestone; later projections emit only DOM

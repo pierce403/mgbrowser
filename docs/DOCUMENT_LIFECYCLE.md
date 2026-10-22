@@ -1,13 +1,12 @@
 # Queued snapshot document lifecycle: implementation contract
 
-Reviewed and frozen 2026-10-22 for F-016 / F-026 after v0.9.10, before changing
-engine behavior. **Local v0.9.11 candidate implemented; release gates pending.**
-Focused and full debug/release regressions, actual workers, package/install/updater
-fixture, frozen JSPLAN, all 13 packaged native/CDP helpers and fresh complete WPT
-review pass. Exact-commit CI, tagged packaging and public delivery remain separate
-gates. Public v0.9.10 still uses modern
-protocol v4 and bundled Init. This contract does not complete Window-testharness
-readiness or authorize another scored corpus; the dated log records evidence.
+Reviewed and frozen 2026-10-22 for F-016 / F-026 before implementation; shipped
+in v0.9.11 at `ba28b9c5471382bd8b1c254c1add6f4bd8734193` after
+exact-source CI, tagged packaging, public install/update and packaged/public
+native acceptance. The actual v0.9.10 baseline used modern v4 and bundled Init.
+This scoped snapshot-loading increment does not complete Window-testharness
+readiness or authorize a new scored corpus; the dated log records the separate
+receipts.
 
 ## Measured baseline
 
@@ -203,8 +202,9 @@ worker, validation, ordinary script and lifecycle errors cannot disappear after
 a clean later projection. Transport/opaque host failures remain distinguishable
 from admitted script errors; neither can be accepted as a clean script result.
 Script-preload failure evidence must come from typed parent broker metadata,
-not parsing mixed resource warnings or status text. Existing timing/count-only
-ScriptFetchProfile fields do not yet provide that evidence.
+not parsing mixed resource warnings or status text. At the frozen v0.9.10
+baseline, timing/count-only ScriptFetchProfile fields did not provide that
+evidence; v0.9.11 adds the separately consumed typed rejection count.
 
 For modern v5, `is_loading` settles on actual LoadComplete or explicit terminal/
 abort/fetch failure, not task-wake absence. Disabled-script documents settle at
@@ -274,5 +274,6 @@ need explicit new boundary tests or post-load workloads, never blanket weakening
 Run all existing debug/release/legacy/embedding/JSPLAN gates and a fresh full
 static WPT measurement. A browser-visible implementation finishes with a new
 versioned release, exact-source CI/site, public checksum/install, actual old
-updater and packaged/public native/CDP acceptance. Until then v0.9.10 remains the
-installed release, this milestone unfinished, and F-016/F-026/MVP remain open.
+updater and packaged/public native/CDP acceptance. This bounded increment's
+release/public gates pass for v0.9.11; F-016/F-026/MVP and full Window readiness
+remain open.

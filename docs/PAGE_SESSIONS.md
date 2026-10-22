@@ -4,15 +4,15 @@ Implemented bounded scope, 2026-09-07. Independent local worker, native and CDP
 acceptance is recorded in the daily log. This is not general platform compatibility;
 the Google result/destination goal remains open.
 
-Local v0.9.11 candidate: [queued document lifecycle](DOCUMENT_LIFECYCLE.md)
+Shipped v0.9.11: [queued document lifecycle](DOCUMENT_LIFECYCLE.md)
 adds strict modern v5 private progress, preserving explicit legacy v1 bytes.
 Init no longer completes DCL/load: each mandatory task uses a later transaction
 and the existing shared work ledger. Chassis pumps committed initial documents
 while still loading, accepts progress only after validation plus one charge,
 and retains typed initial failures across later clean work. Initial load stops
-at LoadComplete, not arbitrary queue idle. Full local regressions, package/install,
-all 13 native/CDP helpers and fresh WPT review pass. Tagged/public gates remain;
-the v4/bundled descriptions below record the still-public v0.9.10 baseline.
+at LoadComplete, not arbitrary queue idle. Exact release/public, actual old-update
+and all 13 packaged/public native receipts are in the dated log. The v4/bundled
+descriptions below record the historical v0.9.10 baseline.
 
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit
@@ -70,7 +70,7 @@ DOM/Event conformance are outside this slice. Bounded startup external sources
 now enter through the parent-owned typed request described in BOA.md; later
 event requests still cannot supply sources or network authority. Unsupported
   APIs must not report fake success. v0.9.7 corrected event targeting, handler-slot
-  order and readiness before deferred sources. The v0.9.11 candidate adds separate
+  order and readiness before deferred sources. The v0.9.11 release adds separate
   DCL/load transactions after the pre-parsed/preloaded classic sources; it does
   not implement streaming parsing or dynamic-resource readiness. Function timers
   use the separate bounded transaction below.
@@ -88,7 +88,7 @@ execution.
 
 Modern protocol v3 introduced `TaskPump { wake_token }`, not a fabricated activation.
 The v0.9.8 provenance-aware Init contract used v4 and rejected v3 frames.
-The v0.9.11 candidate uses strict v5, rejecting earlier modern versions including
+The v0.9.11 release uses strict v5, rejecting earlier modern versions including
 later Event/TaskPump commands; the explicit legacy lane remains v1.
 It shares the activation's one pending command, sequence/revision, lifetime,
 active-time, wire and child ledgers. A valid pump selects one eligible
@@ -171,7 +171,7 @@ Use strict versioned, length-prefixed JSON envelopes with parent-issued generati
 session identity, monotonically increasing sequence and expected revision. Reject
 extra, stale, malformed, oversized, truncated or unsolicited replies. New input
 never carries scripts, replacement HTML, callback handles or network authority.
-The v0.9.11 candidate's modern protocol v5 requires strict lifecycle progress
+Modern protocol v5, shipped in v0.9.11, requires strict lifecycle progress
 and a valid Boa profile report, including platform allocator counters.
 The explicit test-only legacy lane keeps v1 and the original
 allocation phases. Reports must stay cumulative; neither lane can impersonate

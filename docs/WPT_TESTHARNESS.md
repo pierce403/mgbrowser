@@ -7,11 +7,11 @@ Remaining browser services require separate feature contributions and versioned
 releases after the published expanded static baseline.
 
 The [queued snapshot-lifecycle contract](DOCUMENT_LIFECYCLE.md) was frozen before
-implementation against actual v0.9.10 baselines. Its local v0.9.11 candidate uses
-mandatory shared admission, strict modern v5 progress and typed sticky initial
-outcomes. Full local regressions, packaged native/CDP acceptance and fresh static
-WPT review pass; exact-commit/tagged/public release gates remain. Public v0.9.10
-remains v4 with bundled startup. Static renderer
+implementation against actual v0.9.10 baselines and shipped as v0.9.11 at
+`ba28b9c5471382bd8b1c254c1add6f4bd8734193`. Mandatory shared admission,
+strict modern v5 progress and typed sticky initial outcomes pass their separate
+release/public gates; receipts are in the dated log. The measured v0.9.10
+baseline used v4 and bundled startup. Static renderer
 readiness integration stays independent of interpreting score gains: no arbitrary
 timer wait, typed observer or new scored selection is added.
 

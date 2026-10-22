@@ -117,8 +117,8 @@ startup callbacks and bounded Promise checkpoints, not a general browser event
 loop. Parent-preloaded classic external scripts and, in the v0.9.7 increment,
 function-valued `setTimeout`/`clearTimeout` are supported. String timers,
 intervals, modules, fetch/XHR and script cookie access are not implemented.
-Public v0.9.10 bundles startup in Init. The v0.9.11 candidate uses separate
-parent-pumped DCL/load tasks after pre-parsed/preloaded classic sources;
+The v0.9.10 baseline bundled startup in Init. Since v0.9.11, separate
+parent-pumped DCL/load tasks run after pre-parsed/preloaded classic sources;
 timers still require later polling. This is not streaming parsing or a dynamic
 resource barrier. Most modern sites will still fail. [BOA.md](BOA.md) records the
 current integration and explicit `boa-page-process-v1` resource profile.

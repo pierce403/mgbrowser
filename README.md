@@ -12,11 +12,12 @@ typed bounded startup outcomes preserve initial errors across later clean work.
 Strict modern v5 progress separates CDP commit, DCL, load and loading stopped.
 [Lifecycle contract and limitations](docs/DOCUMENT_LIFECYCLE.md).
 
-Full local debug/release regressions, restricted workers, package installation,
-updater fixture, frozen JSPLAN and all thirteen packaged native/CDP helpers pass.
-Exact-commit CI, tagged packaging and public install/update/native acceptance
-are separately recorded in the [dated work log](memory/logs/2026-10-22.md).
-The installer selects the latest actually published release. This is not a
+Published as [v0.9.11](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.11)
+at `ba28b9c5471382bd8b1c254c1add6f4bd8734193`. Full local regressions,
+exact-source CI/site and tagged packaging, public install/reinstall, actual
+v0.9.10 self-upgrade/no-op and all thirteen packaged/public native helpers pass.
+Receipts are in the [dated work log](memory/logs/2026-10-22.md).
+The checksum-verified installer delivers v0.9.11. This is not a
 streaming parser, general event loop, new upstream pass or full WPT harness.
 See the [release notes and limitations](docs/RELEASE-v0.9.11.md).
 
@@ -33,7 +34,8 @@ messaging. Native DOMException preserves Error identity and private branding.
 Published as [v0.9.10](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.10)
 at `6ee10072217d6ccc91a67b31486b1e10cbeb5de6`. Local full debug/release
 regressions, restricted workers, fresh complete static WPT, exact-commit CI/site
-and tagged packaging pass. The public installer delivers v0.9.10; fresh install,
+and tagged packaging pass. The v0.9.10 public installer delivered that release;
+fresh install,
 reinstall, actual v0.9.9 self-upgrade/no-op and all twelve packaged/public native
 acceptance helpers pass. Receipts are recorded in the
 [dated work log](memory/logs/2026-10-22.md).
@@ -229,7 +231,7 @@ See [updater behavior and trust](docs/UPDATES.md).
   require UTF-8 and a supported JavaScript MIME type. The v0.9.7 release adds
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
   v0.9.8 adds conservatively muted Window errors; v0.9.9 adds bounded rejection
-  notification. The v0.9.11 candidate separates DCL/load after pre-parsed/preloaded
+  notification. The v0.9.11 release separates DCL/load after pre-parsed/preloaded
   classic sources, not a streaming parser or dynamic-resource load barrier.
   Cross-context messaging and typed JavaScript testharness results remain unfinished.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general

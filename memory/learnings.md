@@ -89,3 +89,13 @@
   after host drops and without replacing an earlier fatal reason; outward Closed
   and the uncompleted lifecycle prefix remain. This does not prove all VM roots
   release without Context teardown or justify a general test-only GC repair.
+- 2026-10-22: Native navigation readiness has two separate proofs. For the
+  owned script-free scale fixture, new LOADED plus a matching old WM_NAME can
+  precede mandatory lifecycle completion. The helper now requires that new
+  navigation's real Init/DCL/load accounting and acknowledgements before its
+  unchanged single click and PAGE_EVENT_APPLIED check. Three pure controls and
+  a fresh full thirteen-helper run on public v0.9.11 pass. The first public
+  timeout's exact click-admission timing was not logged: do not generalize that
+  inference into a proven browser defect or call title equality a paint barrier.
+  Together with the prior same-title/old-frame observations, curator records
+  this readiness-versus-input-proof distinction in browser-check.

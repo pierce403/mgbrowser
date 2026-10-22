@@ -160,8 +160,8 @@ checks actual native retained-form behavior, external one-per-generation
 start/commit/DCL/load/stop ordering, later DOM invalidation without repeated
 milestones, deferred/earlier-task checkpoints and exact HTTP/work receipts. It
 leaves a long timer pending to distinguish initial load from queue idle. Its
-first local candidate run passed on 2026-10-22; package/public delivery remains
-a separate release gate. It does not prove hidden-tab/supersession GUI behavior,
+packaged and public-installed v0.9.11 acceptance passed; subsequent changes
+still require both repeats. It does not prove hidden-tab/supersession GUI behavior,
 ordinary Playwright compatibility, upstream passes or typed harness completion.
 Keep all older diagnostic rejection guards and native/CDP interaction proofs
 when explicitly migrating their bundled-order premises.
@@ -194,6 +194,9 @@ window geometry. Repeated identical old frames are not proof that a requested
 new paint finished. After opening a panel, changing its section or resizing,
 wait for the requested visible controls/content as well as frame stability;
 a background-color pixel alone can accept an empty resized surface.
+For script-free modern fixtures, correlate the new navigation with actual
+mandatory lifecycle completion before input; a same-title WM_NAME cannot
+establish readiness, and real click/event effects still require separate proof.
 Inspect actual screenshots; repeat with the public-installed
 binary after release. Screen-global X11 DPI is not per-monitor Wayland scaling.
 

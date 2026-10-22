@@ -32,12 +32,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
   kept-object clear. Release/public acceptance is separate from WPT coverage.
 - `docs/WINDOW_MESSAGES.md`: v0.9.10 bounded self-messaging, partial clone
   domain, measured unchanged-harness initialization and separate lifecycle review.
-- `docs/DOCUMENT_LIFECYCLE.md`: frozen contract and measured public-v0.9.10
-  baseline; local v0.9.11 queued lifecycle/typed-outcome candidate passes focused
-  and authored native/CDP preflight plus full source/package/install gates.
-  Fresh WPT and all 13 packaged native helpers also pass. Exact-commit/public
-  release gates remain;
-  it is not a shipped protocol or completed harness-readiness milestone yet.
+- `docs/DOCUMENT_LIFECYCLE.md`: shipped v0.9.11 queued snapshot lifecycle,
+  strict v5 progress and sticky initial outcomes, after the measured public
+  v0.9.10 baseline. Exact release/public receipts are in the dated log; full
+  Window readiness, trusted typed observation and broader WPT integration remain
+  open.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

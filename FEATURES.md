@@ -532,25 +532,27 @@ jobs pending: not typed completion or complete runtime feasibility. This adds no
 upstream score, full structured clone, cross-context messaging, queued lifecycle
 or trusted typed observation claim; unchecked F-016 criteria remain open.
 
-Next-contract review, 2026-10-22: [queued snapshot lifecycle](docs/DOCUMENT_LIFECYCLE.md)
-freezes mandatory shared-work admission, strict proposed modern v5 progress,
+Pre-implementation review, 2026-10-22: [queued snapshot lifecycle](docs/DOCUMENT_LIFECYCLE.md)
+froze mandatory shared-work admission, strict proposed modern v5 progress,
 sticky initial-script failure and parent/CDP/headless integration before engine
 changes. Five controls against the actual public v0.9.10 reproduce bundled
-ordering, exact admission boundaries and a capture-stop phase bug. This review
-does not implement the contract, change production v4, add WPT passes or complete
-any unchecked criterion above.
+ordering, exact admission boundaries and a capture-stop phase bug. That review
+alone did not implement the contract or change the then-public v4 baseline, add
+WPT passes or complete any unchecked criterion above.
 
-Local candidate, 2026-10-22: queued lifecycle, strict v5/legacy isolation and typed
-initial-load integration are implemented for v0.9.11. Focused semantic, exact
+Shipped v0.9.11 at `ba28b9c5471382bd8b1c254c1add6f4bd8734193`: queued
+snapshot lifecycle, strict v5/legacy isolation and typed initial-load integration.
+Focused semantic, exact
 resource-boundary, actual-worker and Chassis/embedding tests pass; the authored
 native/external-CDP fixture verifies deferred/earlier-task order, separate DCL/load,
 later projection without repeated milestones and retained real form navigation.
 A measured Closed/event-cap cleanup defect is covered and corrected without
 new limits or capabilities. Full debug/release regressions, package/install/updater
-fixture, frozen JSPLAN, all 13 packaged native/CDP helpers and fresh full WPT review
-pass. Exact-commit CI, tagged packaging and public release acceptance remain.
-Do not mark any broader F-016 or F-026 gate
-complete from these authored local results.
+fixture, frozen JSPLAN and fresh full WPT review pass. Exact-source CI/site,
+tagged packaging, public install/reinstall, actual v0.9.10 self-upgrade/no-op and
+all 13 packaged/public native/CDP helpers pass. Static WPT remains 317/632/62 of
+1,011; authored controls add no upstream passes. Do not mark any broader F-016
+or F-026 gate complete from these authored results.
 
 ## F-015 : Self-updates and build identity
 
