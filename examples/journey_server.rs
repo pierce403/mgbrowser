@@ -18,6 +18,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/events.html"),
             ),
+            "/script-external-events" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/external-events.html"),
+            ),
+            "/external-events.js" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/external-events.js"),
+            ),
             "/event-search"
                 if fields
                     .iter()
@@ -154,9 +162,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "<h1>Fixture request failed</h1><p>Expected query and hidden field.</p>",
             ),
         };
+        let content_type = if url.path() == "/external-events.js" {
+            "text/javascript"
+        } else {
+            "text/html"
+        };
         write!(
             stream,
-            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )?;
         eprintln!("{status} {}", url.path());

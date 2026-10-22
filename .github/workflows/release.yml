@@ -13,7 +13,7 @@ jobs:
         run: |
           rustup toolchain install 1.91.1 --profile minimal
           sudo apt-get update
-          sudo apt-get install -y xvfb fonts-dejavu-core desktop-file-utils dbus
+          sudo apt-get install -y xvfb xauth fonts-dejavu-core desktop-file-utils dbus
       - name: Build locked release binary
         run: cargo +1.91.1 build --locked --release --bin mgbrowser
       - name: Package and verify the user payload
@@ -25,6 +25,7 @@ jobs:
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
           cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
+          python3 tools/page-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -40,6 +41,13 @@ jobs:
             sleep 0.1
           done
           timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
+      - name: Preserve packaged page-service acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-page-services
+          path: tmp/page-services-smoke-*/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: release-payload

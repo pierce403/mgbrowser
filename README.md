@@ -2,14 +2,20 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.5 Experimental Preview
+## v0.9.6 Experimental Preview
 
-v0.9.5 adds bounded classic external script loading (`<script src="...">`), a
-native **Performance Dashboard** (`F12` / `Ctrl+Shift+I` → **Performance**, or
-`Ctrl+Shift+P`) and headless **CLI profiler** (`mgbrowser --profile <URL>`), and
-multi-tier rendering caches (Frame cache, Stylo computed-style cache and
-RustyBuzz shaping/width cache) that eliminate hover and scroll hangs. Pure-Rust
-Boa ECMAScript execution runs inline and classic external scripts by default
+v0.9.6 corrects classic external script loading (`<script src="...">`) with
+typed parent-supplied sources, shared resource admission and explicit handling
+of unsupported script attributes. The native **Performance Dashboard** (`F12` /
+`Ctrl+Shift+I` → **Performance**, or `Ctrl+Shift+P`) and headless **CLI profiler**
+(`mgbrowser --profile <URL>`) report completed browser paints, actual cache paths
+and resource timings. Frame and computed-style caches share immutable data,
+retain at most 16 MiB and 8 MiB of payload per Browser, and render uncached above
+those bounds. RustyBuzz shaping has separate bounded caches and measured hit
+counters. These are payload limits, not RSS ceilings or a scrolling-speed
+guarantee. [Performance measurements and limits](docs/PERFORMANCE.md).
+
+Pure-Rust Boa ECMAScript execution runs inline and classic external scripts by default
 (`--disable-scripts` opts out), alongside bottom-left link hover URL previews,
 **Open link in new tab** from the right-click context menu and **Ctrl+click** on
 links. The initial 24-test WPT
@@ -87,7 +93,7 @@ The size-optimized, symbol-stripped release stays within older builds' unchanged
 establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded in the [dated work log](memory/logs/2026-10-14.md).
+installation receipts are recorded separately in the [dated work log](memory/logs/2026-10-21.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:
@@ -109,7 +115,8 @@ resource-loading, painting and restricted script-worker code. [Method and comman
 The website reruns the selection before every commit's Pages deployment and
 publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
 The goal is more genuine passes, without hiding failures or losing old passes.
-v0.9.2 completed all 24 tests in the initial cohort, and v0.9.5 preserves 24/24 passes. Current-source website scores may
+v0.9.2 completed all 24 tests in the initial cohort, and the current selection
+remains 24/24. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
@@ -138,8 +145,15 @@ See [updater behavior and trust](docs/UPDATES.md).
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
 - Boa-backed JavaScript integration runs inline and bounded classic external
-  `<script src>` scripts by default (use `--disable-scripts` to opt out). ES
-  modules (`type="module"`), dynamic script injection, timers, fetch/XHR and
+  `<script src>` scripts by default (use `--disable-scripts` to opt out). Up to
+  16 external sources participate within 32 eligible script elements, with a
+  256 KiB per-source cap and a 1 MiB combined HTML/source cap. CSS, fonts, images
+  and scripts share the existing 2 MiB, 32-request, ten-second loading allowance.
+  Deferred sources run after ordinary sources; `nomodule` provides the classic
+  fallback while modules remain unsupported. Async scripts, nonempty integrity
+  metadata and `crossorigin` are skipped with diagnostics. External sources
+  require UTF-8 and a supported JavaScript MIME type. ES modules
+  (`type="module"`), dynamic script injection, timers, fetch/XHR and
   general browser event-loop behavior are not implemented. No React/Vue
   browser-app compatibility is claimed.
 - Script budgets include cumulative opcodes, sources/jobs and 32/64 MiB
@@ -165,7 +179,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.4.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.6.md) for manual install and uninstall.
 
 ## Components
 
@@ -188,14 +202,14 @@ academic references and separately gated embedding compatibility. The first
 [isolated P0/P1 experiment](experiments/jsplan/README.md) compares original Butane
 with Boa 0.22 using pinned tests and honest failure counts. The subsequent
 [page integration](docs/BOA.md) uses an explicit process-contained profile, not
-the original logical allocation report. Full P1 resource control, external
-loading/framework support, performance and V8 compatibility remain open.
+the original logical allocation report. Full P1 resource control, general task
+and module loading, framework support and V8 compatibility remain open.
 
 ## Engineering background (pre-MVP)
 
 A web browser written from the ground up in Rust, developed through reproducible experiments and open contribution.
 
-**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. Opt-in Boa page execution creates usable controls and retains state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete and deferred. There is no general autoresearch executor yet.
+**Status: pre-MVP research.** A native Linux browser loads HTML over verified HTTPS, draws text with Rust fonts, submits forms and follows links. Its initial CDP subset supports real automation. Boa page execution runs by default, creates usable controls and retains state for later click/submit handlers inside a restricted worker. The live Google goal remains incomplete and deferred. There is no general autoresearch executor yet.
 
 ```sh
 cargo run --locked --bin mgbrowser -- https://example.com/

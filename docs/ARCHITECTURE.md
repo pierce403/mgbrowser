@@ -26,8 +26,13 @@ and restricted SVG decoding remain Rust-only. Chassis owns resource fetching,
 navigation-generation cancellation and download budgets. Stylesheets remain
 same-origin; image chains stop sending/storing cookies at their first origin
 crossing, including later redirects back. They cannot downgrade after HTTPS.
-Neither resource bytes nor new fetch capabilities
-are passed into the script worker.
+Stylesheet/font/image bytes and fetch capabilities stay outside the script worker.
+
+Classic external JavaScript source text entered through parent preloading in
+v0.9.5 and corrected to typed initial-request metadata in v0.9.6. Chassis owns
+fetching, cookie/TLS policy and the shared resource ledger; Sparkle validates
+node/source admission; the host still starts the isolated worker. No network
+handle or fetch callback crosses that boundary. See [BOA.md](BOA.md).
 
 The new layout work is not a full CSS engine or hard render-time sandbox. Limits
 include 2,000,000 shared work steps, 200,000 scene operations, depth 256 and bounded
@@ -100,7 +105,8 @@ stable target IDs. Neither switching nor detaching changes a target's identity.
 Chassis fences navigation generations and validates returned DOM/default actions.
 The platform service owns child processes, isolation, cumulative accounting,
 cancellation and bounded reaping. `DisabledScripts` returns an explicit error
-when a host has no isolated worker. The desktop still requires `--enable-scripts`;
+when a host has no isolated worker. The desktop enables scripts by default since
+v0.9.4 (`--disable-scripts` opts out);
 unsupported platforms retain the existing refusal path. The extraction preserved
 behavior; the later Boa adoption explicitly introduces the versioned profile in
 [BOA.md](BOA.md) and protocol v2 with validated engine-specific accounting.
@@ -111,6 +117,11 @@ emits update/restart requests only after explicit UI actions; the host authorize
 restart readiness and owns executable replacement/relaunch. Engines never launch
 an updated application. Restart reopens committed tab URLs in one window with
 fresh session state; it does not preserve pane placement, forms or history.
+
+Frame/style caches retain bounded immutable payloads rather than transferring
+render ownership to another engine. Full Browser paint timing includes output
+composition and chrome. See [PERFORMANCE.md](PERFORMANCE.md) for the reviewed
+16 MiB Frame / 8 MiB Style per-Browser ceilings, fallback and accounting scope.
 
 Chassis clamps its viewport to the existing desktop bounds. Direct Sparkle callers must
 choose dimensions appropriate to their own resource limits. A page surface is

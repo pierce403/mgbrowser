@@ -1,5 +1,40 @@
 # Work queue
 
+2026-10-21 active goal: **implement all features in FEATURES.md**. Keep each
+feature's recorded acceptance criteria and release policy. Work through the
+following dependency order, updating evidence as each increment ships:
+
+1. **Release validation pending: v0.9.6 script and performance correctness.**
+   Implemented typed parent-supplied classic sources, shared CSS/font/image/script
+   resource admission, bounded source/wire admission, document/deferred ordering
+   and explicit unsupported-attribute/MIME/credential handling. Complete Browser
+   paint timing, actual cache-path labels, truthful CLI failure/no-op-scroll
+   reporting and reviewed Frame/style retention bounds are implemented.
+   Final acceptance remains open: source/resource/worker regressions, unchanged
+   24-test WPT cohort, packaged native and external-CDP retained-event journeys,
+   headless short/tall/malformed-response profiling, native Performance at
+   100/200% in light/dark, exact-commit CI/site and release/public-installer
+   repeats. Finish this bounded increment before starting the later queue.
+2. Expand the pinned WPT cohort in a separate tooling contribution, retaining all
+   existing 24 cases and establishing the new baseline before engine fixes.
+   Then implement testharness execution through the restricted worker and the
+   browser services required by those upstream tests (F-026/F-008/F-016).
+3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
+   utilities, then the pinned Playwright locator/navigation/multi-target journey
+   (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
+4. Finish the versioned renderer/navigation/image corpus and missing transport
+   cancellation (F-003/F-004/F-005), then signed-out News fidelity and the actual
+   Google result/destination journey (F-025/F-010).
+5. Build the reproducible evaluator and contributor reproduction gates (F-006),
+   complete the formal Linux MVP criteria (F-007), and advance the remaining
+   language/framework/embedding contracts in F-016 with their specified tests.
+   Conditional JIT/architecture research follows its existing measured gates.
+
+The broader goal remains open while any feature acceptance requirement is
+unfinished. Current-source WPT scores continue to update on every commit.
+
+The following records the preceding WPT and preview increments.
+
 2026-09-23 active: **T-023 / F-026: measurable WPT coverage** supersedes the
 remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md).
 
@@ -29,13 +64,19 @@ remaining site-specific compatibility work below. See [docs/WPT.md](docs/WPT.md)
    attribute bindings while preserving 24/24 WPT passes. Released at
    `b3a92d656565` with exact-commit CI, Pages, release and public installer
    checks verified.
-5. **In release validation:** v0.9.5 implements bounded classic external script
+5. **Published:** v0.9.5 implements bounded classic external script
    loading (`<script src="...">`), a native **Performance Dashboard**
    (`F12` / `Ctrl+Shift+I` → **Performance**, or **Ctrl+Shift+P**) and headless
    **CLI profiler** (`mgbrowser --profile <URL>`), configurable `Window`
    `onclick`/`onsubmit` accessors per WebIDL, and multi-tier rendering caches
    (Frame cache, Stylo computed-style cache and RustyBuzz shaping/width cache)
-   while preserving 24/24 WPT passes.
+   while preserving the recorded 24/24 WPT score. GitHub confirms publication on
+   2026-10-14 at `efdb7e1b1aa8928ff9e119741fd3ee468901b86b` with the
+   8,340,284-byte archive and checksum asset:
+   [v0.9.5](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.5).
+   This publication check does not assert a fresh old-binary native/installer
+   rerun or completion of the broader feature contracts. The v0.9.6 corrections
+   and their pending final acceptance are recorded above.
 6. Expand pinned cohorts and implement full testharness/WebDriver integration in
    separate milestones. Keep worker/resource limits and old regressions; each
    browser behavior improvement finishes with a verified public feature release.

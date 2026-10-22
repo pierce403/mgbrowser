@@ -1530,70 +1530,76 @@ mod tests {
     }
 
     #[test]
-    fn image_tls_origin_crossing_permanently_strips_request_and_response_cookies() {
-        let (client, tls) = resource_test_tls(true);
-        let origin = TcpListener::bind("127.0.0.1:0").unwrap();
-        let other = TcpListener::bind("127.0.0.1:0").unwrap();
-        let page = format!("https://localhost:{}/", origin.local_addr().unwrap().port());
-        let cross = format!(
-            "https://localhost:{}/cross",
-            other.local_addr().unwrap().port()
-        );
-        let first = resource_tls_server(origin, tls.clone(), vec![
-            format!("HTTP/1.1 302 Found\r\nLocation: {cross}\r\nSet-Cookie: before=accepted; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"),
-            "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: back=ignored; Path=/; Secure\r\nContent-Length: 3\r\n\r\nimg".into(),
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into(),
-        ]);
-        let second = resource_tls_server(
-            other,
-            tls,
-            vec![format!(
-                "HTTP/1.1 302 Found\r\nLocation: {page}back\r\nSet-Cookie: cross=ignored; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"
-            )],
-        );
-        let cookies = Mutex::new(CookieJar::default());
-        cookies
-            .lock()
-            .unwrap()
-            .store(&Url::parse(&page).unwrap(), "seed=present; Path=/; Secure");
-        let response = submit_with_limits(
-            &format!("{page}start"),
-            None,
-            client.clone(),
-            &cookies,
-            resource_limits(&page, ResourceKind::Image),
-        )
-        .unwrap();
-        assert_eq!(response.body, b"img");
-        assert_eq!(response.url.as_str(), format!("{page}back"));
-        // A separate request keeps the shared first-party session. Suppression
-        // belongs to the cross-origin chain, not a global destructive jar clear.
-        submit_with_limits(
-            &format!("{page}next"),
-            None,
-            client,
-            &cookies,
-            resource_limits(&page, ResourceKind::Image),
-        )
-        .unwrap();
-        let first = first.join().unwrap();
-        let second = second.join().unwrap();
-        assert_eq!(first.len(), 3);
-        assert_eq!(second.len(), 1);
-        assert!(first[0].contains("Cookie: seed=present\r\n"));
-        assert!(!first[1].contains("Cookie:"));
-        assert!(!second[0].contains("Cookie:"));
-        assert!(first[2].contains("Cookie: seed=present; before=accepted\r\n"));
-        let jar = &mut *cookies.lock().unwrap();
-        assert_eq!(
-            jar.header(&Url::parse(&page).unwrap()),
-            "seed=present; before=accepted"
-        );
+    fn image_and_script_tls_origin_crossing_permanently_strips_request_and_response_cookies() {
+        for kind in [ResourceKind::Image, ResourceKind::Script] {
+            let (client, tls) = resource_test_tls(true);
+            let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+            let other = TcpListener::bind("127.0.0.1:0").unwrap();
+            let page = format!("https://localhost:{}/", origin.local_addr().unwrap().port());
+            let cross = format!(
+                "https://localhost:{}/cross",
+                other.local_addr().unwrap().port()
+            );
+            let first = resource_tls_server(origin, tls.clone(), vec![
+                format!("HTTP/1.1 302 Found\r\nLocation: {cross}\r\nSet-Cookie: before=accepted; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"),
+                "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: back=ignored; Path=/; Secure\r\nContent-Length: 3\r\n\r\nimg".into(),
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into(),
+            ]);
+            let second = resource_tls_server(
+                other,
+                tls,
+                vec![format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {page}back\r\nSet-Cookie: cross=ignored; Path=/; Secure\r\nContent-Length: 0\r\n\r\n"
+                )],
+            );
+            let cookies = Mutex::new(CookieJar::default());
+            cookies
+                .lock()
+                .unwrap()
+                .store(&Url::parse(&page).unwrap(), "seed=present; Path=/; Secure");
+            let response = submit_with_limits(
+                &format!("{page}start"),
+                None,
+                client.clone(),
+                &cookies,
+                resource_limits(&page, kind),
+            )
+            .unwrap();
+            assert_eq!(response.body, b"img");
+            assert_eq!(response.url.as_str(), format!("{page}back"));
+            // A separate request keeps the shared first-party session. Suppression
+            // belongs to the cross-origin chain, not a global destructive jar clear.
+            submit_with_limits(
+                &format!("{page}next"),
+                None,
+                client,
+                &cookies,
+                resource_limits(&page, kind),
+            )
+            .unwrap();
+            let first = first.join().unwrap();
+            let second = second.join().unwrap();
+            assert_eq!(first.len(), 3);
+            assert_eq!(second.len(), 1);
+            assert!(first[0].contains("Cookie: seed=present\r\n"));
+            assert!(!first[1].contains("Cookie:"));
+            assert!(!second[0].contains("Cookie:"));
+            assert!(first[2].contains("Cookie: seed=present; before=accepted\r\n"));
+            let jar = &mut *cookies.lock().unwrap();
+            assert_eq!(
+                jar.header(&Url::parse(&page).unwrap()),
+                "seed=present; before=accepted"
+            );
+        }
     }
 
     #[test]
     fn same_origin_image_and_stylesheet_tls_redirects_keep_session_cookies() {
-        for kind in [ResourceKind::Image, ResourceKind::Stylesheet] {
+        for kind in [
+            ResourceKind::Image,
+            ResourceKind::Stylesheet,
+            ResourceKind::Script,
+        ] {
             let (client, tls) = resource_test_tls(true);
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let page = format!(
@@ -1625,55 +1631,57 @@ mod tests {
     }
 
     #[test]
-    fn direct_cross_origin_images_verify_tls_and_never_use_matching_domain_cookies() {
-        for (host, trusted, succeeds) in [
-            ("localhost", true, true),
-            ("localhost", false, false),
-            ("127.0.0.1", true, false),
-        ] {
-            let (client, tls) = resource_test_tls(trusted);
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let url = format!(
-                "https://{host}:{}/image",
-                listener.local_addr().unwrap().port()
-            );
-            let server = resource_tls_server(listener, tls, vec![
-                "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: foreign=ignored; Path=/\r\nContent-Length: 3\r\n\r\nimg".into()
-            ]);
-            let cookies = Mutex::new(CookieJar::default());
-            cookies
-                .lock()
-                .unwrap()
-                .store(&Url::parse(&url).unwrap(), "existing=not-sent; Path=/");
-            let result = submit_with_limits(
-                &url,
-                None,
-                client,
-                &cookies,
-                resource_limits("https://localhost:1/", ResourceKind::Image),
-            );
-            if succeeds {
-                assert_eq!(result.unwrap().body, b"img");
-                let requests = server.join().unwrap();
-                assert_eq!(requests.len(), 1);
-                assert!(!requests[0].contains("Cookie:"));
-            } else {
-                let error = result.unwrap_err();
-                assert!(error.contains("certificate"), "{error}");
-                assert!(
-                    error.contains(if trusted {
-                        "not valid for name"
-                    } else {
-                        "UnknownIssuer"
-                    }),
-                    "{error}"
+    fn direct_cross_origin_images_and_scripts_verify_tls_and_never_use_matching_domain_cookies() {
+        for kind in [ResourceKind::Image, ResourceKind::Script] {
+            for (host, trusted, succeeds) in [
+                ("localhost", true, true),
+                ("localhost", false, false),
+                ("127.0.0.1", true, false),
+            ] {
+                let (client, tls) = resource_test_tls(trusted);
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!(
+                    "https://{host}:{}/image",
+                    listener.local_addr().unwrap().port()
                 );
-                assert!(server.join().unwrap().is_empty());
+                let server = resource_tls_server(listener, tls, vec![
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nSet-Cookie: foreign=ignored; Path=/\r\nContent-Length: 3\r\n\r\nimg".into()
+                ]);
+                let cookies = Mutex::new(CookieJar::default());
+                cookies
+                    .lock()
+                    .unwrap()
+                    .store(&Url::parse(&url).unwrap(), "existing=not-sent; Path=/");
+                let result = submit_with_limits(
+                    &url,
+                    None,
+                    client,
+                    &cookies,
+                    resource_limits("https://localhost:1/", kind),
+                );
+                if succeeds {
+                    assert_eq!(result.unwrap().body, b"img");
+                    let requests = server.join().unwrap();
+                    assert_eq!(requests.len(), 1);
+                    assert!(!requests[0].contains("Cookie:"));
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(error.contains("certificate"), "{error}");
+                    assert!(
+                        error.contains(if trusted {
+                            "not valid for name"
+                        } else {
+                            "UnknownIssuer"
+                        }),
+                        "{error}"
+                    );
+                    assert!(server.join().unwrap().is_empty());
+                }
+                assert_eq!(
+                    cookies.lock().unwrap().header(&Url::parse(&url).unwrap()),
+                    "existing=not-sent"
+                );
             }
-            assert_eq!(
-                cookies.lock().unwrap().header(&Url::parse(&url).unwrap()),
-                "existing=not-sent"
-            );
         }
     }
 
@@ -1682,6 +1690,7 @@ mod tests {
         let (client, _) = resource_test_tls(true);
         for (scheme, kind) in [
             ("http", ResourceKind::Image),
+            ("http", ResourceKind::Script),
             ("http", ResourceKind::Stylesheet),
             ("https", ResourceKind::Stylesheet),
         ] {
@@ -1700,10 +1709,10 @@ mod tests {
             )
             .unwrap_err();
             assert!(
-                error.contains(if kind == ResourceKind::Image {
-                    "Images require HTTPS"
-                } else {
-                    "page origin"
+                error.contains(match kind {
+                    ResourceKind::Image => "Images require HTTPS",
+                    ResourceKind::Script => "Scripts require HTTPS",
+                    ResourceKind::Stylesheet => "page origin",
                 }),
                 "{error}"
             );
@@ -1737,34 +1746,36 @@ mod tests {
     }
 
     #[test]
-    fn image_https_redirect_cannot_return_to_same_origin_http_exception() {
-        let (client, tls) = resource_test_tls(true);
-        let http = TcpListener::bind("127.0.0.1:0").unwrap();
-        http.set_nonblocking(true).unwrap();
-        let page = format!("http://localhost:{}/", http.local_addr().unwrap().port());
-        let https = TcpListener::bind("127.0.0.1:0").unwrap();
-        let image = format!(
-            "https://localhost:{}/image",
-            https.local_addr().unwrap().port()
-        );
-        let server = resource_tls_server(
-            https,
-            tls,
-            vec![format!(
-                "HTTP/1.1 302 Found\r\nLocation: {page}downgrade\r\nContent-Length: 0\r\n\r\n"
-            )],
-        );
-        let error = submit_with_limits(
-            &image,
-            None,
-            client,
-            &Mutex::new(CookieJar::default()),
-            resource_limits(&page, ResourceKind::Image),
-        )
-        .unwrap_err();
-        assert!(error.contains("cannot downgrade from HTTPS"), "{error}");
-        assert_eq!(server.join().unwrap().len(), 1);
-        assert_eq!(http.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    fn image_and_script_https_redirect_cannot_return_to_same_origin_http_exception() {
+        for kind in [ResourceKind::Image, ResourceKind::Script] {
+            let (client, tls) = resource_test_tls(true);
+            let http = TcpListener::bind("127.0.0.1:0").unwrap();
+            http.set_nonblocking(true).unwrap();
+            let page = format!("http://localhost:{}/", http.local_addr().unwrap().port());
+            let https = TcpListener::bind("127.0.0.1:0").unwrap();
+            let image = format!(
+                "https://localhost:{}/image",
+                https.local_addr().unwrap().port()
+            );
+            let server = resource_tls_server(
+                https,
+                tls,
+                vec![format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {page}downgrade\r\nContent-Length: 0\r\n\r\n"
+                )],
+            );
+            let error = submit_with_limits(
+                &image,
+                None,
+                client,
+                &Mutex::new(CookieJar::default()),
+                resource_limits(&page, kind),
+            )
+            .unwrap_err();
+            assert!(error.contains("cannot downgrade from HTTPS"), "{error}");
+            assert_eq!(server.join().unwrap().len(), 1);
+            assert_eq!(http.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        }
     }
 
     #[test]

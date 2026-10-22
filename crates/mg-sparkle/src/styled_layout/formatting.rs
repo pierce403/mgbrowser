@@ -1105,7 +1105,7 @@ mod tests {
             fonts: &mut fonts,
             controls: &controls,
             viewport_overflow: super::super::viewport_overflow_node(&document, &styles),
-            styles,
+            styles: styles.into(),
             viewport: crate::render::Viewport {
                 width: 800,
                 height: 600,

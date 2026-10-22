@@ -1,0 +1,16 @@
+<!doctype html><html><head><title>Authored external-script event fixture</title></head><body>
+<h1>Authored external scripts with retained events</h1>
+<p id="state">external source has not run</p>
+<a id="cancel" href="/event-trap">Cancel this link</a>
+<form id="search" action="/event-trap" method="get">
+<input id="query" name="q" type="text">
+<button id="submit" type="submit" name="submit" value="events">Search</button>
+</form>
+<div id="parking"></div>
+<script>var starts = 0; var externalOrder = 'inline-before';</script>
+<script src="/external-events.js"></script>
+<script>
+if (externalOrder !== 'external' || starts !== 1) throw new Error('External script order failed');
+document.getElementById('state').textContent = 'ready';
+</script>
+</body></html>

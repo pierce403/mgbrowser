@@ -6,6 +6,7 @@ use crate::{
     paint::{Canvas, Fonts},
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 const BG: u32 = 0xfafbf8;
 const INK: u32 = 0x26342b;
 const LINK: u32 = 0x174ea6;
@@ -55,11 +56,52 @@ pub struct Frame {
     pub diagnostics: crate::style::StyleDiagnostics,
 }
 
+impl Frame {
+    /// Retained capacities and owned string payload, excluding allocator headers.
+    pub fn cache_payload_bytes(&self) -> usize {
+        self.canvas
+            .pixels
+            .capacity()
+            .saturating_mul(std::mem::size_of::<u32>())
+            .saturating_add(
+                self.hits
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Hit>()),
+            )
+            .saturating_add(
+                self.boxes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<LayoutBox>()),
+            )
+            .saturating_add(
+                self.hits
+                    .iter()
+                    .map(|hit| match &hit.action {
+                        Action::Link { href, .. } => href.capacity(),
+                        _ => 0,
+                    })
+                    .sum::<usize>(),
+            )
+            .saturating_add(diagnostic_payload_bytes(&self.diagnostics))
+    }
+}
+
+fn diagnostic_payload_bytes(diagnostics: &crate::style::StyleDiagnostics) -> usize {
+    diagnostics.entries.capacity() * std::mem::size_of::<crate::style::StyleDiagnostic>()
+        + diagnostics
+            .entries
+            .iter()
+            .map(|entry| entry.message.capacity() + entry.source.capacity())
+            .sum::<usize>()
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RenderTimings {
     pub style_ms: f64,
     pub layout_ms: f64,
     pub paint_ms: f64,
+    /// Browser composition, geometry and chrome are measured by Chassis.
+    pub composition_ms: f64,
     pub chrome_ms: f64,
     pub total_ms: f64,
     pub style_cached: bool,
@@ -69,11 +111,59 @@ pub struct RenderTimings {
     pub dom_nodes: usize,
 }
 
+impl RenderTimings {
+    pub fn cache_label(&self) -> &'static str {
+        if self.frame_cached {
+            "frame cache hit"
+        } else if self.style_cached {
+            "style cache hit"
+        } else {
+            "uncached render"
+        }
+    }
+}
+
+/// Retention only: exceeding this never rejects CSS or changes rendered output.
+/// Counts computed structs and their owned allocations plus diagnostics.
+pub const STYLE_CACHE_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Clone, Default)]
 pub struct StyleCache {
     key: Option<(u64, u32, u32)>,
-    styles: Vec<crate::style::ComputedStyle>,
+    styles: Arc<[crate::style::ComputedStyle]>,
     diagnostics: crate::style::StyleDiagnostics,
+    payload_bytes: usize,
+}
+
+impl StyleCache {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn payload_bytes(&self) -> usize {
+        self.payload_bytes
+    }
+
+    fn retain(
+        &mut self,
+        key: (u64, u32, u32),
+        styles: Arc<[crate::style::ComputedStyle]>,
+        diagnostics: &crate::style::StyleDiagnostics,
+    ) {
+        let bytes = std::mem::size_of_val(styles.as_ref())
+            + styles
+                .iter()
+                .map(crate::style::snapshot_heap_bytes)
+                .sum::<usize>()
+            + diagnostic_payload_bytes(diagnostics);
+        self.clear();
+        if bytes <= STYLE_CACHE_PAYLOAD_BYTES {
+            self.key = Some(key);
+            self.styles = styles;
+            self.diagnostics = diagnostics.clone();
+            self.payload_bytes = bytes;
+        }
+    }
 }
 
 /// Render a document without a window, network service, or JavaScript execution.
@@ -137,24 +227,25 @@ pub fn render_scaled_cached(
         {
             timings.style_cached = true;
             diagnostics = style_cache.diagnostics.clone();
-            Ok(style_cache.styles.clone())
+            Ok(Arc::clone(&style_cache.styles))
         } else {
             let style_started = std::time::Instant::now();
+            // Release a stale snapshot before computing the next document.
+            style_cache.clear();
             let result = crate::style::compute_styles_with_diagnostics(
                 document,
                 &document.stylesheets,
                 (viewport.width as f32, viewport.height as f32),
                 &mut diagnostics,
-            );
+            )
+            .map(Arc::<[crate::style::ComputedStyle]>::from);
             timings.style_ms = style_started.elapsed().as_secs_f64() * 1000.0;
             if let Ok(styles) = &result {
                 if doc_key != 0 {
-                    style_cache.key = Some(cache_key);
-                    style_cache.styles = styles.clone();
-                    style_cache.diagnostics = diagnostics.clone();
+                    style_cache.retain(cache_key, Arc::clone(styles), &diagnostics);
                 }
             } else {
-                style_cache.key = None;
+                style_cache.clear();
             }
             result
         };
@@ -213,6 +304,8 @@ pub fn render_scaled_cached(
                 );
             }
         }
+    } else {
+        style_cache.clear();
     }
     let paint_started = std::time::Instant::now();
     let mut frame = Renderer {
@@ -443,6 +536,135 @@ pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> 
 #[cfg(test)]
 mod scale_tests {
     use super::*;
+
+    #[test]
+    fn style_cache_shares_styles_and_matches_uncached_scroll_pixels_and_hits() {
+        let mut fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let doc = crate::document::parse(
+            &format!(
+                "<style>p{{margin:4px;color:#123456}}</style>{}",
+                "<p><a href='/next'>Cached layout and glyphs</a></p>".repeat(30)
+            ),
+            "https://example.test/",
+        );
+        let mut cache = StyleCache::default();
+        let initial = Viewport {
+            width: 320,
+            height: 240,
+            scroll: 0,
+        };
+        let (_, timing) = render_scaled_cached(
+            &doc,
+            &mut fonts,
+            initial,
+            &Controls::default(),
+            1.25,
+            1,
+            &mut cache,
+        );
+        assert!(!timing.style_cached);
+        assert!(cache.payload_bytes() > 0 && cache.payload_bytes() <= STYLE_CACHE_PAYLOAD_BYTES);
+        let styles = Arc::clone(&cache.styles);
+        let scrolled = Viewport {
+            scroll: 65,
+            ..initial
+        };
+        let (cached, timing) = render_scaled_cached(
+            &doc,
+            &mut fonts,
+            scrolled,
+            &Controls::default(),
+            1.25,
+            1,
+            &mut cache,
+        );
+        assert!(timing.style_cached);
+        assert!(Arc::ptr_eq(&styles, &cache.styles));
+        let fresh = render_scaled(&doc, &mut fonts, scrolled, &Controls::default(), 1.25);
+        assert_eq!(cached.canvas.pixels, fresh.canvas.pixels);
+        assert_eq!(cached.boxes, fresh.boxes);
+        assert_eq!(cached.content_height, fresh.content_height);
+        assert_eq!(cached.diagnostics, fresh.diagnostics);
+        let hits = |frame: &Frame| {
+            frame
+                .hits
+                .iter()
+                .map(|h| (h.x, h.y, h.w, h.h, h.action.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hits(&cached), hits(&fresh));
+        for (key, viewport) in [
+            (2, scrolled),
+            (
+                2,
+                Viewport {
+                    width: 360,
+                    ..scrolled
+                },
+            ),
+            (
+                2,
+                Viewport {
+                    height: 300,
+                    width: 360,
+                    ..scrolled
+                },
+            ),
+        ] {
+            let (_, timing) = render_scaled_cached(
+                &doc,
+                &mut fonts,
+                viewport,
+                &Controls::default(),
+                1.25,
+                key,
+                &mut cache,
+            );
+            assert!(!timing.style_cached);
+        }
+        let plain = crate::document::parse("<p>Plain replacement</p>", "https://example.test/");
+        render_scaled_cached(
+            &plain,
+            &mut fonts,
+            initial,
+            &Controls::default(),
+            1.,
+            3,
+            &mut cache,
+        );
+        assert_eq!(cache.payload_bytes(), 0);
+    }
+
+    #[test]
+    fn style_cache_admission_counts_owned_heap_and_drops_oversized_snapshots() {
+        let diagnostics = crate::style::StyleDiagnostics::default();
+        let mut cache = StyleCache::default();
+        cache.retain(
+            (1, 320, 240),
+            vec![crate::style::ComputedStyle::default()].into(),
+            &diagnostics,
+        );
+        assert!(cache.payload_bytes() > 0);
+        let mut large = crate::style::ComputedStyle::default();
+        large.font_families = vec!["x".repeat(STYLE_CACHE_PAYLOAD_BYTES)];
+        let oversized: Arc<[_]> = vec![large].into();
+        cache.retain((2, 320, 240), Arc::clone(&oversized), &diagnostics);
+        assert!(cache.key.is_none());
+        assert_eq!(cache.payload_bytes(), 0);
+        assert!(cache.styles.is_empty());
+        // Admission changes ownership only; the live render input survives.
+        assert_eq!(
+            oversized[0].font_families[0].len(),
+            STYLE_CACHE_PAYLOAD_BYTES
+        );
+    }
 
     #[test]
     fn bare_inline_svg_uses_the_same_renderer_as_an_empty_stylesheet() {

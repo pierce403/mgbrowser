@@ -1147,7 +1147,7 @@ fn child_loop_for(
 pub fn session_selftest() -> Result<(), String> {
     use mg_sparkle::page_session::InputKind;
     fn request() -> Request {
-        Request { url: "https://example.test/session-selftest".into(), html:
+        Request { external_scripts: None, url: "https://example.test/session-selftest".into(), html:
             "<button id=b type=button>B</button><p id=o></p><script>var calls=0;document.getElementById('b').onclick=function(){calls++;document.getElementById('o').setAttribute('data-count',String(calls));};</script>".into() }
     }
     fn wait(session: &mut Session) -> Result<SessionUpdate, String> {
@@ -1384,6 +1384,7 @@ mod tests {
             expected_revision: sequence.saturating_sub(1),
             command: if sequence == 0 {
                 FrameCommand::Init(Request {
+                    external_scripts: None,
                     url: "https://example.test/".into(),
                     html: "<p>owned</p>".into(),
                 })

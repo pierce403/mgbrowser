@@ -408,6 +408,170 @@ mod tests {
         app.handle_key(Key::Character('P'), true, true, false);
         assert!(!app.devtools.visible());
     }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn frame_cache_shares_pixels_and_matches_uncached_pixels_hits_and_geometry() {
+        let mut app = fixture();
+        let first = app.paint();
+        let snapshot = Rc::clone(&app.frame_cache.as_ref().unwrap().1);
+        let hits = |app: &Browser| {
+            app.hits
+                .iter()
+                .map(|h| (h.x, h.y, h.w, h.h, format!("{:?}", h.action)))
+                .collect::<Vec<_>>()
+        };
+        let expected_hits = hits(&app);
+        let expected_boxes = app.boxes.clone();
+        let cached = app.paint();
+        assert!(app.performance_profile().last_frame.frame_cached);
+        assert!(Rc::ptr_eq(&snapshot, &app.frame_cache.as_ref().unwrap().1));
+        assert_eq!(
+            snapshot.canvas.pixels.as_ptr(),
+            app.frame_cache.as_ref().unwrap().1.canvas.pixels.as_ptr()
+        );
+        assert_eq!(first.pixels, cached.pixels);
+        assert_eq!(hits(&app), expected_hits);
+        assert_eq!(app.boxes, expected_boxes);
+        let timing = &app.performance_profile().last_frame;
+        assert!(timing.composition_ms > 0. && timing.chrome_ms > 0.);
+        assert!(timing.total_ms >= timing.composition_ms + timing.chrome_ms);
+        app.frame_cache = None;
+        app.style_cache.clear();
+        let fresh = app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert_eq!(fresh.pixels, cached.pixels);
+        assert_eq!(hits(&app), expected_hits);
+        assert_eq!(app.boxes, expected_boxes);
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn frame_cache_invalidates_for_controls_projection_resize_scale_and_short_scroll() {
+        let mut app = fixture();
+        let original = app.paint();
+        app.scroll_by(120);
+        assert_eq!(app.scroll_position(), 0, "fixture fits the viewport");
+        app.paint();
+        assert_eq!(
+            app.performance_profile().last_frame.cache_label(),
+            "frame cache hit"
+        );
+        let input = app.document.query_selector(0, "input").unwrap().unwrap();
+        app.focus = Focus::Input(input);
+        app.select_all = true;
+        app.type_text("new value");
+        let edited = app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert!(app.performance_profile().last_frame.style_cached);
+        assert_ne!(edited.pixels, original.pixels);
+        app.paint();
+        assert!(app.performance_profile().last_frame.frame_cached);
+        app.acknowledge_projection(
+            document::parse(
+                "<style>p{color:red}</style><p>Changed by event projection</p>",
+                "https://example.com/",
+            ),
+            &[],
+        );
+        app.dom_epoch += 1;
+        let projected = app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert!(!app.performance_profile().last_frame.style_cached);
+        assert_ne!(projected.pixels, edited.pixels);
+        app.resize(640, 480);
+        app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert!(!app.performance_profile().last_frame.style_cached);
+        app.set_scale_preference(ScalePreference::Percent(200));
+        let scaled = app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert_eq!(scaled.width, 1280);
+        app.set_chrome(false);
+        app.paint();
+        assert!(app.frame_cache.is_none());
+        app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn frame_cache_bypasses_oversized_surfaces_without_changing_output() {
+        let mut app = test_app();
+        app.document =
+            document::parse("<p>Large surface still renders</p>", "https://example.com/");
+        app.dom_epoch += 1;
+        app.resize_surface(3000, 1800);
+        let first = app.paint();
+        assert!(first.pixels.len() * 4 > FRAME_CACHE_PAYLOAD_BYTES);
+        assert!(app.frame_cache.is_none());
+        assert_eq!(app.performance_profile().frame_cache_payload_bytes, 0);
+        let second = app.paint();
+        assert!(!app.performance_profile().last_frame.frame_cached);
+        assert_eq!(first.pixels, second.pixels);
+    }
+
+    #[test]
+    fn failed_navigation_preserves_measured_fetch_time_in_performance_report() {
+        let mut app = test_app();
+        app.generation = 1;
+        app.loading = true;
+        app.inflight = 1;
+        app.tx
+            .send(Loaded {
+                generation: 1,
+                document: None,
+                result: Err("fixture connection failure".into()),
+                script: None,
+                fetch_html_ms: 42.5,
+                parse_html_ms: 0.,
+                resource_profile: Default::default(),
+                script_fetch_profile: Default::default(),
+                script_worker_ms: 0.,
+            })
+            .unwrap();
+        app.poll();
+        assert!(!app.last_load_succeeded());
+        assert_eq!(app.performance_profile().fetch_html_ms, 42.5);
+        assert!(app.performance_report().contains("HTML fetch: 42.5 ms"));
+        assert!(app.performance_report().contains("load failure"));
+    }
+
+    #[test]
+    fn performance_reports_requested_worker_allocation_with_explicit_availability() {
+        let mut app = test_app();
+        assert!(app.performance_report().contains("allocation: unavailable"));
+        let mut report = mg_butane::modern::Engine::new().unwrap().stats();
+        report.worker_memory = Some(mg_butane::modern::WorkerMemory {
+            outstanding_bytes: 1024,
+            peak_bytes: 2048,
+            cumulative_bytes: 4096,
+            allocations: 20,
+            outstanding_limit_bytes: mg_butane::modern::WORKER_OUTSTANDING_LIMIT,
+            cumulative_limit_bytes: mg_butane::modern::WORKER_CUMULATIVE_LIMIT,
+        });
+        let reply = SessionReply {
+            revision: 0,
+            snapshot: None,
+            outcome: Default::default(),
+            default_action: DefaultAction::None,
+            navigation: None,
+            errors: vec![],
+            scripts_executed: 1,
+            allocations: None,
+            boa: Some(report),
+            state: RealmState::Ready,
+            acknowledgements: vec![],
+        };
+        app.script_summary(&reply);
+        assert!(app.performance_profile().worker_allocation_recorded);
+        assert_eq!(app.performance_profile().boa_alloc_bytes, 4096);
+        assert_eq!(app.performance_profile().boa_peak_bytes, 2048);
+        assert!(
+            app.performance_report()
+                .contains("4 KiB cumulative, 2 KiB peak outstanding (not GC heap/RSS)")
+        );
+    }
 }
 
 impl State {
@@ -709,7 +873,20 @@ impl Browser {
             format!("Performance Dashboard : {}", bounded(&self.page_url, 240)),
             "Shortcut: Ctrl+Shift+P (or F12 -> Performance) | CLI: mgbrowser --profile <URL>"
                 .into(),
-            format!("Page Load Breakdown (total {:.1} ms):", load_total),
+            format!(
+                "Page Load Breakdown (measured phases {:.1} ms):",
+                load_total
+            ),
+            format!(
+                "  Navigation: {}",
+                if self.loading {
+                    "loading"
+                } else if self.last_load_ok {
+                    "successful HTTP response"
+                } else {
+                    "unsuccessful response or load failure"
+                }
+            ),
             format!(
                 "  HTML fetch: {:.1} ms ({} bytes)",
                 p.fetch_html_ms, p.html_bytes
@@ -720,20 +897,26 @@ impl Browser {
                 self.document.nodes.len()
             ),
             format!(
-                "  Subresources (CSS/images): {:.1} ms ({} requests, {} bytes)",
+                "  Subresources (CSS/fonts/images): {:.1} ms ({} requests, {} charged bytes)",
                 p.resources_ms, p.resource_requests, p.resource_bytes
             ),
             format!(
-                "  External scripts (<script src>): {:.1} ms ({} loaded, {} bytes)",
+                "  External scripts (<script src>): {:.1} ms ({} admitted, {} charged bytes)",
                 p.external_scripts_ms, p.external_scripts_loaded, p.external_scripts_bytes
             ),
             format!(
-                "  Boa JS worker: {:.1} ms ({} scripts executed, {} opcodes, {} KiB peak)",
-                p.script_worker_ms,
-                p.scripts_executed,
-                p.boa_opcodes,
-                p.boa_peak_bytes / 1024
+                "  Boa JS worker: {:.1} ms ({} scripts executed, {} opcodes)",
+                p.script_worker_ms, p.scripts_executed, p.boa_opcodes,
             ),
+            if p.worker_allocation_recorded {
+                format!(
+                    "  Requested worker allocation: {} KiB cumulative, {} KiB peak outstanding (not GC heap/RSS)",
+                    p.boa_alloc_bytes / 1024,
+                    p.boa_peak_bytes / 1024
+                )
+            } else {
+                "  Requested worker allocation: unavailable (no worker memory report)".into()
+            },
             format!(
                 "Render & Frame Cache Pipeline (viewport {}x{} @ {}%):",
                 self.width,
@@ -749,20 +932,34 @@ impl Browser {
                 full.paint_ms
             ),
             format!(
-                "  Last frame repaint: {:.2} ms [{}] | Peak frame: {:.2} ms",
+                "  Last completed Browser paint: {:.2} ms [{}] | Peak: {:.2} ms",
                 last.total_ms,
-                if last.frame_cached {
-                    "frame cache hit"
-                } else if last.style_cached {
-                    "style cache hit"
-                } else {
-                    "uncached render"
-                },
+                last.cache_label(),
                 p.max_frame_ms
+            ),
+            format!(
+                "  Composition/geometry: {:.2} ms | Chrome/Inspector: {:.2} ms",
+                last.composition_ms, last.chrome_ms
             ),
             format!(
                 "  Frames painted: {} | Frame cache hits: {} | Style cache hits: {}",
                 p.frames_painted, p.frame_cache_hits, p.style_cache_hits
+            ),
+            format!(
+                "  Retained snapshot payload: Frame {} KiB / {} KiB; Style {} KiB / {} KiB (per Browser)",
+                p.frame_cache_payload_bytes / 1024,
+                crate::FRAME_CACHE_PAYLOAD_BYTES / 1024,
+                p.style_cache_payload_bytes / 1024,
+                mg_sparkle::render::STYLE_CACHE_PAYLOAD_BYTES / 1024
+            ),
+            format!(
+                "  Shaping lookups (Fonts lifetime): {} hits, {} misses, {} evictions",
+                p.shaping_cache.hits, p.shaping_cache.misses, p.shaping_cache.evictions
+            ),
+            format!(
+                "  Shaping retained: {} entries, {} KiB across loaded faces; cap 4096 entries / 1024 KiB per face",
+                p.shaping_cache.entries,
+                p.shaping_cache.payload_bytes / 1024
             ),
             format!(
                 "  Scene complexity: {} DOM nodes, {} layout boxes, {} paint ops",

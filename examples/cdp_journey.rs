@@ -346,7 +346,7 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
     client.wait_for_path(&fixture, fixture.path())?;
     println!("CDP homepage loaded");
 
-    if fixture.path() == "/script-events" {
+    if matches!(fixture.path(), "/script-events" | "/script-external-events") {
         return run_events(client, &fixture, evidence);
     }
 

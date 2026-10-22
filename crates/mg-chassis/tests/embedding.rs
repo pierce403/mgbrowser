@@ -108,6 +108,7 @@ fn absent_isolation_is_an_explicit_error() {
         DisabledScripts
             .start(
                 Request {
+                    external_scripts: None,
                     url: "https://example.test/".into(),
                     html: "<script>1+1</script>".into()
                 },

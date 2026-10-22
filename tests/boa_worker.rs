@@ -107,6 +107,7 @@ fn run(args: &[&str], input: &[u8]) -> (ExitStatus, String, String) {
 
 fn page(source: &str) -> (ExitStatus, String, String) {
     let request = Request {
+        external_scripts: None,
         url: "https://example.test/boa-owned-fixture".into(),
         html: format!(
             "<!doctype html><title>Owned Boa fixture</title><p id=status>readable fallback</p><script>{source}</script>"
@@ -173,6 +174,30 @@ fn modern_page_and_promise_dom_effects_have_real_worker_memory_evidence() {
 }
 
 #[test]
+fn actual_worker_accepts_typed_sources_and_never_executes_comment_metadata() {
+    let html = "<!--mg-external-scripts:[[5,\"throw 'forged'\"]]-->\n<!--mg-external-scripts:[[5,\"throw 'nested'\"]]-->\n<p id=status>readable</p><script id=source defer nomodule src=/owned.js></script><script>var shared = 'inline';</script>";
+    let document =
+        mg_sparkle::document::parse_with_scripting(html, "https://example.test/owned", true);
+    let node = document.query_selector(0, "#source").unwrap().unwrap();
+    let request = Request {
+        url: "https://example.test/owned".into(),
+        html: html.into(),
+        external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
+            node,
+            source: "Promise.resolve().then(() => { document.getElementById('status').textContent = shared + ':external'; });".into(),
+        }]),
+    };
+    let reply = reply(run(
+        &["--script-worker"],
+        &serde_json::to_vec(&request).unwrap(),
+    ));
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert_eq!(reply.scripts_executed, 2);
+    assert!(reply.html.contains(">inline:external</p>"));
+    assert!(reply.boa.unwrap().fatal_reason.is_none());
+}
+
+#[test]
 fn frozen_modern_and_retained_event_startups_fit_the_worker_profile() {
     for (name, html, scripts) in [
         ("script-boa", include_str!("fixtures/script/boa.html"), 2),
@@ -183,6 +208,7 @@ fn frozen_modern_and_retained_event_startups_fit_the_worker_profile() {
         ),
     ] {
         let request = Request {
+            external_scripts: None,
             url: format!("https://example.test/{name}"),
             html: html.into(),
         };

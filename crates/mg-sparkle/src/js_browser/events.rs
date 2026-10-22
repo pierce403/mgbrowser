@@ -698,6 +698,7 @@ mod tests {
     use super::*;
     fn realm(script: &str) -> PageRealm {
         let (realm, reply) = PageRealm::start(Request {
+            external_scripts: None,
             url: "https://fixture.test/".into(),
             html: format!(
                 "<html><body><p id=state></p><input id=q value=old><textarea id=text>old</textarea><a id=a href=/next>Link</a><script>{script}</script></body></html>"
@@ -1018,6 +1019,7 @@ mod tests {
     #[test]
     fn fatal_initialization_suppresses_earlier_navigation_intent() {
         let (_, reply) = PageRealm::start(Request {
+            external_scripts: None,
             url: "https://fixture.test/".into(),
             html: "<script>location.href='/must-not-navigate';while(true){}</script>".into(),
         });
@@ -1034,6 +1036,7 @@ mod tests {
             "b.setAttribute('form','other');",
         ] {
             let (page, initial) = PageRealm::start(Request {
+                external_scripts: None,
                 url: "https://fixture.test/".into(),
                 html: format!(
                     "<html><body><p id=state></p><form id=f action=/submit><button id=b>Go</button></form><form id=other></form><script>var f=document.getElementById('f'),b=document.getElementById('b');f.onsubmit=function(){{{mutation}document.getElementById('state').textContent='accepted mutation';}};</script></body></html>"

@@ -437,6 +437,32 @@ impl Browser {
         })?;
         self.settled()
     }
+    fn expect_performance(&self, theme: &str) -> Result<Frame> {
+        wait("Performance selection and body text", || {
+            let frame = self.frame()?;
+            let width = i32::from(frame.width) * 100 / self.scale;
+            let panel_width = (width - 16).min(860);
+            let panel_x = (width - panel_width) / 2;
+            let button_width = (panel_width - 48) / 4;
+            let x = panel_x + 26 + 2 * (button_width + 8);
+            let underline = frame.pixel(
+                self.physical(x) as usize,
+                self.physical(self.surface_top + 79) as usize,
+            );
+            if underline != if theme == "dark" { 0xa7dba6 } else { 0x345c36 } {
+                return Ok(false);
+            }
+            let ink = if theme == "dark" { 0xe7eee6 } else { 0x26342b };
+            let mut text_pixels = 0;
+            for y in self.physical(self.surface_top + 94)..self.physical(self.surface_top + 130) {
+                for x in self.physical(panel_x + 12)..self.physical(panel_x + panel_width - 12) {
+                    text_pixels += usize::from(frame.pixel(x as usize, y as usize) == ink);
+                }
+            }
+            Ok(text_pixels > 40)
+        })?;
+        self.settled()
+    }
     fn expect_context(&self, x: i32, y: i32, theme: &str) -> Result<Frame> {
         wait("Inspector context menu pixels", || {
             Ok(self.frame()?.pixel(
@@ -513,6 +539,32 @@ fn exercise(
     browser
         .expect_panel(theme)?
         .save(&dir.join("compact-diagnostics.png"))?;
+    // Open the real Performance section using the native shortcut. Require its
+    // selected underline and visible body text, not only an unchanged panel
+    // background after a compact resize.
+    browser.key(b'P' as u32, true)?;
+    let performance = browser.expect_performance(theme)?;
+    performance.save(&dir.join("compact-performance.png"))?;
+    browser.resize(800, 600)?;
+    let performance = browser.expect_performance(theme)?;
+    assert_ne!(performance.bytes, diagnostics.bytes);
+    performance.save(&dir.join("performance.png"))?;
+    browser.button(760, 500, 5)?;
+    browser.settled()?.save(&dir.join("performance-next.png"))?;
+    assert_eq!(fixture.requests.lock().unwrap().len(), requests);
+    assert_eq!(
+        browser.rpc("Page.getLayoutMetrics", json!({}))?["cssLayoutViewport"]["pageY"],
+        scroll_before,
+        "Performance panel input scrolled the document"
+    );
+    browser.key(b'P' as u32, true)?;
+    // Reopening through F12 and keyboard tabs must reach Performance too.
+    browser.key(0xffc9, false)?;
+    browser.expect_panel(theme)?;
+    browser.key(0xff09, false)?;
+    browser.key(0xff09, false)?;
+    browser.key(0xff0d, false)?;
+    browser.expect_performance(theme)?;
     browser.key(0xff1b, false)?;
     browser.resize(800, 600)?;
     let before_form = fixture.requests.lock().unwrap().len();

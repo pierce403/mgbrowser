@@ -611,6 +611,7 @@ mod linux {
             }
         }
         let request = Request {
+            external_scripts: None,
             url: "https://example.test/".into(),
             html: "<p>Script worker round trip</p>".into(),
         };
@@ -624,6 +625,7 @@ mod linux {
         println!("SCRIPT_WORKER_CHECK protocol: bounded document round trip passed");
         let payload = "bounded payload ".repeat(8192);
         let bulk = execute(Request {
+            external_scripts: None,
             url: "https://example.test/large-owned-fixture".into(),
             html: format!("<p>{payload}</p>"),
         })?;
@@ -632,6 +634,7 @@ mod linux {
         }
         println!("SCRIPT_WORKER_CHECK bulk: multi-buffer document round trip passed");
         let oversized = Request {
+            external_scripts: None,
             url: "https://example.test/".into(),
             html: "x".repeat(INPUT_LIMIT),
         };

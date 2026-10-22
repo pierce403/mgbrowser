@@ -11,6 +11,7 @@ use crate::{
     style::{Color, ComputedStyle, Display, Length, TextAlign, VerticalAlign, WhiteSpace},
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 mod anonymous_table;
 mod formatting;
@@ -316,7 +317,7 @@ pub(crate) fn render_scaled(
     styles: Vec<ComputedStyle>,
     scale: f32,
 ) -> Result<Frame, LayoutFailure> {
-    render_scaled_profiled(document, fonts, viewport, controls, styles, scale)
+    render_scaled_profiled(document, fonts, viewport, controls, styles.into(), scale)
         .map(|(frame, ..)| frame)
 }
 
@@ -325,7 +326,7 @@ pub(crate) fn render_scaled_profiled(
     fonts: &mut Fonts,
     viewport: Viewport,
     controls: &Controls<'_>,
-    styles: Vec<ComputedStyle>,
+    styles: Arc<[ComputedStyle]>,
     scale: f32,
 ) -> Result<(Frame, f64, f64, usize), LayoutFailure> {
     let layout_started = std::time::Instant::now();
@@ -761,7 +762,7 @@ struct Layout<'a, 'c> {
     document: &'a Document,
     fonts: &'a mut Fonts,
     controls: &'a Controls<'c>,
-    styles: Vec<ComputedStyle>,
+    styles: Arc<[ComputedStyle]>,
     viewport: Viewport,
     viewport_overflow: Option<usize>,
     scene: Scene,
@@ -3200,7 +3201,7 @@ mod tests {
             fonts,
             controls,
             viewport_overflow: viewport_overflow_node(document, &styles),
-            styles,
+            styles: styles.into(),
             viewport: Viewport {
                 width: 800,
                 height: 600,
@@ -3640,7 +3641,7 @@ mod tests {
             fonts: &mut fonts,
             controls: &controls,
             viewport_overflow: viewport_overflow_node(&doc, &computed),
-            styles: computed,
+            styles: computed.into(),
             viewport: Viewport {
                 width: 800,
                 height: 600,

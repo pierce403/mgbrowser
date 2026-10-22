@@ -15,6 +15,27 @@ const GLYPH_CACHE_ENTRIES: usize = 4096;
 const SHAPE_CACHE_BYTES: usize = 1024 * 1024;
 const SHAPE_CACHE_ENTRIES: usize = 4096;
 
+/// Actual shaping/measurement lookups, summed over all faces supplied to Fonts.
+/// Payload counts retained text/glyph data, not allocator overhead or process RSS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShapingCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    pub entries: usize,
+    pub payload_bytes: usize,
+}
+
+impl ShapingCacheStats {
+    fn add(&mut self, other: Self) {
+        self.hits = self.hits.saturating_add(other.hits);
+        self.misses = self.misses.saturating_add(other.misses);
+        self.evictions = self.evictions.saturating_add(other.evictions);
+        self.entries = self.entries.saturating_add(other.entries);
+        self.payload_bytes = self.payload_bytes.saturating_add(other.payload_bytes);
+    }
+}
+
 /// Opaque saved physical clip. Callers own nesting tokens; Canvas allocates no
 /// clip stack. Restore on the same surface to recover its previous exact bounds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -252,6 +273,7 @@ pub struct Fonts {
     cached_bytes: usize,
     shape_cache: HashMap<(u64, u32), (Box<str>, f32, Rc<[PositionedGlyph]>)>,
     shape_cached_bytes: usize,
+    shaping_stats: ShapingCacheStats,
     bold: Option<Box<Fonts>>,
     families: HashMap<String, Box<Fonts>>,
 }
@@ -269,6 +291,7 @@ impl Fonts {
             cached_bytes: 0,
             shape_cache: HashMap::new(),
             shape_cached_bytes: 0,
+            shaping_stats: Default::default(),
             bold: None,
             families: HashMap::new(),
         })
@@ -282,7 +305,30 @@ impl Fonts {
     }
 
     pub fn clear_families(&mut self) {
+        // Keep lookup totals when pass-local downloaded font faces are retired.
+        for font in self.families.values() {
+            let mut stats = font.shaping_cache_stats();
+            stats.evictions = stats.evictions.saturating_add(stats.entries as u64);
+            stats.entries = 0;
+            stats.payload_bytes = 0;
+            self.shaping_stats.add(stats);
+        }
         self.families.clear();
+    }
+
+    /// Counters cover this Fonts lifetime, including retired downloaded faces.
+    /// Retained entries/payload cover only the currently loaded faces.
+    pub fn shaping_cache_stats(&self) -> ShapingCacheStats {
+        let mut stats = self.shaping_stats;
+        stats.entries = self.shape_cache.len();
+        stats.payload_bytes = self.shape_cached_bytes;
+        if let Some(bold) = &self.bold {
+            stats.add(bold.shaping_cache_stats());
+        }
+        for font in self.families.values() {
+            stats.add(font.shaping_cache_stats());
+        }
+        stats
     }
 
     pub fn register_family(&mut self, name: &str, bytes: Vec<u8>) {
@@ -337,6 +383,7 @@ impl Fonts {
             if let Some((cached_text, width, _)) = self.shape_cache.get(&key)
                 && &**cached_text == text
             {
+                self.shaping_stats.hits = self.shaping_stats.hits.saturating_add(1);
                 return *width;
             }
         }
@@ -374,12 +421,14 @@ impl Fonts {
             if let Some((cached_text, _, glyphs)) = self.shape_cache.get(&key)
                 && &**cached_text == text
             {
+                self.shaping_stats.hits = self.shaping_stats.hits.saturating_add(1);
                 return glyphs.clone();
             }
             Some(key)
         } else {
             None
         };
+        self.shaping_stats.misses = self.shaping_stats.misses.saturating_add(1);
         // The face was validated when the font was loaded and bytes are private.
         let face = rustybuzz::Face::from_slice(&self.bytes, 0).expect("validated font face");
         let scale = size / face.units_per_em() as f32;
@@ -406,9 +455,16 @@ impl Fonts {
                 .max(0.0);
             let entry_bytes =
                 text.len() + positioned.len() * std::mem::size_of::<PositionedGlyph>();
+            if entry_bytes > SHAPE_CACHE_BYTES {
+                return positioned;
+            }
             if self.shape_cached_bytes + entry_bytes > SHAPE_CACHE_BYTES
                 || self.shape_cache.len() >= SHAPE_CACHE_ENTRIES
             {
+                self.shaping_stats.evictions = self
+                    .shaping_stats
+                    .evictions
+                    .saturating_add(self.shape_cache.len() as u64);
                 self.shape_cache.clear();
                 self.shape_cached_bytes = 0;
             }
@@ -439,6 +495,70 @@ impl Fonts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shaping_fonts() -> Fonts {
+        Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn shaping_cache_reuses_exact_widths_and_pixels_and_bounds_retention() {
+        let mut fonts = shaping_fonts();
+        let text = "office café مرحبا";
+        let width = fonts.width(text, 17.);
+        let cold = fonts.shaping_cache_stats();
+        assert_eq!((cold.hits, cold.misses, cold.entries), (0, 1, 1));
+        assert_eq!(fonts.width(text, 17.), width);
+        let mut cached = Canvas::new(300, 40, 0xffffff);
+        cached.text(&mut fonts, 2, 2, text, 17., 0x123456);
+        let mut fresh = Canvas::new(300, 40, 0xffffff);
+        fresh.text(&mut shaping_fonts(), 2, 2, text, 17., 0x123456);
+        assert_eq!(cached.pixels, fresh.pixels);
+        assert_eq!(fonts.shaping_cache_stats().hits, 2);
+        assert!((fonts.width(text, 34.) - width * 2.).abs() < 0.01);
+        let long = "a".repeat(257);
+        let before = fonts.shaping_cache_stats();
+        fonts.width(&long, 17.);
+        fonts.width(&long, 17.);
+        assert_eq!(fonts.shaping_cache_stats().misses, before.misses + 2);
+        assert_eq!(fonts.shaping_cache_stats().entries, before.entries);
+        for index in 0..1200 {
+            fonts.width(&format!("{index:04}{}", "W".repeat(100)), 17.);
+            let stats = fonts.shaping_cache_stats();
+            assert!(stats.entries <= SHAPE_CACHE_ENTRIES);
+            assert!(stats.payload_bytes <= SHAPE_CACHE_BYTES);
+        }
+        assert!(fonts.shaping_cache_stats().evictions > 0);
+        assert_eq!(fonts.width(text, 17.), width);
+    }
+
+    #[test]
+    fn shaping_totals_survive_retired_downloaded_faces() {
+        let mut fonts = shaping_fonts();
+        fonts.register_family("fixture", fonts.bytes.clone());
+        fonts
+            .select_family(&["fixture".into()])
+            .width("fixture", 16.);
+        assert_eq!(fonts.shaping_cache_stats().misses, 1);
+        assert_eq!(fonts.shaping_cache_stats().entries, 1);
+        fonts.clear_families();
+        let stats = fonts.shaping_cache_stats();
+        assert_eq!(
+            (
+                stats.misses,
+                stats.evictions,
+                stats.entries,
+                stats.payload_bytes
+            ),
+            (1, 1, 0, 0)
+        );
+    }
 
     #[test]
     fn rectangles_clip_negative_and_extreme_coordinates() {

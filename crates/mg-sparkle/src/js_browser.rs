@@ -13,6 +13,11 @@ use crate::page_session::{
 use events::{EventRecord, Listener, Target};
 
 pub const MAX_SOURCE: usize = 1024 * 1024;
+pub const MAX_EXTERNAL_SOURCE: usize = 256 * 1024;
+pub const MAX_EXTERNAL_SCRIPTS: usize = 16;
+pub const MAX_SCRIPTS: usize = 32;
+// Leave room for the existing versioned session envelope within its 2 MiB cap.
+pub const MAX_TYPED_REQUEST_BYTES: usize = 2 * 1024 * 1024 - 1024;
 const MAX_DOM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NODES: usize = 50_000;
 
@@ -21,6 +26,144 @@ const MAX_NODES: usize = 50_000;
 pub struct Request {
     pub url: String,
     pub html: String,
+    /// Sources supplied by the parent after resource-policy admission. Page HTML
+    /// is never interpreted as this metadata. None preserves the legacy wire form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_scripts: Option<Vec<ExternalScriptSource>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalScriptSource {
+    pub node: usize,
+    pub source: String,
+}
+
+pub fn classic_script_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "" | "text/javascript"
+            | "application/javascript"
+            | "text/ecmascript"
+            | "application/ecmascript"
+            | "application/x-javascript"
+    )
+}
+
+pub fn unsupported_external_attribute(node: &Node) -> Option<&'static str> {
+    if node
+        .attr("integrity")
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("integrity");
+    }
+    // This browser does not support modules: nomodule is its classic fallback.
+    // Defer uses a bounded after-parser queue; async/CORS need separate support.
+    ["async", "crossorigin"]
+        .into_iter()
+        .find(|name| node.attr(name).is_some())
+}
+
+/// Count actual JSON bytes without allocating a second copy of script sources.
+pub fn json_bytes(value: &impl Serialize) -> Result<usize, String> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("JSON size overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value).map_err(|error| error.to_string())?;
+    Ok(counter.0)
+}
+
+pub fn external_request_json_bytes(url: &str, html: &str) -> Result<usize, String> {
+    #[derive(Serialize)]
+    struct BorrowedRequest<'a> {
+        url: &'a str,
+        html: &'a str,
+        external_scripts: [ExternalScriptSource; 0],
+    }
+    json_bytes(&BorrowedRequest {
+        url,
+        html,
+        external_scripts: [],
+    })
+}
+
+pub fn external_source_json_bytes(node: usize, source: &str) -> Result<usize, String> {
+    #[derive(Serialize)]
+    struct BorrowedSource<'a> {
+        node: usize,
+        source: &'a str,
+    }
+    json_bytes(&BorrowedSource { node, source })
+}
+
+impl Request {
+    fn validate_external_sources(&self, document: &Document) -> Result<usize, String> {
+        let Some(sources) = &self.external_scripts else {
+            return Ok(self.html.len());
+        };
+        if sources.len() > MAX_EXTERNAL_SCRIPTS {
+            return Err("External script count limit reached (16)".into());
+        }
+        let eligible: Vec<_> = document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(index, node)| node.tag == "script" && !inert(&document.nodes, *index))
+            .filter(|(_, node)| {
+                let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+                kind == "module" || classic_script_type(&kind)
+            })
+            .take(MAX_SCRIPTS)
+            .filter(|(_, node)| {
+                node.attr("src").is_some()
+                    && classic_script_type(
+                        &node.attr("type").unwrap_or("").trim().to_ascii_lowercase(),
+                    )
+            })
+            .take(MAX_EXTERNAL_SCRIPTS)
+            .filter(|(_, node)| unsupported_external_attribute(node).is_none())
+            .map(|(index, _)| index)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut bytes = self.html.len();
+        for source in sources {
+            if !eligible.contains(&source.node) || !seen.insert(source.node) {
+                return Err(
+                    "External script source refers to an ineligible or duplicate node".into(),
+                );
+            }
+            if source.source.len() > MAX_EXTERNAL_SOURCE {
+                return Err("External script exceeds the 256 KiB source limit".into());
+            }
+            bytes = bytes
+                .checked_add(source.source.len())
+                .filter(|bytes| *bytes <= MAX_SOURCE)
+                .ok_or("Script document and external sources exceed the 1 MiB source limit")?;
+        }
+        if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+            return Err("Script request exceeds the existing 2 MiB wire limit".into());
+        }
+        Ok(bytes)
+    }
+
+    fn external_source(&self, index: usize) -> Option<&str> {
+        self.external_scripts
+            .as_ref()?
+            .iter()
+            .find(|source| source.node == index)
+            .map(|source| source.source.as_str())
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,10 +232,16 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
             return (None, reply);
         }
     };
-    let (external_scripts, html_source) = split_external_scripts(&request.html);
-    reply.html = html_source.to_owned();
-    let document = document::parse_with_scripting(html_source, url.as_str(), true);
+    let document = document::parse_with_scripting(&request.html, url.as_str(), true);
+    let allocated = match request.validate_external_sources(&document) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            reply.errors.push(error);
+            return (None, reply);
+        }
+    };
     let mut scripts = Vec::new();
+    let mut deferred = Vec::new();
     let mut script_count = 0;
     for (index, node) in document.nodes.iter().enumerate() {
         if node.tag != "script" || inert(&document.nodes, index) {
@@ -130,11 +279,13 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
             continue;
         }
         if node.attr("src").is_some() {
-            if let Some(map) = &external_scripts {
-                if let Some(Some(source)) = map.get(&index) {
-                    scripts.push((true, source.clone()));
+            if let Some(source) = request.external_source(index) {
+                if node.attr("defer").is_some() {
+                    deferred.push((true, source.to_owned()));
+                } else {
+                    scripts.push((true, source.to_owned()));
                 }
-            } else {
+            } else if request.external_scripts.is_none() {
                 reply
                     .errors
                     .push("External script loading is not implemented".into());
@@ -143,11 +294,12 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
         }
         scripts.push((false, text_content(&document.nodes, index)));
     }
+    scripts.extend(deferred);
     let mut host = BrowserHost {
         document,
         url,
         navigation: None,
-        allocated: request.html.len(),
+        allocated,
         collections: Vec::new(),
         listeners: Vec::new(),
         events: Vec::new(),
@@ -300,20 +452,6 @@ impl PageRealm {
     }
 }
 
-pub(super) fn split_external_scripts(
-    raw_html: &str,
-) -> (
-    Option<std::collections::HashMap<usize, Option<String>>>,
-    &str,
-) {
-    if let Some(rest) = raw_html.strip_prefix("<!--mg-external-scripts:")
-        && let Some((json, html)) = rest.split_once("-->\n")
-        && let Ok(entries) = serde_json::from_str::<Vec<(usize, Option<String>)>>(json)
-    {
-        return (Some(entries.into_iter().collect()), html);
-    }
-    (None, raw_html)
-}
 fn bounded(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
@@ -1433,6 +1571,7 @@ mod tests {
     use super::*;
     fn page(script: &str) -> Reply {
         execute(Request {
+            external_scripts: None,
             url: "http://localhost/fixture".into(),
             html: format!(
                 "<html><head><title>Before</title></head><body><p id=output>Old</p><script>{script}</script></body></html>"
@@ -1458,6 +1597,7 @@ mod tests {
     #[test]
     fn indexed_collection_presence_is_canonical_bounded_and_read_only() {
         let (realm, reply) = initialize(Request {
+            external_scripts: None,
             url: "https://example.test/collection-presence".into(),
             html: "<body><p>one</p><p>two</p><script>var entries=document.querySelectorAll('p');</script></body>".into(),
         });
@@ -1497,7 +1637,7 @@ mod tests {
     }
     #[test]
     fn scripts_share_a_realm_and_load_callbacks_run() {
-        let reply=execute(Request{url:"https://example.org/".into(),html:"<html><head><title>old</title></head><body><script>var word='shared';</script><script>document.addEventListener('DOMContentLoaded',function(){document.title=word;});</script></body></html>".into()});
+        let reply=execute(Request{external_scripts:None,url:"https://example.org/".into(),html:"<html><head><title>old</title></head><body><script>var word='shared';</script><script>document.addEventListener('DOMContentLoaded',function(){document.title=word;});</script></body></html>".into()});
         assert!(reply.errors.is_empty(), "{:?}", reply.errors);
         assert_eq!(
             document::parse(&reply.html, "https://example.org/").title,
@@ -1574,6 +1714,7 @@ mod tests {
             "\"".repeat(400_000)
         );
         let reply = execute(Request {
+            external_scripts: None,
             url: "https://example.test/".into(),
             html: html.clone(),
         });
@@ -1590,6 +1731,7 @@ mod tests {
             reply.errors
         );
         let reply = execute(Request {
+            external_scripts: None,
             url: "https://example.test/".into(),
             html: "a".repeat(MAX_SOURCE + 1),
         });
@@ -1600,6 +1742,7 @@ mod tests {
     #[test]
     fn camel_case_style_properties_and_layout_readback_update_serialized_style() {
         let reply = execute(Request {
+            external_scripts: None,
             url: "http://localhost/flex".into(),
             html: "<!DOCTYPE html><div id=\"target\" style=\"display: flex; min-height: 200px;\"><div style=\"width: 100px; min-height: 100px; background: green;\"></div></div><script>document.body.offsetTop;document.getElementById('target').style.alignItems = 'flex-start';</script>".into(),
         });

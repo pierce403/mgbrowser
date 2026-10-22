@@ -169,23 +169,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let _ = app.paint();
         let uncached = app.performance_profile().last_frame.clone();
+        if !app.last_load_succeeded() {
+            println!("{}", app.performance_report());
+            return Err(format!("Profile navigation failed: {}", app.status()).into());
+        }
+        let initial_scroll = app.scroll_position();
         app.scroll_by(120);
         let _ = app.paint();
         let scroll_cached = app.performance_profile().last_frame.clone();
+        let did_scroll = app.scroll_position() != initial_scroll;
         app.request_redraw();
         let _ = app.paint();
         let ui_cached = app.performance_profile().last_frame.clone();
         println!("{}", app.performance_report());
         println!(
-            "Repaint Benchmark:\n  Uncached initial render: {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  Scroll repaint (Stylo cached): {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  UI/hover repaint (Frame cached): {:.2} ms\nStatus: {}",
+            "Repaint Benchmark (complete Browser paints, including composition/chrome):\n  Initial paint [{}]: {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  Scroll attempt [{}; {}]: {:.2} ms (style {:.2} ms, layout {:.2} ms, paint {:.2} ms)\n  UI redraw [{}]: {:.2} ms\nStatus: {}",
+            uncached.cache_label(),
             uncached.total_ms,
             uncached.style_ms,
             uncached.layout_ms,
             uncached.paint_ms,
+            if did_scroll {
+                "position changed"
+            } else {
+                "no movement: page fits viewport"
+            },
+            scroll_cached.cache_label(),
             scroll_cached.total_ms,
             scroll_cached.style_ms,
             scroll_cached.layout_ms,
             scroll_cached.paint_ms,
+            ui_cached.cache_label(),
             ui_cached.total_ms,
             app.status()
         );

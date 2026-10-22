@@ -11,6 +11,7 @@ const URL: &str = "http://127.0.0.1:7878/script-events";
 
 fn start(html: &str) -> (PageRealm, SessionReply) {
     let (realm, reply) = PageRealm::start(Request {
+        external_scripts: None,
         url: URL.into(),
         html: html.into(),
     });
@@ -520,7 +521,7 @@ fn typed_input_rejects_aggregate_oversize_not_just_each_field() {
 
 #[test]
 fn fatal_initialization_cannot_propose_navigation() {
-    let (_, reply) = PageRealm::start(Request { url: URL.into(), html:
+    let (_, reply) = PageRealm::start(Request { external_scripts: None, url: URL.into(), html:
         "<html><body><p>Readable fallback</p><script>location.href='/must-not-navigate';while(true){}</script></body></html>".into() });
     assert_eq!(reply.state, RealmState::Fatal);
     assert!(reply.navigation.is_none());

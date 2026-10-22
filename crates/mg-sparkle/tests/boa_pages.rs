@@ -11,6 +11,7 @@ use mg_sparkle::{
 
 fn page(script: &str) -> Request {
     Request {
+        external_scripts: None,
         url: "https://example.test/owned".into(),
         html: format!(
             "<html><head><title>Before</title></head><body><p id=out>Before</p><a id=link href=/trap>Next</a><script>{script}</script></body></html>"
@@ -28,6 +29,7 @@ fn projected(reply: &SessionReply) -> document::Document {
 #[test]
 fn native_journey_fixture_creates_real_form_through_boa() {
     let reply = execute(Request {
+        external_scripts: None,
         url: "http://127.0.0.1:7878/script-boa".into(),
         html: include_str!("../../../tests/fixtures/script/boa.html").into(),
     });
@@ -290,17 +292,13 @@ fn classlist_dataset_collection_iteration_and_boolean_attributes_update_dom() {
 #[test]
 fn external_scripts_and_global_event_handler_function_declarations_succeed() {
     let html = "<html><body><p id=out>before</p><script src='/hn.js'></script></body></html>";
-    let header = serde_json::to_string(&vec![(
-        5usize,
-        Some(
-            "function onclick(ev) { return ev; } function onsubmit(ev) { return ev; } document.getElementById('out').textContent = typeof onclick;"
-                .to_owned(),
-        ),
-    )])
-    .unwrap();
     let reply = execute(Request {
+        external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
+            node: 5,
+            source: "function onclick(ev) { return ev; } function onsubmit(ev) { return ev; } document.getElementById('out').textContent = typeof onclick;".to_owned(),
+        }]),
         url: "https://example.test/owned".into(),
-        html: format!("<!--mg-external-scripts:{header}-->\n{html}"),
+        html: html.into(),
     });
     assert!(reply.applied);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);

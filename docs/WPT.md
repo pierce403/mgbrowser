@@ -19,7 +19,7 @@ ordered top-level `css/css-flexbox/*.html` files having a `rel=match` or
 for known passes, scripts, flags or reference requirements. The cutoff is
 `align-self-013.html`; 59 candidates were examined from 1,340 HTML candidates.
 
-The initial adapter can attempt seven selected tests. Seventeen have unsupported
+The initial adapter could attempt seven selected tests. Seventeen had unsupported
 prerequisites, including XML/XHTML references, Ahem/webfont selection or script
 setup. Those tests remain in the 24-test denominator. Their source-derived
 classification is recalculated on every run; an ordinary rendering mismatch is
@@ -33,7 +33,7 @@ a separate column baseline grouping error. Both fixes preserve the upstream
 files: test and reference now match exactly, without diagnostics. The ratchet
 added that pass while retaining every old test and supported prerequisite.
 
-The v0.9.2 candidate reports **24 PASS, 0 FAIL and 0 UNSUPPORTED out of 24**,
+The v0.9.2 release reports **24 PASS, 0 FAIL and 0 UNSUPPORTED out of 24**,
 with no errors, timeouts or crashes. It adds bounded XML/XHTML document parsing
 with CDATA stylesheet unwrapping, normal-flow block advancement by signed
 vertical margin-box extent, column flex cross-axis `fit-content` sizing with
@@ -83,7 +83,9 @@ server serving only the pinned file inventory and explicitly authored controls.
 It invokes the Rust [wpt_render example](../examples/wpt_render.rs) in a fresh
 process for each unique test or reference page:
 
-1. Construct the real Chassis `Browser` with `DisabledScripts` and no chrome.
+1. Construct the real Chassis `Browser` without chrome. Static pages use
+   `DisabledScripts`; supported HTML inline setup uses the real restricted Linux
+   worker and explicit `--enable-scripts` admission.
 2. Navigate normally, including the production parser and CSS/image resource
    loader, at an 800 × 600 logical-pixel viewport and scale 1.
 3. Save the actual `Browser::paint` PNG and exact packed RGB bytes.
@@ -95,8 +97,9 @@ process for each unique test or reference page:
    tolerance. The adapter supports alternative match references and required
    mismatch references; it does not implement general chained-reference logic.
 
-The host selects one DejaVu Sans font file and records its SHA-256. This does
-not provide CSS font-family selection or downloaded fonts. Each report also
+The host selects one DejaVu Sans fallback file and records its SHA-256. Supported
+same-origin TTF/OTF font resources, including pinned Ahem, are fetched and selected
+through the production resource/font pipeline. Each report also
 records the adapter binary hash, viewport, current Git commit, dirty-tree flag,
 corpus/source fingerprints, page artifacts, diagnostics and actual HTTP requests.
 
@@ -128,8 +131,9 @@ Every selected test has exactly one visible outcome:
 | `CRASH` | The renderer process terminated by a signal. |
 
 Missing prerequisites remain visible, with reasons, rather than disappearing
-from the denominator. The current adapter rejects script/event-handler setup,
-`reftest-wait`, XML/XHTML, Ahem/webfonts, CSS imports, fuzzy or timing metadata,
+from the denominator. The current adapter supports static XML/XHTML, bounded
+font resources and inline HTML setup. It rejects external/module/XML script
+setup, event-handler attributes, `reftest-wait`, CSS imports, fuzzy or timing metadata,
 animation/transitions, WPT server substitutions, responsive-image setup and
 unsupported embedded-resource protocols. Overflow/scrollbar-dependent results
 are outside this viewport-only pilot. No JavaScript conformance, WebDriver,
@@ -139,8 +143,8 @@ Page navigation has a 35-second inner deadline; the runner has a 45-second
 subprocess deadline that also bounds painting. Partial reports are written as
 tests finish. Errors, timeouts, crashes, missing requests or changed evaluated
 source invalidate the overall gate. Existing production navigation, rendering,
-allocation and worker limits remain unchanged. The adapter never enables scripts
-or executes a page in an unrestricted parent JavaScript runtime.
+allocation and worker limits remain unchanged. Supported script setup runs only
+through the reviewed restricted child process.
 
 This is trusted, reviewed, pinned test infrastructure, not a sandbox for arbitrary
 web content. Loopback URL checks and a cleared child environment do not provide
@@ -204,12 +208,11 @@ verification policy.
    and diagnostics. Implement general standards behavior, retain existing tests,
    manually tighten the ratchet and release each user-visible increment.
    The first gain is genuine `width: max-content` support and admitted synthesized
-   column baselines. Seven tests now pass; retain them while adding prerequisites
-   for the seventeen unsupported tests, not just more hand-picked easy tests.
-3. Reduce unsupported prerequisites deliberately: genuine XML/XHTML semantics,
-   appropriate Ahem/font selection, then general script/testharness protocols
-   under the existing worker and resource review. Do not rewrite tests to avoid
-   their prerequisites.
+   column baselines. The subsequent v0.9.2 implementation completed all 24 cases;
+   preserve that full initial cohort while expanding coverage.
+3. Add broader script/testharness protocols under the existing worker and
+   resource review. Implement missing prerequisites in the browser; retain
+   original upstream input semantics.
 4. Expand the pinned corpus in a separate reviewed change, preserving old
    coverage and reporting the changed denominator and baseline explicitly.
 5. Add broader upstream runner/WebDriver integration when the actual browser

@@ -55,8 +55,10 @@ lifetime bounds; this is not full DOM ephemeron GC. See [BOA.md](BOA.md).
   Limit registrations cumulatively to 32 (removed records do not renew slots),
   and event records to 256. Admit actual retained storage before allocation.
 - Object-form listener options, synthetic dispatchEvent/element.click(), content
-  attribute handler compilation, timers, keyboard/input events, external script
-  loading and general DOM/Event conformance are outside this slice. Unsupported
+attribute handler compilation, timers, keyboard/input events and general
+DOM/Event conformance are outside this slice. Bounded startup external sources
+now enter through the parent-owned typed request described in BOA.md; later
+event requests still cannot supply sources or network authority. Unsupported
   APIs must not report fake success. Startup approximations remain documented.
 
 These semantics are a bounded subset of the [DOM event dispatch algorithm](https://dom.spec.whatwg.org/#dispatching-events)

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.9.5 Experimental Preview</title>
+<title>mgbrowser: v0.9.6 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -17,9 +17,10 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.5 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.6 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
 <p class="muted"><strong>Measured standards progress.</strong> All 24 selected tests in the initial WPT flexbox reftest cohort pass. The pinned WPT selection is reported below, freshly measured on every commit.</p>
-<p class="muted">Hover links to preview destinations in the bottom-left status strip; right-click or Ctrl+click links to open in a new tab. Right-click Inspect element, press F12 for diagnostics, or press Ctrl+Shift+P (or <code>mgbrowser --profile &lt;URL&gt;</code>) for the Performance Dashboard. Ctrl+T opens a tab; drag tabs into windows or left/right groups. Smooth scrolling, frame/style/shaping caches, themes, sizing, bookmarks and update progress with Restart now remain.</p>
+<p class="muted">v0.9.6 corrects bounded classic external script loading and shares resource admission across CSS, fonts, images and scripts. The Performance Dashboard reports completed browser paints, actual cache reuse and retained payload. Frame/style snapshots share immutable storage and render uncached above their 16 MiB/8 MiB payload bounds. These are per-Browser cache limits, not total memory ceilings or a scrolling-speed guarantee. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/PERFORMANCE.md">Performance scope ↗</a></p>
+<p class="muted">Hover links to preview destinations in the bottom-left status strip; right-click or Ctrl+click links to open in a new tab. Right-click Inspect element, press F12 for diagnostics, or press Ctrl+Shift+P for Performance. Use <code>mgbrowser --profile &lt;URL&gt;</code> for a headless report. Ctrl+T opens a tab; drag tabs into windows or left/right groups. Themes, sizing, bookmarks and update progress with Restart now remain.</p>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
 <span id="copy-status" role="status"></span>
@@ -38,7 +39,7 @@
 <details><summary>Reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
 <p>Corpus SHA-256: <code class="wpt-fingerprint">a7c74dc8f01eebd8f14ad8851e4d8c3bad3d2ac97764abd2e370602e40b1bbdd</code></p>
-<p>Browser source SHA-256: <code class="wpt-fingerprint">30ff58fad573baf36dcfcfa91467c3f8ee9c9b064856dd345e8eb83e3d4c07be</code></p>
+<p>Browser source SHA-256: <code class="wpt-fingerprint">2e4fbb20f7146991c803239ff8b0d628ef9216f4e4d40691f81794ba176e22dd</code></p>
 </details>
 <!-- wpt-score:end -->
 </section>
@@ -48,10 +49,11 @@
 <li>Modern-web compatibility is poor. The Google search → first result journey is not working.</li>
 <li>Google News still has font/icon/corner differences, script-dependent placeholders and possible destination fallbacks. Search, menus and accounts remain unfinished. Ordinary Playwright is unsupported. The native inspector is read-only, not Chrome DevTools or a JavaScript debugger.</li>
 <li>Boa-backed JavaScript integration runs inline and bounded classic external <code>&lt;script src&gt;</code> scripts by default (use <code>--disable-scripts</code> to opt out).</li>
+<li>External scripts are limited to 16 sources within 32 eligible script elements, 256 KiB each and 1 MiB combined HTML/source. Deferred sources run after ordinary sources; <code>nomodule</code> provides the classic fallback. Async scripts, nonempty integrity metadata and <code>crossorigin</code> are skipped with diagnostics. Sources require UTF-8 and a supported JavaScript MIME type.</li>
 <li>ES modules (<code>type="module"</code>), dynamic script injection, timers, fetch/XHR and general browser event-loop behavior are not implemented. No React/Vue browser-app compatibility is claimed.</li>
 <li>Script workers bound cumulative opcodes, sources/jobs and allocation requests. This is not complete cooperative work budgeting or GC/RSS measurement. Active detached listeners persist until removal or teardown.</li>
-<li>Full CSS is not implemented. Flex/grid, positioning and stacking are bounded subsets; transforms, rounded corners, complete line clamping and independently scrolling elements are unsupported. No CSS imports or downloaded fonts.</li>
-<li>Stylesheets remain same-origin; foreign HTTPS images load without cookies. Images support PNG, JPEG, first-frame GIF and restricted static SVG. Unsupported images remain placeholders. Dynamic resources are not fetched. Desktop reading is not mobile fidelity or general destination compatibility.</li>
+<li>Full CSS is not implemented. Flex/grid, positioning and stacking are bounded subsets; transforms, rounded corners, complete line clamping and independently scrolling elements are unsupported. No CSS imports; <code>@font-face</code> supports only bounded same-origin TTF/OTF sources.</li>
+<li>CSS, fonts, images and scripts share 2 MiB, 32 requests and one ten-second loading allowance. Stylesheets/fonts remain same-origin; foreign HTTPS images and scripts load without cookies. Images support PNG, JPEG, first-frame GIF and restricted static SVG. Unsupported images remain placeholders. Dynamic resources are not fetched. Desktop reading is not mobile fidelity or general destination compatibility.</li>
 <li>Linux X11/XWayland is the supported GUI target. Cookies are memory-only.</li>
 <li>Tabs are limited to 16 across four windows, with two left/right groups per window. Navigation/script budgets remain per tab/worker, not a combined memory or CPU quota.</li>
 <li>System size follows screen-global X11 desktop DPI, with 100% fallback. This is whole-browser size, not per-site page zoom or per-monitor Wayland scaling. Images retain their existing decoded resolution.</li>
@@ -62,7 +64,7 @@
 <section class="detail grid"><div><p class="eyebrow">Research after the release</p><h2>Leave a trail others can follow.</h2><p>Feature contracts, daily logs and reusable agent skills keep experiments reviewable. The proposed autoresearch evaluator, broader CSS/images and full CDP remain future work. This preview does not complete the formal Linux MVP gates.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/MVP.md">MVP plan</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/CONTRIBUTING.md">Contribute</a></p></div><div><p class="eyebrow">Built in the open</p><h2>Evidence over promises.</h2><p>Modern page, Promise, retained-event and GC/lifecycle tests accompany the Boa integration. The original engine's assertions and 26 native/26 CDP fixture journeys remain a separate research baseline. Exact release and public-install receipts live in the dated work log; local fixtures are not broad web compatibility.</p><p><a href="https://github.com/pierce403/mgbrowser/blob/main/FEATURES.md">Feature specification</a> · <a href="https://github.com/pierce403/mgbrowser/tree/main/memory/logs">Daily logs</a> · <a href="https://github.com/pierce403/mgbrowser/blob/main/SKILLS.md">Skills</a></p><p class="muted">Our collaboration workflow draws from <a href="https://recurse.bot">Recurse</a>.</p></div></section>
 <section class="detail" id="status"><h2>Project status</h2>
 <!-- project-status:start -->
-<p class="muted">Latest work log: <time datetime="2026-10-14">2026-10-14</time>. Status comes from the repository’s feature specification.</p>
+<p class="muted">Latest work log: <time datetime="2026-10-21">2026-10-21</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
   <li><span>F-026 : Upstream Web Platform Tests coverage</span><small>in-progress</small></li>
   <li><span>F-025 : Google News desktop reading</span><small>in-progress</small></li>

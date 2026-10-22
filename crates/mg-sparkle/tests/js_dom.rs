@@ -10,6 +10,7 @@ const URL: &str = "https://example.test/docs/page.html?q=fixture#part";
 
 fn page(head: &str, body: &str, script: &str) -> Reply {
     execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: format!(
             "<!doctype html><html><head><title>Initial title</title>{head}</head><body><p id=sentinel>Readable local fixture</p><p id=output>Unchanged output</p>{body}<script>{script}</script></body></html>"
@@ -52,6 +53,7 @@ fn completed_array_ast_storage_allows_the_frozen_real_form() {
             .is_empty()
     );
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: html.into(),
     });
@@ -98,6 +100,7 @@ fn object_create_descriptors_build_the_frozen_real_form() {
             .is_empty()
     );
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: html.into(),
     });
@@ -138,6 +141,7 @@ fn static_operator_storage_allows_the_frozen_real_form() {
             .is_empty()
     );
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: html.into(),
     });
@@ -166,6 +170,7 @@ fn static_operator_storage_allows_the_frozen_real_form() {
 #[test]
 fn core_intrinsics_create_the_frozen_real_form() {
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: include_str!("../../../tests/fixtures/script/core-intrinsics.html").into(),
     });
@@ -191,6 +196,7 @@ fn core_intrinsics_create_the_frozen_real_form() {
 #[test]
 fn numeric_constructor_conversion_error_preserves_dom_effect_and_later_recovery() {
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: "<body><p id='state'>initial</p><script>var marker={};try{new Number({valueOf:function(){document.getElementById('state').textContent='before';throw marker;}});}catch(e){if(e!==marker)throw 'wrong error';document.getElementById('state').textContent+=' caught';}</script><script>document.getElementById('state').textContent+=' recovered '+new Boolean().valueOf();</script></body>".into(),
     });
@@ -210,6 +216,7 @@ fn numeric_constructor_conversion_error_preserves_dom_effect_and_later_recovery(
 #[test]
 fn callback_family_and_borrowed_collections_create_the_frozen_real_form() {
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: include_str!("../../../tests/fixtures/script/array-callbacks.html").into(),
     });
@@ -262,6 +269,7 @@ fn borrowed_callbacks_preserve_collection_snapshots_and_detached_node_identity()
 #[test]
 fn collection_callback_error_preserves_earlier_effects_and_allows_a_later_script() {
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: "<body><p id=output>Old</p><span>A</span><span>B</span><script>var nodes=document.querySelectorAll('span');Array.prototype.forEach.call(nodes,function(node,i){document.getElementById('output').textContent=node.textContent;if(i===0)throw 'local callback stop';});document.title='must not run';</script><script>document.title='Later script ready';</script></body>".into(),
     });
@@ -518,6 +526,7 @@ fn source_limit_preserves_the_input_and_never_claims_execution() {
         " ".repeat(MAX_SOURCE)
     );
     let reply = execute(Request {
+        external_scripts: None,
         url: URL.into(),
         html: source.clone(),
     });

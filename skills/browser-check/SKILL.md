@@ -36,6 +36,14 @@ explicit --legacy-page-tests fixture lane. Never package that feature or infer
 production Boa compatibility from original-engine fixtures. Packaged production
 acceptance uses /script-boa and the unchanged /script-events through native input
 and external CDP, plus the installed-binary worker/session smoke checks.
+For typed external classic source or performance/cache changes, also build normal
+journey_server/cdp_journey examples and run tools/page-services-smoke.py against
+the packaged and public-installed executable. It owns its loopback/display and
+checks external startup order, retained event behavior, worker accounting and
+actual CLI cache/failure paths. Preserve the original inline-script journeys.
+Run external_scripts regressions in debug and release; never encode trusted
+source metadata in page HTML. Run inspector-smoke for Performance shortcut/tab,
+compact/scaled and light/dark acceptance, and inspect its saved screenshots.
 WeakRef/removed-listener tests must use actual engine checkpoint cleanup, not
 test-only ClearKeptObjects. Distinguish requested System allocation counters,
 GC reachability and RSS; parser/native/regex/GC work still relies on hard process

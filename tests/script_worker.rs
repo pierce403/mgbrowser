@@ -66,6 +66,7 @@ fn run(args: &[&str], input: &[u8], timeout: Duration) -> (ExitStatus, String, S
 #[test]
 fn restricted_child_completed_array_ast_storage_builds_the_frozen_form() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-ast-arrays".into(),
         html: include_str!("fixtures/script/ast-arrays.html").into(),
     };
@@ -122,6 +123,7 @@ fn restricted_child_completed_array_ast_storage_builds_the_frozen_form() {
 #[test]
 fn restricted_child_compiled_array_ast_preserves_the_runtime_length_limit() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-ast-array-limit".into(),
         html: include_str!("fixtures/script/ast-array-limit.html").into(),
     };
@@ -167,6 +169,7 @@ fn restricted_child_compiled_array_ast_preserves_the_runtime_length_limit() {
 #[test]
 fn restricted_child_object_create_descriptors_build_the_frozen_form() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/object-create".into(),
         html: include_str!("fixtures/script/object-create.html").into(),
     };
@@ -217,6 +220,7 @@ fn restricted_child_object_create_accessor_fuel_is_fatal_and_latched() {
         ("{set:function(value){while(true){}}}", "o.x=9"),
     ] {
         let request = mg_sparkle::js_browser::Request {
+            external_scripts: None,
             url: "https://example.test/object-create-fuel".into(),
             html: format!(
                 "<html><head><title>Descriptor fuel fallback</title></head><body><p id=state>Readable descriptor fallback</p><script>var o=Object.create(null,{{x:{descriptor}}});document.getElementById('state').setAttribute('data-ready','yes');try{{{operation};document.title='Forbidden completion';}}catch(error){{document.title='Forbidden catch';}}finally{{document.title='Forbidden finally';}}</script><script>document.title='Forbidden later';location.href='/forbidden';</script></body></html>"
@@ -258,6 +262,7 @@ fn restricted_child_object_create_accessor_fuel_is_fatal_and_latched() {
 #[test]
 fn restricted_child_static_operators_build_the_frozen_form() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/static-operators".into(),
         html: include_str!("fixtures/script/static-operators.html").into(),
     };
@@ -307,6 +312,7 @@ fn restricted_child_larger_operator_body_still_fails_before_form_and_later_scrip
         .replace("Array(7251)", "Array(8251)")
         + "<script>document.title='forbidden later script';</script>";
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/static-operators-limit".into(),
         html,
     };
@@ -339,6 +345,7 @@ fn restricted_child_larger_operator_body_still_fails_before_form_and_later_scrip
 #[test]
 fn restricted_child_core_intrinsics_build_the_frozen_form() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/core-intrinsics".into(),
         html: include_str!("fixtures/script/core-intrinsics.html").into(),
     };
@@ -378,6 +385,7 @@ fn restricted_child_core_intrinsics_build_the_frozen_form() {
 #[test]
 fn restricted_child_numeric_conversion_fuel_failure_is_fatal_and_latched() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/core-intrinsic-fatal".into(),
         html: "<body><p id='state'>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{new Number({valueOf:function(){while(true){}}});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
     };
@@ -424,6 +432,7 @@ fn isolation_probes_really_run_and_owned_children_are_reaped() {
 #[test]
 fn restricted_child_executes_original_javascript_and_serializes_dom() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/owned-fixture".into(),
         html: "<html><head><title>Before</title></head><body><p id=output>Old</p><script>document.title='Worker ready';document.getElementById('output').textContent='Changed & safe';location.href='/next?q=rust';</script></body></html>".into(),
     };
@@ -445,6 +454,7 @@ fn restricted_child_executes_original_javascript_and_serializes_dom() {
 #[test]
 fn restricted_child_callback_family_builds_the_frozen_dom_collection_form() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-array-callback-fixture".into(),
         html: include_str!("fixtures/script/array-callbacks.html").into(),
     };
@@ -486,6 +496,7 @@ fn restricted_child_callback_family_builds_the_frozen_dom_collection_form() {
 fn restricted_child_callback_length_failure_is_fatal_before_indexed_effects() {
     let request=mg_sparkle::js_browser::Request{
         url:"https://example.test/local-array-callback-limit".into(),
+        external_scripts: None,
         html:"<body><p id=state>Readable fallback</p><script>document.getElementById('state').textContent='Prior effect';try{Array.prototype.forEach.call({0:7,length:10001},function(){document.title='callback effect';});}catch(e){document.title='catch effect';}finally{document.title='finally effect';}location.href='/forbidden';</script><script>document.title='later effect';location.href='/later';</script></body>".into(),
     };
     let input = serde_json::to_vec(&request).unwrap();
@@ -514,6 +525,7 @@ fn restricted_child_callback_length_failure_is_fatal_before_indexed_effects() {
 #[test]
 fn restricted_child_concat_creates_controls_after_frozen_semantic_checks() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-concat-worker-baseline".into(),
         html: include_str!("fixtures/script/concat.html").into(),
     };
@@ -554,6 +566,7 @@ fn function_prototype_reply(
     mg_sparkle::document::Document,
 ) {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-function-prototype-worker-baseline".into(),
         html: html.into(),
     };
@@ -606,6 +619,7 @@ fn diagnostic_reply(
     mg_sparkle::document::Document,
 ) {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-diagnostic-worker-baseline".into(),
         html: html.into(),
     };
@@ -760,6 +774,7 @@ fn bound_function_reply(
     mg_sparkle::document::Document,
 ) {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-bound-function-worker-baseline".into(),
         html: html.into(),
     };
@@ -888,6 +903,7 @@ fn empty_arguments_reply(
     mg_sparkle::document::Document,
 ) {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-empty-arguments-worker-baseline".into(),
         html: html.into(),
     };
@@ -975,6 +991,7 @@ fn restricted_child_observed_empty_snapshots_still_fail_fatally_at_heap_limit() 
 #[test]
 fn restricted_child_concat_null_receiver_is_ordinary_and_later_script_recovers() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-concat-recovery".into(),
         html: "<html><head><title>Concat fallback</title></head><body><p id=output>Readable concat fallback</p><script>Array.prototype.concat.call(null);document.title='Incorrect completion';location.href='/incorrect';</script><script>var result=[1].concat([2]);if(result.length!==2 || result[1]!==2)throw 'Concat recovery failed';document.getElementById('output').textContent='Recovered with actual concat';</script></body></html>".into(),
     };
@@ -999,6 +1016,7 @@ fn restricted_child_concat_null_receiver_is_ordinary_and_later_script_recovers()
 #[test]
 fn restricted_child_concat_total_length_cap_is_fatal_and_latched() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-concat-length-limit".into(),
         html: "<html><head><title>Concat length fallback</title></head><body><p id=output>Readable concat length fallback</p><script>var source=Array(10000);var first=source.concat();if(first===source || first.length!==10000 || first.hasOwnProperty('9999'))throw 'First concat failed';document.getElementById('output').setAttribute('data-concat','ready');try{source.concat([1]);document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1031,6 +1049,7 @@ fn restricted_child_concat_total_length_cap_is_fatal_and_latched() {
 #[test]
 fn restricted_child_concat_real_element_copy_exhaustion_preserves_fallback() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-concat-copy-limit".into(),
         html: "<html><head><title>Concat copy fallback</title></head><body><p id=output>Readable concat copy fallback</p><script>var source=[Array(10000).join('abcdefgh')];var first=source.concat();if(first===source || first.length!==1 || first[0].length!==79992)throw 'First concat copy failed';document.getElementById('output').setAttribute('data-concat','ready');try{for(var index=0;index<30;index++){source.concat();}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1065,6 +1084,7 @@ fn restricted_child_uses_error_family_prototypes_before_creating_controls() {
     // Exact frozen authored baseline: no controls exist until every Error-family
     // prototype/default/instance/string-conversion requirement has succeeded.
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-error-family-worker-baseline".into(),
         html: include_str!("fixtures/script/errors.html").into(),
     };
@@ -1107,6 +1127,7 @@ fn restricted_child_uses_error_family_prototypes_before_creating_controls() {
 #[test]
 fn restricted_child_error_diagnostic_does_not_invoke_hooks_and_later_script_recovers() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-error-diagnostic".into(),
         html: "<html><head><title>Error diagnostic fallback</title></head><body><p id=output>Readable Error fallback</p><script>Error.prototype.toString=function(){document.title='Incorrect diagnostic hook';location.href='/incorrect';while(true){}};throw new TypeError('authored message');</script><script>document.getElementById('output').textContent='Recovered after actual TypeError';</script></body></html>".into(),
     };
@@ -1133,6 +1154,7 @@ fn restricted_child_error_diagnostic_does_not_invoke_hooks_and_later_script_reco
 #[test]
 fn restricted_child_error_string_coercion_fuel_failure_is_fatal_and_latched() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-error-coercion-fuel".into(),
         html: "<html><head><title>Error coercion fallback</title></head><body><p id=output>Readable Error coercion fallback</p><script>var error=new TypeError('message');if(!(error instanceof TypeError) || !(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');error.name={toString:function(){document.getElementById('output').setAttribute('data-hook','ready');while(true){}}};try{String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1163,6 +1185,7 @@ fn restricted_child_error_string_coercion_fuel_failure_is_fatal_and_latched() {
 #[test]
 fn restricted_child_error_string_storage_exhaustion_preserves_fallback() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-error-string-storage".into(),
         html: "<html><head><title>Error string storage fallback</title></head><body><p id=output>Readable Error string storage fallback</p><script>var message=Array(10000).join('abcdefgh');var error=TypeError(message);if(!(error instanceof Error))throw 'Wrong Error chain';document.getElementById('output').setAttribute('data-error','ready');if(String(error).length!==message.length+11)throw 'Wrong Error string';document.getElementById('output').setAttribute('data-string','ready');try{for(var i=0;i<30;i++)String(error);document.title='Incorrect completion';}catch(caught){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1202,6 +1225,7 @@ fn restricted_child_uses_function_and_native_prototypes_before_creating_controls
     // Frozen missing-capability baseline: all prototype/metadata/constructor
     // gates precede the real form. There are no static controls to fall back to.
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-prototype-worker-baseline".into(),
         html: include_str!("fixtures/script/prototypes.html").into(),
     };
@@ -1248,6 +1272,7 @@ fn restricted_child_typed_prototype_depth_exhaustion_is_fatal_and_latched() {
         "p[key]=1;",
     ] {
         let request = mg_sparkle::js_browser::Request {
+            external_scripts: None,
             url: "https://example.test/local-prototype-depth-limit".into(),
             html: format!(
                 "<html><head><title>Prototype depth fallback</title></head><body><p id=output>Readable prototype fallback</p><script>function User(){{}}var p=Object.create(User);if(Object.getPrototypeOf(p)!==User)throw 'Wrong identity';document.getElementById('output').setAttribute('data-prototype','ready');var key=Symbol('missing');for(var i=0;i<70;i++)p=Object.create(p);try{{{operation}document.title='Incorrect completion';}}catch(error){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later';location.href='/incorrect';</script></body></html>"
@@ -1287,6 +1312,7 @@ fn restricted_child_typed_prototype_depth_exhaustion_is_fatal_and_latched() {
 #[test]
 fn restricted_child_primitive_prototype_error_preserves_fallback_and_later_script() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-primitive-prototype".into(),
         html: "<html><head><title>Primitive prototype fallback</title></head><body><p>Readable primitive fallback</p><script>Object.create(7);document.title='Incorrect';location.href='/incorrect';</script><script>document.title='Recovered after prototype error';</script></body></html>".into(),
     };
@@ -1317,6 +1343,7 @@ fn restricted_child_uses_real_symbols_before_creating_controls() {
     // This exact source previously stopped at ReferenceError: Symbol is not
     // defined. Identity/key/reflection/registry checks precede all form creation.
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-symbol-worker-baseline".into(),
         html: include_str!("fixtures/script/symbols.html").into(),
     };
@@ -1355,6 +1382,7 @@ fn restricted_child_uses_real_symbols_before_creating_controls() {
 #[test]
 fn restricted_child_rejects_symbol_dom_conversion_and_recovers_in_later_script() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-symbol-conversion".into(),
         html: "<html><head><title>Symbol conversion fallback</title></head><body><p id=output>Kept text</p><script>var token=Symbol('not text');document.getElementById('output').textContent=Object(token);location.href='/incorrect';</script><script>if(typeof token==='symbol'){document.title='Recovered after Symbol error';}</script></body></html>".into(),
     };
@@ -1383,6 +1411,7 @@ fn restricted_child_rejects_symbol_dom_conversion_and_recovers_in_later_script()
 #[test]
 fn restricted_child_symbol_description_storage_stays_cumulative_and_fatal() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-symbol-storage-limit".into(),
         html: "<html><head><title>Symbol storage fallback</title></head><body><p id=output>Readable Symbol fallback</p><script>var description=Array(10000).join('abcdefgh');document.getElementById('output').setAttribute('data-builder','ready');Symbol(description);document.getElementById('output').setAttribute('data-symbol','ready');try{for(var i=0;i<100;i++){Symbol(description);}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1421,6 +1450,7 @@ fn restricted_child_retains_large_ast_and_calls_real_form_builder() {
     // Frozen before the AST change: 19,998 harmless statements followed by 19
     // DOM-building statements. Its original AST admission exceeded 4 MiB.
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-ast-worker-baseline".into(),
         html: include_str!("fixtures/script/ast.html").into(),
     };
@@ -1460,6 +1490,7 @@ fn restricted_child_sparse_ast_capacity_stays_cumulative_and_fatal() {
     // Merely retaining a function with holes must pay its AST slot capacity,
     // even though the returned array is never executed or created at runtime.
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-sparse-ast-limit".into(),
         html: "<html><head><title>Original sparse fallback</title></head><body><p>Readable sparse AST fallback</p><script>try{for(var i=0;i<6;i++){Function('return ['+Array(10000).join(',')+'];');}document.title='Incorrect completion';}catch(error){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}</script><script>document.title='Incorrect later script';location.href='/incorrect';</script></body></html>".into(),
     };
@@ -1498,6 +1529,7 @@ fn restricted_child_sparse_ast_capacity_stays_cumulative_and_fatal() {
 #[test]
 fn restricted_child_uses_labeled_control_flow_and_uri_builtins() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-language-fixture".into(),
         html: r#"<html><head><title>Before</title></head><body><p id=output>Before</p><script>
         var word='';
@@ -1533,6 +1565,7 @@ fn restricted_child_uses_labeled_control_flow_and_uri_builtins() {
 #[test]
 fn restricted_child_dynamic_compilation_creates_real_form_controls() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-dynamic".into(),
         html: include_str!("fixtures/script/dynamic.html").into(),
     };
@@ -1558,6 +1591,7 @@ fn restricted_child_dynamic_compilation_creates_real_form_controls() {
 #[test]
 fn restricted_child_regexp_execution_creates_real_form_controls() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-regexp".into(),
         html: include_str!("fixtures/script/regexp.html").into(),
     };
@@ -1587,6 +1621,7 @@ fn restricted_child_regexp_execution_creates_real_form_controls() {
 #[test]
 fn restricted_child_rejects_invalid_literal_before_dom_prefix_effects() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-regexp-syntax".into(),
         html: "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>document.title='Incorrect prefix';var broken=/(/;</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>".into(),
     };
@@ -1609,6 +1644,7 @@ fn restricted_child_rejects_invalid_literal_before_dom_prefix_effects() {
 #[test]
 fn restricted_child_iteration_and_switch_create_real_form_controls() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-iteration".into(),
         html: include_str!("fixtures/script/iteration.html").into(),
     };
@@ -1641,6 +1677,7 @@ fn restricted_child_iteration_and_switch_create_real_form_controls() {
 #[test]
 fn restricted_child_rejects_invalid_switch_before_dom_prefix_effects() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-switch-syntax".into(),
         html: "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>document.title='Incorrect prefix';switch(1){default:break;default:break;}</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>".into(),
     };
@@ -1663,6 +1700,7 @@ fn restricted_child_rejects_invalid_switch_before_dom_prefix_effects() {
 #[test]
 fn restricted_child_deeply_grouped_factory_creates_real_form_controls() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-expressions".into(),
         html: include_str!("fixtures/script/expressions.html").into(),
     };
@@ -1705,6 +1743,7 @@ fn restricted_child_malformed_group_rejects_prefix_and_preserves_later_script() 
         ")".repeat(63)
     );
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-expression-syntax".into(),
         html: format!(
             "<html><head><title>Original title</title></head><body><p id=output>Before</p><script>{source}</script><script>document.getElementById('output').textContent='Later script executes';</script></body></html>"
@@ -1734,6 +1773,7 @@ fn restricted_child_excessive_group_depth_is_fatal_before_prefix_effects() {
         ")".repeat(1024)
     );
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-expression-limit".into(),
         html: format!(
             "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>document.title='Incorrect later script';</script></body></html>"
@@ -1775,6 +1815,7 @@ fn restricted_child_nested_evaluation_limits_cannot_be_caught_or_reset() {
         ),
     ] {
         let request = mg_sparkle::js_browser::Request {
+            external_scripts: None,
             url: "https://example.test/local-evaluation-limit".into(),
             html: format!(
                 "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>function recurse(){{{body}}}try{{recurse();}}catch(e){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later script';</script></body></html>"
@@ -1807,6 +1848,7 @@ fn restricted_child_returns_first_allocation_failure_without_reset_or_dom_effect
     use mg_butane::runtime::AllocationPhase;
     let source = "try{while(true){Array(1000);}}catch(e){document.title='Incorrect catch';}finally{document.title='Incorrect finally';}";
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-allocation-limit".into(),
         html: format!(
             "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>document.title='Incorrect later script';</script></body></html>"
@@ -1846,6 +1888,7 @@ fn restricted_child_reports_successful_allocation_totals_and_pre_runtime_rejecti
         ("file:///local-allocation-report", false),
     ] {
         let request = mg_sparkle::js_browser::Request {
+            external_scripts: None,
             url: url.into(),
             html: "<html><body><p>Local fixture</p><script>function add(a,b){return a+b;}document.title=String(add(2,3));</script></body></html>".into(),
         };
@@ -1876,6 +1919,7 @@ fn restricted_child_reports_successful_allocation_totals_and_pre_runtime_rejecti
 #[test]
 fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budget() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-allocation".into(),
         html: include_str!("fixtures/script/allocation.html").into(),
     };
@@ -1913,6 +1957,7 @@ fn restricted_child_shared_large_factory_creates_real_form_inside_unchanged_budg
 #[test]
 fn restricted_child_owned_function_source_creates_form_inside_unchanged_budget() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-sources".into(),
         html: include_str!("fixtures/script/sources.html").into(),
     };
@@ -1947,6 +1992,7 @@ fn restricted_child_owned_function_source_creates_form_inside_unchanged_budget()
 fn restricted_child_multiple_source_fragments_keep_real_join_and_utf8_limits() {
     let separator = " ".repeat(75);
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-multiple-source-limit".into(),
         html: format!(
             "<html><head><title>Original source title</title></head><body><p>Readable source fallback</p><script>try{{Function(Array(10000).join('{separator}'),'',\"document.title='Incorrect body';\")();location.href='/incorrect';}}catch(error){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later script';</script></body></html>"
@@ -1981,6 +2027,7 @@ fn restricted_child_multiple_source_fragments_keep_real_join_and_utf8_limits() {
 #[test]
 fn restricted_child_parameter_copy_creates_form_inside_unchanged_budget() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-bindings".into(),
         html: include_str!("fixtures/script/bindings.html").into(),
     };
@@ -2019,6 +2066,7 @@ fn restricted_child_parameter_copy_creates_form_inside_unchanged_budget() {
 fn restricted_child_parameter_real_copy_exhaustion_latches_before_body_or_handlers() {
     let separator = "0123456789".repeat(11);
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/local-parameter-limit".into(),
         html: format!(
             "<html><head><title>Original title</title></head><body><p>Readable parameter fallback</p><script>function touch(buffer){{document.title='Incorrect body';}}try{{touch(Array(10000).join('{separator}'));location.href='/incorrect';}}catch(error){{document.title='Incorrect catch';}}finally{{document.title='Incorrect finally';}}</script><script>document.title='Incorrect later script';</script></body></html>"
@@ -2050,6 +2098,7 @@ fn restricted_child_parameter_real_copy_exhaustion_latches_before_body_or_handle
 #[test]
 fn restricted_child_prepaid_arrays_create_real_form_inside_unchanged_budget() {
     let request = mg_sparkle::js_browser::Request {
+        external_scripts: None,
         url: "https://example.test/script-arrays".into(),
         html: include_str!("fixtures/script/arrays.html").into(),
     };
@@ -2107,6 +2156,7 @@ fn restricted_child_retained_arguments_preserve_snapshot_and_fatal_array_limits(
         ),
     ] {
         let request = mg_sparkle::js_browser::Request {
+            external_scripts: None,
             url: "https://example.test/local-array-ownership".into(),
             html: format!(
                 "<html><head><title>Original title</title></head><body><p>Readable original content</p><script>{source}</script><script>if(document.title==='Retained arguments ready'){{document.title='Later snapshot ready';}}else{{document.title='Incorrect later script';}}</script></body></html>"

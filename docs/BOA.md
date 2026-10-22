@@ -1,6 +1,7 @@
 # Boa-backed page JavaScript
 
-v0.4.0 implements an opt-in Boa 0.22.0 page backend. Release publication and public
+v0.4.0 introduced the Boa 0.22.0 page backend; v0.9.4 enabled it by default.
+Use `--disable-scripts` to opt out. Release publication and public
 installer verification are recorded separately in the dated work log.
 This is a bounded JSPLAN integration increment, not completion of P1-P8 or a
 claim that modern web applications generally work.
@@ -18,18 +19,43 @@ actual page engine only after installing the restricted worker policy. There is
 no production fallback to the original evaluator, no JIT and no executable-memory
 permission change. Library callers must supply their own process isolation.
 
-Eligible inline classic scripts share a realm. Modern language fixtures exercise
+Eligible inline and parent-fetched classic scripts share a realm. Modern language fixtures exercise
 lexical bindings, arrows, classes, templates, destructuring, Map/WeakMap, Proxy,
 Reflect and Promise callbacks. Bounded FIFO microtask checkpoints run after
 scripts and delivered callbacks. Scripts can create real controls, change text,
 register later listeners and propose navigation that the parent validates.
 The existing DOM API and startup-event approximations remain deliberately small.
 
-External scripts, module loading, timers, fetch/XHR, script cookie access,
+Module loading, timers, fetch/XHR, script cookie access,
 synthetic dispatch and a general browser task loop are not implemented. An idle
 module loader cannot acquire filesystem/network access. Passing the separate
 Vue reactivity experiment does not establish a Vue DOM or React browser app.
 Google search to first result remains unfinished and deferred.
+
+## Classic external sources
+
+The parent fetches parser-discovered classic sources before worker startup.
+`Request.external_scripts` carries typed node/source entries; page HTML comments
+are never interpreted as transport metadata. The optional field is omitted for
+legacy requests, preserving their serialized representation and baseline tests.
+Both parent and worker validate eligibility and source/count/wire admission.
+
+At most 16 external sources participate within the existing 32 eligible script
+elements. Each external source is at most 256 KiB; HTML plus admitted sources is
+at most 1 MiB. Typed JSON fits the existing 2 MiB initial frame, reserving space
+for its versioned envelope. Duplicate execution sources consume admission again.
+CSS/fonts/images/scripts share 2 MiB, 32 requests and one absolute ten-second
+resource deadline; this is separate from the worker's cumulative source budget.
+
+Ordinary classic sources execute in document order. Deferred external sources
+run afterward, before startup callbacks. Because modules remain unsupported,
+`nomodule` executes its classic fallback. Async scripts, nonempty integrity
+metadata and `crossorigin` are explicitly unsupported and skipped with bounded
+diagnostics. External responses require a supported JavaScript MIME type and
+UTF-8. HTTPS verification stays enabled; foreign sources cannot send/store
+cookies, restore credentials after crossing origins or downgrade HTTPS.
+This remains startup preloading rather than a streaming parser or general task
+loop. The worker gains no network or filesystem capability.
 
 ## Explicit process profile
 

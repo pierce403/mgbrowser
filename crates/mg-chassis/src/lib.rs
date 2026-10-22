@@ -24,6 +24,7 @@ use std::sync::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -32,6 +33,9 @@ pub use theme::{ColorScheme, ThemePreference};
 
 const TOP: i32 = 64;
 const BG: u32 = 0xfafbf8;
+/// Persistent page snapshot payload per Browser; oversized frames still render.
+/// Includes retained vector capacities, link strings and diagnostics, not RSS.
+pub const FRAME_CACHE_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(feature = "chrome")]
 const HTTP_CHROME: u32 = 0x9f202b;
 const MAX_EDIT_BYTES: usize = 8191;
@@ -84,6 +88,7 @@ pub struct PerformanceProfile {
     pub boa_opcodes: u64,
     pub boa_alloc_bytes: usize,
     pub boa_peak_bytes: usize,
+    pub worker_allocation_recorded: bool,
     pub slowest_resources: Vec<resources::ResourceTiming>,
     pub last_frame: mg_sparkle::render::RenderTimings,
     pub last_full_render: mg_sparkle::render::RenderTimings,
@@ -91,6 +96,9 @@ pub struct PerformanceProfile {
     pub frame_cache_hits: u64,
     pub style_cache_hits: u64,
     pub max_frame_ms: f64,
+    pub frame_cache_payload_bytes: usize,
+    pub style_cache_payload_bytes: usize,
+    pub shaping_cache: mg_sparkle::paint::ShapingCacheStats,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +194,11 @@ pub struct Browser {
     page_loader: u64,
     dom_epoch: u64,
     style_cache: mg_sparkle::render::StyleCache,
-    frame_cache: Option<(FrameCacheKey, mg_sparkle::render::Frame)>,
+    frame_cache: Option<(
+        FrameCacheKey,
+        Rc<mg_sparkle::render::Frame>,
+        mg_sparkle::render::RenderTimings,
+    )>,
     boxes: Vec<mg_sparkle::render::LayoutBox>,
     cdp_enabled: bool,
     cdp_events: Vec<cdp_browser::Event>,
@@ -706,7 +718,7 @@ impl Browser {
             let mut resource_profile = resources::ResourceLoadProfile::default();
             let mut script_fetch_profile = resources::ScriptFetchProfile::default();
             let mut script_worker_ms = 0.0;
-            let mut prepared_script_html = None;
+            let mut external_scripts = None;
             let document = result
                 .as_ref()
                 .ok()
@@ -730,14 +742,15 @@ impl Browser {
                         cancel,
                     );
                     if scripts_enabled {
-                        let (prepared, profile) = resources::prepare_script_html(
+                        let (sources, profile) = resources::prepare_script_sources(
                             &session,
                             &mut document,
                             &html,
                             response.url.as_str(),
                             cancel,
+                            &resource_profile,
                         );
-                        prepared_script_html = Some(prepared);
+                        external_scripts = Some(sources);
                         script_fetch_profile = profile;
                     }
                     document
@@ -750,14 +763,14 @@ impl Browser {
                         response.content_type.contains("html") || response.content_type.is_empty()
                     })
                     .map(|response| {
-                        let html = prepared_script_html
-                            .unwrap_or_else(|| decode_text(&response.body, &response.content_type));
+                        let html = decode_text(&response.body, &response.content_type);
                         let worker_started = Instant::now();
                         let started = pool
                             .start(
                                 mg_sparkle::js_browser::Request {
                                     url: response.url.to_string(),
                                     html,
+                                    external_scripts,
                                 },
                                 generation,
                             )
@@ -803,26 +816,25 @@ impl Browser {
             self.last_load_ok = false;
             let mut load_error = None;
             let mut script_navigation = None;
+            // Failed fetches are measured too; a failed navigation is not a
+            // zero-duration load. Keep profiling independent of response status.
+            self.devtools.performance.fetch_html_ms = loaded.fetch_html_ms;
+            self.devtools.performance.parse_html_ms = loaded.parse_html_ms;
+            self.devtools.performance.resources_ms = loaded.resource_profile.total_ms;
+            self.devtools.performance.resource_requests = loaded.resource_profile.requests;
+            self.devtools.performance.resource_bytes = loaded.resource_profile.bytes;
+            self.devtools.performance.external_scripts_ms = loaded.script_fetch_profile.total_ms;
+            self.devtools.performance.external_scripts_loaded = loaded.script_fetch_profile.loaded;
+            self.devtools.performance.external_scripts_bytes = loaded.script_fetch_profile.bytes;
+            self.devtools.performance.script_worker_ms = loaded.script_worker_ms;
+            let mut slowest = loaded.resource_profile.timings;
+            slowest.extend(loaded.script_fetch_profile.timings);
+            slowest.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
+            slowest.truncate(8);
+            self.devtools.performance.slowest_resources = slowest;
             match loaded.result {
                 Ok(response) => {
-                    self.devtools.performance.fetch_html_ms = loaded.fetch_html_ms;
                     self.devtools.performance.html_bytes = response.body.len();
-                    self.devtools.performance.parse_html_ms = loaded.parse_html_ms;
-                    self.devtools.performance.resources_ms = loaded.resource_profile.total_ms;
-                    self.devtools.performance.resource_requests = loaded.resource_profile.requests;
-                    self.devtools.performance.resource_bytes = loaded.resource_profile.bytes;
-                    self.devtools.performance.external_scripts_ms =
-                        loaded.script_fetch_profile.total_ms;
-                    self.devtools.performance.external_scripts_loaded =
-                        loaded.script_fetch_profile.loaded;
-                    self.devtools.performance.external_scripts_bytes =
-                        loaded.script_fetch_profile.bytes;
-                    self.devtools.performance.script_worker_ms = loaded.script_worker_ms;
-                    let mut slowest = loaded.resource_profile.timings;
-                    slowest.extend(loaded.script_fetch_profile.timings);
-                    slowest.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
-                    slowest.truncate(8);
-                    self.devtools.performance.slowest_resources = slowest;
 
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
@@ -961,6 +973,8 @@ impl Browser {
             self.page_url = self.address.clone();
             self.page_loader = loaded.generation;
             self.dom_epoch += 1;
+            self.frame_cache = None;
+            self.style_cache.clear();
             if self.cdp_enabled {
                 self.cdp_events.push(cdp_browser::Event::Finished {
                     generation: loaded.generation,
@@ -988,10 +1002,8 @@ impl Browser {
             if let Some(mem) = &report.worker_memory {
                 self.devtools.performance.boa_alloc_bytes = mem.cumulative_bytes as usize;
                 self.devtools.performance.boa_peak_bytes = mem.peak_bytes as usize;
+                self.devtools.performance.worker_allocation_recorded = true;
             }
-        }
-        if let Some(report) = &reply.allocations {
-            self.devtools.performance.boa_alloc_bytes = report.accepted_bytes as usize;
         }
         for diagnostic in &reply.errors {
             self.devtools.record("JavaScript", diagnostic);
@@ -1997,10 +2009,23 @@ impl Browser {
         hasher.finish()
     }
     pub fn paint(&mut self) -> Canvas {
+        let started = Instant::now();
         let reflow = std::mem::take(&mut self.scroll_reflow_pending);
-        self.paint_with_scroll_clamp(reflow)
+        let (canvas, mut timings) = self.paint_with_scroll_clamp(reflow);
+        self.devtools.performance.frame_cache_payload_bytes = self
+            .frame_cache
+            .as_ref()
+            .map_or(0, |(_, frame, _)| frame.cache_payload_bytes());
+        self.devtools.performance.style_cache_payload_bytes = self.style_cache.payload_bytes();
+        self.devtools.performance.shaping_cache = self.fonts.shaping_cache_stats();
+        timings.total_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.devtools.record_frame_timings(timings);
+        canvas
     }
-    fn paint_with_scroll_clamp(&mut self, clamp_scroll: bool) -> Canvas {
+    fn paint_with_scroll_clamp(
+        &mut self,
+        clamp_scroll: bool,
+    ) -> (Canvas, mg_sparkle::render::RenderTimings) {
         let top = self.page_top();
         let scale_percent = self.effective_scale_percent();
         let scale = f32::from(scale_percent) / 100.;
@@ -2021,21 +2046,25 @@ impl Browser {
             select_all: self.select_all,
             controls_hash: self.controls_cache_hash(),
         };
-        let (frame, timings) = if let Some((cached_key, cached_frame)) = &self.frame_cache
+        let (frame, mut timings) = if let Some((cached_key, cached_frame, cached_timings)) =
+            &self.frame_cache
             && *cached_key == cache_key
         {
-            let clone_started = Instant::now();
-            let frame = cached_frame.clone();
-            let total_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
-            let mut timings = self.devtools.performance.last_full_render.clone();
+            // Share the immutable page pixels; composition copies directly into
+            // the caller-owned output instead of cloning a second page surface.
+            let frame = Rc::clone(cached_frame);
+            let mut timings = cached_timings.clone();
             timings.style_ms = 0.0;
             timings.layout_ms = 0.0;
             timings.paint_ms = 0.0;
-            timings.total_ms = total_ms;
-            timings.style_cached = true;
+            timings.composition_ms = 0.0;
+            timings.chrome_ms = 0.0;
+            timings.style_cached = false;
             timings.frame_cached = true;
             (frame, timings)
         } else {
+            // Drop stale pixels before allocating a replacement snapshot.
+            self.frame_cache = None;
             let controls = mg_sparkle::render::Controls {
                 values: Some(&self.values),
                 focused_input,
@@ -2055,21 +2084,32 @@ impl Browser {
                 doc_key,
                 &mut self.style_cache,
             );
-            self.frame_cache = Some((cache_key, frame.clone()));
+            let frame = Rc::new(frame);
+            if self.chrome && frame.cache_payload_bytes() <= FRAME_CACHE_PAYLOAD_BYTES {
+                self.frame_cache = Some((cache_key, Rc::clone(&frame), timings.clone()));
+            }
             (frame, timings)
         };
-        self.devtools.record_frame_timings(timings);
-        self.devtools.rendering = frame.diagnostics;
+        let composition_started = Instant::now();
+        self.devtools.rendering = frame.diagnostics.clone();
         self.content_height = frame.content_height + top;
         let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
         if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
             self.stop_scroll();
             self.scroll = max_scroll;
-            return self.paint_with_scroll_clamp(false);
+            drop(frame);
+            let (canvas, mut settled) = self.paint_with_scroll_clamp(false);
+            settled.style_ms += timings.style_ms;
+            settled.layout_ms += timings.layout_ms;
+            settled.paint_ms += timings.paint_ms;
+            settled.style_cached &= timings.style_cached;
+            settled.frame_cached &= timings.frame_cached;
+            return (canvas, settled);
         }
         self.boxes = frame
             .boxes
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|mut rect| {
                 rect.y += top;
                 rect
@@ -2079,23 +2119,34 @@ impl Browser {
         self.devtools.invalidate_selection(self.dom_epoch);
         self.hits = frame
             .hits
-            .into_iter()
+            .iter()
             .map(|hit| Hit {
                 x: hit.x,
                 y: hit.y + top,
                 w: hit.w,
                 h: hit.h,
-                action: match hit.action {
-                    mg_sparkle::render::Action::Input(node) => Action::Input(node),
-                    mg_sparkle::render::Action::Submit(node) => Action::Submit(node),
-                    mg_sparkle::render::Action::Link { node, href } => Action::Link { node, href },
+                action: match &hit.action {
+                    mg_sparkle::render::Action::Input(node) => Action::Input(*node),
+                    mg_sparkle::render::Action::Submit(node) => Action::Submit(*node),
+                    mg_sparkle::render::Action::Link { node, href } => Action::Link {
+                        node: *node,
+                        href: href.clone(),
+                    },
                 },
             })
             .collect();
         self.refresh_hovered_link();
         if !self.chrome {
             self.dirty = false;
-            return frame.canvas;
+            timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
+            // No-chrome rendering does not retain a frame, so return the
+            // original surface without a pixel clone for embedding callers.
+            return (
+                Rc::try_unwrap(frame)
+                    .unwrap_or_else(|_| unreachable!("no-chrome frame retained"))
+                    .canvas,
+                timings,
+            );
         }
         let mut canvas = Canvas::new_scaled(self.width, self.height, BG, scale);
         let physical_top = canvas.physical_edge(i64::from(top)) as u32;
@@ -2119,13 +2170,16 @@ impl Browser {
                 );
             }
         }
+        timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
+        let chrome_started = Instant::now();
         #[cfg(feature = "chrome")]
         if self.chrome {
             self.paint_chrome(&mut canvas);
             self.paint_devtools(&mut canvas);
         }
+        timings.chrome_ms = chrome_started.elapsed().as_secs_f64() * 1000.0;
         self.dirty = false;
-        canvas
+        (canvas, timings)
     }
     fn smoke_step(&mut self, canvas: &Canvas) {
         if self.smoke_events {
@@ -3191,6 +3245,9 @@ impl Browser {
     pub fn performance_report(&self) -> String {
         self.performance_lines().join("\n")
     }
+    pub fn scroll_position(&self) -> i32 {
+        self.scroll
+    }
     pub fn request_redraw(&mut self) {
         self.dirty = true;
     }
@@ -3236,6 +3293,7 @@ impl Browser {
         self.devtools.close();
         self.stop_scroll();
         self.chrome = enabled && cfg!(feature = "chrome");
+        self.frame_cache = None;
         self.restart_requested = false;
         self.new_tab_request = None;
         self.bookmarks_open = false;

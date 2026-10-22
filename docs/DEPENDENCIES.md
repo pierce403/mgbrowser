@@ -40,12 +40,26 @@ This browser is a testing and research project, not a production browser. The us
 | Linux window | x11rb 0.13, defaults disabled, RustConnection | Rust X11 wire protocol over OS sockets, usable through X11/XWayland. No Xlib/XCB FFI or native toolkit rendering. |
 | Desktop appearance | zbus 5.19.0, defaults disabled, async-io and blocking-api; host only | Rust D-Bus protocol to the standard settings portal over the local session socket. No libdbus, GTK/Qt or native theme renderer. OS sockets/polling remain platform interfaces. |
 | Browser automation | tungstenite 0.28 with only handshake, serde/serde_json, base64 | Loopback-only plain WebSocket CDP. No native TLS, compression or renderer fallback. Rust SHA-1 is used for the standard WebSocket handshake, not TLS certificate trust. |
-| JavaScript | Boa engine/GC 0.22.0, defaults disabled; engine fuzz feature for instruction accounting; Mg facade and DOM bridge | Rust parser/VM/GC, no C/C++ backend, JIT or production fallback. Page integration remains partial and opt-in. Original interpreter tests remain separate. |
+| JavaScript | Boa engine/GC 0.22.0, defaults disabled; engine fuzz feature for instruction accounting; Mg facade and DOM bridge | Rust parser/VM/GC, no C/C++ backend, JIT or production fallback. Partial scripting is enabled by default since v0.9.4; `--disable-scripts` opts out. Original interpreter tests remain separate. |
 | Script worker controls | libc 0.2 Rust OS declarations; std process/pipes; existing serde_json | Linux x86_64 resource limits, descriptor closure and seccomp. Not a C font/image/crypto backend or replacement JavaScript engine. |
 
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### Script admission and retained caches: v0.9.6
+
+No third-party dependency, feature or source pin changes. Classic external
+sources use typed parent metadata, never HTML comments as a transport. They
+share the existing 2 MiB / 32-request / 10-second resource ledger with CSS,
+fonts and images; certificate verification and worker syscall restrictions
+are unchanged. See [BOA.md](BOA.md) for source/wire admission and unsupported
+script attributes. This does not implement modules or a general event loop.
+
+The explicit retained-cache resource review is in [PERFORMANCE.md](PERFORMANCE.md):
+16 MiB Frame and 8 MiB style payload per Browser, with oversized snapshots
+bypassing retention. These are not whole-browser allocator/RSS limits. No
+existing network, worker, layout-work or image ceiling is increased.
 
 ### News formatting and JPEG: v0.9.0, reviewed 2026-09-17/18
 

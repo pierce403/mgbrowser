@@ -19,7 +19,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/jsplan/RESULTS.md`: implemented P0/narrow P1 comparison, exact dependency
   review, selected Test262/Vue results and remaining Boa adoption gates.
   `experiments/jsplan` is excluded from the production workspace; `tools/jsplan`
-  holds immutable inputs and reviewed outcome expectations. Browser stays v0.3.0.
+  holds immutable inputs and reviewed outcome expectations. Production Boa page
+  execution has its separate contract in docs/BOA.md.
+
+- `docs/PERFORMANCE.md`: Browser paint/CLI measurements, cache identity and
+  explicit retained-payload ceilings; unavailable worker accounting stays visible.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

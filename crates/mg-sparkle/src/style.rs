@@ -662,7 +662,7 @@ const MAX_FONT_FAMILIES: usize = 16;
 const MAX_STYLE_URL_BYTES: usize = 4096;
 const MAX_FONT_NAME_BYTES: usize = 256;
 
-fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
+pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
     layout_heap_bytes(&value.layout)
         + value.font_families.capacity() * std::mem::size_of::<String>()
         + value.background_images.capacity() * std::mem::size_of::<BackgroundImage>()

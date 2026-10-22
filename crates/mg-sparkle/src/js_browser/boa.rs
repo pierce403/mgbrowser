@@ -7,9 +7,7 @@
 //! teardown, within the unchanged 32-registration/300-second session bounds.
 //! This bounded retention policy is not full DOM ephemeron garbage collection.
 use super::events::{Kind, Target};
-use super::{
-    BrowserHost, MAX_SOURCE, Request, bounded, inert, split_external_scripts, text_content,
-};
+use super::{BrowserHost, MAX_SOURCE, Request, bounded, inert, text_content};
 use crate::{document, page_session::*};
 use mg_butane::{
     modern::{self, Engine},
@@ -558,9 +556,16 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        let (external_scripts, html_source) = split_external_scripts(&request.html);
-        let document = document::parse_with_scripting(html_source, url.as_str(), true);
+        let document = document::parse_with_scripting(&request.html, url.as_str(), true);
+        let allocated = match request.validate_external_sources(&document) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                reply.errors.push(error);
+                return (None, reply);
+            }
+        };
         let mut sources = Vec::new();
+        let mut deferred = Vec::new();
         let mut count = 0;
         for (index, node) in document.nodes.iter().enumerate() {
             if node.tag != "script" || inert(&document.nodes, index) {
@@ -590,11 +595,13 @@ impl BoaPageRealm {
                 continue;
             }
             if node.attr("src").is_some() {
-                if let Some(map) = &external_scripts {
-                    if let Some(Some(source)) = map.get(&index) {
-                        sources.push((true, source.clone()));
+                if let Some(source) = request.external_source(index) {
+                    if node.attr("defer").is_some() {
+                        deferred.push((true, source.to_owned()));
+                    } else {
+                        sources.push((true, source.to_owned()));
                     }
-                } else {
+                } else if request.external_scripts.is_none() {
                     reply
                         .errors
                         .push("External script loading is not implemented".into());
@@ -603,11 +610,12 @@ impl BoaPageRealm {
             }
             sources.push((false, text_content(&document.nodes, index)));
         }
+        sources.extend(deferred);
         let host = BrowserHost {
             document,
             url,
             navigation: None,
-            allocated: request.html.len(),
+            allocated,
             collections: Vec::new(),
             listeners: Vec::new(),
             events: Vec::new(),
@@ -1148,6 +1156,7 @@ mod tests {
     use super::*;
     fn realm(source: &str) -> BoaPageRealm {
         let (realm, reply) = BoaPageRealm::start(Request {
+            external_scripts: None,
             url: "https://example.test/owned".into(),
             html: format!(
                 "<html><body><p id=out>before</p><a id=a href=/next>Next</a><script>{source}</script></body></html>"
