@@ -1,9 +1,10 @@
-# Next increment: bounded Window self-messaging
+# Bounded Window self-messaging
 
-Reviewed implementation contract, 2026-10-22. Implemented v0.9.10 candidate;
-this is not yet shipped behavior.
+Reviewed implementation contract, 2026-10-22. Published in v0.9.10 at
+`6ee10072217d6ccc91a67b31486b1e10cbeb5de6`; exact release/public acceptance
+receipts are recorded in the dated work log, separate from authored tests.
 v0.9.9 at `af5d8fc3a8f14555520c07946c0c56c355921a01` supplies queued Promise
-notifications. Genuine Window messaging is the next dependency toward
+notifications. Genuine Window messaging is another dependency toward
 [complete Window-testharness readiness](WPT_TESTHARNESS.md), not its completion.
 Keep the pinned corpus, scorer, expectations, protocol and resource policy fixed.
 

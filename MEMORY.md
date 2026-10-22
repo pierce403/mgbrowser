@@ -30,8 +30,8 @@ summary: Compact map of mgbrowser project decisions and evidence.
   shared work, traced/weak ownership and persistent privacy-observation gaps.
   Pinned Boa fatal VM roots require actual terminal teardown, not an extra
   kept-object clear. Release/public acceptance is separate from WPT coverage.
-- `docs/WINDOW_MESSAGES.md`: next bounded self-messaging contract, measured
-  unchanged-harness blocker, partial clone domain and separate lifecycle review.
+- `docs/WINDOW_MESSAGES.md`: v0.9.10 bounded self-messaging, partial clone
+  domain, measured unchanged-harness initialization and separate lifecycle review.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

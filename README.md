@@ -2,9 +2,9 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.10 Experimental Preview candidate
+## v0.9.10 Experimental Preview
 
-The next increment adds genuine later Window self-messaging: `postMessage`,
+This release adds genuine later Window self-messaging: `postMessage`,
 `message`/`messageerror` listeners and handler slots, cloned data, trusted origins
 and noncancelable native events. Primitives, ordinary objects, arrays, sparse
 holes, cycles and aliases are supported. Other builtins and nonempty transfer
@@ -12,13 +12,16 @@ lists fail explicitly; this is not full structured clone or cross-context
 messaging. Native DOMException preserves Error identity and private branding.
 [Messaging contract and acceptance](docs/WINDOW_MESSAGES.md).
 
-Local full debug/release regressions, restricted-worker controls, packaged
-installation/updater and the fresh complete static WPT gate pass. Authored
-native/CDP messaging also passes on the packaged candidate. Exact-commit CI and
-public installation/update/native acceptance remain required before shipment.
-The installer currently delivers the verified v0.9.9 below.
+Published as [v0.9.10](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.10)
+at `6ee10072217d6ccc91a67b31486b1e10cbeb5de6`. Local full debug/release
+regressions, restricted workers, fresh complete static WPT, exact-commit CI/site
+and tagged packaging pass. The public installer delivers v0.9.10; fresh install,
+reinstall, actual v0.9.9 self-upgrade/no-op and all twelve packaged/public native
+acceptance helpers pass. Receipts are recorded in the
+[dated work log](memory/logs/2026-10-22.md).
+See the [release notes and limitations](docs/RELEASE-v0.9.10.md).
 
-### Published v0.9.9
+### Previous v0.9.9 increment
 
 The v0.9.9 increment adds queued Window `unhandledrejection` and
 `rejectionhandled` events with real Promise/reason identity, traced pending
@@ -33,8 +36,8 @@ existing cumulative limits. Startup is still **bundled**, not a complete HTML
 lifecycle. Cross-context messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
-The installer below delivers [v0.9.9](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.9),
-released at `af5d8fc3a8f14555520c07946c0c56c355921a01`. Exact-commit
+[v0.9.9](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.9)
+released at `af5d8fc3a8f14555520c07946c0c56c355921a01`. Its exact-commit
 Rust/JSPLAN/site checks, tagged packaging, checksum-verified public install and
 reinstall, all eleven packaged/public native helpers, and actual v0.9.8
 self-upgrade/no-op verification pass. See the
@@ -140,7 +143,7 @@ and resource limits remain explicit; this does not
 establish general CSS or arbitrary-site compatibility.
 
 The installer selects the latest published release. Exact release and public-
-installation receipts are recorded separately in the [dated work log](memory/logs/2026-10-21.md).
+installation receipts are recorded separately in the [dated work log](memory/logs/2026-10-22.md).
 
 **Linux x86_64 / X11 or XWayland**, glibc 2.35 or newer. Install the
 checksum-verified binary without sudo or Rust:

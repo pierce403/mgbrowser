@@ -78,9 +78,9 @@ See [the contract and acceptance](PROMISE_REJECTIONS.md). Exact release/public
 installation, prior-binary self-upgrade and native acceptance pass at
 `af5d8fc3a8f14555520c07946c0c56c355921a01`; full Window readiness stays open.
 
-## Bounded Window messages: v0.9.10 candidate
+## Bounded Window messages: v0.9.10
 
-The candidate implements actual later self-Window `postMessage`, `message` and
+The release implements actual later self-Window `postMessage`, `message` and
 `messageerror` callbacks, with immutable trusted sender origin and delivery-time
 target checks. A partial native serializer supports primitives, ordinary objects
 and arrays, preserving UTF-16, sparse length/holes, cycles and aliases. Other

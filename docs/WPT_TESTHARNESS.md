@@ -230,7 +230,7 @@ The complete unchanged harness was subsequently measured once through the
 verified public v0.9.9 browser: the first bootstrap blocker is unsupported Window
 `message` registration. Initial parsing/admission fit, but execution stopped
 early with a pending task, so complete feasibility and typed completion remain
-unknown. [The next messaging contract](WINDOW_MESSAGES.md) records the exact
+unknown. [The messaging contract](WINDOW_MESSAGES.md) records the exact
 diagnostic, deliberately limited serialization scope and unchanged resource
 policy. Genuine self-messaging comes before separately reviewed queued lifecycle
 and trusted observation; none of these authored controls adds an upstream pass.

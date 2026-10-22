@@ -94,7 +94,7 @@ refunding lifetime work. Genuine late handling admits a new task. Traced payload
 weak outstanding membership and conservative sticky observation gaps follow
 [the reviewed contract](PROMISE_REJECTIONS.md). No v4 wire shape changes.
 
-The v0.9.10 candidate adds one self-Window message per selected pump. The worker
+The v0.9.10 release adds one self-Window message per selected pump. The worker
 keeps only an owned serialized graph with scalar edges until delivery; a traced
 native event then owns the cloned JS data. Clone failures cancel pending work
 without refunding lifetime admission. Target mismatch still consumes the selected

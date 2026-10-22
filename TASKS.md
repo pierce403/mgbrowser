@@ -59,15 +59,21 @@ following dependency order, updating evidence as each increment ships:
    eleven packaged/public native helpers and actual v0.9.8 self-upgrade/no-op pass.
    Binding terminal roots clear; pinned Boa VM roots require actual Context
    teardown, which the browser worker already performs.
-   **Active v0.9.10 candidate:** [genuine bounded Window self-messaging](docs/WINDOW_MESSAGES.md).
+   **Shipped v0.9.10** at `6ee10072217d6ccc91a67b31486b1e10cbeb5de6`:
+   [genuine bounded Window self-messaging](docs/WINDOW_MESSAGES.md).
    Full local regressions, package/updater, fresh static WPT and authored
-   native/CDP messaging pass; finish exact-commit CI, tagged publication and
-   public install/actual v0.9.9 update/native acceptance before the next feature.
+   native/CDP messaging, exact-commit CI/site, tagged publication, public
+   install/reinstall, actual v0.9.9 update/no-op and all twelve public native
+   helpers pass. No v0.9.10 binary-release acceptance gate remains.
    The complete unchanged harness now initializes without the old registration
    error, but two jobs remain pending in the navigation-only probe. This is not
    typed completion, a new upstream pass or proof that full execution fits.
-   Next are separately reviewed queued lifecycle and typed observation. Corpus
-   and observer/scoring changes require their own frozen review.
+   **Next:** separately review queued snapshot lifecycle, then typed observation.
+   Freeze mandatory-work admission, versioned monotonic progress, parent loading/
+   pump behavior, sticky initial-load failures and CDP/headless completion before
+   implementation. Keep the existing limits; do not add a free lifecycle queue
+   or silently drain arbitrary timers. Corpus and observer/scoring changes
+   require their own frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
