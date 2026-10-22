@@ -38,8 +38,6 @@ def check_errors(log, name):
             f"{name}: expected exactly one explicitly partial timer transaction")
     require("SCRIPT_ERROR" not in log and "SCRIPT_REJECTED" not in log,
             f"{name}: browser reported another script failure")
-    require(sum(line.startswith("PAGE_TASK_APPLIED ") for line in log.splitlines()) == 1,
-            f"{name}: expected one accepted parent-issued throwing timer task")
     reports = [json.loads(line.removeprefix("SCRIPT_BOA "))
                for line in log.splitlines() if line.startswith("SCRIPT_BOA ")]
     require(len(reports) >= 2, f"{name}: missing startup and task worker reports")
@@ -66,6 +64,8 @@ def check_errors(log, name):
     source = FIXTURE.read_text().split("<script>", 1)[1].split("</script>", 1)[0]
     realm = [report for report in reports if report["source_admissions"] == 1 and
              report["source_bytes"] == len(source.encode())]
+    services.check_lifecycle_tasks(log, reports, (1, len(source.encode())),
+                                   [(3, 1, 2), (3, 2, 1), (5, 3, 1), (7, 6, 0)], name)
     require(len(realm) >= 2, f"{name}: missing original error fixture realm reports")
     require(realm[0]["pending_jobs"] > 0 and realm[-1]["pending_jobs"] == 0,
             f"{name}: original error fixture task did not settle")

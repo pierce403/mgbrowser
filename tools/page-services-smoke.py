@@ -220,6 +220,51 @@ def check_worker(log, name):
             f"{name}: missing nonfatal restricted-worker execution/accounting proof")
 
 
+def check_lifecycle_tasks(log, reports, source_key, expected, name):
+    """Retain exact per-realm work, not a blanket extra-task allowance.
+
+    The CDP browser can supersede its initial / document before its lifecycle
+    completes. Only that first empty-source prefix may be incomplete; every
+    journey document must exhibit its two real lifecycle tasks. Source keys
+    identify these fixed authored inputs, not general remote session identity.
+    """
+    result = (REPO / "tests/fixtures/script/event-results.html").read_bytes()
+    result_source = result.split(b"<script>", 1)[1].split(b"</script>", 1)[0]
+    allowed = {(0, 0), (1, len(result_source))}
+    cohorts = []
+    for report in reports:
+        key = (report["source_admissions"], report["source_bytes"])
+        work = tuple(report[field] for field in ("jobs_admitted", "jobs_executed", "pending_jobs"))
+        if not cohorts or key != cohorts[-1]["source"] or (work == (2, 0, 2) and cohorts[-1]["work"][-1] != work):
+            cohorts.append({"source": key, "work": []})
+        cohorts[-1]["work"].append(work)
+    require(cohorts, f"{name}: no genuine worker cohorts")
+    fixture_count, applied = 0, 0
+    for index, cohort in enumerate(cohorts):
+        key, work = cohort["source"], cohort["work"]
+        if key == source_key:
+            fixture_count += 1
+            require(len(work) >= len(expected) and work[:len(expected)] == expected
+                    and all(item == expected[-1] for item in work[len(expected):]),
+                    f"{name}: original realm skipped/repeated lifecycle or message/task work: {work}")
+            applied += len(expected) - 1
+        else:
+            require(key in allowed, f"{name}: unexpected later source {key}")
+            lifecycle = [(2, 0, 2), (2, 1, 1), (2, 2, 0)]
+            prefix = lifecycle[:min(3, len(work))]
+            require(work[:len(prefix)] == prefix and all(item == lifecycle[-1] for item in work[3:]),
+                    f"{name}: other realm hid unfinished or non-lifecycle work: {work}")
+            require(len(work) >= 3 or (index == 0 and key == (0, 0)),
+                    f"{name}: journey document did not finish its lifecycle")
+            applied += min(2, len(work) - 1)
+    require(fixture_count == 1, f"{name}: missing or repeated original fixture realm")
+    require(sum(line.startswith("PAGE_TASK_APPLIED ") for line in log.splitlines()) == applied,
+            f"{name}: parent tasks differ from exact per-realm lifecycle/task transitions")
+    return {"applied_tasks": applied, "fixture_applied_tasks": len(expected) - 1,
+            "cohorts": [{"source": list(item["source"]), "work": [list(value) for value in item["work"]]}
+                        for item in cohorts]}
+
+
 def journeys(run, binary, client, fixture=FIXTURE, worker_check=check_worker):
     native_dir = run.root / "native"
     native = run.command(

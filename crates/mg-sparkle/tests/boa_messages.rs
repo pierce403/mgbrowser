@@ -3,7 +3,9 @@
 use mg_sparkle::{
     document::{self, Document},
     js_browser::{Request, boa::BoaPageRealm},
-    page_session::{DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump},
+    page_session::{
+        DefaultAction, InputKind, LifecyclePhase, RealmState, SessionInput, SessionReply, TaskPump,
+    },
 };
 use std::time::Duration;
 
@@ -19,11 +21,51 @@ fn request(source: &str) -> Request {
     }
 }
 fn start(source: &str) -> (BoaPageRealm, SessionReply) {
+    // Later-message controls explicitly create their workload during native
+    // load. Stop at LoadComplete, not queue-idle: the message remains pending.
+    let (mut realm, init) = raw_start(&format!("window.onload=function(){{{source}\n}};"));
+    assert_eq!(
+        (
+            init.boa.as_ref().unwrap().jobs_admitted,
+            init.boa.as_ref().unwrap().jobs_executed
+        ),
+        (2, 0)
+    );
+    let dcl = pump(&mut realm, &init);
+    assert_eq!(
+        dcl.lifecycle.unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    let loaded = pump(&mut realm, &dcl);
+    assert_eq!(
+        loaded.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    (realm, loaded)
+}
+fn raw_start(source: &str) -> (BoaPageRealm, SessionReply) {
     let (realm, reply) = BoaPageRealm::start(request(source));
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
     clean(&reply);
     assert!(reply.accounting_valid());
     (realm.expect("owned retained realm"), reply)
+}
+fn source_complete(source: &str) -> (BoaPageRealm, SessionReply) {
+    // Synchronous conversion/constructor controls retain original source-time
+    // execution. Only their otherwise-empty mandatory lifecycle is awaited.
+    let (mut realm, init) = raw_start(source);
+    let loaded = finish_load(&mut realm, init);
+    clean(&loaded);
+    (realm, loaded)
+}
+fn finish_load(realm: &mut BoaPageRealm, mut reply: SessionReply) -> SessionReply {
+    for _ in 0..4 {
+        if reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete {
+            return reply;
+        }
+        reply = pump(realm, &reply);
+    }
+    panic!("owned initial lifecycle did not complete")
 }
 fn projected(reply: &SessionReply) -> Document {
     document::project_nodes(reply.snapshot.as_ref().unwrap().nodes.clone(), URL).unwrap()
@@ -87,7 +129,7 @@ fn click(realm: &mut BoaPageRealm, previous: &SessionReply) -> SessionReply {
 
 #[test]
 fn native_domexception_has_error_identity_stack_codes_and_guarded_constructor() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         var order=[];
         const error=new DOMException({toString(){order.push('message');return 'owned';}},
@@ -120,7 +162,7 @@ fn native_domexception_has_error_identity_stack_codes_and_guarded_constructor() 
 
 #[test]
 fn domexception_defaults_utf16_new_target_order_and_native_brand_do_not_use_page_getters() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const Native=DOMException,proto=Native.prototype;
         const messageGetter=Object.getOwnPropertyDescriptor(proto,'message').get;
@@ -172,8 +214,8 @@ fn primitive_values_preserve_utf16_bigint_negative_zero_and_nan() {
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "primitive clone");
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 1);
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 3);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 3);
     no_work(&reply);
 }
 
@@ -294,7 +336,7 @@ fn iterative_graph_walk_preserves_depth_first_getter_order_and_single_reads() {
 
 #[test]
 fn noncloneable_values_are_real_datacloneerrors_without_proxy_traps_or_events() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         let traps=0,failures=0;
         const proxy=new Proxy({}, {ownKeys(){traps++;throw 'proxy inspected';},get(){traps++;throw 'proxy read';}});
@@ -315,7 +357,7 @@ fn noncloneable_values_are_real_datacloneerrors_without_proxy_traps_or_events() 
 
 #[test]
 fn excluded_cloneable_builtins_are_explicit_not_supported_not_empty_records() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const values=[new Boolean(false),new Number(2),new String('owned'),Object(3n),new Date(0),/owned/gi,
             new Map([[1,2]]),new Set([3]),new ArrayBuffer(4),new Uint8Array(4),new DataView(new ArrayBuffer(4)),
@@ -333,7 +375,7 @@ fn excluded_cloneable_builtins_are_explicit_not_supported_not_empty_records() {
 
 #[test]
 fn valid_transfers_are_unsupported_and_invalid_duplicates_do_not_detach() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const buffer=new ArrayBuffer(8);let visited=0;
         function expect(name,action){try{action();throw 'transfer accepted';}catch(error){
@@ -348,13 +390,13 @@ fn valid_transfers_are_unsupported_and_invalid_duplicates_do_not_detach() {
     "#,
     );
     assert_eq!(title(&init), "transfers rejected safely");
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 0);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
     no_work(&init);
 }
 
 #[test]
 fn nonisolated_shared_buffers_are_datacloneerrors() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         // Pinned production Boa deliberately excludes experimental .transfer.
         // The actual detached-buffer clone/transfer control uses its unconditional
@@ -384,7 +426,7 @@ fn tasks_are_fifo_not_synchronous_or_promise_aliases_and_nested_tasks_stay_later
         };
         postMessage('a','/');postMessage('b','/');
         Promise.resolve().then(()=>order.push('script-job'));
-        window.onload=()=>{if(order.join(',')!=='script,script-job')throw 'message during Init';};
+        if(order.join(',')!=='script')throw 'message ran synchronously';
     "#,
     );
     assert_eq!(title(&init), "before");
@@ -416,7 +458,7 @@ fn getter_posted_message_queues_before_outer_after_synchronous_serialization() {
         if(order.join(',')!=='getter')throw 'not synchronous clone/no later task';
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 4);
     let inner = pump(&mut realm, &init);
     clean(&inner);
     assert_eq!(title(&inner), "getter,inner");
@@ -436,12 +478,12 @@ fn throwing_getter_preserves_original_exception_and_successful_inner_task_only()
         window.onmessage=event=>{if(event.data!=='inner')throw 'failed outer queued';document.title='inner preserved';};
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 4);
     assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 1);
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "inner preserved");
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 3);
     no_work(&reply);
 }
 
@@ -452,9 +494,10 @@ fn no_listener_at_enqueue_still_clones_and_later_listener_receives_snapshot() {
         var reads=0;const source={get value(){reads++;return 7;}};
         postMessage(source);
         if(reads!==1)throw 'no-listener clone skipped';
-        window.onload=()=>{window.onmessage=event=>{
+        // The listener is genuinely installed after enqueue, before delivery.
+        window.onmessage=event=>{
             if(event.data.value!==7||reads!==1)throw 'late listener clone';document.title='late listener';
-        };};
+        };
     "#,
     );
     let reply = pump(&mut realm, &init);
@@ -475,11 +518,11 @@ fn eventual_origin_mismatch_still_serializes_and_throws_before_nondelivery() {
         document.getElementById('a').onclick=event=>{event.preventDefault();if(calls!==0)throw 'mismatch delivered';document.title='mismatch discarded';};
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 4);
     assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 1);
     let dropped = pump(&mut realm, &init);
     clean(&dropped);
-    assert_eq!(dropped.boa.as_ref().unwrap().jobs_executed, 1);
+    assert_eq!(dropped.boa.as_ref().unwrap().jobs_executed, 3);
     no_work(&dropped);
     let checked = click(&mut realm, &dropped);
     clean(&checked);
@@ -512,7 +555,7 @@ fn normalized_origins_options_and_opaque_targets_use_url_origin_not_navigation_r
 
 #[test]
 fn invalid_target_is_domexception_syntaxerror_before_clone_and_unsupported_transfer() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const Native=DOMException;let reads=0,traps=0;
         globalThis.DOMException=function(){traps++;throw 'page exception constructor called';};
@@ -526,7 +569,7 @@ fn invalid_target_is_domexception_syntaxerror_before_clone_and_unsupported_trans
     "#,
     );
     assert_eq!(title(&init), "syntax before clone");
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 0);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
     no_work(&init);
 }
 
@@ -568,7 +611,7 @@ fn arity_selects_dictionary_or_legacy_overload_without_reading_unselected_member
         if(strings!==1||rejected!==2)throw 'overload arity conversion';
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 7);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 9);
     let mut reply = init;
     for _ in 0..7 {
         reply = pump(&mut realm, &reply);
@@ -583,7 +626,7 @@ fn arity_selects_dictionary_or_legacy_overload_without_reading_unselected_member
 
 #[test]
 fn transfer_sequence_item_failure_closes_iterator_before_target_getter_and_origin_validation() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const order=[];
         const transfer={ [Symbol.iterator](){order.push('iterator');return {
@@ -605,7 +648,7 @@ fn transfer_sequence_item_failure_closes_iterator_before_target_getter_and_origi
     "#,
     );
     assert_eq!(title(&init), "sequence conversion first");
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 0);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
     no_work(&init);
 }
 
@@ -624,7 +667,7 @@ fn legacy_origin_conversion_precedes_transfer_iteration_and_keeps_original_abrup
         window.onmessage=event=>{if(event.data.value!==7)throw 'USVString origin match';document.title='legacy conversion';};
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 1);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 3);
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "legacy conversion");
@@ -633,7 +676,7 @@ fn legacy_origin_conversion_precedes_transfer_iteration_and_keeps_original_abrup
 
 #[test]
 fn argument_conversion_exceptions_and_wrong_receivers_admit_no_clone_work() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_complete(
         r#"
         const thrown={proof:1};let caught,rejected=0;
         try{postMessage(1,{get targetOrigin(){throw thrown;}});}catch(error){caught=error;}
@@ -646,7 +689,7 @@ fn argument_conversion_exceptions_and_wrong_receivers_admit_no_clone_work() {
     "#,
     );
     assert_eq!(title(&init), "calls rejected");
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 0);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 2);
     no_work(&init);
 }
 
@@ -660,17 +703,21 @@ fn sender_origin_ignores_base_aliases_and_location_proposals() {
         actual.onmessage=event=>{
             if(event.origin!==origin||event.origin!=='https://example.test'||event.source!==actual)throw 'forged sender authority';
             document.title='trusted sender';
+            // Navigation is proposed after actual delivery, not a startup
+            // prefix that the parent must cancel without further task pumps.
+            location.href='/proposed-navigation';
         };
-        send.call(actual,{proof:42},'/');location.href='/proposed-navigation';
+        send.call(actual,{proof:42},'/');
     "#,
     );
-    assert_eq!(
-        init.navigation.as_deref(),
-        Some("https://example.test/proposed-navigation")
-    );
+    assert!(init.navigation.is_none());
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "trusted sender");
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://example.test/proposed-navigation")
+    );
 }
 
 #[test]
@@ -727,7 +774,7 @@ fn capture_stop_keeps_same_invocation_but_skips_noncapture_and_immediate_stops_b
 
 #[test]
 fn message_families_share_existing_thirty_two_cumulative_listener_slots() {
-    let (mut realm, init) = start(
+    let (mut realm, init) = raw_start(
         r#"
         var calls=0;
         for(let i=0;i<32;i++)window.addEventListener('message',()=>{calls++;document.title='listeners:'+calls;});
@@ -738,12 +785,13 @@ fn message_families_share_existing_thirty_two_cumulative_listener_slots() {
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "listeners:32");
+    let reply = finish_load(&mut realm, reply);
     no_work(&reply);
 }
 
 #[test]
 fn removed_message_listeners_do_not_renew_slots_and_unobserved_message_still_runs() {
-    let (mut realm, init) = start(
+    let (mut realm, init) = raw_start(
         r#"
         function handler(){throw 'removed listener ran';}
         for(let i=0;i<32;i++){window.addEventListener('message',handler);window.removeEventListener('message',handler);}
@@ -751,11 +799,12 @@ fn removed_message_listeners_do_not_renew_slots_and_unobserved_message_still_run
         if(!rejected)throw 'removed listener budget renewed';document.title='removed slots retained';postMessage(1,'/');
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 1);
+    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 3);
     let reply = pump(&mut realm, &init);
     clean(&reply);
     assert_eq!(title(&reply), "removed slots retained");
     assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+    let reply = finish_load(&mut realm, reply);
     no_work(&reply);
 }
 
@@ -858,6 +907,12 @@ fn uncaught_domexception_retains_real_error_data_and_stack_after_vm_unwind() {
     assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
     assert!(reply.errors[0].starts_with("Inline script 1:"));
     assert_eq!(title(&reply), "real exception stack");
+    // The source-time throw remains source-time evidence. Later clean
+    // lifecycle must not erase its typed initial-failure bit.
+    assert!(reply.lifecycle.unwrap().initial_failure);
+    let mut realm = realm.unwrap();
+    let reply = finish_load(&mut realm, reply);
+    assert!(reply.lifecycle.unwrap().initial_failure);
     no_work(&reply);
 }
 
@@ -871,16 +926,38 @@ fn exact_frozen_native_message_fixture_creates_controls_only_in_the_later_task()
     assert_eq!(init.state, RealmState::Ready, "{:?}", init.errors);
     clean(&init);
     assert!(projected(&init).forms.is_empty());
-    assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 1);
+    assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 2);
     let mut realm = realm.unwrap();
-    let reply = pump(&mut realm, &init);
+    let dcl = pump(&mut realm, &init);
+    clean(&dcl);
+    assert_eq!(
+        dcl.lifecycle.unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    assert!(projected(&dcl).forms.is_empty());
+    let loaded = pump(&mut realm, &dcl);
+    clean(&loaded);
+    assert_eq!(
+        loaded.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    assert!(projected(&loaded).forms.is_empty());
+    assert_eq!(
+        (
+            loaded.boa.as_ref().unwrap().jobs_admitted,
+            loaded.boa.as_ref().unwrap().jobs_executed,
+            loaded.boa.as_ref().unwrap().pending_jobs
+        ),
+        (5, 4, 1)
+    );
+    let reply = pump(&mut realm, &loaded);
     clean(&reply);
     let document = projected(&reply);
     assert_eq!(document.title, "Window message controls ready");
     assert_eq!(document.forms.len(), 1);
     assert!(document.query_selector(0, "#cancel").unwrap().is_some());
     assert!(document.query_selector(0, "#query").unwrap().is_some());
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 5);
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 5);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 7);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 7);
     no_work(&reply);
 }

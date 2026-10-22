@@ -354,6 +354,7 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
             | "/script-error-events"
             | "/script-rejection-events"
             | "/message-events"
+            | "/lifecycle-events"
     ) {
         return run_events(client, &fixture, evidence);
     }
@@ -535,6 +536,7 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
             | "/script-error-events"
             | "/script-rejection-events"
             | "/message-events"
+            | "/lifecycle-events"
     ) {
         // These fixtures create controls in a later timer/error dispatch. Poll
         // ordinary public DOM state within the client's existing deadline;
@@ -555,14 +557,20 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
         let error_fixture = fixture.path() == "/script-error-events";
         let rejection_fixture = fixture.path() == "/script-rejection-events";
         let message_fixture = fixture.path() == "/message-events";
-        let expected = if message_fixture {
+        let lifecycle_fixture = fixture.path() == "/lifecycle-events";
+        let lifecycle_order = "script:loading,script-job:loading,ready:interactive,ready-job:interactive,defer:interactive,defer-job:interactive,early-message:interactive,message-job:interactive,early-timer:interactive,timer-job:interactive,dcl-capture:interactive,dcl:interactive,dcl-job:interactive,dcl-bubble:interactive,ready:complete,ready-job:complete,load:complete,load-job:complete";
+        let expected = if lifecycle_fixture {
+            lifecycle_order
+        } else if message_fixture {
             "deep-clone-identity-noncancelable"
         } else if error_fixture || rejection_fixture {
             "typed-identity-canceled"
         } else {
             "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask"
         };
-        let attribute = if message_fixture {
+        let attribute = if lifecycle_fixture {
+            "data-lifecycle-order"
+        } else if message_fixture {
             "data-message-proof"
         } else if rejection_fixture {
             "data-rejection-proof"
@@ -574,8 +582,8 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
         let checkpoint =
             "script,script-microtask,timer,property,property-microtask,listener,listener-microtask";
         let rejection_checkpoint =
-            "script,script-microtask,property,property-microtask,listener,listener-microtask";
-        let message_checkpoint = "script,after-post,script-microtask,load,load-microtask,property,property-microtask,listener,listener-microtask";
+            "script,script-microtask,load,property,property-microtask,listener,listener-microtask";
+        let message_checkpoint = "script,script-microtask,load,after-post,load-microtask,property,property-microtask,listener,listener-microtask";
         loop {
             remaining(client.deadline)?;
             let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
@@ -599,11 +607,20 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                         message_checkpoint,
                     )
                     .is_some())
+                && (!lifecycle_fixture
+                    || with_attribute(
+                        &document["root"],
+                        "data-lifecycle-later",
+                        "after-load-task-and-checkpoint",
+                    )
+                    .is_some())
             {
                 let state = with_attribute(&document["root"], "id", "state")
                     .and_then(|node| node["nodeId"].as_u64())
                     .ok_or_else(|| failure("Missing timer state node"))?;
-                let expected_state = if message_fixture {
+                let expected_state = if lifecycle_fixture {
+                    "lifecycle ready"
+                } else if message_fixture {
                     "window message ready"
                 } else if rejection_fixture {
                     "promise rejection ready"
@@ -615,7 +632,11 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 if text_of(&document["root"], state).as_deref() != Some(expected_state) {
                     return Err(failure("Timer task proof and visible state disagree"));
                 }
-                if message_fixture {
+                if lifecycle_fixture {
+                    println!(
+                        "CDP_LIFECYCLE_FORM_OK {expected} later=after-load-task-and-checkpoint"
+                    );
+                } else if message_fixture {
                     println!("CDP_WINDOW_MESSAGE_OK {expected} checkpoint={message_checkpoint}");
                 } else if rejection_fixture {
                     println!(

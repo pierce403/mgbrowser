@@ -4,6 +4,16 @@ Implemented bounded scope, 2026-09-07. Independent local worker, native and CDP
 acceptance is recorded in the daily log. This is not general platform compatibility;
 the Google result/destination goal remains open.
 
+Local v0.9.11 candidate: [queued document lifecycle](DOCUMENT_LIFECYCLE.md)
+adds strict modern v5 private progress, preserving explicit legacy v1 bytes.
+Init no longer completes DCL/load: each mandatory task uses a later transaction
+and the existing shared work ledger. Chassis pumps committed initial documents
+while still loading, accepts progress only after validation plus one charge,
+and retains typed initial failures across later clean work. Initial load stops
+at LoadComplete, not arbitrary queue idle. Full local regressions, package/install,
+all 13 native/CDP helpers and fresh WPT review pass. Tagged/public gates remain;
+the v4/bundled descriptions below record the still-public v0.9.10 baseline.
+
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit
 test baseline, not a production fallback. Real
@@ -59,11 +69,13 @@ attribute handler compilation, string timers/intervals, keyboard/input events an
 DOM/Event conformance are outside this slice. Bounded startup external sources
 now enter through the parent-owned typed request described in BOA.md; later
 event requests still cannot supply sources or network authority. Unsupported
-  APIs must not report fake success. Snapshot startup is still bundled, although
-  v0.9.7 corrects event targeting, handler-slot order and readiness before deferred
-  sources. Function timers use the separate bounded transaction below.
+  APIs must not report fake success. v0.9.7 corrected event targeting, handler-slot
+  order and readiness before deferred sources. The v0.9.11 candidate adds separate
+  DCL/load transactions after the pre-parsed/preloaded classic sources; it does
+  not implement streaming parsing or dynamic-resource readiness. Function timers
+  use the separate bounded transaction below.
 
-## Parent-issued tasks: timers, notifications and messages
+## Parent-issued tasks: lifecycle, timers, notifications and messages
 
 `setTimeout(function, delay, ...arguments)` retains traced callback/argument roots
 under the same shared work admission as Promise jobs; `clearTimeout` cancels
@@ -75,8 +87,9 @@ admitting new input or work. A wake can be late but must never authorize early
 execution.
 
 Modern protocol v3 introduced `TaskPump { wake_token }`, not a fabricated activation.
-The v0.9.8 provenance-aware Init contract uses v4 and rejects v3 frames,
-including later Event/TaskPump commands; the explicit legacy lane remains v1.
+The v0.9.8 provenance-aware Init contract used v4 and rejected v3 frames.
+The v0.9.11 candidate uses strict v5, rejecting earlier modern versions including
+later Event/TaskPump commands; the explicit legacy lane remains v1.
 It shares the activation's one pending command, sequence/revision, lifetime,
 active-time, wire and child ledgers. A valid pump selects one eligible
 task and its microtask checkpoints. Reject early/stale/replayed tokens without
@@ -110,9 +123,10 @@ for bounded host waits; `is_loading` retains its navigation meaning and does not
 wait for arbitrary timers. A one-shot worker only returns Init. No child sleeps,
 unsolicited callbacks/output, replay or automatic restart are introduced.
 
-This is not a general HTML event loop: startup remains bundled in Init, and
-string timers, intervals, fully queued lifecycle and cross-context messaging
-remain unsupported. The non-scoring full-harness
+This is not a general HTML event loop. Separate DCL/load tasks operate within
+the pre-parsed/preloaded classic-source domain, without a dynamic-resource
+load barrier. String timers, intervals and cross-context messaging remain
+unsupported. The non-scoring full-harness
 readiness milestone remains open in [WPT_TESTHARNESS.md](WPT_TESTHARNESS.md).
 
 The bounded v0.9.8 Window `error`/five-argument `onerror` path retains ordinary
@@ -157,8 +171,9 @@ Use strict versioned, length-prefixed JSON envelopes with parent-issued generati
 session identity, monotonically increasing sequence and expected revision. Reject
 extra, stale, malformed, oversized, truncated or unsolicited replies. New input
 never carries scripts, replacement HTML, callback handles or network authority.
-Production protocol v4 requires a valid Boa profile report, including platform
-allocator counters. The explicit test-only legacy lane keeps v1 and the original
+The v0.9.11 candidate's modern protocol v5 requires strict lifecycle progress
+and a valid Boa profile report, including platform allocator counters.
+The explicit test-only legacy lane keeps v1 and the original
 allocation phases. Reports must stay cumulative; neither lane can impersonate
 the other's accounting or silently switch engines.
 

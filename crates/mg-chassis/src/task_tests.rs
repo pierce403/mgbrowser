@@ -65,6 +65,12 @@ fn fixture() -> (Browser, Arc<Mutex<State>>, usize) {
     );
     app.generation = 42;
     app.script_blocked = false;
+    // These pre-existing controls exercise later work on an already loaded
+    // document, not initialization or its mandatory lifecycle admissions.
+    app.lifecycle = Some(LifecycleProgress {
+        phase: LifecyclePhase::LoadComplete,
+        initial_failure: false,
+    });
     let node = app.document.query_selector(0, "#value").unwrap().unwrap();
     assert!(
         app.input_item(node).is_some(),
@@ -97,6 +103,7 @@ fn reply(app: &Browser, wake: Option<TaskWake>) -> SessionReply {
         state: RealmState::Ready,
         acknowledgements: vec![],
         task_wake: wake,
+        lifecycle: app.lifecycle,
     }
 }
 fn complete(app: &Browser, state: &Arc<Mutex<State>>, reply: SessionReply) {
@@ -390,6 +397,7 @@ fn stale_initial_success_charges_only_its_owned_session_then_cancels() {
     );
     initial.revision = 0;
     app.loading = true;
+    app.fetching = true;
     app.inflight = 1;
     app.tx
         .send(Loaded {
@@ -427,4 +435,535 @@ fn stale_initial_success_charges_only_its_owned_session_then_cancels() {
     assert_eq!(app.page_session.as_ref().unwrap().id(), 91);
     app.poll();
     assert_eq!(stale.lock().unwrap().charges, 1);
+}
+
+fn lifecycle_reply(
+    app: &Browser,
+    phase: LifecyclePhase,
+    failure: bool,
+    executed: usize,
+    pending: usize,
+    wake: Option<TaskWake>,
+) -> SessionReply {
+    let mut reply = reply(app, wake);
+    let report = reply.boa.as_mut().unwrap();
+    report.jobs_admitted = executed + pending;
+    report.jobs_executed = executed;
+    report.pending_jobs = pending;
+    reply.lifecycle = Some(LifecycleProgress {
+        phase,
+        initial_failure: failure,
+    });
+    reply
+}
+
+fn committed_lifecycle(
+    errors: &[&str],
+    broker_rejections: usize,
+) -> (Browser, Arc<Mutex<State>>, usize) {
+    let (mut app, state, node) = fixture();
+    app.page_session = None;
+    app.scripts_enabled = true;
+    app.loading = true;
+    app.fetching = true;
+    app.inflight = 1;
+    app.lifecycle = None;
+    app.cdp_enabled = true;
+    state.lock().unwrap().validation_pending = true;
+    let mut initial = lifecycle_reply(
+        &app,
+        LifecyclePhase::Interactive,
+        !errors.is_empty(),
+        0,
+        2,
+        Some(TaskWake {
+            token: 1,
+            delay_ms: 0,
+        }),
+    );
+    initial.revision = 0;
+    initial.scripts_executed = 3;
+    initial.errors = errors.iter().map(|value| (*value).into()).collect();
+    app.tx
+        .send(Loaded {
+            generation: app.generation,
+            document: None,
+            result: Ok(net::Response {
+                resource_same_origin_chain: false,
+                url: url::Url::parse(&app.page_url).unwrap(),
+                status: 200,
+                content_type: "text/html".into(),
+                body: b"<title>Retained</title>".to_vec(),
+            }),
+            script: Some(Ok(ScriptLoad {
+                session: Some(Box::new(FakeSession(state.clone(), 91))),
+                reply: initial,
+            })),
+            fetch_html_ms: 0.0,
+            parse_html_ms: 0.0,
+            resource_profile: Default::default(),
+            script_fetch_profile: resources::ScriptFetchProfile {
+                rejected_sources: broker_rejections,
+                ..Default::default()
+            },
+            script_worker_ms: 0.0,
+        })
+        .unwrap();
+    app.poll();
+    (app, state, node)
+}
+
+#[test]
+fn committed_initial_lifecycle_pumps_while_loading_and_charges_once_per_reply() {
+    let (mut app, state, _) = committed_lifecycle(&[], 0);
+    assert!(app.is_loading());
+    assert!(!app.fetching);
+    assert_eq!(
+        app.initial_script_outcome().status,
+        InitialScriptStatus::Pending
+    );
+    assert_eq!(state.lock().unwrap().charges, 1);
+    assert_eq!(state.lock().unwrap().pumps, [(1, 0)]);
+    assert!(matches!(
+        app.cdp_events.as_slice(),
+        [cdp_browser::Event::Committed { .. }]
+    ));
+    assert!(app.dispatch_page(InputKind::Click { target: 0 }).is_err());
+
+    let dcl = lifecycle_reply(
+        &app,
+        LifecyclePhase::DomContentLoaded,
+        false,
+        1,
+        1,
+        Some(TaskWake {
+            token: 2,
+            delay_ms: 0,
+        }),
+    );
+    complete(&app, &state, dcl);
+    app.poll();
+    assert!(app.is_loading());
+    assert_eq!(state.lock().unwrap().charges, 2);
+    assert_eq!(state.lock().unwrap().pumps, [(1, 0), (2, 1)]);
+    let load = lifecycle_reply(&app, LifecyclePhase::LoadComplete, false, 2, 0, None);
+    complete(&app, &state, load);
+    app.poll();
+    assert!(!app.is_loading());
+    assert_eq!(
+        app.initial_script_outcome().status,
+        InitialScriptStatus::Complete
+    );
+    assert_eq!(app.initial_script_outcome().scripts_executed, 3);
+    assert_eq!(state.lock().unwrap().charges, 3);
+    let kinds: Vec<_> = app
+        .cdp_events
+        .iter()
+        .map(|event| match event {
+            cdp_browser::Event::Committed { .. } => "commit",
+            cdp_browser::Event::DocumentUpdated => "dom-update",
+            cdp_browser::Event::DomContentLoaded { .. } => "dcl",
+            cdp_browser::Event::LoadComplete { .. } => "load",
+            cdp_browser::Event::Finished { .. } => "stop",
+            cdp_browser::Event::Started => "start",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["commit", "dom-update", "dcl", "dom-update", "load", "stop"]
+    );
+    app.poll();
+    assert_eq!(state.lock().unwrap().charges, 3);
+    assert_eq!(
+        app.cdp_events.len(),
+        6,
+        "Milestones are not repeated by idle polls"
+    );
+}
+
+#[test]
+fn initial_failures_survive_clean_lifecycle_and_transient_status() {
+    for (errors, broker) in [(vec!["SyntaxError: owned source"], 0), (vec![], 1)] {
+        let (mut app, state, _) = committed_lifecycle(&errors, broker);
+        let failed = !errors.is_empty(); // Broker failures are parent-only evidence.
+        let dcl = lifecycle_reply(
+            &app,
+            LifecyclePhase::DomContentLoaded,
+            failed,
+            1,
+            1,
+            Some(TaskWake {
+                token: 2,
+                delay_ms: 0,
+            }),
+        );
+        complete(&app, &state, dcl);
+        app.poll();
+        let load = lifecycle_reply(&app, LifecyclePhase::LoadComplete, failed, 2, 0, None);
+        complete(&app, &state, load);
+        app.poll();
+        assert!(!app.is_loading());
+        let outcome = app.initial_script_outcome();
+        assert_eq!(outcome.status, InitialScriptStatus::Partial);
+        assert_eq!(outcome.failure, Some(InitialScriptFailure::Script));
+        assert_eq!(outcome.scripts_executed, 3);
+        assert_eq!(outcome.error_count, errors.len());
+        assert_eq!(outcome.broker_rejected_sources, broker);
+        assert_eq!(outcome.diagnostics, errors);
+        assert!(
+            app.status().contains("0 diagnostics"),
+            "Typed failures outlive clean task status"
+        );
+    }
+}
+
+#[test]
+fn load_completion_does_not_wait_for_long_or_new_zero_delay_task() {
+    for delay_ms in [0, 60_000] {
+        let (mut app, state, _) = committed_lifecycle(&[], 0);
+        let dcl = lifecycle_reply(
+            &app,
+            LifecyclePhase::DomContentLoaded,
+            false,
+            1,
+            1,
+            Some(TaskWake {
+                token: 2,
+                delay_ms: 0,
+            }),
+        );
+        complete(&app, &state, dcl);
+        app.poll();
+        let load = lifecycle_reply(
+            &app,
+            LifecyclePhase::LoadComplete,
+            false,
+            2,
+            1,
+            Some(TaskWake { token: 3, delay_ms }),
+        );
+        complete(&app, &state, load);
+        app.poll();
+        assert!(!app.is_loading());
+        assert_eq!(
+            app.initial_script_outcome().status,
+            InitialScriptStatus::Complete
+        );
+        assert!(matches!(
+            app.script_work_status(),
+            ScriptWorkStatus::Scheduled(_)
+        ));
+        assert_eq!(
+            state.lock().unwrap().pumps.len(),
+            2,
+            "Load is observable before starting later work"
+        );
+        if delay_ms == 0 {
+            let frozen = app.initial_script_outcome().clone();
+            app.poll();
+            assert_eq!(state.lock().unwrap().pumps.len(), 3);
+            let mut later = lifecycle_reply(&app, LifecyclePhase::LoadComplete, false, 3, 0, None);
+            later.errors.push("An unrelated later task failed".into());
+            complete(&app, &state, later);
+            app.poll();
+            assert_eq!(app.initial_script_outcome(), &frozen);
+            assert_eq!(
+                app.cdp_events
+                    .iter()
+                    .filter(|event| matches!(
+                        event,
+                        cdp_browser::Event::DomContentLoaded { .. }
+                            | cdp_browser::Event::LoadComplete { .. }
+                    ))
+                    .count(),
+                2
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_lifecycle_and_opaque_failures_stop_without_fake_completion() {
+    for kind in [
+        "skip",
+        "missing",
+        "reset-failure",
+        "navigation-advance",
+        "opaque",
+    ] {
+        let (mut app, state, _) = committed_lifecycle(&["Owned startup error"], 0);
+        let before = app.dom_epoch;
+        if kind == "opaque" {
+            state.lock().unwrap().updates.push_back(SessionUpdate {
+                generation: app.generation,
+                session_id: 91,
+                sequence: Some(1),
+                reply: Err("Opaque worker transport failure".into()),
+            });
+        } else {
+            let mut invalid = lifecycle_reply(
+                &app,
+                LifecyclePhase::DomContentLoaded,
+                true,
+                1,
+                1,
+                Some(TaskWake {
+                    token: 2,
+                    delay_ms: 0,
+                }),
+            );
+            match kind {
+                "skip" => invalid.lifecycle.as_mut().unwrap().phase = LifecyclePhase::LoadComplete,
+                "missing" => invalid.lifecycle = None,
+                "reset-failure" => invalid.lifecycle.as_mut().unwrap().initial_failure = false,
+                "navigation-advance" => {
+                    invalid.navigation = Some("https://example.test/next".into())
+                }
+                _ => unreachable!(),
+            }
+            complete(&app, &state, invalid);
+        }
+        app.poll();
+        assert!(!app.is_loading(), "{kind}");
+        assert_eq!(app.dom_epoch, before, "{kind}");
+        assert_eq!(
+            app.document_lifecycle().unwrap().phase,
+            LifecyclePhase::Interactive
+        );
+        assert_eq!(
+            app.initial_script_outcome().status,
+            InitialScriptStatus::Failed
+        );
+        assert_eq!(
+            app.initial_script_outcome().failure,
+            Some(InitialScriptFailure::Infrastructure)
+        );
+        assert_eq!(app.initial_script_outcome().error_count, 1);
+        assert!(app.cdp_events.iter().all(|event| !matches!(
+            event,
+            cdp_browser::Event::DomContentLoaded { .. } | cdp_browser::Event::LoadComplete { .. }
+        )));
+        assert_eq!(
+            state.lock().unwrap().charges,
+            if kind == "opaque" { 1 } else { 2 }
+        );
+        assert!(state.lock().unwrap().canceled);
+    }
+}
+
+#[test]
+fn accepted_fatal_prefix_is_script_failure_not_transport_error_or_load_success() {
+    let (mut app, state, _) = committed_lifecycle(&[], 0);
+    let epoch = app.dom_epoch;
+    let mut fatal = lifecycle_reply(&app, LifecyclePhase::Interactive, true, 1, 0, None);
+    fatal.boa.as_mut().unwrap().jobs_admitted = 2; // Canceled load is not refunded.
+    fatal.boa.as_mut().unwrap().fatal_reason = Some("Owned terminal task".into());
+    fatal.state = RealmState::Fatal;
+    fatal.errors.push("Owned terminal task".into());
+    complete(&app, &state, fatal);
+    app.poll();
+    assert!(!app.is_loading());
+    assert_eq!(app.dom_epoch, epoch);
+    assert_eq!(
+        app.initial_script_outcome().status,
+        InitialScriptStatus::Failed
+    );
+    assert_eq!(
+        app.initial_script_outcome().failure,
+        Some(InitialScriptFailure::Script)
+    );
+    assert_eq!(app.initial_script_outcome().error_count, 1);
+    assert_eq!(
+        app.document_lifecycle().unwrap().phase,
+        LifecyclePhase::Interactive
+    );
+    assert_eq!(state.lock().unwrap().charges, 2);
+    assert!(app.cdp_events.iter().all(|event| !matches!(
+        event,
+        cdp_browser::Event::DomContentLoaded { .. } | cdp_browser::Event::LoadComplete { .. }
+    )));
+}
+
+#[test]
+fn ordinary_error_on_load_transition_latches_before_completion() {
+    let (mut app, state, _) = committed_lifecycle(&[], 0);
+    let dcl = lifecycle_reply(
+        &app,
+        LifecyclePhase::DomContentLoaded,
+        false,
+        1,
+        1,
+        Some(TaskWake {
+            token: 2,
+            delay_ms: 0,
+        }),
+    );
+    complete(&app, &state, dcl);
+    app.poll();
+    let mut load = lifecycle_reply(&app, LifecyclePhase::LoadComplete, true, 2, 0, None);
+    load.errors.push("Owned load handler error".into());
+    complete(&app, &state, load);
+    app.poll();
+    assert!(!app.is_loading());
+    assert_eq!(
+        app.initial_script_outcome().status,
+        InitialScriptStatus::Partial
+    );
+    assert_eq!(
+        app.initial_script_outcome().failure,
+        Some(InitialScriptFailure::Script)
+    );
+    assert_eq!(app.initial_script_outcome().error_count, 1);
+    assert_eq!(
+        app.document_lifecycle().unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    assert_eq!(
+        app.cdp_events
+            .iter()
+            .filter(|event| matches!(event, cdp_browser::Event::LoadComplete { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn cumulative_accounting_is_validated_before_publishing_load() {
+    let (mut app, state, _) = committed_lifecycle(&[], 0);
+    let dcl = lifecycle_reply(
+        &app,
+        LifecyclePhase::DomContentLoaded,
+        false,
+        1,
+        1,
+        Some(TaskWake {
+            token: 2,
+            delay_ms: 0,
+        }),
+    );
+    complete(&app, &state, dcl);
+    app.poll();
+    let epoch = app.dom_epoch;
+    let invalid = lifecycle_reply(&app, LifecyclePhase::LoadComplete, false, 1, 0, None);
+    assert!(
+        invalid.accounting_valid(),
+        "Individually valid is not cumulatively valid"
+    );
+    complete(&app, &state, invalid);
+    app.poll();
+    assert!(!app.is_loading());
+    assert_eq!(app.dom_epoch, epoch);
+    assert_eq!(
+        app.document_lifecycle().unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    assert_eq!(
+        app.initial_script_outcome().failure,
+        Some(InitialScriptFailure::Infrastructure)
+    );
+    assert_eq!(state.lock().unwrap().charges, 3);
+    assert!(
+        app.cdp_events
+            .iter()
+            .all(|event| !matches!(event, cdp_browser::Event::LoadComplete { .. }))
+    );
+}
+
+#[test]
+fn hidden_committed_pages_pump_initial_lifecycle_without_painting() {
+    let (mut first, a, _) = committed_lifecycle(&[], 0);
+    let (mut second, b, _) = committed_lifecycle(&[], 0);
+    for (app, state) in [(&mut first, &a), (&mut second, &b)] {
+        let dcl = lifecycle_reply(
+            app,
+            LifecyclePhase::DomContentLoaded,
+            false,
+            1,
+            1,
+            Some(TaskWake {
+                token: 2,
+                delay_ms: 0,
+            }),
+        );
+        complete(app, state, dcl);
+        app.poll();
+        let load = lifecycle_reply(app, LifecyclePhase::LoadComplete, false, 2, 0, None);
+        complete(app, state, load);
+        app.poll();
+        assert!(!app.is_loading());
+        assert_eq!(
+            app.initial_script_outcome().status,
+            InitialScriptStatus::Complete
+        );
+        assert_eq!(state.lock().unwrap().charges, 3);
+        assert_eq!(app.performance_profile().frames_painted, 0);
+    }
+}
+
+struct RejectedGeneration;
+impl scripts::ScriptRuntime for RejectedGeneration {
+    fn set_generation(&self, _: u64) -> Result<(), String> {
+        Err("Owned child-generation admission failure".into())
+    }
+    fn start(
+        &self,
+        _: mg_sparkle::js_browser::Request,
+        _: u64,
+    ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+        panic!("Generation failure must not start a worker or fetch job")
+    }
+    fn close(&self) {}
+    fn wait_idle(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn generation_admission_failure_and_supersession_stop_each_navigation_once() {
+    let (mut app, state, _) = committed_lifecycle(&[], 0);
+    let previous = app.generation;
+    app.child_pool = Arc::new(RejectedGeneration);
+    app.navigate("https://must-not-fetch.invalid/".into(), None, false);
+    assert!(!app.is_loading());
+    assert!(!app.fetching);
+    assert_eq!(app.inflight, 0);
+    assert_eq!(app.generation, previous + 1);
+    assert!(state.lock().unwrap().canceled);
+    assert!(app.document_lifecycle().is_none());
+    assert_eq!(
+        app.initial_script_outcome().status,
+        InitialScriptStatus::Failed
+    );
+    assert_eq!(
+        app.initial_script_outcome().failure,
+        Some(InitialScriptFailure::Infrastructure)
+    );
+    let stops: Vec<_> = app
+        .cdp_events
+        .iter()
+        .filter_map(|event| {
+            if let cdp_browser::Event::Finished { generation, error } = event {
+                Some((*generation, error.as_deref().unwrap()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(stops.len(), 2);
+    assert_eq!(stops[0].0, previous);
+    assert!(stops[0].1.contains("superseded"));
+    assert_eq!(stops[1].0, previous + 1);
+    assert!(stops[1].1.contains("child-generation"));
+    assert!(app.cdp_events.iter().all(|event| !matches!(
+        event,
+        cdp_browser::Event::DomContentLoaded { .. } | cdp_browser::Event::LoadComplete { .. }
+    )));
+    app.poll();
+    assert_eq!(
+        app.cdp_events
+            .iter()
+            .filter(|event| matches!(event, cdp_browser::Event::Finished { .. }))
+            .count(),
+        2
+    );
 }

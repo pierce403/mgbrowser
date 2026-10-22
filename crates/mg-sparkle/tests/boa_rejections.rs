@@ -6,7 +6,9 @@ use mg_sparkle::{
         ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource, Request,
         boa::BoaPageRealm,
     },
-    page_session::{DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump},
+    page_session::{
+        DefaultAction, InputKind, LifecyclePhase, RealmState, SessionInput, SessionReply, TaskPump,
+    },
 };
 use std::time::Duration;
 
@@ -16,7 +18,39 @@ const SUPPRESSED: &str =
     "Promise rejection observation suppressed by source-exposure policy; handled status unknown.";
 
 fn start(source: &str) -> (BoaPageRealm, SessionReply) {
-    request(source, None)
+    // These controls require a loaded realm with notification work still queued.
+    // Unlike bundled Init, genuine source-created tasks may precede DCL/load.
+    let wrapped = format!("window.onload=function(){{{source}\n}};");
+    let (mut realm, init) = request(&wrapped, None);
+    assert_eq!(init.lifecycle.unwrap().phase, LifecyclePhase::Interactive);
+    assert_eq!(
+        (
+            init.boa.as_ref().unwrap().jobs_admitted,
+            init.boa.as_ref().unwrap().jobs_executed
+        ),
+        (2, 0)
+    );
+    let dcl = pump(&mut realm, &init);
+    assert_eq!(
+        dcl.lifecycle.unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    let loaded = pump(&mut realm, &dcl);
+    assert_eq!(
+        loaded.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    (realm, loaded)
+}
+
+fn finish_load(realm: &mut BoaPageRealm, mut reply: SessionReply) -> SessionReply {
+    for _ in 0..4 {
+        if reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete {
+            return reply;
+        }
+        reply = pump(realm, &reply);
+    }
+    panic!("owned lifecycle did not complete in four tasks")
 }
 
 fn request(
@@ -151,7 +185,7 @@ fn notification_is_a_later_task_with_actual_typed_payload_and_escaped_identity()
                 document.title='escaped';return false;
             }};
             promise=Promise.reject(reason);
-            window.onload=()=>{{if(saved!==undefined)throw 'notification ran during Init';document.title='initialized';}};
+            if(saved!==undefined)throw 'notification ran synchronously';document.title='initialized';
         "#,
         ));
         clean(&init);
@@ -160,7 +194,8 @@ fn notification_is_a_later_task_with_actual_typed_payload_and_escaped_identity()
         let notified = pump(&mut realm, &init);
         assert_eq!(title(&notified), "notified", "value {value}");
         assert_eq!(notified.errors, [UNHANDLED]);
-        assert_eq!(notified.boa.as_ref().unwrap().jobs_executed, 1);
+        // Two genuine lifecycle tasks preceded this notification.
+        assert_eq!(notified.boa.as_ref().unwrap().jobs_executed, 3);
         no_work(&notified);
         let escaped = click(&mut realm, &notified);
         clean(&escaped);
@@ -429,8 +464,8 @@ fn handling_a_later_frozen_member_during_first_delivery_skips_it_without_false_e
     let reply = pump(&mut realm, &init);
     assert_eq!(title(&reply), "first only");
     assert_eq!(reply.errors, [UNHANDLED]);
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 4);
-    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 3);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_admitted, 6);
+    assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 5);
     no_work(&reply);
 }
 
@@ -581,6 +616,9 @@ fn initial_foreign_and_unknown_floors_suppress_even_immediately_caught_rejection
                 ),
                 Some(visibility),
             );
+            // Initial provenance remains a real source-time control. Lifecycle
+            // pumps must survive privacy purging and retain its sticky notice.
+            let init = finish_load(&mut realm, init);
             assert_eq!(title(&init), "suppressed");
             assert_eq!(init.errors, [SUPPRESSED]);
             no_work(&init);
@@ -608,6 +646,7 @@ fn proven_local_external_source_keeps_notification_identity_and_fresh_realms_are
         let reply = pump(&mut realm, &init);
         assert_eq!(title(&reply), "local");
         assert_eq!(reply.errors, [UNHANDLED]);
+        let reply = finish_load(&mut realm, reply);
         no_work(&reply);
     }
 }
@@ -619,12 +658,16 @@ fn dynamic_compilation_suppresses_before_reject_before_checkpoint_and_before_pum
         "var promise=Promise.reject(1);eval('');",
         "var promise=Promise.reject(1);Promise.resolve().then(()=>Function(''));",
     ] {
-        let (_realm, init) = start(&format!(
-            r#"
+        let (mut realm, init) = request(
+            &format!(
+                r#"
             window.addEventListener('unhandledrejection',()=>{{throw 'newly private rejection leaked';}});
             {source}document.title='dynamic floor';
         "#,
-        ));
+            ),
+            None,
+        );
+        let init = finish_load(&mut realm, init);
         assert_eq!(title(&init), "dynamic floor");
         assert_eq!(init.errors, [SUPPRESSED]);
         no_work(&init);
@@ -692,17 +735,20 @@ fn a_floor_falling_during_delivery_suppresses_remaining_members_without_rewritin
 
 #[test]
 fn actual_rejection_listeners_use_existing_thirty_two_cumulative_slots() {
-    let (mut realm, init) = start(
+    let (mut realm, init) = request(
         r#"
         var calls=0;
         for(let i=0;i<32;i++)window.addEventListener('unhandledrejection',()=>{calls++;document.title='listeners:'+calls;});
         var rejected=false;try{window.addEventListener('rejectionhandled',()=>{});}catch(error){rejected=true;}
         if(!rejected)throw 'listener cap expanded';Promise.reject(1);
     "#,
+        None,
     );
     clean(&init);
     let reply = pump(&mut realm, &init);
     assert_eq!(title(&reply), "listeners:32");
     assert_eq!(reply.errors, [UNHANDLED]);
+    // No wrapper listener consumes one of the exact 32 tested slots.
+    let reply = finish_load(&mut realm, reply);
     no_work(&reply);
 }

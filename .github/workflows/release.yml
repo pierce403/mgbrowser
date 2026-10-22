@@ -22,15 +22,17 @@ jobs:
         run: |
           test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
           python3 tools/test_gzip_release.py
+          python3 tools/test_chrome_update_smoke.py
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
-          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
+          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example lifecycle_journey --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
           python3 tools/page-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/task-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/error-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/rejection-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/message-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
+          python3 tools/lifecycle-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/chrome-update-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/theme-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
           bash tools/scale-smoke.sh tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -57,6 +59,7 @@ jobs:
             tmp/error-services-smoke-*/
             tmp/rejection-services-smoke-*/
             tmp/message-services-smoke-*/
+            tmp/lifecycle-services-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

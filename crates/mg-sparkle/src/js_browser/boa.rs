@@ -35,12 +35,16 @@ use std::{
 };
 
 mod dom_exception;
+#[cfg(test)]
+mod lifecycle_tests;
 mod message_clone;
 mod window_messages;
 
 static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
 const REJECTION_FAILURE: &str = "Promise rejection tracking invariant or storage admission failed";
 const MESSAGE_FAILURE: &str = "Window message invariant or storage admission failed";
+const LIFECYCLE_FAILURE: &str = "Document lifecycle invariant or storage admission failed";
+const CLOSED_WORK_FAILURE: &str = "Closed page realm canceled pending microtasks";
 const UNHANDLED_REJECTION: &str = "Unhandled Promise rejection";
 const REJECTION_GAP: &str =
     "Promise rejection observation suppressed by source-exposure policy; handled status unknown.";
@@ -98,6 +102,12 @@ struct RejectionCandidate {
 
 #[derive(Trace, Finalize)]
 enum DomTaskKind {
+    Lifecycle {
+        #[unsafe_ignore_trace]
+        permit: modern::WorkPermit,
+        #[unsafe_ignore_trace]
+        phase: LifecyclePhase,
+    },
     Batch(#[unsafe_ignore_trace] Vec<u64>),
     Handled {
         #[unsafe_ignore_trace]
@@ -449,6 +459,12 @@ pub struct BoaPageRealm {
     state: Shared,
     revision: u64,
     closed: bool,
+    // Closing a host realm must also discard Boa's pending jobs. Keep this
+    // cleanup-origin latch distinct from a preexisting execution fatal so the
+    // outward terminal cause remains Closed, not a fabricated resource fatal.
+    closed_work_latched: bool,
+    lifecycle: LifecycleProgress,
+    pending_milestone: Option<LifecyclePhase>,
 }
 
 fn failure(message: impl Into<String>) -> JsError {
@@ -1254,7 +1270,12 @@ impl BoaPageRealm {
             if realm.state.borrow().host.ready == "loading" {
                 realm.set_ready("interactive", &mut reply.errors);
             }
-            realm.startup(&mut reply.errors);
+            if !realm.closed
+                && !realm.engine.is_fatal()
+                && realm.state.borrow().host.navigation.is_none()
+            {
+                realm.queue_lifecycle(&mut reply.errors);
+            }
         }
         realm.snapshot(&mut reply);
         reply.errors.truncate(64);
@@ -1431,6 +1452,12 @@ impl BoaPageRealm {
             state: shared,
             revision: 0,
             closed: false,
+            closed_work_latched: false,
+            lifecycle: LifecycleProgress {
+                phase: LifecyclePhase::Initializing,
+                initial_failure: false,
+            },
+            pending_milestone: None,
         })
     }
     fn empty_reply() -> SessionReply {
@@ -1447,6 +1474,10 @@ impl BoaPageRealm {
             state: RealmState::Closed,
             acknowledgements: Vec::new(),
             task_wake: None,
+            lifecycle: Some(LifecycleProgress {
+                phase: LifecyclePhase::Initializing,
+                initial_failure: true,
+            }),
         }
     }
     fn execution_failure(
@@ -1607,6 +1638,7 @@ impl BoaPageRealm {
 
     fn checkpoint(&mut self, errors: &mut Vec<String>) {
         if self.closed {
+            self.clear_work();
             self.engine.context_mut().clear_kept_objects();
             return;
         }
@@ -1638,6 +1670,26 @@ impl BoaPageRealm {
         // In particular, a permit's Drop must not run under the State borrow.
         let discarded = self.state.borrow_mut().take_work();
         drop(discarded);
+        // Any work left after all host permits are dropped is Boa's own job
+        // queue. A Closed realm must never publish those jobs or run them on a
+        // later ingress. Reuse the existing terminal cancellation path without
+        // changing an earlier fatal reason or ordinary Ready navigation.
+        if self.closed && !self.engine.is_fatal() && self.engine.stats().pending_jobs != 0 {
+            self.closed_work_latched = true;
+            self.engine.latch_failure(CLOSED_WORK_FAILURE);
+        }
+    }
+
+    fn realm_state(&self) -> RealmState {
+        if self.closed_work_latched {
+            RealmState::Closed
+        } else if self.engine.is_fatal() {
+            RealmState::Fatal
+        } else if self.closed {
+            RealmState::Closed
+        } else {
+            RealmState::Ready
+        }
     }
 
     fn rejection_failure(&mut self, errors: &mut Vec<String>) {
@@ -1682,7 +1734,9 @@ impl BoaPageRealm {
             DomTaskKind::Batch(ids) => ids
                 .iter()
                 .any(|id| rejections.iter().any(|candidate| candidate.id == *id)),
-            DomTaskKind::Handled { .. } | DomTaskKind::Message { .. } => true,
+            DomTaskKind::Handled { .. }
+            | DomTaskKind::Message { .. }
+            | DomTaskKind::Lifecycle { .. } => true,
         });
     }
 
@@ -1693,10 +1747,12 @@ impl BoaPageRealm {
         let discarded = {
             let mut data = self.state.borrow_mut();
             if !data.rejections.is_empty()
-                || data
-                    .dom_tasks
-                    .iter()
-                    .any(|task| !matches!(task.kind, DomTaskKind::Message { .. }))
+                || data.dom_tasks.iter().any(|task| {
+                    matches!(
+                        task.kind,
+                        DomTaskKind::Batch(_) | DomTaskKind::Handled { .. }
+                    )
+                })
                 || data.outstanding_rejections.is_some()
             {
                 data.rejection_observation_gap = true;
@@ -1712,14 +1768,19 @@ impl BoaPageRealm {
                 let mut data = self.state.borrow_mut();
                 data.dom_tasks
                     .iter()
-                    .position(|task| !matches!(task.kind, DomTaskKind::Message { .. }))
+                    .position(|task| {
+                        matches!(
+                            task.kind,
+                            DomTaskKind::Batch(_) | DomTaskKind::Handled { .. }
+                        )
+                    })
                     .map(|index| data.dom_tasks.swap_remove(index))
             };
             if discarded.is_none() {
                 break;
             }
             // A rejected notice's permit must be canceled outside State borrows;
-            // legitimate messages keep their handles, roots, origin and order.
+            // Independent messages and lifecycle keep their order and permits.
             drop(discarded);
         }
         Ok(true)
@@ -2088,26 +2149,87 @@ impl BoaPageRealm {
         self.checkpoint(errors);
         canceled
     }
-    fn startup(&mut self, errors: &mut Vec<String>) {
-        // Deliberately bundled snapshot startup, not a streaming parser or
-        // fully task-separated HTML lifecycle. Timers never run in this phase.
-        if self.closed || self.engine.is_fatal() || self.state.borrow().host.navigation.is_some() {
-            return;
+    fn queue_lifecycle(&mut self, errors: &mut Vec<String>) {
+        let admitted = (|| -> Result<(), ()> {
+            if self.lifecycle.phase != LifecyclePhase::Interactive {
+                return Err(());
+            }
+            // Both reservations precede storage/publication. No page code runs
+            // between them, and cancellation never restores lifetime credit.
+            let dcl = modern::admit_host_task(self.engine.context_mut()).map_err(|_| ())?;
+            let load = modern::admit_host_task(self.engine.context_mut()).map_err(|_| ())?;
+            let mut data = self.state.borrow_mut();
+            if data
+                .dom_tasks
+                .iter()
+                .any(|task| matches!(task.kind, DomTaskKind::Lifecycle { .. }))
+            {
+                return Err(());
+            }
+            let first = data.next_handle.checked_add(1).ok_or(())?;
+            let second = first.checked_add(1).ok_or(())?;
+            let deadline = data.now();
+            let State {
+                host, dom_tasks, ..
+            } = &mut *data;
+            reserve_storage(host, dom_tasks, 2)?;
+            data.next_handle = second;
+            data.dom_tasks.push(DomTask {
+                handle: first,
+                deadline,
+                kind: DomTaskKind::Lifecycle {
+                    permit: dcl,
+                    phase: LifecyclePhase::DomContentLoaded,
+                },
+            });
+            data.dom_tasks.push(DomTask {
+                handle: second,
+                deadline,
+                kind: DomTaskKind::Lifecycle {
+                    permit: load,
+                    phase: LifecyclePhase::LoadComplete,
+                },
+            });
+            Ok(())
+        })();
+        if admitted.is_err() {
+            self.lifecycle_failure(errors);
         }
-        self.lifecycle(Kind::DomReady, errors);
-        if self.closed || self.engine.is_fatal() || self.state.borrow().host.navigation.is_some() {
-            return;
+    }
+    fn lifecycle_failure(&mut self, errors: &mut Vec<String>) {
+        let failure = self.engine.latch_failure(LIFECYCLE_FAILURE);
+        if errors.len() < 64 {
+            errors.push(bounded(&failure.to_string(), 512));
         }
-        self.set_ready("complete", errors);
-        if self.closed || self.engine.is_fatal() || self.state.borrow().host.navigation.is_some() {
-            return;
+    }
+    fn publish_lifecycle(&mut self, reply: &mut SessionReply) {
+        // The OLD phase decides whether this transaction belongs to initial
+        // loading, including the transaction first completing Window load.
+        if self.lifecycle.phase != LifecyclePhase::LoadComplete
+            && (!reply.errors.is_empty() || reply.state != RealmState::Ready)
+        {
+            self.lifecycle.initial_failure = true;
         }
-        self.lifecycle(Kind::Load, errors);
-        self.checkpoint(errors);
+        if let Some(phase) = self.pending_milestone.take() {
+            if reply.state == RealmState::Ready && reply.navigation.is_none() {
+                self.lifecycle.phase = phase;
+            }
+        }
+        reply.lifecycle = Some(self.lifecycle);
     }
     fn set_ready(&mut self, ready: &'static str, errors: &mut Vec<String>) {
+        if self.state.borrow().host.ready == ready {
+            return;
+        }
         self.state.borrow_mut().host.ready = ready;
         self.lifecycle(Kind::ReadyState, errors);
+        if ready == "interactive"
+            && !self.closed
+            && !self.engine.is_fatal()
+            && self.state.borrow().host.navigation.is_none()
+        {
+            self.lifecycle.phase = LifecyclePhase::Interactive;
+        }
     }
     fn lifecycle(&mut self, kind: Kind, errors: &mut Vec<String>) {
         let path: &[Target] = if kind == Kind::Load {
@@ -2143,7 +2265,7 @@ impl BoaPageRealm {
         }
         if !self.engine.is_fatal() && !self.state.borrow().host.events[event].stopped {
             self.listeners_at(event, path[0], true, 2, errors);
-            if !self.engine.is_fatal() && !self.state.borrow().host.events[event].immediate {
+            if !self.engine.is_fatal() && !self.state.borrow().host.events[event].stopped {
                 self.listeners_at(event, path[0], false, 2, errors);
             }
         }
@@ -2171,13 +2293,7 @@ impl BoaPageRealm {
                 reply.errors.push(bounded(&error.to_string(), 512));
             }
         }
-        reply.state = if self.engine.is_fatal() {
-            RealmState::Fatal
-        } else if self.closed {
-            RealmState::Closed
-        } else {
-            RealmState::Ready
-        };
+        reply.state = self.realm_state();
         if reply.state != RealmState::Ready {
             reply.default_action = DefaultAction::None;
             self.closed = true;
@@ -2211,11 +2327,13 @@ impl BoaPageRealm {
             reply.task_wake = None;
         }
         drop(data);
-        if reply.state != RealmState::Ready {
+        if reply.state != RealmState::Ready || reply.navigation.is_some() {
             self.clear_work();
+            reply.task_wake = None;
         }
         self.observation_notice(&mut reply.errors);
         reply.boa = Some(self.engine.stats());
+        self.publish_lifecycle(reply);
     }
 
     fn advertise_wake(&mut self, reply: &mut SessionReply) -> Result<(), String> {
@@ -2290,13 +2408,10 @@ impl BoaPageRealm {
             reply
                 .errors
                 .push("Inactive realm or early, stale or replayed task wake".into());
-            reply.state = if self.engine.is_fatal() {
-                RealmState::Fatal
-            } else {
-                RealmState::Closed
-            };
+            reply.state = self.realm_state();
             reply.boa = Some(self.engine.stats());
             self.observation_notice(&mut reply.errors);
+            self.publish_lifecycle(&mut reply);
             return reply;
         }
         self.revision += 1;
@@ -2337,6 +2452,31 @@ impl BoaPageRealm {
             SelectedTask::Dom(mut task) => {
                 self.state.borrow_mut().timer_nesting = None;
                 match &mut task.kind {
+                    DomTaskKind::Lifecycle { permit, phase } => {
+                        let expected = match phase {
+                            LifecyclePhase::DomContentLoaded => Some(LifecyclePhase::Interactive),
+                            LifecyclePhase::LoadComplete => Some(LifecyclePhase::DomContentLoaded),
+                            _ => None,
+                        };
+                        if expected != Some(self.lifecycle.phase)
+                            || modern::begin_host_task(self.engine.context_mut(), permit).is_err()
+                        {
+                            self.lifecycle_failure(&mut reply.errors);
+                        } else {
+                            if *phase == LifecyclePhase::DomContentLoaded {
+                                self.lifecycle(Kind::DomReady, &mut reply.errors);
+                            } else {
+                                self.set_ready("complete", &mut reply.errors);
+                                if !self.closed
+                                    && !self.engine.is_fatal()
+                                    && self.state.borrow().host.navigation.is_none()
+                                {
+                                    self.lifecycle(Kind::Load, &mut reply.errors);
+                                }
+                            }
+                            self.pending_milestone = Some(*phase);
+                        }
+                    }
                     DomTaskKind::Batch(ids) => self.rejection_batch(&ids, &mut reply.errors),
                     DomTaskKind::Handled { permit, payload } => {
                         match rejection_exposure(self.engine.context()) {
@@ -2589,13 +2729,10 @@ impl BoaPageRealm {
             self.closed = true;
             self.clear_work();
             reply.boa = Some(self.engine.stats());
-            reply.state = if self.engine.is_fatal() {
-                RealmState::Fatal
-            } else {
-                RealmState::Closed
-            };
+            reply.state = self.realm_state();
             reply.errors.push("Page realm is no longer active".into());
             self.observation_notice(&mut reply.errors);
+            self.publish_lifecycle(&mut reply);
             return reply;
         }
         let validation = self.state.borrow().host.validate_input(&input);
@@ -2606,6 +2743,7 @@ impl BoaPageRealm {
             self.clear_work();
             reply.boa = Some(self.engine.stats());
             self.observation_notice(&mut reply.errors);
+            self.publish_lifecycle(&mut reply);
             return reply;
         }
         self.revision += 1;
@@ -2697,13 +2835,39 @@ mod tests {
         let (realm, reply) = BoaPageRealm::start(Request {
             external_scripts: None,
             url: "https://example.test/owned".into(),
-            html: format!(
-                "<html><body><p id=out>before</p><a id=a href=/next>Next</a><script>{source}</script></body></html>"
-            ),
+            html: "<html><body><p id=out>before</p><a id=a href=/next>Next</a><script></script></body></html>".into(),
         });
         assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
         assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-        realm.unwrap()
+        let mut realm = realm.unwrap();
+        let dcl = pump_next(&mut realm);
+        let load = pump_next(&mut realm);
+        assert_eq!(
+            dcl.lifecycle.unwrap().phase,
+            LifecyclePhase::DomContentLoaded
+        );
+        assert_eq!(load.lifecycle.unwrap().phase, LifecyclePhase::LoadComplete);
+        assert!(dcl.errors.is_empty() && load.errors.is_empty());
+        let stats = realm.engine.stats();
+        assert_eq!(
+            (stats.jobs_admitted, stats.jobs_executed, stats.pending_jobs),
+            (2, 2, 0)
+        );
+        // Binding/fault/GC workloads are explicitly post-load. No counters are
+        // reset or subtracted; assertions below retain the two real task costs.
+        if !source.is_empty() {
+            let result = {
+                let _ingress = Ingress::enter(realm.state.clone());
+                realm.engine.evaluate_raw(source)
+            };
+            assert!(result.is_ok(), "owned binding setup failed");
+            let mut reply = BoaPageRealm::empty_reply();
+            realm.checkpoint(&mut reply.errors);
+            realm.snapshot(&mut reply);
+            assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+            assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        }
+        realm
     }
     fn collect(realm: &mut BoaPageRealm) {
         // The real public checkpoint must release WeakRef kept-alive entries;
@@ -2740,7 +2904,7 @@ mod tests {
                 .is_err()
         );
         assert!(realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
         assert_eq!(message_title(&realm), "");
         let global = realm.engine.context().global_object();
         let touched = global
@@ -2760,7 +2924,7 @@ mod tests {
         ));
         assert!(result.is_err(), "IteratorClose swallowed engine error");
         assert!(realm.engine.is_fatal(), "VM limit did not latch");
-        assert_eq!(realm.engine.stats().jobs_admitted, 0);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2);
         assert_eq!(message_title(&realm), "");
         terminal_rejection_snapshot(&mut realm);
     }
@@ -2803,8 +2967,8 @@ mod tests {
         "#).unwrap();
         assert_eq!(result.as_boolean(), Some(true));
         assert!(!realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 1);
-        assert_eq!(realm.engine.stats().jobs_executed, 0);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
+        assert_eq!(realm.engine.stats().jobs_executed, 2);
         assert_eq!(realm.engine.stats().pending_jobs, 0);
         assert!(realm.state.borrow().dom_tasks.is_empty());
         realm.engine.checkpoint().unwrap();
@@ -2818,7 +2982,7 @@ mod tests {
             "try{postMessage({get proof(){document.title='serialized before handle';return 42;}},'*');}catch(e){document.title='caught fatal';}",
         ).is_err());
         assert!(realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
         assert_eq!(message_title(&realm), "serialized before handle");
         assert!(realm.state.borrow().dom_tasks.is_empty());
         terminal_rejection_snapshot(&mut realm);
@@ -2838,7 +3002,7 @@ mod tests {
         assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
         assert!(reply.errors.is_empty());
         assert_eq!(message_title(&realm), "");
-        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 2 + 1);
         assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
         assert!(reply.task_wake.is_none());
     }
@@ -2856,7 +3020,7 @@ mod tests {
         assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
         assert!(reply.errors.is_empty());
         assert_eq!(message_title(&realm), "ordinary restore failure");
-        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 2 + 1);
         assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
         assert!(reply.task_wake.is_none());
         evaluate(&mut realm, "if(calls!==1)throw 'duplicate messageerror';");
@@ -2870,7 +3034,7 @@ mod tests {
         realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
         let reply = pump_next(&mut realm);
         assert_eq!(reply.state, RealmState::Fatal, "{:?}", reply.errors);
-        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 1);
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, 2 + 1);
         assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
         assert!(reply.task_wake.is_none());
         assert_eq!(message_title(&realm), "");
@@ -2977,7 +3141,7 @@ mod tests {
         realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
         assert!(realm.engine.evaluate("Promise.reject(value);").is_err());
         assert!(realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
         assert!(realm.state.borrow().rejections.is_empty());
         assert!(realm.state.borrow().dom_tasks.is_empty());
         terminal_rejection_snapshot(&mut realm);
@@ -2997,7 +3161,7 @@ mod tests {
         let mut errors = Vec::new();
         realm.checkpoint(&mut errors);
         assert!(realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
         terminal_rejection_snapshot(&mut realm);
         modern::boa_gc::force_collect();
         assert!(realm.state.borrow().finalized.get() > before);
@@ -3016,7 +3180,7 @@ mod tests {
                 realm.checkpoint(&mut Vec::new());
             }
             assert!(realm.engine.is_fatal());
-            assert_eq!(realm.engine.stats().jobs_admitted, 1);
+            assert_eq!(realm.engine.stats().jobs_admitted, 2 + 1);
             terminal_rejection_snapshot(&mut realm);
         }
     }
@@ -3028,7 +3192,7 @@ mod tests {
         realm.state.borrow_mut().next_handle = u64::MAX;
         assert!(realm.engine.evaluate("p.catch(()=>{});").is_err());
         assert!(realm.engine.is_fatal());
-        assert_eq!(realm.engine.stats().jobs_admitted, 2);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 2);
         terminal_rejection_snapshot(&mut realm);
     }
 
@@ -3065,7 +3229,7 @@ mod tests {
                 .as_engine()
                 .is_some()
         );
-        assert_eq!(realm.engine.stats().jobs_admitted, 0);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2);
         assert!(realm.state.borrow().rejections.is_empty());
         realm.engine.check().unwrap();
     }
@@ -3406,8 +3570,8 @@ mod tests {
             "old native-job failure queue behavior changed"
         );
         assert_eq!(realm.engine.stats().pending_jobs, 0);
-        assert_eq!(realm.engine.stats().jobs_admitted, 3);
-        assert_eq!(realm.engine.stats().jobs_executed, 2);
+        assert_eq!(realm.engine.stats().jobs_admitted, 2 + 3);
+        assert_eq!(realm.engine.stats().jobs_executed, 2 + 2);
         let mut reply = BoaPageRealm::empty_reply();
         realm.snapshot(&mut reply);
         assert_eq!(reply.state, RealmState::Ready);

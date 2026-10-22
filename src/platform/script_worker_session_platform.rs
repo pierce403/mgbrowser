@@ -4,7 +4,8 @@ use super::super::linux::{
 use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
 use mg_sparkle::page_session::{
-    DefaultAction, MAX_EDIT_BYTES, MAX_EDITS, MAX_EVENT_BYTES, RealmState,
+    ArenaSnapshot, ControlAck, DefaultAction, EventOutcome, LifecycleProgress, MAX_EDIT_BYTES,
+    MAX_EDITS, MAX_EVENT_BYTES, RealmState, TaskWake,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -20,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 4;
+const VERSION: u8 = 5;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -106,13 +107,134 @@ fn encode_request_frame(
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReplyFrame {
+struct ReplyFrame<R = SessionReply> {
     version: u8,
     generation: u64,
     session_id: u64,
     sequence: u64,
     expected_revision: u64,
-    reply: SessionReply,
+    reply: R,
+}
+
+/// Exactly the historical v1 reply fields. A new optional field on SessionReply
+/// must not make an explicit legacy `lifecycle: null` silently acceptable.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySessionReply {
+    revision: u64,
+    snapshot: Option<ArenaSnapshot>,
+    outcome: EventOutcome,
+    default_action: DefaultAction,
+    navigation: Option<String>,
+    errors: Vec<String>,
+    scripts_executed: usize,
+    allocations: Option<AllocationReport>,
+    #[serde(default)]
+    boa: Option<mg_butane::modern::Report>,
+    state: RealmState,
+    acknowledgements: Vec<ControlAck>,
+    #[serde(default)]
+    task_wake: Option<TaskWake>,
+}
+
+/// Counting and transmission borrow the same old view, without cloning the
+/// arena, diagnostics, accounting report or any strings to remove new fields.
+#[derive(Serialize)]
+struct LegacySessionReplyView<'a> {
+    revision: u64,
+    snapshot: &'a Option<ArenaSnapshot>,
+    outcome: &'a EventOutcome,
+    default_action: &'a DefaultAction,
+    navigation: &'a Option<String>,
+    errors: &'a [String],
+    scripts_executed: usize,
+    allocations: &'a Option<AllocationReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boa: Option<&'a mg_butane::modern::Report>,
+    state: RealmState,
+    acknowledgements: &'a [ControlAck],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_wake: Option<&'a TaskWake>,
+}
+
+fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String> {
+    if legacy {
+        let frame: ReplyFrame<LegacySessionReply> =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        let old = frame.reply;
+        Ok(ReplyFrame {
+            version: frame.version,
+            generation: frame.generation,
+            session_id: frame.session_id,
+            sequence: frame.sequence,
+            expected_revision: frame.expected_revision,
+            reply: SessionReply {
+                revision: old.revision,
+                snapshot: old.snapshot,
+                outcome: old.outcome,
+                default_action: old.default_action,
+                navigation: old.navigation,
+                errors: old.errors,
+                scripts_executed: old.scripts_executed,
+                allocations: old.allocations,
+                boa: old.boa,
+                state: old.state,
+                acknowledgements: old.acknowledgements,
+                task_wake: old.task_wake,
+                lifecycle: None,
+            },
+        })
+    } else {
+        let frame: ReplyFrame =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        if frame.reply.lifecycle.is_none() {
+            return Err("Modern v5 reply requires non-null lifecycle progress".into());
+        }
+        Ok(frame)
+    }
+}
+
+fn write_reply_frame(
+    writer: &mut impl Write,
+    frame: &ReplyFrame,
+    total: &mut usize,
+    legacy: bool,
+) -> Result<(), String> {
+    if !legacy {
+        if frame.reply.lifecycle.is_none() {
+            return Err("Modern v5 reply requires lifecycle progress".into());
+        }
+        return write_frame(writer, frame, total);
+    }
+    let reply = &frame.reply;
+    if reply.lifecycle.is_some() {
+        return Err("Legacy v1 reply forbids lifecycle progress".into());
+    }
+    write_frame(
+        writer,
+        &ReplyFrame {
+            version: frame.version,
+            generation: frame.generation,
+            session_id: frame.session_id,
+            sequence: frame.sequence,
+            expected_revision: frame.expected_revision,
+            reply: LegacySessionReplyView {
+                revision: reply.revision,
+                snapshot: &reply.snapshot,
+                outcome: &reply.outcome,
+                default_action: &reply.default_action,
+                navigation: &reply.navigation,
+                errors: &reply.errors,
+                scripts_executed: reply.scripts_executed,
+                allocations: &reply.allocations,
+                boa: reply.boa.as_ref(),
+                state: reply.state,
+                acknowledgements: &reply.acknowledgements,
+                task_wake: reply.task_wake.as_ref(),
+            },
+        },
+        total,
+    )
 }
 
 #[derive(Default)]
@@ -448,6 +570,7 @@ struct Worker {
     last_report: Option<AllocationReport>,
     last_boa: Option<mg_butane::modern::Report>,
     last_wake_token: u64,
+    last_lifecycle: Option<LifecycleProgress>,
     legacy: bool,
 }
 impl Worker {
@@ -517,6 +640,7 @@ impl Worker {
             last_report: None,
             last_boa: None,
             last_wake_token: 0,
+            last_lifecycle: None,
             legacy: super::super::legacy_test_mode(),
         })
     }
@@ -653,9 +777,17 @@ impl Worker {
                 if sent_header != 4 || sent != input.len() {
                     return Err("Script-session reply preceded the complete request".into());
                 }
-                let frame: ReplyFrame = serde_json::from_slice(output)
+                let frame = decode_reply_frame(output, self.legacy)
                     .map_err(|error| format!("Invalid script-session reply: {error}"))?;
                 validate_reply(request, &frame)?;
+                let lifecycle = if matches!(request.command, FrameCommand::Init(_)) {
+                    frame.reply.validate_lifecycle_initial()?
+                } else {
+                    frame.reply.validate_lifecycle_after(
+                        self.last_lifecycle,
+                        matches!(request.command, FrameCommand::TaskPump(_)),
+                    )?
+                };
                 if let Some(wake) = &frame.reply.task_wake {
                     if self.legacy || wake.token <= self.last_wake_token {
                         return Err("Invalid or nonmonotonic script task wake".into());
@@ -684,6 +816,7 @@ impl Worker {
                 }
                 self.last_report = frame.reply.allocations;
                 self.last_boa = frame.reply.boa.clone();
+                self.last_lifecycle = lifecycle;
                 if let Some(wake) = &frame.reply.task_wake {
                     self.last_wake_token = wake.token;
                 }
@@ -900,6 +1033,9 @@ fn validate_command(command: &TransactionCommand) -> Result<(), String> {
     }
 }
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
+    if !matches!(request.version, 1 | VERSION) {
+        return Err("Unsupported script-session protocol version".into());
+    }
     if matches!(request.command, FrameCommand::TaskPump(_)) && request.version != VERSION {
         return Err("Legacy script session does not support task pumping".into());
     }
@@ -913,6 +1049,14 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     let reply = &frame.reply;
     let initial = matches!(request.command, FrameCommand::Init(_));
+    if (request.version == VERSION) != reply.lifecycle.is_some() {
+        return Err("Script reply changed its trusted lifecycle protocol lane".into());
+    }
+    if initial {
+        reply.validate_lifecycle_initial()?;
+    } else if reply.allocations.is_none() && reply.boa.is_none() {
+        return Err("Later script reply omitted its engine report".into());
+    }
     let expected = if initial {
         0
     } else {
@@ -968,6 +1112,14 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Closed script session proposed a default or navigation".into());
     }
+    if reply.state != RealmState::Ready
+        && reply
+            .boa
+            .as_ref()
+            .is_some_and(|report| report.pending_jobs != 0)
+    {
+        return Err("Terminal Boa script session retained pending work".into());
+    }
     if reply.task_wake.as_ref().is_some_and(|wake| wake.token == 0) {
         return Err("Invalid zero script task wake token".into());
     }
@@ -1022,11 +1174,7 @@ fn validate_engine_profile(
 ) -> Result<(), String> {
     // A rejected initial document may have no realm or report. Once a realm
     // exists its parent-selected engine cannot change, even on terminal replies.
-    let rejected_initial = previous.is_none()
-        && reply.state == RealmState::Closed
-        && reply.snapshot.is_none()
-        && reply.allocations.is_none()
-        && reply.boa.is_none();
+    let rejected_initial = previous.is_none() && reply.is_rejected_initial();
     if !rejected_initial && (reply.boa.is_some() == legacy) {
         return Err("Script session returned the wrong engine profile".into());
     }
@@ -1224,7 +1372,7 @@ fn child_loop_for(
     attach_memory(&mut reply);
     let mut revision = reply.revision;
     let mut terminal = reply.state != RealmState::Ready;
-    write_frame(
+    write_reply_frame(
         writer,
         &ReplyFrame {
             version,
@@ -1235,6 +1383,7 @@ fn child_loop_for(
             reply,
         },
         &mut wire,
+        legacy,
     )?;
     for sequence in 1..TRANSACTIONS {
         if terminal {
@@ -1266,7 +1415,7 @@ fn child_loop_for(
         attach_memory(&mut reply);
         revision = reply.revision;
         terminal = reply.state != RealmState::Ready;
-        write_frame(
+        write_reply_frame(
             writer,
             &ReplyFrame {
                 version,
@@ -1277,6 +1426,7 @@ fn child_loop_for(
                 reply,
             },
             &mut wire,
+            legacy,
         )?;
     }
     // Reaching the fixed transaction budget ends the original realm, never resets it.
@@ -1395,7 +1545,7 @@ pub fn session_selftest() -> Result<(), String> {
         let mut received = Instant::now();
         if reply.state != RealmState::Ready
             || !reply.errors.is_empty()
-            || reply.boa.as_ref().map(|report| report.pending_jobs) != Some(2)
+            || reply.boa.as_ref().map(|report| report.pending_jobs) != Some(4)
             || !reply.snapshot.as_ref().is_some_and(|snapshot| {
                 snapshot
                     .nodes
@@ -1492,6 +1642,70 @@ pub fn session_selftest() -> Result<(), String> {
             }
             reply = next;
         }
+        // Both source timers precede the mandatory lifecycle work. Complete
+        // exactly those two milestones, not an arbitrary task drain, using
+        // the same single-flight and one-charge acknowledgement boundary.
+        for (revision, phase) in [
+            (
+                2,
+                mg_sparkle::page_session::LifecyclePhase::DomContentLoaded,
+            ),
+            (3, mg_sparkle::page_session::LifecyclePhase::LoadComplete),
+        ] {
+            let wake = reply.task_wake.as_ref().ok_or("Lifecycle wake missing")?;
+            let due = received
+                .checked_add(Duration::from_millis(u64::from(wake.delay_ms)))
+                .ok_or("Lifecycle selftest clock overflow")?;
+            while Instant::now() < due {
+                thread::sleep(TICK);
+            }
+            let sequence = session.try_task_pump(
+                TaskPump {
+                    wake_token: wake.token,
+                },
+                revision,
+            )?;
+            let update = wait(&mut session)?;
+            received = Instant::now();
+            let next = update.reply?;
+            if update.sequence != Some(sequence)
+                || next.revision != revision + 1
+                || next.state != RealmState::Ready
+                || !next.errors.is_empty()
+                || !next.acknowledgements.is_empty()
+                || next.default_action != DefaultAction::None
+                || next.outcome.click_canceled.is_some()
+                || next.outcome.submit_canceled.is_some()
+                || next.scripts_executed != 0
+                || next
+                    .validate_lifecycle_after(reply.lifecycle, true)?
+                    .map(|progress| progress.phase)
+                    != Some(phase)
+                || !next.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.nodes.iter().any(|node| {
+                        node.attr("data-count") == Some("2") && node.attr("data-micro") == Some("2")
+                    })
+                })
+            {
+                return Err(
+                    "Lifecycle selftest changed timer effects or fabricated a milestone".into(),
+                );
+            }
+            next.boa
+                .as_ref()
+                .ok_or("Lifecycle resource report missing")?
+                .validate_after(
+                    reply
+                        .boa
+                        .as_ref()
+                        .ok_or("Previous lifecycle report missing")?,
+                )?;
+            session.charge_active(Duration::ZERO)?;
+            if session.charge_active(Duration::ZERO).is_ok() {
+                return Err("Lifecycle projection was acknowledged twice".into());
+            }
+            reply = next;
+        }
         if reply.task_wake.is_some()
             || reply.boa.as_ref().map(|report| report.pending_jobs) != Some(0)
         {
@@ -1502,7 +1716,7 @@ pub fn session_selftest() -> Result<(), String> {
         reaped(pid)?;
         empty(&pool)?;
         println!(
-            "SCRIPT_SESSION_CHECK tasks: parent-issued pumps; one task plus checkpoint; shared single-flight/projection charge; canceled timer absent; monotonic reports; drop reaped"
+            "SCRIPT_SESSION_CHECK tasks: parent-issued pumps; one task plus checkpoint; shared single-flight/projection charge; canceled timer absent; separate DCL/load; monotonic reports; drop reaped"
         );
     }
 
@@ -1678,8 +1892,132 @@ mod tests {
                 state: RealmState::Ready,
                 acknowledgements: Vec::new(),
                 task_wake: None,
+                lifecycle: None,
             },
         }
+    }
+
+    fn modern_response(request: &RequestFrame) -> ReplyFrame {
+        let mut frame = response(request);
+        frame.reply.allocations = None;
+        frame.reply.boa = Some(mg_butane::modern::Engine::new().unwrap().report());
+        let initial = matches!(request.command, FrameCommand::Init(_));
+        frame.reply.lifecycle = Some(LifecycleProgress {
+            phase: if initial {
+                mg_sparkle::page_session::LifecyclePhase::Interactive
+            } else {
+                mg_sparkle::page_session::LifecyclePhase::LoadComplete
+            },
+            initial_failure: false,
+        });
+        if initial {
+            // This wire fixture represents the two admitted mandatory tasks,
+            // not extra allowance or two already executed callbacks.
+            let report = frame.reply.boa.as_mut().unwrap();
+            report.jobs_admitted = 2;
+            report.pending_jobs = 2;
+            frame.reply.task_wake = Some(TaskWake {
+                token: 1,
+                delay_ms: 0,
+            });
+        }
+        frame
+    }
+
+    #[test]
+    fn lifecycle_terminal_boa_reply_cannot_retain_pending_jobs() {
+        let mut request = request(0);
+        request.version = VERSION;
+        for state in [RealmState::Closed, RealmState::Fatal] {
+            let mut frame = modern_response(&request);
+            frame.reply.state = state;
+            frame.reply.task_wake = None;
+            frame.reply.lifecycle.as_mut().unwrap().initial_failure = true;
+            assert!(frame.reply.boa.as_ref().unwrap().is_valid());
+            assert!(validate_reply(&request, &frame).is_err(), "{state:?}");
+            frame.reply.boa.as_mut().unwrap().pending_jobs = 0;
+            validate_reply(&request, &frame).unwrap();
+        }
+        let mut rejected = modern_response(&request);
+        rejected.reply.boa = None;
+        rejected.reply.snapshot = None;
+        rejected.reply.scripts_executed = 0;
+        rejected.reply.state = RealmState::Closed;
+        rejected.reply.task_wake = None;
+        rejected.reply.lifecycle = Some(LifecycleProgress {
+            phase: mg_sparkle::page_session::LifecyclePhase::Initializing,
+            initial_failure: true,
+        });
+        assert!(rejected.reply.is_rejected_initial());
+        assert!(!rejected.reply.accounting_valid());
+        validate_reply(&request, &rejected).unwrap();
+    }
+
+    #[test]
+    fn lifecycle_modern_decoder_requires_non_null_strict_progress() {
+        let mut request = request(0);
+        request.version = VERSION;
+        let valid = modern_response(&request);
+        let encoded = encode(&valid, OUTPUT_LIMIT).unwrap();
+        let decoded = decode_reply_frame(&encoded, false).unwrap();
+        validate_reply(&request, &decoded).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"phase":"Interactive","initial_failure":null}),
+            serde_json::json!({"phase":"Interactive","initial_failure":0}),
+            serde_json::json!({"phase":"Interactive","initial_failure":false,"extra":1}),
+            serde_json::json!({"phase":"Unknown","initial_failure":false}),
+        ] {
+            let mut invalid = serde_json::to_value(&valid).unwrap();
+            invalid["reply"]["lifecycle"] = value;
+            assert!(decode_reply_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err());
+        }
+        let mut missing = serde_json::to_value(&valid).unwrap();
+        missing["reply"]
+            .as_object_mut()
+            .unwrap()
+            .remove("lifecycle");
+        assert!(decode_reply_frame(&serde_json::to_vec(&missing).unwrap(), false).is_err());
+        let mut old = request;
+        old.version = 4;
+        let mut reply = modern_response(&old);
+        reply.version = 4;
+        assert!(validate_reply(&old, &reply).is_err());
+    }
+
+    #[test]
+    fn lifecycle_legacy_decoder_rejects_presence_even_null_and_encoding_is_borrowed_old_shape() {
+        let request = request(0);
+        let mut frame = response(&request);
+        let expected = encode(&frame, OUTPUT_LIMIT).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({"phase":"Initializing","initial_failure":true}),
+        ] {
+            let mut invalid = serde_json::to_value(&frame).unwrap();
+            invalid["reply"]["lifecycle"] = value;
+            assert!(decode_reply_frame(&serde_json::to_vec(&invalid).unwrap(), true).is_err());
+        }
+        let mut output = Vec::new();
+        let mut written = 0;
+        write_reply_frame(&mut output, &frame, &mut written, true).unwrap();
+        assert_eq!(written, expected.len() + 4);
+        assert_eq!(&output[..4], &(expected.len() as u32).to_be_bytes());
+        assert_eq!(&output[4..], expected);
+        let decoded = decode_reply_frame(&output[4..], true).unwrap();
+        assert!(decoded.reply.lifecycle.is_none());
+        validate_reply(&request, &decoded).unwrap();
+        // Wrong-lane internal metadata is not silently stripped or published.
+        frame.reply.lifecycle = Some(LifecycleProgress {
+            phase: mg_sparkle::page_session::LifecyclePhase::Interactive,
+            initial_failure: false,
+        });
+        let mut forbidden = Vec::new();
+        let mut written = 0;
+        assert!(write_reply_frame(&mut forbidden, &frame, &mut written, true).is_err());
+        assert!(forbidden.is_empty());
+        assert_eq!(written, 0);
     }
 
     #[test]
@@ -1764,23 +2102,25 @@ mod tests {
         }
     }
     #[test]
-    fn provenance_modern_session_uses_v4_and_rejects_v3_before_execution() {
-        assert_eq!(VERSION, 4);
-        let mut initial = request(0);
-        initial.version = 3;
-        let mut input = Vec::new();
-        write_frame(&mut input, &initial, &mut 0).unwrap();
-        let mut output = Vec::new();
-        assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
-        assert!(
-            output.is_empty(),
-            "old modern frames must execute no source"
-        );
+    fn lifecycle_modern_v5_rejects_v3_and_v4_before_execution() {
+        assert_eq!(VERSION, 5);
+        for version in [3, 4] {
+            let mut initial = request(0);
+            initial.version = version;
+            let mut input = Vec::new();
+            write_frame(&mut input, &initial, &mut 0).unwrap();
+            let mut output = Vec::new();
+            assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
+            assert!(
+                output.is_empty(),
+                "old modern frames must execute no source"
+            );
+        }
     }
     #[test]
-    fn provenance_modern_v4_accepts_old_absent_metadata_request_shape() {
+    fn lifecycle_modern_v5_accepts_old_absent_source_metadata_shape() {
         let mut initial = request(0);
-        initial.version = 4;
+        initial.version = VERSION;
         let mut input = Vec::new();
         write_frame(&mut input, &initial, &mut 0).unwrap();
         let mut output = Vec::new();
@@ -1789,20 +2129,20 @@ mod tests {
             .unwrap()
             .unwrap();
         let reply: ReplyFrame = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(reply.version, 4);
+        assert_eq!(reply.version, VERSION);
         assert_eq!(reply.reply.state, RealmState::Ready);
     }
     #[test]
-    fn provenance_modern_v4_rejects_later_v3_events_and_task_pumps_without_replies() {
-        for task in [false, true] {
+    fn lifecycle_modern_v5_rejects_later_v3_v4_events_and_pumps_without_replies() {
+        for (task, old_version) in [(false, 3), (true, 3), (false, 4), (true, 4)] {
             let mut initial = request(0);
-            initial.version = 4;
+            initial.version = VERSION;
             let FrameCommand::Init(page) = &mut initial.command else {
                 unreachable!()
             };
             page.html = "<p id=o></p><script>window.onclick=()=>{document.getElementById('o').textContent='RAN';};setTimeout(()=>{document.getElementById('o').textContent='RAN';},0);</script>".into();
             let mut later = request(1);
-            later.version = 3;
+            later.version = old_version;
             if task {
                 later.command = FrameCommand::TaskPump(TaskPump { wake_token: 1 });
             }
@@ -1816,9 +2156,11 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let first: ReplyFrame = serde_json::from_slice(&first).unwrap();
-            assert_eq!(first.version, 4);
+            assert_eq!(first.version, VERSION);
             assert_eq!(first.reply.state, RealmState::Ready);
-            assert_eq!(first.reply.boa.unwrap().pending_jobs, 1);
+            // One source timer and both mandatory lifecycle tasks remain;
+            // rejected old-version commands execute none of those callbacks.
+            assert_eq!(first.reply.boa.unwrap().pending_jobs, 3);
             assert!(
                 read_frame(&mut cursor, &mut 0, OUTPUT_LIMIT)
                     .unwrap()
@@ -1954,10 +2296,8 @@ mod tests {
         let mut request = request(1);
         request.version = VERSION;
         request.command = FrameCommand::TaskPump(TaskPump { wake_token: 7 });
-        let mut frame = response(&request);
+        let mut frame = modern_response(&request);
         frame.reply.scripts_executed = 0;
-        frame.reply.allocations = None;
-        frame.reply.boa = Some(mg_butane::modern::Engine::new().unwrap().report());
         validate_reply(&request, &frame).unwrap();
         for change in [
             "ack",
@@ -2059,15 +2399,12 @@ mod tests {
     }
     #[test]
     fn boa_profile_requires_process_accounting_and_cannot_fall_back_or_reset() {
-        use mg_butane::modern::{
-            Engine, WORKER_CUMULATIVE_LIMIT, WORKER_OUTSTANDING_LIMIT, WorkerMemory,
-        };
+        use mg_butane::modern::{WORKER_CUMULATIVE_LIMIT, WORKER_OUTSTANDING_LIMIT, WorkerMemory};
         let mut request = request(0);
         request.version = VERSION;
         let mut frame = response(&request);
         assert!(validate_engine_profile(&frame.reply, false, None).is_err());
-        frame.reply.allocations = None;
-        frame.reply.boa = Some(Engine::new().unwrap().report());
+        frame = modern_response(&request);
         assert!(validate_engine_profile(&frame.reply, false, None).is_err());
         frame.reply.boa.as_mut().unwrap().worker_memory = Some(WorkerMemory {
             outstanding_bytes: 100,
@@ -2100,6 +2437,12 @@ mod tests {
         frame.reply.state = RealmState::Closed;
         frame.reply.snapshot = None;
         frame.reply.boa = None;
+        frame.reply.scripts_executed = 0;
+        frame.reply.task_wake = None;
+        frame.reply.lifecycle = Some(LifecycleProgress {
+            phase: mg_sparkle::page_session::LifecyclePhase::Initializing,
+            initial_failure: true,
+        });
         validate_engine_profile(&frame.reply, false, None).unwrap();
         assert!(validate_engine_profile(&frame.reply, false, Some(&previous)).is_err());
         frame.reply.allocations = Some(report(10));

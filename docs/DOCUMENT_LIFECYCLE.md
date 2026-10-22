@@ -1,10 +1,13 @@
 # Queued snapshot document lifecycle: implementation contract
 
-Reviewed 2026-10-22 for F-016 / F-026 after v0.9.10. **Not implemented or
-released.** Production still uses modern protocol v4 and bundles startup in
-Init. This document freezes the next engine/host integration and its acceptance
-premises before changing that behavior. It does not complete Window-testharness
-readiness or authorize another scored corpus.
+Reviewed and frozen 2026-10-22 for F-016 / F-026 after v0.9.10, before changing
+engine behavior. **Local v0.9.11 candidate implemented; release gates pending.**
+Focused and full debug/release regressions, actual workers, package/install/updater
+fixture, frozen JSPLAN, all 13 packaged native/CDP helpers and fresh complete WPT
+review pass. Exact-commit CI, tagged packaging and public delivery remain separate
+gates. Public v0.9.10 still uses modern
+protocol v4 and bundled Init. This contract does not complete Window-testharness
+readiness or authorize another scored corpus; the dated log records evidence.
 
 ## Measured baseline
 

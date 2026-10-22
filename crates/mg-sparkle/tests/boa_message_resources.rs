@@ -9,7 +9,9 @@ use mg_sparkle::{
         ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource, Request,
         boa::BoaPageRealm,
     },
-    page_session::{DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump},
+    page_session::{
+        DefaultAction, InputKind, LifecyclePhase, RealmState, SessionInput, SessionReply, TaskPump,
+    },
 };
 use std::time::Duration;
 
@@ -28,11 +30,41 @@ fn request(source: &str) -> Request {
     }
 }
 fn start(source: &str) -> (BoaPageRealm, SessionReply) {
+    // Capacity/clone workloads start during genuine load so both mandatory
+    // permits are already begun. Keep their inclusive accounting visible.
+    let (mut realm, init) = raw_start(&format!("window.onload=function(){{{source}\n}};"));
+    assert_eq!(
+        (report(&init).jobs_admitted, report(&init).jobs_executed),
+        (2, 0)
+    );
+    let dcl = pump(&mut realm, &init);
+    assert_eq!(
+        dcl.lifecycle.unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    let loaded = pump(&mut realm, &dcl);
+    assert_eq!(
+        loaded.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    (realm, loaded)
+}
+fn raw_start(source: &str) -> (BoaPageRealm, SessionReply) {
     let (realm, reply) = BoaPageRealm::start(request(source));
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     report(&reply);
     (realm.expect("owned retained realm"), reply)
+}
+fn finish_load(realm: &mut BoaPageRealm, mut reply: SessionReply) -> SessionReply {
+    for _ in 0..4 {
+        if reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete {
+            return reply;
+        }
+        reply = pump(realm, &reply);
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+    }
+    panic!("owned lifecycle did not complete")
 }
 fn external(
     source: &str,
@@ -144,14 +176,14 @@ fn exact_capacity_delivery_frees_one_pending_slot_before_callback_admission() {
         postMessage('first','/');
     "#,
     );
-    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT);
-    assert_eq!(report(&init).jobs_executed, 127);
+    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT + 2);
+    assert_eq!(report(&init).jobs_executed, 129);
     assert_eq!(report(&init).pending_jobs, 129);
     let first = pump(&mut realm, &init);
     assert_eq!(first.state, RealmState::Ready, "{:?}", first.errors);
     assert!(first.errors.is_empty());
-    assert_eq!(report(&first).jobs_admitted, 257);
-    assert_eq!(report(&first).jobs_executed, 128);
+    assert_eq!(report(&first).jobs_admitted, 259);
+    assert_eq!(report(&first).jobs_executed, 130);
     assert_eq!(report(&first).pending_jobs, 129);
     assert_eq!(title(&first), "delivered 1");
 }
@@ -165,14 +197,14 @@ fn full_pending_capacity_delivery_begins_its_permit_before_callback_posts_anothe
         postMessage('first','/');
     "#,
     );
-    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT);
-    assert_eq!(report(&init).jobs_executed, 0);
+    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT + 2);
+    assert_eq!(report(&init).jobs_executed, 2);
     assert_eq!(report(&init).pending_jobs, PENDING_JOB_LIMIT);
     let first = pump(&mut realm, &init);
     assert_eq!(first.state, RealmState::Ready, "{:?}", first.errors);
     assert!(first.errors.is_empty(), "{:?}", first.errors);
-    assert_eq!(report(&first).jobs_admitted, 257);
-    assert_eq!(report(&first).jobs_executed, 1);
+    assert_eq!(report(&first).jobs_admitted, 259);
+    assert_eq!(report(&first).jobs_executed, 3);
     assert_eq!(report(&first).pending_jobs, PENDING_JOB_LIMIT);
     assert_eq!(title(&first), "full-capacity callback");
     assert!(first.task_wake.is_some());
@@ -182,7 +214,9 @@ fn full_pending_capacity_delivery_begins_its_permit_before_callback_posts_anothe
 fn failed_clone_releases_pending_but_does_not_refund_lifetime_work() {
     let (mut realm, init) = start(
         r#"
-        for(let i=0;i<2047;i++){
+        // Two lifecycle admissions + 2,045 failed clones + the final message
+        // hit the exact unchanged 2,048 lifetime cap before the next attempt.
+        for(let i=0;i<2045;i++){
             try{postMessage(Symbol('owned'),'/');throw 'invalid clone accepted';}
             catch(error){if(!(error instanceof DOMException)||error.name!=='DataCloneError')throw error;}
         }
@@ -194,12 +228,13 @@ fn failed_clone_releases_pending_but_does_not_refund_lifetime_work() {
     "#,
     );
     assert_eq!(report(&init).jobs_admitted, CUMULATIVE_JOB_LIMIT);
+    assert_eq!(report(&init).jobs_executed, 2);
     assert_eq!(report(&init).pending_jobs, 1);
     let delivered = pump(&mut realm, &init);
     assert_eq!(delivered.state, RealmState::Ready, "{:?}", delivered.errors);
     assert!(delivered.errors.is_empty());
     assert_eq!(title(&delivered), "last admitted");
-    assert_eq!(report(&delivered).jobs_executed, 1);
+    assert_eq!(report(&delivered).jobs_executed, 3);
     no_work(&delivered);
     let target = projected(&delivered)
         .query_selector(0, "#a")
@@ -228,8 +263,8 @@ fn preclone_argument_syntax_and_transfer_failures_spend_no_clone_permit() {
     "#,
     );
     assert_eq!(title(&reply), "preclone failures");
-    assert_eq!(report(&reply).jobs_admitted, 0);
-    assert_eq!(report(&reply).jobs_executed, 0);
+    assert_eq!(report(&reply).jobs_admitted, 2);
+    assert_eq!(report(&reply).jobs_executed, 2);
     no_work(&reply);
 }
 
@@ -237,7 +272,7 @@ fn preclone_argument_syntax_and_transfer_failures_spend_no_clone_permit() {
 fn message_delivery_preserves_the_exact_cumulative_two_hundred_fifty_six_event_cap() {
     // A direct library control isolates the unchanged event-record allowance.
     // It does not change/bypass the real parent's separate 64-transaction cap.
-    let (mut realm, init) = start(
+    let (mut realm, init) = raw_start(
         r#"
         var calls=0;
         window.onerror=()=>{document.title='event-limit reporter must not run';};
@@ -250,6 +285,14 @@ fn message_delivery_preserves_the_exact_cumulative_two_hundred_fifty_six_event_c
     let mut reply = init;
     for executed in 1..=256 {
         reply = pump(&mut realm, &reply);
+        if executed == 1 {
+            // Keep this exact 256-message/event-record control source-time:
+            // no wrapper load listener consumes an invisible extra event.
+            // The two unobserved lifecycle tasks run before message #2.
+            assert_eq!(report(&reply).jobs_executed, 1);
+            assert_eq!(report(&reply).pending_jobs, 3);
+            reply = finish_load(&mut realm, reply);
+        }
         assert_eq!(
             reply.state,
             RealmState::Ready,
@@ -258,14 +301,14 @@ fn message_delivery_preserves_the_exact_cumulative_two_hundred_fifty_six_event_c
         );
         assert!(reply.errors.is_empty(), "{:?}", reply.errors);
         assert_eq!(title(&reply), format!("delivered {executed}"));
-        assert_eq!(report(&reply).jobs_admitted, executed + 1);
-        assert_eq!(report(&reply).jobs_executed, executed);
+        assert_eq!(report(&reply).jobs_admitted, executed + 3);
+        assert_eq!(report(&reply).jobs_executed, executed + 2);
         assert_eq!(report(&reply).pending_jobs, 1);
     }
     let fatal = pump(&mut realm, &reply);
     assert_eq!(fatal.state, RealmState::Fatal, "{:?}", fatal.errors);
-    assert_eq!(report(&fatal).jobs_admitted, 257);
-    assert_eq!(report(&fatal).jobs_executed, 257);
+    assert_eq!(report(&fatal).jobs_admitted, 259);
+    assert_eq!(report(&fatal).jobs_executed, 259);
     assert!(report(&fatal).fatal_reason.is_some());
     assert_eq!(title(&fatal), "delivered 256");
     assert!(fatal.navigation.is_none());
@@ -345,7 +388,7 @@ fn failed_getter_releases_partial_clone_source_memo_and_keeps_only_inner_message
         };
     "#,
     );
-    assert_eq!(report(&init).jobs_admitted, 2);
+    assert_eq!(report(&init).jobs_admitted, 4);
     assert_eq!(report(&init).pending_jobs, 1);
     boa_gc::force_collect();
     let reply = pump(&mut realm, &init);
@@ -389,17 +432,19 @@ fn escaped_message_payload_is_traced_until_its_event_is_released() {
 
 #[test]
 fn floor_fall_with_only_messages_does_not_invent_rejection_observation_gap() {
-    let (mut realm, init) = start(
+    let (mut realm, init) = raw_start(
         r#"
         window.onmessage=event=>{if(event.origin!==location.origin||event.data.proof!==42)throw 'message muted';document.title='message survives floor';};
         postMessage({proof:42},'/');eval('void 0');
     "#,
     );
-    assert_eq!(report(&init).jobs_admitted, 1);
-    assert_eq!(report(&init).pending_jobs, 1);
+    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).pending_jobs, 3);
     let reply = pump(&mut realm, &init);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     assert_eq!(title(&reply), "message survives floor");
+    let reply = finish_load(&mut realm, reply);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     no_work(&reply);
 }
 
@@ -418,12 +463,15 @@ fn rejection_privacy_purge_preserves_message_task_origin_and_exact_remaining_wor
     report(&init);
     let mut realm = realm.expect("owned retained message realm with expected privacy notice");
     assert_eq!(init.errors, [GAP]);
-    assert_eq!(report(&init).jobs_admitted, 2);
-    assert_eq!(report(&init).pending_jobs, 1);
+    assert_eq!(report(&init).jobs_admitted, 4);
+    assert_eq!(report(&init).pending_jobs, 3);
     let reply = pump(&mut realm, &init);
     assert_eq!(reply.errors, [GAP]);
     assert_eq!(report(&reply).jobs_executed, 1);
     assert_eq!(title(&reply), "message after purge");
+    let reply = finish_load(&mut realm, reply);
+    assert_eq!(reply.errors, [GAP]);
+    assert_eq!(report(&reply).jobs_executed, 3);
     no_work(&reply);
 }
 
@@ -441,10 +489,12 @@ fn initial_foreign_or_unknown_floor_does_not_suppress_legitimate_message_payload
             visibility,
         );
         assert!(init.errors.is_empty(), "{:?}", init.errors);
-        assert_eq!(report(&init).pending_jobs, 1);
+        assert_eq!(report(&init).pending_jobs, 3);
         let reply = pump(&mut realm, &init);
         assert!(reply.errors.is_empty(), "{:?}", reply.errors);
         assert_eq!(title(&reply), "document message");
+        let reply = finish_load(&mut realm, reply);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
         no_work(&reply);
     }
 }
@@ -461,8 +511,8 @@ fn notification_handler_posted_message_survives_active_rejection_floor_purge() {
     let notice = pump(&mut realm, &init);
     assert_eq!(notice.state, RealmState::Ready, "{:?}", notice.errors);
     assert_eq!(notice.errors, [UNHANDLED, GAP]);
-    assert_eq!(report(&notice).jobs_admitted, 2);
-    assert_eq!(report(&notice).jobs_executed, 1);
+    assert_eq!(report(&notice).jobs_admitted, 4);
+    assert_eq!(report(&notice).jobs_executed, 3);
     assert_eq!(report(&notice).pending_jobs, 1);
     let message = pump(&mut realm, &notice);
     assert_eq!(message.errors, [GAP]);
@@ -475,7 +525,7 @@ fn invalid_input_closes_all_message_timer_and_rejection_work_without_replay() {
     let (mut realm, init) = start(
         "postMessage({proof:1},'/');Promise.reject({proof:2});setTimeout(()=>{throw 'must not run';},100000);",
     );
-    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).jobs_admitted, 5);
     assert_eq!(report(&init).pending_jobs, 3);
     let rejected = realm.dispatch(SessionInput {
         kind: InputKind::Click { target: usize::MAX },
@@ -483,8 +533,8 @@ fn invalid_input_closes_all_message_timer_and_rejection_work_without_replay() {
     });
     assert_eq!(rejected.state, RealmState::Closed);
     assert!(rejected.snapshot.is_none());
-    assert_eq!(report(&rejected).jobs_admitted, 3);
-    assert_eq!(report(&rejected).jobs_executed, 0);
+    assert_eq!(report(&rejected).jobs_admitted, 5);
+    assert_eq!(report(&rejected).jobs_executed, 2);
     no_work(&rejected);
     let replay = realm.pump_tasks(TaskPump {
         wake_token: init.task_wake.unwrap().token,
@@ -505,11 +555,11 @@ fn fatal_message_callback_stops_later_listeners_jobs_messages_and_timers() {
         postMessage({proof:1},'/');postMessage({proof:2},'/');setTimeout(()=>{document.title='timer must not run';},100000);
     "#,
     );
-    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).jobs_admitted, 5);
     let fatal = pump(&mut realm, &init);
     assert_eq!(fatal.state, RealmState::Fatal, "{:?}", fatal.errors);
-    assert_eq!(report(&fatal).jobs_admitted, 3);
-    assert_eq!(report(&fatal).jobs_executed, 1);
+    assert_eq!(report(&fatal).jobs_admitted, 5);
+    assert_eq!(report(&fatal).jobs_executed, 3);
     assert!(report(&fatal).fatal_reason.is_some());
     assert_eq!(title(&fatal), "before");
     assert!(fatal.navigation.is_none());

@@ -112,6 +112,10 @@ impl Peer {
         ] {
             assert_eq!(reply[key].as_u64(), Some(expected), "{key}");
         }
+        assert!(
+            reply["reply"].get("lifecycle").is_none(),
+            "legacy wire must omit modern lifecycle entirely"
+        );
         reply
     }
     fn wait(&mut self) -> ExitStatus {

@@ -42,9 +42,9 @@ services = load("message_page_services", "tools/page-services-smoke.py")
 control = load("message_process_control", "tools/wpt/process_control.py")
 require = services.require
 FIXTURE = REPO / "tests/fixtures/script/message-events.html"
-FIXTURE_SHA256 = "9b32f5cbd533f0d836cb09a9d9651331ce44b7f81588173789e66e743ced0c96"
+FIXTURE_SHA256 = "5f5a7276865dbd635f87f8e2dc175e3e12f9fd7fb4d27d71d149fa5dccf3580d"
 FIXTURE_URL = "http://127.0.0.1:7878/message-events"
-CHECKPOINT = ("script,after-post,script-microtask,load,load-microtask,property,"
+CHECKPOINT = ("script,script-microtask,load,after-post,load-microtask,property,"
               "property-microtask,listener,listener-microtask")
 PROOF = "deep-clone-identity-noncancelable"
 LOG_LIMIT = 1024 * 1024
@@ -350,11 +350,9 @@ def check_messages(log, name):
                    "SCRIPT_SESSION_CLOSED", "SCRIPT_SHUTDOWN_ERROR", "LOAD_ERROR",
                    "RESOURCE_WARNING", "RESOURCE_DIAGNOSTIC", "JOURNEY_INCOMPLETE"):
         require(marker not in log, f"{name}: unexpected diagnostic/failure {marker}")
-    require(sum(line.startswith("PAGE_TASK_APPLIED ") for line in log.splitlines()) == 1,
-            f"{name}: expected one real parent-issued message task")
     reports = [json.loads(line.removeprefix("SCRIPT_BOA ")) for line in log.splitlines()
                if line.startswith("SCRIPT_BOA ")]
-    require(len(reports) >= 2, f"{name}: missing real restricted-worker reports")
+    require(len(reports) >= 4, f"{name}: missing separate startup/DCL/load/message reports")
     for report in reports:
         require(type(report) is dict and "fatal_reason" in report,
                 f"{name}: malformed or missing typed worker fatal state")
@@ -381,19 +379,8 @@ def check_messages(log, name):
                 f"{name}: invalid/changed requested-System memory bounds")
     source = control.read_artifact(FIXTURE, limit=LOG_LIMIT).split(b"<script>", 1)[1].split(b"</script>", 1)[0]
     realm = [item for item in reports if item["source_admissions"] == 1 and item["source_bytes"] == len(source)]
-    require(len(realm) >= 2, f"{name}: missing exact original fixture source reports")
-    require(tuple(realm[0][key] for key in ("jobs_admitted", "jobs_executed", "pending_jobs")) == (3, 2, 1),
-            f"{name}: Init did not retain the real later message after its two microtasks")
-    require(all(tuple(item[key] for key in ("jobs_admitted", "jobs_executed", "pending_jobs")) == (5, 5, 0)
-                for item in realm[1:]), f"{name}: message/listener checkpoints did not settle exactly once")
-    results = control.read_artifact(REPO / "tests/fixtures/script/event-results.html", limit=LOG_LIMIT)
-    results_source = results.split(b"<script>", 1)[1].split(b"</script>", 1)[0]
-    for item in reports:
-        if item in realm:
-            continue
-        require((item["source_admissions"], item["source_bytes"]) in ((0, 0), (1, len(results_source)))
-                and all(item[key] == 0 for key in ("jobs_admitted", "jobs_executed", "pending_jobs")),
-                f"{name}: unexpected later source or unfinished work outside the original fixture")
+    trace = [(3, 1, 2), (3, 2, 1), (5, 4, 1), (7, 7, 0)]
+    lifecycle = services.check_lifecycle_tasks(log, reports, (1, len(source)), trace, name)
     for before, after in zip(realm, realm[1:]):
         require(after["opcodes_remaining"] <= before["opcodes_remaining"] and
                 all(after[key] >= before[key] for key in ("jobs_admitted", "jobs_executed")) and
@@ -401,7 +388,8 @@ def check_messages(log, name):
                     for key in ("peak_bytes", "cumulative_bytes", "allocations")),
                 f"{name}: original realm renewed cumulative counters")
     return {"reports": len(reports), "original_realm_reports": len(realm),
-            "init_work": [3, 2, 1], "settled_work": [5, 5, 0], "applied_tasks": 1,
+            "init_work": [3, 1, 2], "load_work": [5, 4, 1], "settled_work": [7, 7, 0],
+            **lifecycle,
             "emitted_script_diagnostics": 0}
 
 

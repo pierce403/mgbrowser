@@ -109,8 +109,10 @@ when a host has no isolated worker. The desktop enables scripts by default since
 v0.9.4 (`--disable-scripts` opts out);
 unsupported platforms retain the existing refusal path. The extraction preserved
 behavior; the later Boa adoption explicitly introduces the versioned profile in
-[BOA.md](BOA.md) and protocol v4 with validated engine-specific accounting,
-typed classic-source provenance and parent-issued timer tasks. Host polling drives task eligibility; painting/CDP
+[BOA.md](BOA.md). Modern v4 added validated engine-specific accounting,
+typed classic-source provenance and parent-issued timer tasks; the v0.9.11
+candidate uses strict modern v5 for monotonic lifecycle/failure progress.
+Original-engine v1 bytes remain isolated. Host polling drives task eligibility; painting/CDP
 event draining alone does not. Timers share existing job/session resource
 ledgers rather than acquiring network, filesystem or process authority.
 Original protocol/allocation assertions remain in the explicit legacy test lane.

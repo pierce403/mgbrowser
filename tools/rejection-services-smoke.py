@@ -37,11 +37,9 @@ def check_rejections(log, name):
             f"{name}: expected one explicitly partial rejection transaction")
     require("SCRIPT_ERROR" not in log and "SCRIPT_REJECTED" not in log,
             f"{name}: another script failure was reported")
-    require(sum(line.startswith("PAGE_TASK_APPLIED ") for line in log.splitlines()) == 1,
-            f"{name}: expected one parent-issued frozen rejection batch")
     reports = [json.loads(line.removeprefix("SCRIPT_BOA "))
                for line in log.splitlines() if line.startswith("SCRIPT_BOA ")]
-    require(len(reports) >= 2, f"{name}: missing real worker reports")
+    require(len(reports) >= 4, f"{name}: missing separate startup/DCL/load/rejection reports")
     for report in reports:
         require(report.get("profile") == "boa-page-process-v1" and
                 report.get("fatal_reason") is None and
@@ -61,12 +59,8 @@ def check_rejections(log, name):
     source = FIXTURE.read_text().split("<script>", 1)[1].split("</script>", 1)[0]
     realm = [report for report in reports if report["source_admissions"] == 1 and
              report["source_bytes"] == len(source.encode())]
-    require(len(realm) >= 2, f"{name}: missing original rejection realm reports")
-    require((realm[0]["jobs_admitted"], realm[0]["jobs_executed"], realm[0]["pending_jobs"]) == (2, 1, 1),
-            f"{name}: Init did not retain exactly one later rejection candidate")
-    require(all((report["jobs_admitted"], report["jobs_executed"], report["pending_jobs"]) == (4, 4, 0)
-                for report in realm[1:]),
-            f"{name}: batch/property/listener checkpoints did not settle exactly once")
+    services.check_lifecycle_tasks(log, reports, (1, len(source.encode())),
+                                   [(3, 1, 2), (3, 2, 1), (4, 3, 1), (6, 6, 0)], name)
     for previous, current in zip(realm, realm[1:]):
         require(current["opcodes_remaining"] <= previous["opcodes_remaining"] and
                 current["jobs_admitted"] >= previous["jobs_admitted"] and

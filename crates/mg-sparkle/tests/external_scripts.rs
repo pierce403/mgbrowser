@@ -9,7 +9,7 @@ use mg_sparkle::{
         boa::{BoaPageRealm, execute},
         external_source_json_bytes, external_source_json_bytes_with_provenance, json_bytes,
     },
-    page_session::{InputKind, SessionInput},
+    page_session::{InputKind, LifecyclePhase, SessionInput, TaskPump},
 };
 
 const URL: &str = "https://example.test/owned";
@@ -367,6 +367,27 @@ fn deferred_nomodule_fallback_shares_state_and_retains_handlers() {
     ]));
     assert!(initial.errors.is_empty(), "{:?}", initial.errors);
     assert_eq!(initial.scripts_executed, 3);
+    assert_eq!(
+        initial.lifecycle.unwrap().phase,
+        LifecyclePhase::Interactive
+    );
+    let mut realm = realm.unwrap();
+    let mut initial = initial;
+    for _ in 0..2 {
+        let wake = initial
+            .task_wake
+            .as_ref()
+            .expect("mandatory lifecycle work");
+        assert_eq!(wake.delay_ms, 0);
+        initial = realm.pump_tasks(TaskPump {
+            wake_token: wake.token,
+        });
+        assert!(initial.errors.is_empty(), "{:?}", initial.errors);
+    }
+    assert_eq!(
+        initial.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
     let snapshot = initial.snapshot.unwrap();
     let document = document::project_nodes(snapshot.nodes, URL).unwrap();
     assert!(
@@ -376,7 +397,7 @@ fn deferred_nomodule_fallback_shares_state_and_retains_handlers() {
             .any(|node| node.text == "classic:deferred:ready")
     );
     let target = document.query_selector(0, "#link").unwrap().unwrap();
-    let reply = realm.unwrap().dispatch(SessionInput {
+    let reply = realm.dispatch(SessionInput {
         kind: InputKind::Click { target },
         edits: Vec::new(),
     });

@@ -89,8 +89,9 @@ CDP cancellation/form/destination assertions. This is not upstream WPT coverage.
 The static adapter still does not await arbitrary timers; audit current-cohort
 passing script logs for unfinished work before score adoption. A new asynchronous
 scoring prerequisite/corpus requires its own frozen contribution, not a silent
-change to waits or exceptions while scoring an engine fix. Bundled Init is not
-fully task-separated lifecycle or completed Window-testharness readiness.
+change to waits or exceptions while scoring an engine fix. The original timer
+increment's bundled Init was not completed Window-testharness readiness; queued
+snapshot lifecycle has separate acceptance below and is not full readiness either.
 
 For Window uncaught errors, also read docs/WINDOW_ERRORS.md and run boa_errors,
 external_scripts and actual boa_worker/script_tasks controls in debug/release.
@@ -98,8 +99,9 @@ Check five-argument onerror/literal-true cancellation, capture-phase stop versus
 same-invocation continuation, retained diagnostics, recursive/fatal no-JS paths,
 real traced exception release and sticky foreign/unknown/dynamic-source muting.
 Parent origin proof covers every redirect and survives cache/defer; DOM/base
-attributes cannot supply it. Preserve modern v4/strict legacy v1 bytes and the
-existing resource counters. Run tools/error-services-smoke.py on packaged and
+attributes cannot supply it. Preserve the current strict modern wire version,
+strict legacy v1 bytes and existing resource counters; never guess an old modern
+frame's shape. Run tools/error-services-smoke.py on packaged and
 public-installed bytes: require its exact expected diagnostic/PARTIAL per
 journey plus native/CDP identity, checkpoint and retained form proofs. Do not
 relax the old diagnostic-free page/task checkers. These are authored controls,
@@ -132,7 +134,8 @@ trusted origins, conversion/IteratorClose fatal guards, traced event identity
 and terminal root/permit cleanup. No new transfer/cross-context authority is
 implied. Run tools/test_message_services_smoke.py and then
 tools/message-services-smoke.py against packaged and public-installed bytes.
-Require its exact queued/settled work, one parent task, native/CDP clone and
+Require its exact queued/settled work, one actual message task plus the separate
+mandatory lifecycle tasks, native/CDP clone and
 checkpoint proof, retained form/cancellation/destination, zero diagnostics/trap
 requests and confirmed owned cleanup. Its private display disables Mesa's disk
 shader cache; artifact limits and browser settings remain unchanged. Do not
@@ -140,11 +143,28 @@ relax older diagnostic checkers. A full unchanged harness bootstrap probe is
 non-scoring: successful initialization or pending work is not typed completion,
 full lifecycle readiness or an upstream pass.
 
-Before implementing queued snapshot lifecycle, read docs/DOCUMENT_LIFECYCLE.md.
-Its proposed v5 progress, mandatory shared-work admission, typed sticky initial
-outcome and renderer integration are a frozen prerequisite, not shipped behavior.
-Separate semantic timing migrations from resource assertions; never blanket-add
-lifecycle counters or accept a new status string in place of initial failures.
+For queued snapshot lifecycle, read docs/DOCUMENT_LIFECYCLE.md. Its strict v5
+progress, mandatory shared admission, typed sticky initial outcome and renderer
+integration are one bounded contract, not general event-loop or harness support.
+Run boa_lifecycle, shared/transport, actual script_tasks, Chassis and independent
+embedding controls in debug/release, preserving all older tests. Keep raw
+source-fatal quota negatives and explicitly separate post-load test workloads;
+never blanket-add counters, subtract mandatory work or accept transient status
+text in place of initial failures. A terminal reply must cancel pending work,
+retain its lifecycle prefix and preserve the first actual failure; Context
+teardown is still necessary for VM roots, not a test-only GC repair.
+Build journey_server/cdp_journey/lifecycle_journey and run
+tools/test_lifecycle_services_smoke.py, then tools/lifecycle-services-smoke.py
+against packaged and public-installed bytes. The authored helper separately
+checks actual native retained-form behavior, external one-per-generation
+start/commit/DCL/load/stop ordering, later DOM invalidation without repeated
+milestones, deferred/earlier-task checkpoints and exact HTTP/work receipts. It
+leaves a long timer pending to distinguish initial load from queue idle. Its
+first local candidate run passed on 2026-10-22; package/public delivery remains
+a separate release gate. It does not prove hidden-tab/supersession GUI behavior,
+ordinary Playwright compatibility, upstream passes or typed harness completion.
+Keep all older diagnostic rejection guards and native/CDP interaction proofs
+when explicitly migrating their bundled-order premises.
 
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
@@ -187,7 +207,8 @@ gate. Use private XDG roots only: never read or modify real user bookmarks.
 Inspect the saved bookmark-dialog screenshot, then repeat the same acceptance
 with the public-installed release. Storage belongs to the host, not Chassis.
 
-For post-update restart, run tools/chrome-update-smoke.sh with the packaged and
+For post-update restart, first run tools/test_chrome_update_smoke.py, then
+tools/chrome-update-smoke.sh with the packaged and
 public-installed executable. It retains the running-inode worker regression,
 then uses an explicitly synthetic newer-version wrapper to activate local
 update readiness without GitHub API access. Native clicks must preserve the old

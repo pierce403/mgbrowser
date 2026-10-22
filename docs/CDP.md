@@ -115,6 +115,15 @@ operations. This adds no commands, remote execution context or Runtime evaluatio
 
 Enabled Page sessions receive `frameStartedLoading`, `frameNavigated`, `domContentEventFired`, `loadEventFired`, and `frameStoppedLoading` as the corresponding navigation work occurs. Transport failures omit the two content/load completion events. DOM sessions receive `documentUpdated` when their node references become stale. Attach/detach events describe actual session changes. Navigation errors stay distinguishable from successful content delivery. Event timestamps use monotonic seconds; load events cannot establish that unsupported scripts or images completed.
 
+The local v0.9.11 lifecycle candidate separates these notifications: document
+commit does not settle Page.navigate, DCL/load follow accepted worker milestones,
+and loading stops on load or explicit failure/abort. An aborted terminal prefix
+does not fabricate either missing milestone; later projections emit only DOM
+invalidation. Disabled-script parsing/resource completion and the explicit legacy
+test lane remain parent-owned. This is queued snapshot lifecycle, not a general
+resource-loading barrier, Runtime support or Playwright compatibility. Full
+release/public acceptance remains recorded separately in the dated log.
+
 Unknown methods return `-32601`; invalid or unsupported parameters return `-32602`. Invalidated handles and unavailable page operations return a protocol error with a useful explanation. Commands with no return fields still reply with an empty `result` object. A response must contain either `result` or `error`, never both.
 
 ## Acceptance and continued development

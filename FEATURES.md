@@ -540,6 +540,18 @@ ordering, exact admission boundaries and a capture-stop phase bug. This review
 does not implement the contract, change production v4, add WPT passes or complete
 any unchecked criterion above.
 
+Local candidate, 2026-10-22: queued lifecycle, strict v5/legacy isolation and typed
+initial-load integration are implemented for v0.9.11. Focused semantic, exact
+resource-boundary, actual-worker and Chassis/embedding tests pass; the authored
+native/external-CDP fixture verifies deferred/earlier-task order, separate DCL/load,
+later projection without repeated milestones and retained real form navigation.
+A measured Closed/event-cap cleanup defect is covered and corrected without
+new limits or capabilities. Full debug/release regressions, package/install/updater
+fixture, frozen JSPLAN, all 13 packaged native/CDP helpers and fresh full WPT review
+pass. Exact-commit CI, tagged packaging and public release acceptance remain.
+Do not mark any broader F-016 or F-026 gate
+complete from these authored local results.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable

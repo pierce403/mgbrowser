@@ -5,6 +5,7 @@ mod cdp_browser;
 #[cfg(feature = "chrome")]
 mod chrome;
 mod devtools;
+mod initial_load;
 pub mod net;
 pub mod resources;
 mod scale;
@@ -12,11 +13,12 @@ pub mod scripts;
 mod scroll;
 mod theme;
 pub use cdp_browser::BrowserCdp;
+pub use initial_load::{InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus};
 use mg_sparkle::{
     document::{self, Document, Item},
     page_session::{
-        ControlEdit, DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump,
-        TaskWake,
+        AccountingSnapshot, ControlEdit, DefaultAction, InputKind, LifecyclePhase,
+        LifecycleProgress, RealmState, SessionInput, SessionReply, TaskPump, TaskWake,
     },
     paint::{Canvas, Fonts},
 };
@@ -173,7 +175,7 @@ struct ScheduledTaskWake {
     token: u64,
     at: Instant,
 }
-/// Explicit script scheduling state; navigation loading keeps its old meaning.
+/// Explicit script scheduling state, separate from initial document loading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptWorkStatus {
     NoSession,
@@ -239,6 +241,9 @@ pub struct Browser {
     task_wake: Option<ScheduledTaskWake>,
     last_task_wake_token: u64,
     script_blocked: bool,
+    lifecycle: Option<LifecycleProgress>,
+    initial_script: InitialScriptOutcome,
+    last_accounting: Option<AccountingSnapshot>,
     edit_versions: HashMap<usize, u64>,
     next_edit: u64,
     values: HashMap<usize, String>,
@@ -259,6 +264,7 @@ pub struct Browser {
     inflight: usize,
     resource_generation: Arc<AtomicU64>,
     loading: bool,
+    fetching: bool,
     tx: mpsc::Sender<Loaded>,
     rx: mpsc::Receiver<Loaded>,
     dirty: bool,
@@ -634,6 +640,9 @@ impl Browser {
             task_wake: None,
             last_task_wake_token: 0,
             script_blocked: false,
+            lifecycle: None,
+            initial_script: InitialScriptOutcome::new(false),
+            last_accounting: None,
             edit_versions: HashMap::new(),
             next_edit: 0,
             hits: Vec::new(),
@@ -657,6 +666,7 @@ impl Browser {
             resource_generation: Arc::new(AtomicU64::new(0)),
             inflight: 0,
             loading: false,
+            fetching: false,
             tx,
             rx,
             dirty: true,
@@ -693,7 +703,18 @@ impl Browser {
             self.dirty = true;
             return;
         }
+        if self.loading {
+            self.finish_initial_load(Some("net::ERR_ABORTED: superseded navigation".into()));
+        }
         self.generation += 1;
+        self.loading = true;
+        self.fetching = true;
+        self.lifecycle = None;
+        self.last_accounting = None;
+        self.initial_script = InitialScriptOutcome::new(self.scripts_enabled);
+        if self.cdp_enabled {
+            self.cdp_events.push(cdp_browser::Event::Started);
+        }
         self.devtools.new_navigation();
         self.resource_generation
             .store(self.generation, Ordering::Relaxed);
@@ -712,11 +733,7 @@ impl Browser {
         if retired.is_some() {
             self.script_blocked = true;
         }
-        if self.cdp_enabled {
-            self.cdp_events.push(cdp_browser::Event::Started);
-        }
         self.inflight += 1;
-        self.loading = true;
         self.address = target.clone();
         self.focus = Focus::Page;
         self.status = format!("Loading {target}");
@@ -835,6 +852,7 @@ impl Browser {
         });
     }
     pub fn poll(&mut self) {
+        let was_loading = self.loading;
         while let Ok(mut loaded) = self.rx.try_recv() {
             let received = Instant::now();
             self.inflight = self.inflight.saturating_sub(1);
@@ -851,7 +869,15 @@ impl Browser {
                 }
                 continue;
             }
-            self.loading = false;
+            self.fetching = false;
+            // Remain loading while a committed modern realm pumps its initial
+            // lifecycle. No old-generation task is eligible during a new fetch.
+            self.loading = true;
+            self.lifecycle = None;
+            self.last_accounting = None;
+            self.initial_script = InitialScriptOutcome::new(loaded.script.is_some());
+            self.initial_script
+                .broker_rejections(loaded.script_fetch_profile.rejected_sources);
             self.scroll = 0;
             self.stop_scroll();
             self.values.clear();
@@ -903,15 +929,31 @@ impl Browser {
                     let script_status = match loaded.script {
                         Some(Ok(mut startup)) => {
                             let wake = self.validate_task_wake(&startup.reply, received);
+                            let lifecycle = self.validate_lifecycle_reply(&startup.reply, None);
+                            let rejected = startup.reply.is_rejected_initial();
                             let validation = if startup.reply.revision != 0
+                                || startup.reply.errors.len() > 64
+                                || startup.reply.errors.iter().any(|error| error.len() > 4096)
                                 || !startup.reply.acknowledgements.is_empty()
                                 || startup.reply.default_action != DefaultAction::None
+                                || startup.reply.outcome.click_canceled.is_some()
+                                || startup.reply.outcome.submit_canceled.is_some()
                             {
                                 Err("Invalid initial script session reply".into())
                             } else {
                                 wake.and_then(|wake| {
-                                    Self::project_reply(&mut startup.reply, &self.address, None)
-                                        .map(|document| (document, wake))
+                                    lifecycle.and_then(|lifecycle| {
+                                        if rejected {
+                                            Ok((None, wake, lifecycle))
+                                        } else {
+                                            Self::project_reply(
+                                                &mut startup.reply,
+                                                &self.address,
+                                                None,
+                                            )
+                                            .map(|document| (Some(document), wake, lifecycle))
+                                        }
+                                    })
                                 })
                             };
                             let timed = startup
@@ -920,9 +962,15 @@ impl Browser {
                                 .ok_or_else(|| "Missing script session ownership".to_string())
                                 .and_then(|session| session.charge_active(received.elapsed()));
                             match validation.and_then(|document| timed.map(|_| document)) {
-                                Ok((document, wake)) => {
-                                    projected = Some(document);
-                                    scripting = true;
+                                Ok((document, wake, lifecycle)) => {
+                                    projected = document;
+                                    scripting = projected.is_some();
+                                    self.lifecycle = lifecycle;
+                                    if !rejected {
+                                        self.last_accounting =
+                                            Some(startup.reply.accounting_snapshot());
+                                    }
+                                    self.initial_script.accept(&startup.reply, true);
                                     self.page_revision = startup.reply.revision;
                                     self.script_blocked = startup.reply.state != RealmState::Ready;
                                     if !self.script_blocked {
@@ -940,6 +988,8 @@ impl Browser {
                                     }
                                     eprintln!("SCRIPT_REJECTED {error:?}");
                                     self.devtools.record("JavaScript rejected", &error);
+                                    self.initial_script
+                                        .fail(InitialScriptFailure::Infrastructure, &error);
                                     format!("JS rejected; original document retained: {error}")
                                 }
                             }
@@ -947,6 +997,8 @@ impl Browser {
                         Some(Err(error)) => {
                             eprintln!("SCRIPT_ERROR {error:?}");
                             self.devtools.record("JavaScript worker", &error);
+                            self.initial_script
+                                .fail(InitialScriptFailure::Infrastructure, &error);
                             format!("JS worker failed: {error}")
                         }
                         None => "JavaScript disabled".into(),
@@ -1012,6 +1064,8 @@ impl Browser {
                 Err(error) => {
                     self.devtools.record("Navigation", &error);
                     load_error = Some(error.clone());
+                    self.initial_script
+                        .fail(InitialScriptFailure::Infrastructure, &error);
                     self.page_mime = "text/html".into();
                     self.status = format!("Load failed: {error}");
                     self.document = document::parse(
@@ -1030,11 +1084,25 @@ impl Browser {
             self.frame_cache = None;
             self.style_cache.clear();
             if self.cdp_enabled {
-                self.cdp_events.push(cdp_browser::Event::Finished {
-                    generation: loaded.generation,
+                self.cdp_events.push(cdp_browser::Event::Committed {
                     frame: cdp_browser::frame(self),
-                    error: load_error,
                 });
+            }
+            if let Some(error) = load_error {
+                self.finish_initial_load(Some(error));
+            } else if self.initial_script.status == InitialScriptStatus::Failed {
+                self.finish_initial_load(Some("Initial page script execution failed".into()));
+            } else if self.lifecycle.is_none() {
+                // Script-disabled and explicit legacy lanes have parent-owned
+                // resource completion / bundled Init. Never fabricate v5 data.
+                if self.cdp_enabled {
+                    let at = Instant::now();
+                    self.cdp_events
+                        .push(cdp_browser::Event::DomContentLoaded { at });
+                    self.cdp_events
+                        .push(cdp_browser::Event::LoadComplete { at });
+                }
+                self.finish_initial_load(None);
             }
             self.dirty = true;
             if let Some(target) = script_navigation.or_else(|| self.document.refresh.clone()) {
@@ -1042,12 +1110,17 @@ impl Browser {
                     self.refresh_count += 1;
                     self.navigate_inner(target, None, false, true);
                 } else {
-                    self.status = "Automatic navigation limit reached; navigation stopped.".into();
+                    self.block_session("Automatic navigation limit reached; navigation stopped");
                 }
             }
         }
         self.poll_page_session();
-        self.poll_task_wake(Instant::now());
+        // Let initial-load consumers observe the accepted load milestone
+        // before starting unrelated load-created zero-delay work. Ordinary
+        // native polling resumes it on the next tick, including hidden tabs.
+        if !was_loading || self.loading {
+            self.poll_task_wake(Instant::now());
+        }
     }
     fn script_summary(&mut self, reply: &SessionReply) -> String {
         self.devtools.performance.scripts_executed = self
@@ -1185,9 +1258,68 @@ impl Browser {
         self.pending_transaction = None;
         self.task_wake = None;
         self.script_blocked = true;
+        self.fetching = false;
+        self.initial_script
+            .fail(InitialScriptFailure::Infrastructure, error);
+        self.finish_initial_load(Some(error.into()));
         self.status = format!("Page script session unavailable; activation canceled: {error}");
         eprintln!("SCRIPT_SESSION_CLOSED {error:?}");
         self.dirty = true;
+    }
+    fn validate_lifecycle_reply(
+        &self,
+        reply: &SessionReply,
+        task_pump: Option<bool>,
+    ) -> Result<Option<LifecycleProgress>, String> {
+        let modern = self.child_pool.source_wire_mode() == scripts::SourceWireMode::Modern;
+        if modern != reply.lifecycle.is_some() {
+            return Err("Script lifecycle does not match the trusted runtime lane".into());
+        }
+        match task_pump {
+            None => reply.validate_lifecycle_initial(),
+            Some(pump) => reply.validate_lifecycle_after(self.lifecycle, pump),
+        }
+    }
+    fn finish_initial_load(&mut self, error: Option<String>) {
+        if !self.loading {
+            return;
+        }
+        if let Some(error) = &error {
+            self.initial_script
+                .fail(InitialScriptFailure::Infrastructure, error);
+        }
+        self.loading = false;
+        if self.cdp_enabled {
+            self.cdp_events.push(cdp_browser::Event::Finished {
+                generation: self.generation,
+                error,
+            });
+        }
+        self.dirty = true;
+    }
+    fn accept_lifecycle(&mut self, progress: Option<LifecycleProgress>, at: Instant) {
+        let previous = self.lifecycle;
+        self.lifecycle = progress;
+        if let Some(progress) = progress
+            && previous.map(|previous| previous.phase) != Some(progress.phase)
+        {
+            match progress.phase {
+                LifecyclePhase::DomContentLoaded => {
+                    if self.cdp_enabled {
+                        self.cdp_events
+                            .push(cdp_browser::Event::DomContentLoaded { at });
+                    }
+                }
+                LifecyclePhase::LoadComplete => {
+                    if self.cdp_enabled {
+                        self.cdp_events
+                            .push(cdp_browser::Event::LoadComplete { at });
+                    }
+                    self.finish_initial_load(None);
+                }
+                LifecyclePhase::Initializing | LifecyclePhase::Interactive => {}
+            }
+        }
     }
     fn validate_task_wake(
         &self,
@@ -1226,7 +1358,7 @@ impl Browser {
         self.task_wake = wake;
     }
     fn poll_task_wake(&mut self, now: Instant) {
-        if self.loading || self.script_blocked || self.pending_transaction.is_some() {
+        if self.fetching || self.script_blocked || self.pending_transaction.is_some() {
             return;
         }
         let Some(wake) = self.task_wake.filter(|wake| now >= wake.at) else {
@@ -1471,11 +1603,28 @@ impl Browser {
                 );
             }
             let wake = self.validate_task_wake(&reply, received)?;
+            let lifecycle = self.validate_lifecycle_reply(&reply, Some(activation.is_none()))?;
+            if self
+                .last_accounting
+                .as_ref()
+                .is_some_and(|previous| !reply.accounting_valid_after(previous))
+            {
+                return Err(
+                    "Script session cumulative accounting moved backward or changed profile".into(),
+                );
+            }
             let document = Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
             if let Some(input) = &activation {
                 Self::validate_default(&document, &input.kind, &reply.default_action)?;
             }
-            Ok((document, wake, identity, activation.is_some(), ack))
+            Ok((
+                document,
+                wake,
+                lifecycle,
+                identity,
+                activation.is_some(),
+                ack,
+            ))
         })();
         // Every successful host frame requires exactly one acknowledgment,
         // even if its identity or projection is rejected. Err closures have no
@@ -1485,7 +1634,7 @@ impl Browser {
             .as_mut()
             .unwrap()
             .charge_active(received.elapsed());
-        let (document, wake, identity, activation, ack) =
+        let (document, wake, lifecycle, identity, activation, ack) =
             match projection.and_then(|value| timed.map(|_| value)) {
                 Ok(value) => value,
                 Err(error) => {
@@ -1493,6 +1642,7 @@ impl Browser {
                     return;
                 }
             };
+        self.initial_script.accept(&reply, false);
         if reply.state != RealmState::Ready {
             // Later failed transactions are atomic from the parent's point of
             // view. Diagnostics survive, but the previous accepted document,
@@ -1502,12 +1652,14 @@ impl Browser {
             return;
         }
         self.acknowledge_projection(document, &ack);
+        self.last_accounting = Some(reply.accounting_snapshot());
         self.replace_task_wake(wake);
         self.page_revision = reply.revision;
         self.dom_epoch += 1;
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
         }
+        self.accept_lifecycle(lifecycle, received);
         let _ = self.script_summary(&reply);
         self.status = format!(
             "Page {} completed · {} diagnostics",
@@ -3082,6 +3234,7 @@ mod tests {
                     allocations: None,
                     boa: None,
                     task_wake: None,
+                    lifecycle: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -3105,6 +3258,7 @@ mod tests {
                     allocations: Some(invalid_report),
                     boa: None,
                     task_wake: None,
+                    lifecycle: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -3190,6 +3344,7 @@ mod tests {
                         allocations: None,
                         boa: None,
                         task_wake: None,
+                        lifecycle: None,
                     },
                 })),
                 result: Ok(net::Response {
@@ -3421,6 +3576,12 @@ impl Browser {
     }
     pub fn is_loading(&self) -> bool {
         self.loading
+    }
+    pub fn initial_script_outcome(&self) -> &InitialScriptOutcome {
+        &self.initial_script
+    }
+    pub fn document_lifecycle(&self) -> Option<LifecycleProgress> {
+        self.lifecycle
     }
     /// Hosts may explicitly wait for script work under their own finite deadline.
     /// This does not redefine navigation loading or wait for arbitrary timers.

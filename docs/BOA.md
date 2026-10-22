@@ -6,6 +6,14 @@ installer verification are recorded separately in the dated work log.
 This is a bounded JSPLAN integration increment, not completion of P1-P8 or a
 claim that modern web applications generally work.
 
+Local v0.9.11 candidate: [queued snapshot lifecycle](DOCUMENT_LIFECYCLE.md)
+replaces bundled Init with separate DCL/load tasks, strict modern v5 progress
+and typed sticky initial-load evidence. Full local regressions, package/install,
+all 13 native/CDP helpers, frozen JSPLAN and fresh WPT review pass; exact-commit
+CI, tagged packaging and public release gates remain.
+Historical v0.9.7-v0.9.10 sections below describe their original bundled behavior;
+public v0.9.10 is unchanged until a verified new release is published.
+
 ```sh
 mgbrowser --enable-scripts https://example.com/
 ```
@@ -24,8 +32,10 @@ lexical bindings, arrows, classes, templates, destructuring, Map/WeakMap, Proxy,
 Reflect and Promise callbacks. Bounded FIFO microtask checkpoints run after
 scripts and delivered callbacks. Scripts can create real controls, change text,
 register later listeners and propose navigation that the parent validates.
-The DOM API remains deliberately small. Snapshot startup is still bundled in
-initialization rather than a fully task-separated HTML lifecycle.
+The DOM API remains deliberately small. Ordinary and deferred classic sources
+are pre-parsed/preloaded; the v0.9.11 candidate queues separate DCL/load tasks
+after their checkpoints. This is not a streaming parser or dynamic-resource
+load barrier; see [the lifecycle contract](DOCUMENT_LIFECYCLE.md).
 
 Module loading, string timers/intervals, fetch/XHR, script cookie access,
 synthetic dispatch and a general browser task loop are not implemented. An idle
@@ -49,7 +59,8 @@ errors opaque, even later local throws. Opaque errors expose only `Script error.
 empty filename, zero line/column and null error. Proven local realms preserve
 thrown-value identity, but still report honest unknown locations. This deliberately
 over-mutes rather than guessing a throw site from a callback or source path.
-Modern sessions use v4; the explicit original-engine lane keeps strict v1 bytes.
+That v0.9.8 increment used modern v4; v0.9.11 introduces strict modern v5.
+The explicit original-engine lane keeps strict v1 bytes.
 See [the policy and authored controls](WINDOW_ERRORS.md).
 
 That v0.9.8 release adds no Promise rejection notification, messaging, ErrorEvent
@@ -124,7 +135,7 @@ These are intentionally narrow research limits, not normal-browser longevity.
 Single-window aliases include self/parent/top with null opener. Document-ready
 capture/target/bubble, Window load's document target, property-handler slot order
 and interactive readiness before deferred scripts are corrected. These startup
-phases remain bundled inside Init; all timers run afterward. String timer compilation,
+phases remained bundled inside Init in v0.9.7; all timers ran afterward. String timer compilation,
 intervals, fully queued lifecycle, synthetic dispatch, cross-context messaging
 and typed WPT testharness reporting remain unfinished.
 The one-shot `--script-worker` path returns the initial snapshot, not a task loop.

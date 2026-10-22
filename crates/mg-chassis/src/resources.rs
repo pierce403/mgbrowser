@@ -55,6 +55,9 @@ pub struct ScriptFetchProfile {
     /// Resource-ledger charge, including downloaded bodies rejected after fetch
     /// and the separate retained copies required by duplicate source elements.
     pub bytes: usize,
+    /// Eligible classic external elements not admitted by the parent broker.
+    /// Typed failure evidence; resource warning wording is not an API.
+    pub rejected_sources: usize,
     pub timings: Vec<ResourceTiming>,
 }
 
@@ -499,6 +502,27 @@ pub fn prepare_script_sources(
     }
     profile.total_ms = started.elapsed().as_secs_f64() * 1000.0;
     profile.loaded = entries.len();
+    let requested = document
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(index, node)| {
+            node.tag == "script" && !inert_script(&document.nodes, *index) && {
+                let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+                kind == "module" || classic_script_type(&kind)
+            }
+        })
+        .take(MAX_SCRIPTS)
+        .filter(|(_, node)| {
+            !node
+                .attr("type")
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("module")
+                && node.attr("src").is_some()
+        })
+        .count();
+    profile.rejected_sources = requested.saturating_sub(profile.loaded);
     profile.bytes = loader.bytes.saturating_sub(resources.bytes);
     loader.compact_warnings();
     profile.timings = loader.timings;
@@ -1426,6 +1450,7 @@ mod tests {
             SourceWireMode::Modern,
         );
         assert_eq!(sources.len(), 16);
+        assert_eq!(profile.rejected_sources, 1);
         assert_eq!(profile.timings.len(), 16);
         assert_eq!(worker.join().unwrap().len(), 16);
         assert!(
@@ -1451,6 +1476,10 @@ mod tests {
         );
         assert!(sources.is_empty());
         assert!(profile.timings.is_empty());
+        assert_eq!(
+            profile.rejected_sources, 0,
+            "The 33rd source is the worker's source-count error, not an admitted broker request"
+        );
     }
 
     #[test]
@@ -1473,6 +1502,7 @@ mod tests {
             SourceWireMode::Modern,
         );
         assert_eq!(sources.len(), 1);
+        assert_eq!(profile.rejected_sources, 1);
         assert_eq!(profile.timings.len(), 1);
         assert_eq!(worker.join().unwrap(), ["/first.js"]);
         assert!(
@@ -1505,6 +1535,7 @@ mod tests {
             );
             assert!(sources.is_empty());
             assert!(profile.timings.is_empty());
+            assert_eq!(profile.rejected_sources, 2);
             assert!(!doc.resource_warnings.is_empty());
         }
     }
@@ -1529,6 +1560,7 @@ mod tests {
         assert!(sources.is_empty());
         assert!(profile.timings.is_empty());
         assert_eq!(worker.join().unwrap(), ["/full.css"]);
+        assert_eq!(profile.rejected_sources, 1);
     }
 
     #[test]
@@ -1561,6 +1593,7 @@ mod tests {
                 <= MAX_SOURCE
         );
         assert_eq!(profile.bytes, 3 * MAX_EXTERNAL_SOURCE);
+        assert_eq!(profile.rejected_sources, 5);
         assert_eq!(profile.timings.len(), 1);
         assert_eq!(worker.join().unwrap(), ["/same.js"]);
     }
@@ -1593,6 +1626,7 @@ mod tests {
         );
         assert!(sources.is_empty());
         assert_eq!(profile.timings.len(), 2);
+        assert_eq!(profile.rejected_sources, 5);
         assert_eq!(worker.join().unwrap(), ["/text.js", "/binary.js"]);
         assert_eq!(doc.resource_warnings.len(), 5);
     }
@@ -1633,6 +1667,10 @@ mod tests {
             assert!(sources.is_empty());
             assert!(profile.timings.is_empty());
             assert_eq!(doc.resource_warnings.len(), MAX_WARNINGS);
+            assert_eq!(
+                profile.rejected_sources, 3,
+                "Warning truncation cannot erase typed broker failures"
+            );
             let expected_omitted = retained + prior_omitted + 3 - (MAX_WARNINGS - 1);
             assert_eq!(
                 doc.resource_warnings.last(),

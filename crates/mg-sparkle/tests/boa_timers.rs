@@ -3,7 +3,7 @@
 use mg_sparkle::{
     document::{self, Document},
     js_browser::{Request, boa::BoaPageRealm},
-    page_session::{DefaultAction, RealmState, SessionReply, TaskPump},
+    page_session::{DefaultAction, LifecyclePhase, RealmState, SessionReply, TaskPump},
 };
 use std::time::Duration;
 
@@ -13,12 +13,26 @@ fn start(source: &str) -> (BoaPageRealm, SessionReply) {
         external_scripts: None,
         url: URL.into(),
         html: format!(
-            "<html><head><title>before</title></head><body><p id=out></p><script>{source}</script></body></html>"
+            "<html><head><title>before</title></head><body><p id=out></p><script>window.onload=function(){{{source}\n}};</script></body></html>"
         ),
     });
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-    (realm.unwrap(), reply)
+    // Timer-unit workloads begin in a genuine load callback, after both
+    // mandatory tasks; exact Init admission is independently tested in boa_lifecycle.
+    finish_load(realm.unwrap(), reply)
+}
+fn finish_load(mut realm: BoaPageRealm, mut reply: SessionReply) -> (BoaPageRealm, SessionReply) {
+    for _ in 0..2 {
+        if reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete {
+            break;
+        }
+        reply = pump(&mut realm, &reply);
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    }
+    assert_eq!(reply.lifecycle.unwrap().phase, LifecyclePhase::LoadComplete);
+    (realm, reply)
 }
 fn projected(reply: &SessionReply) -> Document {
     document::project_nodes(reply.snapshot.as_ref().unwrap().nodes.clone(), URL).unwrap()
@@ -42,26 +56,22 @@ fn pump(realm: &mut BoaPageRealm, previous: &SessionReply) -> SessionReply {
 }
 
 #[test]
-fn zero_delay_runs_only_after_init_load_and_microtasks() {
+fn zero_delay_runs_only_after_its_actual_load_callback_and_microtasks() {
     let (mut realm, init) = start(
         r#"
-        var order=['script'];
-        Promise.resolve().then(()=>order.push('script-job'));
+        var order=['load'];
+        Promise.resolve().then(()=>order.push('load-job'));
         setTimeout(function(arg){
             if(this!==window||arg.proof!==42)throw 'wrong callback/argument';
             order.push('timer');Promise.resolve().then(()=>document.title=order.join(','));
         },0,{proof:42});
-        window.onload=()=>{order.push('load');Promise.resolve().then(()=>order.push('load-job'));};
     "#,
     );
     assert_eq!(projected(&init).title, "before");
     assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 1);
     let reply = pump(&mut realm, &init);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-    assert_eq!(
-        projected(&reply).title,
-        "script,script-job,load,load-job,timer"
-    );
+    assert_eq!(projected(&reply).title, "load,load-job,timer");
     assert!(reply.task_wake.is_none());
     assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
 }
@@ -76,7 +86,7 @@ fn exact_frozen_native_task_fixture_creates_real_controls_after_a_later_task() {
     assert_eq!(init.state, RealmState::Ready, "{:?}", init.errors);
     assert!(init.errors.is_empty(), "{:?}", init.errors);
     assert!(projected(&init).forms.is_empty());
-    let mut realm = realm.unwrap();
+    let (mut realm, init) = finish_load(realm.unwrap(), init);
     let reply = pump(&mut realm, &init);
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
@@ -130,7 +140,7 @@ fn readiness_precedes_deferred_sources_and_lifecycle_uses_real_paths_and_slots()
     </script><script id=deferred src='/owned.js' defer></script></body></html>"#;
     let parsed = document::parse_with_scripting(html, URL, true);
     let node = parsed.query_selector(0, "#deferred").unwrap().unwrap();
-    let (_realm, reply) = BoaPageRealm::start(Request {
+    let (realm, reply) = BoaPageRealm::start(Request {
         url: URL.into(),
         html: html.into(),
         external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
@@ -139,6 +149,8 @@ fn readiness_precedes_deferred_sources_and_lifecycle_uses_real_paths_and_slots()
             provenance: None,
         }]),
     });
+    assert_eq!(reply.lifecycle.unwrap().phase, LifecyclePhase::Interactive);
+    let (_realm, reply) = finish_load(realm.unwrap(), reply);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     assert_eq!(
         projected(&reply).title,
@@ -160,8 +172,16 @@ fn cancellation_and_reentrant_delay_conversion_preserve_order_and_admissions() {
         order.push('after');
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 3);
-    assert_eq!(init.boa.as_ref().unwrap().pending_jobs, 1);
+    let report = init.boa.as_ref().unwrap();
+    // Two lifecycle tasks, one canceled timer, one reaction and one live timer.
+    assert_eq!(
+        (
+            report.jobs_admitted,
+            report.jobs_executed,
+            report.pending_jobs
+        ),
+        (5, 3, 1)
+    );
     let reply = pump(&mut realm, &init);
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
     assert_eq!(projected(&reply).title, "convert,after,job,timer");
@@ -177,7 +197,16 @@ fn conversion_failure_retains_no_timer_and_fatal_conversion_cannot_be_caught() {
         if(!rejected)throw 'Symbol delay accepted';
     "#,
     );
-    assert_eq!(init.boa.as_ref().unwrap().jobs_admitted, 0);
+    let report = init.boa.as_ref().unwrap();
+    // Invalid conversion adds no timer admission beyond the two completed tasks.
+    assert_eq!(
+        (
+            report.jobs_admitted,
+            report.jobs_executed,
+            report.pending_jobs
+        ),
+        (2, 2, 0)
+    );
     assert!(init.task_wake.is_none());
     let (_realm, reply) = BoaPageRealm::start(Request { external_scripts: None, url: URL.into(),
         html: "<p>readable</p><script>try{setTimeout(()=>document.title='outer',{valueOf(){setTimeout(()=>document.title='inner',0);while(true){}}});}catch(e){document.title='caught fatal';}</script>".into() });
@@ -225,7 +254,7 @@ fn early_zero_stale_and_replayed_tokens_never_execute_callbacks() {
         wake_token: init.task_wake.unwrap().token,
     });
     assert_eq!(replay.state, RealmState::Closed);
-    assert_eq!(replay.revision, 1);
+    assert_eq!(replay.revision, init.revision + 1);
     assert!(replay.snapshot.is_none());
 }
 

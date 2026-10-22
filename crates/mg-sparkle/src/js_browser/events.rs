@@ -645,6 +645,7 @@ impl PageRealm {
             state: RealmState::Closed,
             acknowledgements: Vec::new(),
             task_wake: None,
+            lifecycle: None,
         };
         if self.closed || self.runtime.is_fatal() {
             self.closed = true;

@@ -14,7 +14,7 @@ window.onunhandledrejection = function (event) {
       event.reason !== retainedReason || event.target !== window || event.currentTarget !== window ||
       event.eventPhase !== 2 || event.bubbles || !event.cancelable || event.defaultPrevented ||
       document.readyState !== 'complete' || propertyCalls !== 0 ||
-      rejectionOrder.join(',') !== 'script,script-microtask')
+      rejectionOrder.join(',') !== 'script,script-microtask,load')
     throw new Error('Wrong later Promise rejection property delivery');
   propertyCalls++;
   savedRejection = event;
@@ -28,7 +28,7 @@ window.addEventListener('unhandledrejection', function (event) {
       event.reason !== retainedReason || event.target !== window || event.currentTarget !== window ||
       event.eventPhase !== 2 || event.bubbles || !event.cancelable || !event.defaultPrevented ||
       propertyCalls !== 1 || listenerCalls !== 0 ||
-      rejectionOrder.join(',') !== 'script,script-microtask,property,property-microtask')
+      rejectionOrder.join(',') !== 'script,script-microtask,load,property,property-microtask')
     throw new Error('Wrong native canceled PromiseRejectionEvent');
   listenerCalls++;
   rejectionOrder.push('listener');
@@ -72,7 +72,7 @@ window.addEventListener('unhandledrejection', function (event) {
   document.body.setAttribute('data-rejection-proof', 'typed-identity-canceled');
   Promise.resolve().then(function () {
     rejectionOrder.push('listener-microtask');
-    var expected = 'script,script-microtask,property,property-microtask,listener,listener-microtask';
+    var expected = 'script,script-microtask,load,property,property-microtask,listener,listener-microtask';
     if (rejectionOrder.join(',') !== expected) throw new Error('Wrong rejection checkpoint order');
     checkpointDone = true;
     document.body.setAttribute('data-rejection-checkpoint', expected);
@@ -80,5 +80,10 @@ window.addEventListener('unhandledrejection', function (event) {
     state.textContent = 'promise rejection ready';
   });
 });
-rejected = Promise.reject(retainedReason);
+window.onload = function () {
+  if (propertyCalls !== 0 || listenerCalls !== 0) throw new Error('Rejection ran before load enqueue');
+  rejectionOrder.push('load');
+  // Require complete readiness explicitly, not the old bundled Init ordering.
+  rejected = Promise.reject(retainedReason);
+};
 </script></body></html>

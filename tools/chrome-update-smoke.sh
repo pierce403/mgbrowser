@@ -17,6 +17,21 @@ export MGBROWSER_CHROME_SMOKE="$scratch"
 timeout 60s xvfb-run -a bash <<'SMOKE'
 set -euo pipefail
 scratch=$MGBROWSER_CHROME_SMOKE
+# BEGIN restart destination guard: also exercised by synthetic checker tests.
+restart_destination_loaded() {
+    local log=$1 before=$2
+    [[ $before =~ ^[0-9]+$ ]] || return 1
+    # Lifecycle task diagnostics may follow LOADED. Only the final load record
+    # can prove the restarted window reached the destination, never an older
+    # destination followed by a different/failed navigation.
+    awk -v before="$before" '
+        /^LOADED / { count++; last = $0 }
+        END {
+            exit !(count > before && last ~ /^LOADED http:\/\/127[.]0[.]0[.]1:7878\/destination HTTP 200 title="Local journey completed" items=[0-9]+ forms=[0-9]+$/)
+        }
+    ' "$log"
+}
+# END restart destination guard.
 export MGBROWSER_RESTART_PAYLOAD="$scratch/updated-payload"
 XDG_CONFIG_HOME="$scratch/config" DBUS_SESSION_BUS_ADDRESS="unix:path=$scratch/no-bus" \
     "$scratch/mgbrowser" http://127.0.0.1:7878/ --enable-scripts --remote-debugging-port=0 > "$scratch/browser.log" 2>&1 &
@@ -59,7 +74,7 @@ for attempt in $(seq 1 100); do
     restarted=$(sed -n 's/^RESTART: launched pid=//p' "$scratch/browser.log")
     if [[ -n $restarted ]] && [[ $(grep -c '^WINDOW id=' "$scratch/browser.log") == 2 ]] && \
         (( $(grep -c '^LOADED ' "$scratch/browser.log") > loads )) && \
-        tail -n 5 "$scratch/browser.log" | grep -q 'LOADED .*destination'; then break; fi
+        restart_destination_loaded "$scratch/browser.log" "$loads"; then break; fi
     sleep 0.1
 done
 wait "$browser"
@@ -68,7 +83,7 @@ kill -0 "$restarted"
 grep -q '^RESTART_WRAPPER_EXEC' "$scratch/browser.log"
 [[ $(grep -c '^WINDOW id=' "$scratch/browser.log") == 2 ]]
 (( $(grep -c '^LOADED ' "$scratch/browser.log") > loads ))
-tail -n 5 "$scratch/browser.log" | grep -q 'LOADED .*destination'
+restart_destination_loaded "$scratch/browser.log" "$loads"
 printf 'NATIVE_UPDATED_BINARY_RESTART_OK\n'
 SMOKE
 printf 'CHROME_UPDATE_SMOKE_OK %s\n' "$scratch"

@@ -6,10 +6,11 @@
 //! Run: wpt_render http://127.0.0.1:PORT/test.html FONT.ttf OUTPUT_PREFIX [--enable-scripts]
 use mg_browser::platform::{self, script_worker};
 use mg_chassis::{
-    Browser,
+    Browser, InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus,
     scripts::{DisabledScripts, ScriptRuntime, ScriptSession, SessionUpdate},
 };
 use mg_sparkle::{
+    document::{self, Node},
     js_browser::Request,
     page_session::{DefaultAction, SessionInput, SessionReply, TaskPump},
     paint::{Canvas, Fonts},
@@ -33,6 +34,9 @@ const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(35);
 const FAILURE_REASON_BYTES: usize = 1024;
+// Mirror the existing document projection bounds, not a new worker profile.
+const MAX_ARENA_TAGS: usize = 50_000;
+const MAX_ARENA_TAG_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug)]
 struct AdapterFailure {
@@ -97,11 +101,89 @@ struct NoNavigationScripts {
 struct NoNavigationSession {
     inner: Box<dyn ScriptSession>,
     pending_validation: Duration,
+    page_url: String,
+    tags: StableArenaTags,
+    staged_tags: Option<StagedArenaTags>,
+    acknowledgement_failed: bool,
     host_failures: Arc<ScriptHostFailures>,
+}
+#[derive(Default)]
+struct StableArenaTags {
+    tags: Vec<String>,
+    bytes: usize,
+}
+struct StagedArenaTags {
+    tags: Vec<String>,
+    bytes: usize,
+}
+impl StableArenaTags {
+    fn stage(&mut self, reply: &SessionReply) -> Result<StagedArenaTags, String> {
+        let nodes = reply
+            .snapshot
+            .as_ref()
+            .map_or(&[][..], |snapshot| snapshot.nodes.as_slice());
+        if nodes.len() > MAX_ARENA_TAGS {
+            return Err("Script snapshot tag metadata node limit exceeded".into());
+        }
+        // Do not replace prior identities before Chassis validates them. Only
+        // append new tags after a successful acknowledgement. A parent rejecting
+        // an ordinary snapshot charges it, then cancels the session; it cannot
+        // become the predecessor of another accepted snapshot.
+        let appended = nodes.get(self.tags.len()..).unwrap_or_default();
+        let bytes = appended
+            .iter()
+            .try_fold(0usize, |bytes, node| bytes.checked_add(node.tag.len()));
+        let bytes = bytes
+            .filter(|bytes| self.bytes.saturating_add(*bytes) <= MAX_ARENA_TAG_BYTES)
+            .ok_or("Script snapshot tag metadata byte limit exceeded")?;
+        let mut tags = Vec::new();
+        tags.try_reserve_exact(appended.len())
+            .map_err(|_| "Cannot reserve script snapshot tag metadata")?;
+        self.tags
+            .try_reserve_exact(appended.len())
+            .map_err(|_| "Cannot reserve stable script snapshot tag metadata")?;
+        for node in appended {
+            let mut tag = String::new();
+            tag.try_reserve_exact(node.tag.len())
+                .map_err(|_| "Cannot reserve script snapshot tag bytes")?;
+            tag.push_str(&node.tag);
+            tags.push(tag);
+        }
+        Ok(StagedArenaTags { tags, bytes })
+    }
+    fn commit(&mut self, staged: StagedArenaTags) {
+        // stage reserved this capacity before the timed acknowledgement.
+        self.tags.extend(staged.tags);
+        self.bytes += staged.bytes;
+    }
+    fn validate(&self, nodes: &[Node]) -> Result<(), String> {
+        if nodes.len() < self.tags.len()
+            || self
+                .tags
+                .iter()
+                .zip(nodes)
+                .any(|(tag, node)| *tag != node.tag)
+        {
+            return Err("Script snapshot reused or removed stable arena identities".into());
+        }
+        Ok(())
+    }
+}
+enum ScriptReplyRejection {
+    Policy(String),
+    Infrastructure(String),
+}
+impl ScriptReplyRejection {
+    fn reason(&self) -> &str {
+        match self {
+            Self::Policy(reason) | Self::Infrastructure(reason) => reason,
+        }
+    }
 }
 #[derive(Default)]
 struct ScriptHostFailures {
     reason: Mutex<Option<String>>,
+    admitted_reason: Mutex<Option<String>>,
 }
 impl ScriptHostFailures {
     fn observe<T>(&self, result: Result<T, String>) -> Result<T, String> {
@@ -119,12 +201,36 @@ impl ScriptHostFailures {
                 "Script-host failure observer unavailable",
             )
         })?;
-        match reason.as_ref() {
-            Some(reason) => Err(AdapterFailure::infrastructure(
+        if let Some(reason) = reason.as_ref() {
+            return Err(AdapterFailure::infrastructure(
                 "script-host",
                 reason.clone(),
-            )),
+            ));
+        }
+        let admitted = self.admitted_reason.lock().map_err(|_| {
+            AdapterFailure::infrastructure("script-host", "Script policy observer unavailable")
+        })?;
+        match admitted.as_ref() {
+            Some(reason) => Err(AdapterFailure::admitted("script", reason.clone())),
             None => Ok(()),
+        }
+    }
+    fn reject_policy(&self, reason: &str) -> Result<(), String> {
+        let mut admitted = self.admitted_reason.lock().map_err(|_| {
+            let error = "Script policy observer unavailable".to_string();
+            let _ = self.observe::<()>(Err(error.clone()));
+            error
+        })?;
+        admitted.get_or_insert_with(|| reason.to_owned());
+        Ok(())
+    }
+    fn record_rejection(&self, rejection: &ScriptReplyRejection) -> Result<(), String> {
+        match rejection {
+            ScriptReplyRejection::Policy(reason) => self.reject_policy(reason),
+            ScriptReplyRejection::Infrastructure(reason) => {
+                let _ = self.observe::<()>(Err(reason.clone()));
+                Ok(())
+            }
         }
     }
 }
@@ -145,6 +251,33 @@ fn admit_script_reply(reply: &SessionReply) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate_policy_rejection(
+    reply: &mut SessionReply,
+    page_url: &str,
+    previous: Option<&StableArenaTags>,
+) -> Result<(), ScriptReplyRejection> {
+    let Err(policy) = admit_script_reply(reply) else {
+        return Ok(());
+    };
+    // A denied reply never reaches Chassis. Validate its owned arena here so
+    // malformed projections cannot masquerade as ordinary policy FAILs. This
+    // is not a second protocol-envelope validator; the actual Linux transport
+    // still validates its trusted report, accounting and lifecycle fields.
+    let validation = (|| {
+        let snapshot = reply
+            .snapshot
+            .take()
+            .ok_or("Script session has no accepted snapshot")?;
+        if let Some(previous) = previous {
+            previous.validate(&snapshot.nodes)?;
+        }
+        document::project_nodes(snapshot.nodes, page_url).map(|_| ())
+    })();
+    match validation {
+        Ok(()) => Err(ScriptReplyRejection::Policy(policy)),
+        Err(error) => Err(ScriptReplyRejection::Infrastructure(error)),
+    }
+}
 impl ScriptRuntime for NoNavigationScripts {
     fn set_generation(&self, generation: u64) -> Result<(), String> {
         self.host_failures
@@ -155,25 +288,38 @@ impl ScriptRuntime for NoNavigationScripts {
         request: Request,
         generation: u64,
     ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
-        let (mut session, reply) = self
+        let page_url = request.url.clone();
+        let (mut session, mut reply) = self
             .host_failures
             .observe(self.inner.start(request, generation))?;
         let started = Instant::now();
-        let validation = admit_script_reply(&reply);
+        let mut tags = StableArenaTags::default();
+        let validation = validate_policy_rejection(&mut reply, &page_url, None).and_then(|()| {
+            tags.stage(&reply)
+                .map_err(ScriptReplyRejection::Infrastructure)
+        });
         let elapsed = started.elapsed();
-        if let Err(error) = validation {
-            // Rejected replies never reach Chassis, so acknowledge their
-            // validation here before cancellation. Opaque host errors remain
-            // infrastructure errors rather than being inferred from text.
-            let charged = self.host_failures.observe(session.charge_active(elapsed));
-            session.cancel();
-            charged?;
-            return Err(error);
-        }
+        let staged_tags = match validation {
+            Ok(staged) => staged,
+            Err(rejection) => {
+                // Rejected replies never reach Chassis, so acknowledge their
+                // validation here before cancellation. Opaque host errors remain
+                // infrastructure errors rather than being inferred from text.
+                let charged = self.host_failures.observe(session.charge_active(elapsed));
+                session.cancel();
+                charged?;
+                self.host_failures.record_rejection(&rejection)?;
+                return Err(rejection.reason().into());
+            }
+        };
         Ok((
             Box::new(NoNavigationSession {
                 inner: session,
                 pending_validation: elapsed,
+                page_url,
+                tags,
+                staged_tags: Some(staged_tags),
+                acknowledgement_failed: false,
                 host_failures: self.host_failures.clone(),
             }),
             reply,
@@ -191,29 +337,57 @@ impl ScriptSession for NoNavigationSession {
         self.inner.id()
     }
     fn try_dispatch(&mut self, input: SessionInput, revision: u64) -> Result<u64, String> {
+        if self.acknowledgement_failed {
+            return Err("Script projection acknowledgement failed".into());
+        }
         self.host_failures
             .observe(self.inner.try_dispatch(input, revision))
     }
     fn try_task_pump(&mut self, pump: TaskPump, revision: u64) -> Result<u64, String> {
+        if self.acknowledgement_failed {
+            return Err("Script projection acknowledgement failed".into());
+        }
         // Preserve the production host API. Replies still pass through the
         // same navigation/default guard and exactly-one combined charge below.
         self.host_failures
             .observe(self.inner.try_task_pump(pump, revision))
     }
     fn try_recv(&mut self) -> Option<SessionUpdate> {
+        if self.acknowledgement_failed {
+            return None;
+        }
         let mut update = self.inner.try_recv()?;
-        if let Ok(reply) = &update.reply {
+        if let Ok(reply) = &mut update.reply {
             let started = Instant::now();
-            let validation = admit_script_reply(reply);
+            let validation = validate_policy_rejection(reply, &self.page_url, Some(&self.tags))
+                .and_then(|()| {
+                    self.tags
+                        .stage(reply)
+                        .map_err(ScriptReplyRejection::Infrastructure)
+                });
             let elapsed = started.elapsed();
-            if let Err(error) = validation {
-                let charged = self
-                    .host_failures
-                    .observe(self.inner.charge_active(elapsed));
-                self.inner.cancel();
-                update.reply = Err(charged.err().unwrap_or(error));
-            } else {
-                self.pending_validation = self.pending_validation.saturating_add(elapsed);
+            match validation {
+                Err(rejection) => {
+                    let charged = self
+                        .host_failures
+                        .observe(self.inner.charge_active(elapsed));
+                    self.inner.cancel();
+                    self.acknowledgement_failed = true;
+                    self.staged_tags = None;
+                    let recorded = if charged.is_ok() {
+                        self.host_failures.record_rejection(&rejection)
+                    } else {
+                        Ok(())
+                    };
+                    update.reply = Err(charged
+                        .err()
+                        .or_else(|| recorded.err())
+                        .unwrap_or_else(|| rejection.reason().into()));
+                }
+                Ok(staged) => {
+                    self.pending_validation = self.pending_validation.saturating_add(elapsed);
+                    self.staged_tags = Some(staged);
+                }
             }
         } else if let Err(error) = &update.reply {
             let _ = self.host_failures.observe::<()>(Err(error.clone()));
@@ -224,14 +398,27 @@ impl ScriptSession for NoNavigationSession {
         self.inner.cancel();
     }
     fn charge_active(&mut self, duration: Duration) -> Result<(), String> {
+        if self.acknowledgement_failed {
+            return Err("Script projection acknowledgement failed".into());
+        }
         // One completion permits exactly one acknowledgement. Include this
         // adapter's validation in Chassis's acknowledgement, never consume the
         // inner session's validation_pending flag before Chassis can use it.
         let validation = std::mem::take(&mut self.pending_validation);
-        self.host_failures.observe(
+        let staged = self.staged_tags.take();
+        let charged = self.host_failures.observe(
             self.inner
                 .charge_active(duration.saturating_add(validation)),
-        )
+        );
+        if let Some(staged) = staged {
+            if charged.is_ok() {
+                self.tags.commit(staged);
+            } else {
+                self.acknowledgement_failed = true;
+                self.inner.cancel();
+            }
+        }
+        charged
     }
 }
 
@@ -295,6 +482,31 @@ fn rgb_bytes(canvas: &Canvas) -> Result<Vec<u8>, String> {
     Ok(rgb)
 }
 
+fn check_initial_script(outcome: &InitialScriptOutcome) -> Result<(), AdapterFailure> {
+    let reason = format!(
+        "Initial scripts: {:?}; executed={}; errors={}; broker-rejected={}; {}",
+        outcome.status,
+        outcome.scripts_executed,
+        outcome.error_count,
+        outcome.broker_rejected_sources,
+        outcome
+            .diagnostics
+            .first()
+            .map(String::as_str)
+            .unwrap_or("")
+    );
+    if outcome.failure == Some(InitialScriptFailure::Infrastructure) {
+        return Err(AdapterFailure::infrastructure("script-host", reason));
+    }
+    match outcome.status {
+        InitialScriptStatus::Complete if outcome.failure.is_none() => Ok(()),
+        InitialScriptStatus::Partial | InitialScriptStatus::Failed => {
+            Err(AdapterFailure::admitted("script", reason))
+        }
+        _ => Err(AdapterFailure::infrastructure("script-host", reason)),
+    }
+}
+
 fn render_page(
     url: &str,
     font_path: &Path,
@@ -342,19 +554,10 @@ fn render_page(
             format!("Navigation failed: {}", browser.status()),
         ));
     }
-    // Preserve the existing conservative status guard. The Browser host does
-    // not yet expose a typed initial JavaScript outcome; this envelope identifies
-    // the adapter stage, not a testharness result or a new status-string heuristic.
-    if enable_scripts
-        && (!browser.status().contains("JS: ")
-            || browser.status().contains("errors")
-            || browser.status().contains("JS rejected")
-            || browser.status().contains("JS worker failed"))
-    {
-        return Err(AdapterFailure::admitted(
-            "script",
-            format!("Script execution failed: {}", browser.status()),
-        ));
+    // This is the typed initial-load result, never a transient task status,
+    // harness completion signal or permission to wait for arbitrary timers.
+    if enable_scripts {
+        check_initial_script(browser.initial_script_outcome())?;
     }
     check_final_url(&requested, browser.page_url())
         .map_err(|error| AdapterFailure::admitted("navigation", error))?;
@@ -509,6 +712,7 @@ mod tests {
         canceled: Arc<AtomicBool>,
         charges: Arc<Mutex<Vec<Duration>>>,
         validation_pending: bool,
+        fail_charge: Option<usize>,
         update: Option<SessionUpdate>,
     }
     impl ScriptSession for FakeSession {
@@ -547,7 +751,11 @@ mod tests {
                 return Err("No fixture projection awaits validation".into());
             }
             self.validation_pending = false;
-            self.charges.lock().unwrap().push(duration);
+            let mut charges = self.charges.lock().unwrap();
+            charges.push(duration);
+            if self.fail_charge == Some(charges.len()) {
+                return Err("Fixture active charge failed".into());
+            }
             Ok(())
         }
     }
@@ -595,11 +803,23 @@ mod tests {
             state: RealmState::Ready,
             acknowledgements: Vec::new(),
             task_wake: None,
+            lifecycle: None,
         }
     }
     fn guarded(
         reply: SessionReply,
         later: Option<SessionReply>,
+    ) -> (
+        NoNavigationScripts,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<Duration>>>,
+    ) {
+        guarded_charge(reply, later, None)
+    }
+    fn guarded_charge(
+        reply: SessionReply,
+        later: Option<SessionReply>,
+        fail_charge: Option<usize>,
     ) -> (
         NoNavigationScripts,
         Arc<AtomicBool>,
@@ -611,6 +831,7 @@ mod tests {
             canceled: canceled.clone(),
             charges: charges.clone(),
             validation_pending: true,
+            fail_charge,
             update: later.map(|reply| SessionUpdate {
                 generation: 3,
                 session_id: 99,
@@ -703,7 +924,7 @@ mod tests {
         assert!(matches!(runtime.start(request(), 3), Err(error) if error.contains("navigation")));
         assert!(canceled.load(Ordering::SeqCst));
         assert_eq!(charges.lock().unwrap().len(), 1);
-        assert!(runtime.host_failures.check().is_ok());
+        assert_eq!(runtime.host_failures.check().unwrap_err().outcome, "FAIL");
     }
 
     #[test]
@@ -724,14 +945,25 @@ mod tests {
 
     #[test]
     fn test_host_rejects_later_navigation_refresh_and_navigation_defaults() {
-        let mut navigation = reply("<p>owned</p>");
+        let html = "<a href=https://must-not-fetch.invalid/>link</a>";
+        let mut navigation = reply(html);
         navigation.navigation = Some("https://must-not-fetch.invalid/".into());
-        let refresh =
-            reply("<meta http-equiv=refresh content='0;url=https://must-not-fetch.invalid/'>");
-        let mut default = reply("<a href=https://must-not-fetch.invalid/>link</a>");
+        // A later refresh must append a node without replacing existing arena
+        // identities, otherwise it is a projection ERROR before policy FAIL.
+        let mut refresh = reply(html);
+        let nodes = &mut refresh.snapshot.as_mut().unwrap().nodes;
+        let meta = nodes.len();
+        nodes.push(Node {
+            tag: "meta".into(),
+            attributes: vec![("http-equiv".into(), "refresh".into())],
+            text: String::new(),
+            parent: meta,
+            children: vec![],
+        });
+        let mut default = reply(html);
         default.default_action = DefaultAction::FollowLink { node: 1 };
         for later in [navigation, refresh, default] {
-            let (runtime, canceled, charges) = guarded(reply("<p>owned</p>"), Some(later));
+            let (runtime, canceled, charges) = guarded(reply(html), Some(later));
             let (mut session, _) = runtime.start(request(), 3).unwrap();
             session.charge_active(Duration::from_millis(4)).unwrap();
             let update = session.try_recv().unwrap();
@@ -741,6 +973,300 @@ mod tests {
             assert_eq!(update.sequence, Some(1));
             assert!(canceled.load(Ordering::SeqCst));
             assert_eq!(charges.lock().unwrap().len(), 2);
+            assert_eq!(runtime.host_failures.check().unwrap_err().outcome, "FAIL");
+        }
+    }
+
+    #[test]
+    fn denied_initial_navigation_or_refresh_does_not_mask_invalid_projection() {
+        for refresh in [false, true] {
+            for fault in ["root", "edge", "missing"] {
+                let mut initial = if refresh {
+                    reply(
+                        "<meta http-equiv=refresh content='0;url=https://must-not-fetch.invalid/'>",
+                    )
+                } else {
+                    let mut initial = reply("<p>owned</p>");
+                    initial.navigation = Some("https://must-not-fetch.invalid/".into());
+                    initial
+                };
+                match fault {
+                    "root" => initial.snapshot.as_mut().unwrap().nodes[0].tag = "bad-root".into(),
+                    "edge" => initial.snapshot.as_mut().unwrap().nodes[0]
+                        .children
+                        .push(usize::MAX),
+                    "missing" => {
+                        initial.snapshot = None;
+                        // Without an arena the refresh cannot itself be found;
+                        // retain an independent navigation-policy denial.
+                        initial.navigation = Some("https://must-not-fetch.invalid/".into());
+                    }
+                    _ => unreachable!(),
+                }
+                let (runtime, canceled, charges) = guarded(initial, None);
+                assert!(runtime.start(request(), 3).is_err(), "{refresh}/{fault}");
+                assert!(canceled.load(Ordering::SeqCst));
+                assert_eq!(charges.lock().unwrap().len(), 1);
+                let failure = runtime.host_failures.check().unwrap_err();
+                assert_eq!(failure.outcome, "ERROR", "{refresh}/{fault}");
+                assert_eq!(failure.kind, "infrastructure");
+                assert!(
+                    runtime
+                        .host_failures
+                        .admitted_reason
+                        .lock()
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn denied_later_projection_keeps_exact_acknowledged_arena_identities() {
+        for refresh in [false, true] {
+            for fault in ["removed", "retagged", "edge"] {
+                // The initial extra detached node is valid and must keep its
+                // identity even though it contributes no painted content.
+                let mut initial = reply("<p>owned</p>");
+                let nodes = &mut initial.snapshot.as_mut().unwrap().nodes;
+                let detached = nodes.len();
+                nodes.push(Node {
+                    tag: "aside".into(),
+                    attributes: vec![],
+                    text: String::new(),
+                    parent: detached,
+                    children: vec![],
+                });
+                let mut later = reply("<p>owned</p>");
+                let nodes = &mut later.snapshot.as_mut().unwrap().nodes;
+                if fault != "removed" {
+                    nodes.push(Node {
+                        tag: if fault == "retagged" {
+                            "section"
+                        } else {
+                            "aside"
+                        }
+                        .into(),
+                        attributes: vec![],
+                        text: String::new(),
+                        parent: detached,
+                        children: vec![],
+                    });
+                }
+                if fault == "edge" {
+                    nodes[0].children.push(usize::MAX);
+                }
+                if refresh {
+                    // A policy-relevant detached meta is sufficient: the
+                    // existing guard rejects any arena refresh element.
+                    let meta = nodes.len();
+                    nodes.push(Node {
+                        tag: "meta".into(),
+                        attributes: vec![("http-equiv".into(), "refresh".into())],
+                        text: String::new(),
+                        parent: meta,
+                        children: vec![],
+                    });
+                } else {
+                    later.navigation = Some("https://must-not-fetch.invalid/".into());
+                }
+                let (runtime, canceled, charges) = guarded(initial, Some(later));
+                let (mut session, _) = runtime.start(request(), 3).unwrap();
+                session.charge_active(Duration::ZERO).unwrap();
+                let update = session.try_recv().unwrap();
+                assert!(update.reply.is_err(), "{refresh}/{fault}");
+                assert_eq!(
+                    (update.generation, update.session_id, update.sequence),
+                    (3, 99, Some(1))
+                );
+                assert!(canceled.load(Ordering::SeqCst));
+                assert_eq!(charges.lock().unwrap().len(), 2);
+                let failure = runtime.host_failures.check().unwrap_err();
+                assert_eq!(failure.outcome, "ERROR", "{refresh}/{fault}");
+                assert_eq!(failure.kind, "infrastructure");
+                assert!(
+                    runtime
+                        .host_failures
+                        .admitted_reason
+                        .lock()
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(session.try_recv().is_none());
+                assert!(session.charge_active(Duration::ZERO).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn denied_projection_charge_failure_is_infrastructure_and_never_retried() {
+        for startup in [false, true] {
+            let mut denied = reply("<p>owned</p>");
+            denied.navigation = Some("https://must-not-fetch.invalid/".into());
+            let (runtime, canceled, charges) = if startup {
+                guarded_charge(denied, None, Some(1))
+            } else {
+                guarded_charge(reply("<p>owned</p>"), Some(denied), Some(2))
+            };
+            if startup {
+                assert!(
+                    matches!(runtime.start(request(), 3), Err(error) if error == "Fixture active charge failed")
+                );
+            } else {
+                let (mut session, _) = runtime.start(request(), 3).unwrap();
+                session.charge_active(Duration::ZERO).unwrap();
+                assert!(
+                    matches!(session.try_recv().unwrap().reply, Err(error) if error == "Fixture active charge failed")
+                );
+                assert!(session.try_recv().is_none());
+                assert!(session.charge_active(Duration::ZERO).is_err());
+                assert!(
+                    session
+                        .try_task_pump(TaskPump { wake_token: 7 }, 0)
+                        .is_err()
+                );
+            }
+            assert!(canceled.load(Ordering::SeqCst));
+            assert_eq!(charges.lock().unwrap().len(), if startup { 1 } else { 2 });
+            assert_eq!(runtime.host_failures.check().unwrap_err().outcome, "ERROR");
+            assert!(
+                runtime
+                    .host_failures
+                    .admitted_reason
+                    .lock()
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn tag_metadata_is_bounded_append_only_and_committed_only_on_acknowledgement() {
+        let mut tags = StableArenaTags::default();
+        let initial = reply("<p>owned</p>");
+        let staged = tags.stage(&initial).unwrap();
+        assert!(tags.tags.is_empty());
+        assert_eq!(tags.bytes, 0);
+        let count = staged.tags.len();
+        let bytes = staged.bytes;
+        tags.commit(staged);
+        assert_eq!(tags.tags.len(), count);
+        assert_eq!(tags.bytes, bytes);
+
+        let mut appended = reply("<p>owned</p>");
+        let nodes = &mut appended.snapshot.as_mut().unwrap().nodes;
+        let detached = nodes.len();
+        nodes.push(Node {
+            tag: "aside".into(),
+            attributes: vec![],
+            text: String::new(),
+            parent: detached,
+            children: vec![],
+        });
+        let staged = tags.stage(&appended).unwrap();
+        assert_eq!(staged.tags, ["aside"]);
+        assert_eq!(tags.tags.len(), count);
+        drop(staged); // Failed acknowledgements must not adopt this identity.
+        assert_eq!(tags.tags.len(), count);
+        assert_eq!(tags.bytes, bytes);
+        let staged = tags.stage(&initial).unwrap();
+        assert!(staged.tags.is_empty());
+        assert_eq!(staged.bytes, 0);
+        drop(staged);
+        assert_eq!(tags.tags.len(), count);
+        assert_eq!(tags.bytes, bytes);
+
+        let mut oversized = reply("<p>owned</p>");
+        oversized.snapshot.as_mut().unwrap().nodes.resize(
+            MAX_ARENA_TAGS + 1,
+            Node {
+                tag: "p".into(),
+                attributes: vec![],
+                text: String::new(),
+                parent: 0,
+                children: vec![],
+            },
+        );
+        assert!(tags.stage(&oversized).is_err());
+        let mut oversized = reply("<p>owned</p>");
+        oversized.snapshot.as_mut().unwrap().nodes.push(Node {
+            tag: "x".repeat(MAX_ARENA_TAG_BYTES),
+            attributes: vec![],
+            text: String::new(),
+            parent: 0,
+            children: vec![],
+        });
+        assert!(tags.stage(&oversized).is_err());
+        assert_eq!(tags.tags.len(), count);
+        assert_eq!(tags.bytes, bytes);
+
+        let staged = tags.stage(&appended).unwrap();
+        tags.commit(staged);
+        assert_eq!(tags.tags.len(), count + 1);
+        assert_eq!(tags.bytes, bytes + "aside".len());
+        assert!(
+            tags.validate(&initial.snapshot.as_ref().unwrap().nodes)
+                .is_err()
+        );
+        assert!(
+            tags.validate(&appended.snapshot.as_ref().unwrap().nodes)
+                .is_ok()
+        );
+
+        for fail_charge in [1, 2] {
+            let initial = reply("<p>owned</p>");
+            let later = reply("<p>owned</p><aside>new</aside>");
+            let (runtime, canceled, charges) =
+                guarded_charge(initial, Some(later), Some(fail_charge));
+            let (mut session, _) = runtime.start(request(), 3).unwrap();
+            if fail_charge == 2 {
+                session.charge_active(Duration::ZERO).unwrap();
+                assert!(session.try_recv().unwrap().reply.is_ok());
+            }
+            assert!(session.charge_active(Duration::ZERO).is_err());
+            assert!(canceled.load(Ordering::SeqCst));
+            assert!(session.try_recv().is_none());
+            assert!(session.charge_active(Duration::ZERO).is_err());
+            assert!(
+                session
+                    .try_task_pump(TaskPump { wake_token: 7 }, 0)
+                    .is_err()
+            );
+            assert_eq!(charges.lock().unwrap().len(), fail_charge);
+            assert_eq!(runtime.host_failures.check().unwrap_err().outcome, "ERROR");
+        }
+    }
+
+    #[test]
+    fn reportless_prerealm_closed_rejection_passes_through_without_projection() {
+        use mg_sparkle::page_session::{LifecyclePhase, LifecycleProgress};
+        for modern in [false, true] {
+            let mut rejected = reply("<p>source fallback</p>");
+            rejected.snapshot = None;
+            rejected.state = RealmState::Closed;
+            rejected
+                .errors
+                .push("Source rejected before realm creation".into());
+            rejected.lifecycle = modern.then_some(LifecycleProgress {
+                phase: LifecyclePhase::Initializing,
+                initial_failure: true,
+            });
+            assert!(rejected.is_rejected_initial());
+            assert!(rejected.validate_lifecycle_initial().is_ok());
+            let (runtime, canceled, charges) = guarded(rejected, None);
+            let (mut session, forwarded) = runtime.start(request(), 3).unwrap();
+            assert!(forwarded.is_rejected_initial());
+            assert!(forwarded.snapshot.is_none());
+            assert_eq!(forwarded.errors, ["Source rejected before realm creation"]);
+            assert_eq!(forwarded.lifecycle.is_some(), modern);
+            assert!(runtime.host_failures.check().is_ok());
+            assert!(charges.lock().unwrap().is_empty());
+            session.charge_active(Duration::ZERO).unwrap();
+            assert_eq!(charges.lock().unwrap().len(), 1);
+            assert!(!canceled.load(Ordering::SeqCst));
+            session.cancel(); // Chassis owns cancellation of the Closed result.
+            assert!(canceled.load(Ordering::SeqCst));
             assert!(runtime.host_failures.check().is_ok());
         }
     }
@@ -817,9 +1343,14 @@ mod tests {
                 canceled: Arc::new(AtomicBool::new(false)),
                 charges: charges.clone(),
                 validation_pending: true,
+                fail_charge: None,
                 update: None,
             }),
             pending_validation: Duration::from_millis(3),
+            page_url: request().url,
+            tags: StableArenaTags::default(),
+            staged_tags: None,
+            acknowledgement_failed: false,
             host_failures: Arc::new(ScriptHostFailures::default()),
         };
         session.charge_active(Duration::from_millis(5)).unwrap();
@@ -850,6 +1381,45 @@ mod tests {
         assert_eq!(reply.errors, ["SyntaxError: owned fixture"]);
         session.charge_active(Duration::ZERO).unwrap();
         assert!(runtime.host_failures.check().is_ok());
+    }
+
+    #[test]
+    fn typed_initial_outcome_rejects_partial_pending_and_opaque_failure_without_status_text() {
+        let clean = InitialScriptOutcome {
+            status: InitialScriptStatus::Complete,
+            failure: None,
+            scripts_executed: 3,
+            error_count: 0,
+            broker_rejected_sources: 0,
+            diagnostics: vec![],
+        };
+        assert!(check_initial_script(&clean).is_ok());
+        for status in [InitialScriptStatus::Partial, InitialScriptStatus::Failed] {
+            for (script_errors, broker_errors) in [(1, 0), (0, 1)] {
+                let mut outcome = clean.clone();
+                outcome.status = status;
+                outcome.failure = Some(InitialScriptFailure::Script);
+                outcome.error_count = script_errors;
+                outcome.broker_rejected_sources = broker_errors;
+                let failure = check_initial_script(&outcome).unwrap_err();
+                assert_eq!(failure.outcome, "FAIL");
+                assert_eq!(failure.kind, "admitted-execution");
+            }
+        }
+        for status in [
+            InitialScriptStatus::Failed,
+            InitialScriptStatus::Pending,
+            InitialScriptStatus::NotRequested,
+        ] {
+            let mut outcome = clean.clone();
+            outcome.status = status;
+            if status == InitialScriptStatus::Failed {
+                outcome.failure = Some(InitialScriptFailure::Infrastructure);
+            }
+            let failure = check_initial_script(&outcome).unwrap_err();
+            assert_eq!(failure.outcome, "ERROR");
+            assert_eq!(failure.kind, "infrastructure");
+        }
     }
 
     #[test]

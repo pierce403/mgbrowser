@@ -23,7 +23,7 @@ window.onmessage = function (event) {
       Object.hasOwn(clone.sparse, '0') || Object.hasOwn(clone.sparse, '1') ||
       clone.sparse[2] !== clone.child || Object.hasOwn(clone.sparse, '3') ||
       document.readyState !== 'complete' || propertyCalls !== 0 ||
-      messageOrder.join(',') !== 'script,after-post,script-microtask,load,load-microtask')
+      messageOrder.join(',') !== 'script,script-microtask,load,after-post,load-microtask')
     throw new Error('Wrong later native cloned Window message');
   propertyCalls++; savedMessage = event; savedData = clone;
   event.preventDefault();
@@ -37,7 +37,7 @@ window.addEventListener('message', function (event) {
       event.origin !== expectedOrigin || event.source !== window || event.target !== window ||
       event.currentTarget !== window || event.eventPhase !== 2 || event.defaultPrevented ||
       event.bubbles || event.cancelable || propertyCalls !== 1 || listenerCalls !== 0 ||
-      messageOrder.join(',') !== 'script,after-post,script-microtask,load,load-microtask,property,property-microtask')
+      messageOrder.join(',') !== 'script,script-microtask,load,after-post,load-microtask,property,property-microtask')
     throw new Error('Wrong message listener checkpoint or event identity');
   listenerCalls++; messageOrder.push('listener');
   // These controls cannot exist until the real message clone and callback checkpoint.
@@ -73,19 +73,21 @@ window.addEventListener('message', function (event) {
   document.body.setAttribute('data-message-proof', 'deep-clone-identity-noncancelable');
   Promise.resolve().then(function () {
     messageOrder.push('listener-microtask');
-    var expected = 'script,after-post,script-microtask,load,load-microtask,property,property-microtask,listener,listener-microtask';
+    var expected = 'script,script-microtask,load,after-post,load-microtask,property,property-microtask,listener,listener-microtask';
     if (messageOrder.join(',') !== expected) throw new Error('Wrong message checkpoint order');
     checkpointDone = true;
     document.body.setAttribute('data-message-checkpoint', expected);
     document.title = 'Window message controls ready'; state.textContent = 'window message ready';
   });
 });
-postMessage(originalMessage, '/');
-messageOrder.push('after-post'); originalChild.value = 99;
 Promise.resolve().then(function () { messageOrder.push('script-microtask'); });
 window.onload = function () {
-  if (propertyCalls !== 0 || listenerCalls !== 0) throw new Error('Message ran during Init');
+  if (propertyCalls !== 0 || listenerCalls !== 0) throw new Error('Message ran before load enqueue');
   messageOrder.push('load');
+  // Enqueue after actual load: source-created messages may correctly precede DCL.
+  // The clone must still snapshot 42 before the original is changed to 99.
+  postMessage(originalMessage, '/');
+  messageOrder.push('after-post'); originalChild.value = 99;
   Promise.resolve().then(function () { messageOrder.push('load-microtask'); });
 };
 </script></body></html>

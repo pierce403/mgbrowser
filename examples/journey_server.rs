@@ -38,6 +38,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/message-events.html"),
             ),
+            "/lifecycle-events" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/lifecycle-events.html"),
+            ),
+            "/lifecycle-deferred.js" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/lifecycle-deferred.js"),
+            ),
             "/external-events.js" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/external-events.js"),
@@ -178,7 +186,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "<h1>Fixture request failed</h1><p>Expected query and hidden field.</p>",
             ),
         };
-        let content_type = if url.path() == "/external-events.js" {
+        let content_type = if matches!(url.path(), "/external-events.js" | "/lifecycle-deferred.js")
+        {
             "text/javascript"
         } else {
             "text/html"

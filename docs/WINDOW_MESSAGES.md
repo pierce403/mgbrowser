@@ -223,7 +223,7 @@ actual prior-binary updater gates. Freeze the unchanged full static WPT cohort
 and freshly review every case/page/request/cleanup/passing-script result before
 any contribution. Finish user-visible messaging through a new verified release.
 
-## Separate next milestone: queued lifecycle
+## Historical next milestone after v0.9.10: queued lifecycle
 
 Keep bundled Init unchanged in this increment. Mandatory DOMContentLoaded and
 complete/load tasks would change existing Init semantic/counter assertions,
@@ -232,7 +232,12 @@ extra allowances, relaxed resource tests or an implicit compatibility mode.
 Review genuine lifecycle scheduling and explicit migration of approximation-only
 semantic expectations separately, retaining all quota/fatal/security assertions.
 
-Chassis currently ends loading at Init and CDP emits DCL/load together. Proper
+In the v0.9.10 baseline, Chassis ends loading at Init and CDP emits DCL/load
+together. The separately frozen and implemented v0.9.11 candidate follows
+[DOCUMENT_LIFECYCLE.md](DOCUMENT_LIFECYCLE.md), with release gates recorded in
+the dated log. The original next-step requirements were:
+
+Proper
 task-separated lifecycle needs monotonic generation-fenced progress, a reviewed
 strict modern protocol/schema decision, correct CDP events and a finite initial
 load wait in profile/static hosts. Never redefine loading as draining all timers

@@ -1,4 +1,4 @@
-//! Owned modern-v4 process controls; no display, fixture server or parent JS.
+//! Owned modern-v5 process controls; no display, fixture server or parent JS.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use mg_butane::modern::Report;
@@ -55,7 +55,7 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
-        self.send_version(4, sequence, revision, kind, payload);
+        self.send_version(5, sequence, revision, kind, payload);
     }
     fn send_version(
         &mut self,
@@ -116,12 +116,12 @@ impl Peer {
         }
         bytes
     }
-    fn receive(&mut self, sequence: u64, revision: u64) -> Value {
+    fn receive_frame(&mut self, sequence: u64, revision: u64) -> Value {
         let len = u32::from_be_bytes(self.exact(4).try_into().unwrap()) as usize;
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 4),
+            ("version", 5),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -129,6 +129,14 @@ impl Peer {
         ] {
             assert_eq!(frame[field], value, "{field}");
         }
+        serde_json::from_value::<mg_sparkle::page_session::LifecycleProgress>(
+            frame["reply"]["lifecycle"].clone(),
+        )
+        .expect("required typed modern lifecycle progress");
+        frame
+    }
+    fn receive(&mut self, sequence: u64, revision: u64) -> Value {
+        let frame = self.receive_frame(sequence, revision);
         assert!(frame["reply"]["allocations"].is_null());
         let report = report(&frame);
         report.validate().unwrap();
@@ -143,6 +151,45 @@ impl Peer {
     fn pump(&mut self, sequence: u64, revision: u64, token: u64) -> Value {
         self.send(sequence, revision, "TaskPump", json!({"wake_token":token}));
         self.receive(sequence, revision)
+    }
+    /// Only the explicitly expected remaining mandatory milestones, never an
+    /// arbitrary timer/message drain. Call after earlier fixture tasks finish.
+    fn complete_lifecycle(&mut self, mut previous: Value) -> Value {
+        use mg_sparkle::page_session::{LifecyclePhase, LifecycleProgress, SessionReply};
+        let progress: LifecycleProgress =
+            serde_json::from_value(previous["reply"]["lifecycle"].clone()).unwrap();
+        let phases: &[LifecyclePhase] = match progress.phase {
+            LifecyclePhase::Interactive => &[
+                LifecyclePhase::DomContentLoaded,
+                LifecyclePhase::LoadComplete,
+            ],
+            LifecyclePhase::DomContentLoaded => &[LifecyclePhase::LoadComplete],
+            LifecyclePhase::LoadComplete => &[],
+            LifecyclePhase::Initializing => panic!("fixture did not finish source initialization"),
+        };
+        for phase in phases {
+            let sequence = previous["sequence"].as_u64().unwrap() + 1;
+            let revision = previous["reply"]["revision"].as_u64().unwrap();
+            let (token, delay) = wake(&previous);
+            self.wait_due(delay);
+            let next = self.pump(sequence, revision, token);
+            no_activation(&next);
+            assert_eq!(next["reply"]["state"], "Ready");
+            let old_reply: SessionReply =
+                serde_json::from_value(previous["reply"].clone()).unwrap();
+            let next_reply: SessionReply = serde_json::from_value(next["reply"].clone()).unwrap();
+            let observed = next_reply
+                .validate_lifecycle_after(old_reply.lifecycle, true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                observed.phase, *phase,
+                "unexpected non-lifecycle work in fixed milestone control"
+            );
+            report(&next).validate_after(&report(&previous)).unwrap();
+            previous = next;
+        }
+        previous
     }
     fn idle(&mut self) {
         let mut byte = [0];
@@ -211,6 +258,216 @@ fn no_activation(frame: &Value) {
 }
 
 #[test]
+fn real_worker_empty_initialization_and_lifecycle_are_three_distinct_replies() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("");
+    assert_eq!(
+        initial["reply"]["lifecycle"],
+        json!({"phase":"Interactive","initial_failure":false})
+    );
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(
+        (
+            report(&initial).jobs_admitted,
+            report(&initial).jobs_executed,
+            report(&initial).pending_jobs
+        ),
+        (2, 0, 2)
+    );
+    peer.idle();
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let dcl = peer.pump(1, 0, token);
+    no_activation(&dcl);
+    assert_eq!(
+        dcl["reply"]["lifecycle"],
+        json!({"phase":"DomContentLoaded","initial_failure":false})
+    );
+    assert_eq!(dcl["reply"]["errors"], json!([]));
+    assert_eq!(
+        (
+            report(&dcl).jobs_admitted,
+            report(&dcl).jobs_executed,
+            report(&dcl).pending_jobs
+        ),
+        (2, 1, 1)
+    );
+    assert!(wake(&dcl).0 > token);
+    report(&dcl).validate_after(&report(&initial)).unwrap();
+    peer.idle();
+    let loaded = peer.complete_lifecycle(dcl);
+    assert_eq!(
+        loaded["reply"]["lifecycle"],
+        json!({"phase":"LoadComplete","initial_failure":false})
+    );
+    assert_eq!(
+        (
+            report(&loaded).jobs_admitted,
+            report(&loaded).jobs_executed,
+            report(&loaded).pending_jobs
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(loaded["reply"]["errors"], json!([]));
+    assert!(loaded["reply"]["task_wake"].is_null());
+    peer.finish();
+}
+
+#[test]
+fn real_worker_initial_errors_stay_latched_through_clean_milestones_and_later_work() {
+    for stage in ["inline", "dcl", "load"] {
+        let mut peer = Peer::start();
+        let source = format!(
+            r#"
+            function fail(){{throw 'owned-{stage}-failure';}}
+            setTimeout(()=>document.getElementById('o').setAttribute('data-later','yes'),60);
+            {}
+        "#,
+            match stage {
+                "inline" => "fail();",
+                "dcl" => "document.addEventListener('DOMContentLoaded',fail);",
+                "load" => "window.onload=fail;",
+                _ => unreachable!(),
+            }
+        );
+        let initial = peer.initialize(&source);
+        assert_eq!(
+            initial["reply"]["lifecycle"]["initial_failure"],
+            stage == "inline"
+        );
+        let mut loaded = initial;
+        for (sequence, phase) in [(1, "DomContentLoaded"), (2, "LoadComplete")] {
+            let (token, delay) = wake(&loaded);
+            peer.wait_due(delay);
+            let next = peer.pump(sequence, sequence - 1, token);
+            no_activation(&next);
+            assert_eq!(next["reply"]["lifecycle"]["phase"], phase);
+            let expected_error =
+                (stage == "dcl" && sequence == 1) || (stage == "load" && sequence == 2);
+            assert_eq!(
+                next["reply"]["errors"].as_array().unwrap().len(),
+                usize::from(expected_error),
+                "{stage} {phase}"
+            );
+            if expected_error {
+                assert!(
+                    next["reply"]["errors"][0]
+                        .as_str()
+                        .unwrap()
+                        .contains("JavaScript threw a value (not coerced by the host)")
+                );
+            }
+            report(&next).validate_after(&report(&loaded)).unwrap();
+            loaded = next;
+        }
+        assert_eq!(
+            loaded["reply"]["lifecycle"],
+            json!({"phase":"LoadComplete","initial_failure":true}),
+            "{stage}"
+        );
+        assert_eq!(report(&loaded).pending_jobs, 1);
+        let (token, delay) = wake(&loaded);
+        peer.wait_due(delay);
+        let later = peer.pump(3, 2, token);
+        assert_eq!(later["reply"]["errors"], json!([]), "{stage}");
+        assert_eq!(
+            later["reply"]["lifecycle"], loaded["reply"]["lifecycle"],
+            "{stage}"
+        );
+        assert_eq!(attribute(&later, "data-later").as_deref(), Some("yes"));
+        assert_eq!(report(&later).pending_jobs, 0);
+        report(&later).validate_after(&report(&loaded)).unwrap();
+        peer.finish();
+    }
+}
+
+#[test]
+fn real_worker_window_error_identity_survives_genuine_queued_load() {
+    let mut peer = Peer::start();
+    // Retained counterpart of the original one-shot Window-error control:
+    // property/listener identity and no coercion are preserved across load.
+    let initial = peer.initialize("var traps=0,secret={},saved;for(const key of ['message','name','stack'])Object.defineProperty(secret,key,{get(){traps++;throw 'trap';}});secret[Symbol.toPrimitive]=()=>{traps++;throw 'trap';};window.onerror=function(message,file,line,column,error){if(arguments.length!==5||this!==window||error!==secret||file!==''||line!==0||column!==0||traps)throw 'bad property handler';return true;};window.addEventListener('error',function(event){if(event.error!==secret||event.target!==window||event.currentTarget!==window||event.eventPhase!==2||event.bubbles||!event.cancelable||!event.defaultPrevented||traps)throw 'bad native event';saved=event;});window.onload=()=>{if(saved.currentTarget!==null||saved.eventPhase!==0||saved.error!==secret||traps)throw 'bad escaped event';document.getElementById('o').setAttribute('data-proof','owned error identity');};throw secret;");
+    assert_eq!(initial["reply"]["errors"].as_array().unwrap().len(), 1);
+    assert!(
+        initial["reply"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("JavaScript threw a value (not coerced by the host)")
+    );
+    assert!(attribute(&initial, "data-proof").is_none());
+    assert_eq!(report(&initial).pending_jobs, 2);
+    let loaded = peer.complete_lifecycle(initial);
+    assert_eq!(loaded["reply"]["errors"], json!([]));
+    assert_eq!(
+        attribute(&loaded, "data-proof").as_deref(),
+        Some("owned error identity")
+    );
+    assert_eq!(
+        loaded["reply"]["lifecycle"],
+        json!({"phase":"LoadComplete","initial_failure":true})
+    );
+    assert_eq!(report(&loaded).pending_jobs, 0);
+    peer.finish();
+}
+
+#[test]
+fn real_worker_early_navigation_and_prerealm_rejection_never_manufacture_load() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("location.href='/next';");
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["navigation"], "https://example.test/next");
+    assert_eq!(
+        initial["reply"]["lifecycle"],
+        json!({"phase":"Initializing","initial_failure":false})
+    );
+    assert_eq!(
+        (
+            report(&initial).jobs_admitted,
+            report(&initial).pending_jobs
+        ),
+        (0, 0)
+    );
+    assert!(initial["reply"]["task_wake"].is_null());
+    peer.finish();
+
+    let mut peer = Peer::start();
+    let html = "<p id=o>fallback</p><script>throw 'MUST_NOT_RUN';</script><script id=external src=/owned.js></script>";
+    let document =
+        mg_sparkle::document::parse_with_scripting(html, "https://example.test/tasks", true);
+    peer.send(0, 0, "Init", json!({"url":"https://example.test/tasks","html":html,"external_scripts":[{
+        "node":document.query_selector(0,"#external").unwrap().unwrap(),"source":"throw 'MUST_NOT_RUN'","provenance":{
+            "response_url":"https://foreign.test/owned.js","error_visibility":"same-origin"
+        }
+    }]}));
+    let rejected = peer.receive_frame(0, 0);
+    let reply: mg_sparkle::page_session::SessionReply =
+        serde_json::from_value(rejected["reply"].clone()).unwrap();
+    assert!(reply.is_rejected_initial());
+    assert_eq!(
+        rejected["reply"]["lifecycle"],
+        json!({"phase":"Initializing","initial_failure":true})
+    );
+    assert!(rejected["reply"]["boa"].is_null());
+    assert_eq!(rejected["reply"]["errors"].as_array().unwrap().len(), 1);
+    assert!(
+        rejected["reply"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("contradictory classic source provenance")
+    );
+    assert!(peer.input.is_some());
+    loop {
+        if let Some(status) = peer.child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        peer.tick();
+    }
+    let mut byte = [0];
+    assert_eq!(peer.output.read(&mut byte).unwrap(), 0);
+}
+
+#[test]
 fn real_worker_delivers_exactly_one_cloned_message_per_parent_pump() {
     let mut peer = Peer::start();
     let initial = peer.initialize(r#"
@@ -243,7 +500,7 @@ fn real_worker_delivers_exactly_one_cloned_message_per_parent_pump() {
             report(&initial).jobs_executed,
             report(&initial).pending_jobs
         ),
-        (3, 1, 2)
+        (5, 1, 4) // Two messages, one reaction and two queued lifecycle permits.
     );
     let mut previous = initial;
     for sequence in 1..=2 {
@@ -266,15 +523,20 @@ fn real_worker_delivers_exactly_one_cloned_message_per_parent_pump() {
                 report(&current).pending_jobs
             ),
             (
-                3 + sequence as usize,
+                5 + sequence as usize,
                 1 + 2 * sequence as usize,
-                2 - sequence as usize
+                4 - sequence as usize
             )
         );
         report(&current).validate_after(&report(&previous)).unwrap();
         previous = current;
     }
-    assert!(previous["reply"]["task_wake"].is_null());
+    let completed = peer.complete_lifecycle(previous);
+    assert_eq!(report(&completed).jobs_admitted, 7);
+    assert_eq!(report(&completed).jobs_executed, 7);
+    assert_eq!(report(&completed).pending_jobs, 0);
+    assert_eq!(completed["reply"]["errors"], json!([]));
+    assert!(completed["reply"]["task_wake"].is_null());
     peer.idle();
     peer.finish();
 }
@@ -290,13 +552,17 @@ fn real_worker_message_pump_replay_is_terminal_without_running_the_next_message(
     assert_eq!(first["reply"]["state"], "Ready");
     assert_eq!(first["reply"]["errors"], json!([]));
     assert_eq!(attribute(&first, "data-order").as_deref(), Some("first"));
-    assert_eq!(report(&first).pending_jobs, 1);
+    assert_eq!(report(&first).pending_jobs, 3); // Second message plus both lifecycle tasks.
     let rejected = peer.pump(2, 1, token);
     no_activation(&rejected);
     assert_eq!(rejected["reply"]["state"], "Closed");
-    assert_eq!(report(&rejected).jobs_admitted, 2);
+    assert_eq!(report(&rejected).jobs_admitted, 4);
     assert_eq!(report(&rejected).jobs_executed, 1);
     assert_eq!(report(&rejected).pending_jobs, 0);
+    assert_eq!(
+        rejected["reply"]["lifecycle"],
+        json!({"phase":"Interactive","initial_failure":true})
+    );
     assert!(rejected["reply"]["task_wake"].is_null());
     assert!(
         rejected["reply"]["errors"]
@@ -343,7 +609,7 @@ fn real_worker_message_pumps_share_the_unchanged_sixty_four_transaction_budget()
             report(&reply).jobs_executed,
             report(&reply).pending_jobs
         ),
-        (1, 0, 1)
+        (3, 0, 3) // Recursive message plus DCL/load; all share the same budget.
     );
     let initial = report(&reply);
     for sequence in 1..64 {
@@ -354,20 +620,31 @@ fn real_worker_message_pumps_share_the_unchanged_sixty_four_transaction_budget()
         assert_eq!(next["reply"]["state"], "Ready");
         assert_eq!(next["reply"]["errors"], json!([]));
         assert_eq!(next["reply"]["revision"], sequence);
-        assert_eq!(attribute(&next, "data-count"), Some(sequence.to_string()));
+        let messages = sequence.saturating_sub(2).max(1);
+        assert_eq!(attribute(&next, "data-count"), Some(messages.to_string()));
         assert_eq!(
             (
                 report(&next).jobs_admitted,
                 report(&next).jobs_executed,
                 report(&next).pending_jobs
             ),
-            (sequence as usize + 1, sequence as usize, 1)
+            (
+                messages as usize + 3,
+                sequence as usize,
+                if sequence < 3 {
+                    4 - sequence as usize
+                } else {
+                    1
+                }
+            )
         );
         report(&next).validate_after(&report(&reply)).unwrap();
         reply = next;
     }
     assert!(report(&reply).opcodes_remaining < initial.opcodes_remaining);
-    // Init + 63 pumps ends the worker even though a real message remains queued.
+    assert_eq!(attribute(&reply, "data-count").as_deref(), Some("61"));
+    assert_eq!(reply["reply"]["lifecycle"]["phase"], "LoadComplete");
+    // Init + 63 pumps (two lifecycle, 61 messages) ends the worker even though a real message remains queued.
     // Do not close parent stdin or renew the realm to manufacture termination.
     assert!(peer.input.is_some());
     loop {
@@ -385,13 +662,13 @@ fn real_worker_fatal_message_delivery_exits_without_next_callbacks_or_closing_pa
     let initial = peer.initialize("onerror=()=>document.getElementById('o').setAttribute('data-reporter','wrong');onmessage=()=>{document.getElementById('o').setAttribute('data-entered','yes');Promise.resolve().then(()=>document.getElementById('o').setAttribute('data-job','wrong'));while(true){}};addEventListener('message',()=>document.getElementById('o').setAttribute('data-listener','wrong'));postMessage(1,'/');postMessage(2,'/');");
     assert_eq!(initial["reply"]["state"], "Ready");
     assert_eq!(initial["reply"]["errors"], json!([]));
-    assert_eq!(report(&initial).pending_jobs, 2);
+    assert_eq!(report(&initial).pending_jobs, 4); // Messages and mandatory lifecycle.
     let (token, delay) = wake(&initial);
     peer.wait_due(delay);
     let fatal = peer.pump(1, 0, token);
     no_activation(&fatal);
     assert_eq!(fatal["reply"]["state"], "Fatal");
-    assert_eq!(report(&fatal).jobs_admitted, 3);
+    assert_eq!(report(&fatal).jobs_admitted, 5); // Two messages, two lifecycle, one stopped reaction.
     assert_eq!(report(&fatal).jobs_executed, 1);
     assert_eq!(report(&fatal).pending_jobs, 0);
     assert!(report(&fatal).fatal_reason.is_some());
@@ -422,7 +699,7 @@ fn real_worker_only_runs_one_due_timer_and_its_checkpoint_per_parent_pump() {
         attribute(&initial, "data-order").as_deref(),
         Some("init,micro")
     );
-    assert_eq!(report(&initial).pending_jobs, 2);
+    assert_eq!(report(&initial).pending_jobs, 4); // Two timers and both mandatory milestones.
     let (token, delay) = wake(&initial);
     peer.wait_due(delay);
     peer.idle();
@@ -432,7 +709,7 @@ fn real_worker_only_runs_one_due_timer_and_its_checkpoint_per_parent_pump() {
         attribute(&first, "data-order").as_deref(),
         Some("init,micro,first,checkpoint")
     );
-    assert_eq!(report(&first).pending_jobs, 1);
+    assert_eq!(report(&first).pending_jobs, 3);
     report(&first).validate_after(&report(&initial)).unwrap();
     let (next, delay) = wake(&first);
     assert!(next > token);
@@ -443,9 +720,11 @@ fn real_worker_only_runs_one_due_timer_and_its_checkpoint_per_parent_pump() {
         attribute(&second, "data-order").as_deref(),
         Some("init,micro,first,checkpoint,second")
     );
-    assert!(second["reply"]["task_wake"].is_null());
-    assert_eq!(report(&second).pending_jobs, 0);
+    assert_eq!(report(&second).pending_jobs, 2);
     report(&second).validate_after(&report(&first)).unwrap();
+    let completed = peer.complete_lifecycle(second);
+    assert_eq!(report(&completed).pending_jobs, 0);
+    assert!(completed["reply"]["task_wake"].is_null());
     peer.finish();
 }
 
@@ -458,17 +737,30 @@ fn real_worker_rejects_early_foreign_and_replayed_tokens_without_effects() {
         } else {
             "setTimeout(function(){document.getElementById('o').setAttribute('data-ran','first');},0);setTimeout(function(){document.getElementById('o').setAttribute('data-ran','second');},0);"
         });
+        // Complete only the two mandatory milestones before testing the long
+        // timer's genuine not-yet-due token. Immediate timer controls retain
+        // their original position ahead of lifecycle tasks.
+        let initial = if invalid == "early" {
+            peer.complete_lifecycle(initial)
+        } else {
+            initial
+        };
+        let sequence = initial["sequence"].as_u64().unwrap() + 1;
+        let revision = initial["reply"]["revision"].as_u64().unwrap();
         let (token, delay) = wake(&initial);
+        if invalid == "early" {
+            assert!(delay > Duration::from_secs(1));
+        }
         let (sequence, revision, bad_token) = if invalid == "replayed" {
             peer.wait_due(delay);
-            let first = peer.pump(1, 0, token);
+            let first = peer.pump(sequence, revision, token);
             assert_eq!(attribute(&first, "data-ran").as_deref(), Some("first"));
             assert!(wake(&first).0 > token);
-            (2, 1, token)
+            (sequence + 1, revision + 1, token)
         } else {
             (
-                1,
-                0,
+                sequence,
+                revision,
                 if invalid == "foreign" {
                     token + 1
                 } else {
@@ -499,12 +791,17 @@ fn real_worker_timer_pumps_share_the_fixed_64_transaction_budget() {
         let next = peer.pump(sequence, sequence - 1, token);
         no_activation(&next);
         assert_eq!(next["reply"]["revision"], sequence);
-        assert_eq!(attribute(&next, "data-count"), Some(sequence.to_string()));
+        // The first timer precedes DCL/load; its successors follow the two
+        // already queued lifecycle tasks and share their transaction budget.
+        let timers = sequence.saturating_sub(2).max(1);
+        assert_eq!(attribute(&next, "data-count"), Some(timers.to_string()));
         report(&next).validate_after(&report(&reply)).unwrap();
         reply = next;
     }
     assert!(report(&reply).opcodes_remaining < first.opcodes_remaining);
-    assert!(report(&reply).jobs_executed >= 63);
+    assert_eq!(report(&reply).jobs_executed, 63);
+    assert_eq!(attribute(&reply, "data-count").as_deref(), Some("61"));
+    assert_eq!(reply["reply"]["lifecycle"]["phase"], "LoadComplete");
     // The child closes after the original Init + 63-command limit, even with
     // a retained recursive timeout. It cannot accept a 65th frame or renew the realm.
     loop {
@@ -522,10 +819,12 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
     let initial = peer.initialize("var value={},saved,order=[];window.onerror=function(message,file,line,column,error){if(arguments.length!==5||this!==window||error!==value||file!==''||line!==0||column!==0)throw 'bad onerror';order.push('property');Promise.resolve().then(()=>order.push('property-job'));return true;};window.addEventListener('error',event=>{if(event.error!==value||event.target!==window||event.currentTarget!==window||event.eventPhase!==2||!event.defaultPrevented||event.bubbles||!event.cancelable)throw 'bad event';saved=event;order.push('listener');Promise.resolve().then(()=>{order.push('listener-job');document.getElementById('o').setAttribute('data-order',order.join(','));});});document.getElementById('o').onclick=event=>{if(saved.error!==value||saved.currentTarget!==null||saved.eventPhase!==0||!saved.defaultPrevented)throw 'lost event';event.preventDefault();document.getElementById('o').setAttribute('data-retained','yes');};setTimeout(()=>{throw value;},60);");
     assert_eq!(initial["reply"]["state"], "Ready");
     assert_eq!(initial["reply"]["errors"], json!([]));
-    assert_eq!(report(&initial).pending_jobs, 1);
-    let (token, delay) = wake(&initial);
+    assert_eq!(report(&initial).pending_jobs, 3);
+    let loaded = peer.complete_lifecycle(initial.clone());
+    assert_eq!(report(&loaded).pending_jobs, 1);
+    let (token, delay) = wake(&loaded);
     peer.wait_due(delay);
-    let fired = peer.pump(1, 0, token);
+    let fired = peer.pump(3, 2, token);
     no_activation(&fired);
     assert_eq!(fired["reply"]["state"], "Ready");
     assert_eq!(fired["reply"]["errors"].as_array().unwrap().len(), 1);
@@ -541,7 +840,8 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
     );
     assert_eq!(report(&fired).pending_jobs, 0);
     assert!(fired["reply"]["task_wake"].is_null());
-    report(&fired).validate_after(&report(&initial)).unwrap();
+    report(&fired).validate_after(&report(&loaded)).unwrap();
+    assert_eq!(fired["reply"]["lifecycle"]["initial_failure"], false);
     let target = fired["reply"]["snapshot"]["nodes"]
         .as_array()
         .unwrap()
@@ -553,12 +853,12 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
         })
         .unwrap();
     peer.send(
-        2,
-        1,
+        4,
+        3,
         "Event",
         json!({"kind":{"kind":"Click","target":target},"edits":[]}),
     );
-    let clicked = peer.receive(2, 1);
+    let clicked = peer.receive(4, 3);
     assert_eq!(clicked["reply"]["errors"], json!([]));
     assert_eq!(clicked["reply"]["state"], "Ready");
     assert_eq!(clicked["reply"]["outcome"]["click_canceled"], true);
@@ -569,8 +869,11 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
 }
 
 #[test]
-fn real_worker_rejects_v3_init_and_later_commands_without_reply_or_execution() {
-    for kind in ["Init", "Event", "TaskPump"] {
+fn real_worker_rejects_v3_and_v4_init_and_later_commands_without_reply_or_execution() {
+    for (version, kind) in [3, 4]
+        .into_iter()
+        .flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
+    {
         let mut peer = Peer::start();
         let (sequence, payload) = match kind {
             "Init" => (
@@ -580,7 +883,7 @@ fn real_worker_rejects_v3_init_and_later_commands_without_reply_or_execution() {
             later => {
                 let initial = peer.initialize("setTimeout(()=>{throw 'MUST_NOT_RUN';},100000);");
                 assert_eq!(initial["reply"]["state"], "Ready");
-                assert_eq!(report(&initial).pending_jobs, 1);
+                assert_eq!(report(&initial).pending_jobs, 3); // Timer plus mandatory lifecycle.
                 (
                     1,
                     if later == "Event" {
@@ -591,12 +894,12 @@ fn real_worker_rejects_v3_init_and_later_commands_without_reply_or_execution() {
                 )
             }
         };
-        peer.send_version(3, sequence, 0, kind, payload);
+        peer.send_version(version, sequence, 0, kind, payload);
         loop {
             if let Some(status) = peer.child.try_wait().unwrap() {
                 assert!(
                     !status.success(),
-                    "old modern version must fail closed: {kind}"
+                    "old modern version must fail closed: {version} {kind}"
                 );
                 break;
             }
@@ -638,9 +941,9 @@ fn real_worker_runs_one_frozen_rejection_batch_and_its_listener_checkpoints() {
         attribute(&initial, "data-order").as_deref(),
         Some("script,init-job")
     );
-    assert_eq!(report(&initial).jobs_admitted, 3);
+    assert_eq!(report(&initial).jobs_admitted, 5); // Two candidates, a reaction and lifecycle.
     assert_eq!(report(&initial).jobs_executed, 1);
-    assert_eq!(report(&initial).pending_jobs, 2);
+    assert_eq!(report(&initial).pending_jobs, 4);
     let (token, delay) = wake(&initial);
     peer.wait_due(delay);
     peer.idle();
@@ -656,11 +959,16 @@ fn real_worker_runs_one_frozen_rejection_batch_and_its_listener_checkpoints() {
         Some("script,init-job,u-a,m-a,u-b,m-b")
     );
     assert!(attribute(&notified, "data-window-error").is_none());
-    assert_eq!(report(&notified).jobs_admitted, 5);
+    assert_eq!(report(&notified).jobs_admitted, 7);
     assert_eq!(report(&notified).jobs_executed, 5);
-    assert_eq!(report(&notified).pending_jobs, 0);
-    assert!(notified["reply"]["task_wake"].is_null());
+    assert_eq!(report(&notified).pending_jobs, 2);
     report(&notified).validate_after(&report(&initial)).unwrap();
+    let completed = peer.complete_lifecycle(notified);
+    assert_eq!(report(&completed).jobs_admitted, 7);
+    assert_eq!(report(&completed).jobs_executed, 7);
+    assert_eq!(report(&completed).pending_jobs, 0);
+    assert_eq!(completed["reply"]["lifecycle"]["initial_failure"], true);
+    assert!(completed["reply"]["task_wake"].is_null());
     peer.idle();
     peer.finish();
 }
@@ -709,10 +1017,10 @@ fn real_worker_muted_rejection_observation_gap_survives_catch_and_later_reply() 
     assert_eq!(initial["reply"]["errors"], json!([NOTICE]));
     assert_eq!(attribute(&initial, "data-caught").as_deref(), Some("yes"));
     // Suppressed observation retains no rejection permit. Only the real catch
-    // reaction and timer consume work, under the unchanged shared report.
-    assert_eq!(report(&initial).jobs_admitted, 2);
+    // reaction, timer and two mandatory lifecycle tasks consume shared work.
+    assert_eq!(report(&initial).jobs_admitted, 4);
     assert_eq!(report(&initial).jobs_executed, 1);
-    assert_eq!(report(&initial).pending_jobs, 1);
+    assert_eq!(report(&initial).pending_jobs, 3);
     let (token, delay) = wake(&initial);
     peer.wait_due(delay);
     let later = peer.pump(1, 0, token);
@@ -720,11 +1028,16 @@ fn real_worker_muted_rejection_observation_gap_survives_catch_and_later_reply() 
     assert_eq!(later["reply"]["state"], "Ready");
     assert_eq!(later["reply"]["errors"], json!([NOTICE]));
     assert_eq!(attribute(&later, "data-later").as_deref(), Some("yes"));
-    assert_eq!(report(&later).jobs_admitted, 2);
+    assert_eq!(report(&later).jobs_admitted, 4);
     assert_eq!(report(&later).jobs_executed, 2);
-    assert_eq!(report(&later).pending_jobs, 0);
-    assert!(later["reply"]["task_wake"].is_null());
+    assert_eq!(report(&later).pending_jobs, 2);
     report(&later).validate_after(&report(&initial)).unwrap();
+    let completed = peer.complete_lifecycle(later);
+    assert_eq!(completed["reply"]["errors"], json!([NOTICE]));
+    assert_eq!(report(&completed).jobs_admitted, 4);
+    assert_eq!(report(&completed).jobs_executed, 4);
+    assert_eq!(report(&completed).pending_jobs, 0);
+    assert!(completed["reply"]["task_wake"].is_null());
     peer.finish();
 }
 
@@ -746,13 +1059,13 @@ fn real_worker_fatal_rejection_delivery_exits_with_parent_input_still_open() {
     );
     assert_eq!(initial["reply"]["state"], "Ready");
     assert_eq!(initial["reply"]["errors"], json!([]));
-    assert_eq!(report(&initial).pending_jobs, 2);
+    assert_eq!(report(&initial).pending_jobs, 4);
     let (token, delay) = wake(&initial);
     peer.wait_due(delay);
     let fatal = peer.pump(1, 0, token);
     no_activation(&fatal);
     assert_eq!(fatal["reply"]["state"], "Fatal");
-    assert_eq!(report(&fatal).jobs_admitted, 3);
+    assert_eq!(report(&fatal).jobs_admitted, 5); // Candidates, lifecycle, then stopped reaction.
     assert_eq!(report(&fatal).jobs_executed, 1);
     assert_eq!(report(&fatal).pending_jobs, 0);
     assert!(report(&fatal).fatal_reason.is_some());

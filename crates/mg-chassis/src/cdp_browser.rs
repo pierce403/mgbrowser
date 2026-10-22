@@ -14,9 +14,17 @@ const NODE_STRIDE: u64 = 100_000;
 pub enum Event {
     DocumentUpdated,
     Started,
+    Committed {
+        frame: Value,
+    },
+    DomContentLoaded {
+        at: Instant,
+    },
+    LoadComplete {
+        at: Instant,
+    },
     Finished {
         generation: u64,
-        frame: Value,
         error: Option<String>,
     },
 }
@@ -282,12 +290,7 @@ impl BrowserCdp {
                         }
                     }
                 }
-                Event::Finished {
-                    generation,
-                    mut frame,
-                    error,
-                } => {
-                    frame["id"] = json!(frame_id);
+                Event::Finished { generation, error } => {
                     let pending = std::mem::take(&mut self.pending);
                     for p in pending {
                         if p.target == target && p.generation == generation {
@@ -301,6 +304,18 @@ impl BrowserCdp {
                             self.pending.push(p);
                         }
                     }
+                    for (route, scope) in &self.scopes {
+                        if scope.target == target && scope.page {
+                            self.event(
+                                route,
+                                "Page.frameStoppedLoading",
+                                json!({"frameId":frame_id}),
+                            );
+                        }
+                    }
+                }
+                Event::Committed { mut frame } => {
+                    frame["id"] = json!(frame_id);
                     for scope in self
                         .scopes
                         .values_mut()
@@ -308,7 +323,6 @@ impl BrowserCdp {
                     {
                         scope.pressed = None;
                     }
-                    let timestamp = self.started.elapsed().as_secs_f64();
                     for (route, scope) in &self.scopes {
                         if scope.target != target {
                             continue;
@@ -322,23 +336,19 @@ impl BrowserCdp {
                                 "Page.frameNavigated",
                                 json!({"frame":frame,"type":"Navigation"}),
                             );
-                            if error.is_none() {
-                                self.event(
-                                    route,
-                                    "Page.domContentEventFired",
-                                    json!({"timestamp":timestamp}),
-                                );
-                                self.event(
-                                    route,
-                                    "Page.loadEventFired",
-                                    json!({"timestamp":timestamp}),
-                                );
-                            }
-                            self.event(
-                                route,
-                                "Page.frameStoppedLoading",
-                                json!({"frameId":frame_id}),
-                            );
+                        }
+                    }
+                }
+                Event::DomContentLoaded { at } | Event::LoadComplete { at } => {
+                    let method = if matches!(event, Event::DomContentLoaded { .. }) {
+                        "Page.domContentEventFired"
+                    } else {
+                        "Page.loadEventFired"
+                    };
+                    let timestamp = at.saturating_duration_since(self.started).as_secs_f64();
+                    for (route, scope) in &self.scopes {
+                        if scope.target == target && scope.page {
+                            self.event(route, method, json!({"timestamp":timestamp}));
                         }
                     }
                 }
@@ -1411,9 +1421,11 @@ mod tests {
             });
         }
         second.cdp_events.push(Event::Started);
+        second.cdp_events.push(Event::Committed {
+            frame: frame(&second),
+        });
         second.cdp_events.push(Event::Finished {
             generation: 3,
-            frame: frame(&second),
             error: Some("second-only failure".into()),
         });
         cdp.flush_page_events("page-7", &mut second);
@@ -1453,6 +1465,90 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("ERR_ABORTED")
+        );
+    }
+
+    #[test]
+    fn queued_milestones_are_separate_on_wire_and_navigation_waits_for_load() {
+        let mut app = fixture();
+        app.generation = 3;
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick(&mut app);
+        let mut socket = wire(&cdp, "/devtools/page/page-1");
+        let route = Route {
+            client: cdp.server.page_client_ids()[0],
+            session: None,
+        };
+        cdp.dispatch(&mut app, &route, false, "Page.enable", &json!({}))
+            .unwrap();
+        cdp.dispatch(&mut app, &route, false, "DOM.enable", &json!({}))
+            .unwrap();
+        cdp.pending.push(Pending {
+            target: TARGET.into(),
+            route: route.clone(),
+            id: json!(91),
+            generation: 3,
+        });
+        app.cdp_events.push(Event::Started);
+        app.cdp_events.push(Event::Committed { frame: frame(&app) });
+        cdp.flush_events(&mut app);
+        let mut next = || {
+            serde_json::from_str::<Value>(&read_wire(&mut socket).unwrap().into_text().unwrap())
+                .unwrap()
+        };
+        let committed: Vec<_> = (0..3).map(|_| next()).collect();
+        assert_eq!(
+            committed
+                .iter()
+                .map(|event| event["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "Page.frameStartedLoading",
+                "DOM.documentUpdated",
+                "Page.frameNavigated"
+            ]
+        );
+        assert_eq!(
+            cdp.pending.len(),
+            1,
+            "Document commit is not navigation completion"
+        );
+        let dcl_at = Instant::now();
+        app.cdp_events.push(Event::DocumentUpdated);
+        app.cdp_events.push(Event::DomContentLoaded { at: dcl_at });
+        cdp.flush_events(&mut app);
+        assert_eq!(next()["method"], "DOM.documentUpdated");
+        let dcl = next();
+        assert_eq!(dcl["method"], "Page.domContentEventFired");
+        assert_eq!(
+            dcl["params"]["timestamp"],
+            dcl_at.duration_since(cdp.started).as_secs_f64()
+        );
+        assert_eq!(cdp.pending.len(), 1, "DCL is not load completion");
+        let load_at = Instant::now();
+        app.cdp_events.push(Event::LoadComplete { at: load_at });
+        app.cdp_events.push(Event::Finished {
+            generation: 3,
+            error: None,
+        });
+        cdp.flush_events(&mut app);
+        let load = next();
+        assert_eq!(load["method"], "Page.loadEventFired");
+        assert!(
+            load["params"]["timestamp"].as_f64().unwrap()
+                >= dcl["params"]["timestamp"].as_f64().unwrap()
+        );
+        assert_eq!(next()["id"], 91);
+        assert_eq!(next()["method"], "Page.frameStoppedLoading");
+        assert!(cdp.pending.is_empty());
+        app.cdp_events.push(Event::DocumentUpdated);
+        cdp.flush_events(&mut app);
+        assert_eq!(next()["method"], "DOM.documentUpdated");
+        drop(next);
+        assert!(
+            matches!(socket.read(), Err(tungstenite::Error::Io(error))
+            if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "A later projection must not repeat lifecycle events"
         );
     }
     #[test]
@@ -2036,9 +2132,9 @@ mod tests {
             generation: 3,
         });
         app.cdp_events.push(Event::Started);
+        app.cdp_events.push(Event::Committed { frame: frame(&app) });
         app.cdp_events.push(Event::Finished {
             generation: 3,
-            frame: frame(&app),
             error: Some("fixture transport failure".into()),
         });
         cdp.flush_events(&mut app);

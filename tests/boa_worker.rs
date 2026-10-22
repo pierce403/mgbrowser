@@ -165,8 +165,10 @@ fn modern_page_and_promise_dom_effects_have_real_worker_memory_evidence() {
     assert!(reply.html.contains("Boa page answer 42"));
     let report = reply.boa.unwrap();
     assert!(report.fatal_reason.is_none());
-    assert_eq!(report.pending_jobs, 0);
-    assert!(report.jobs_admitted > 0 && report.jobs_executed > 0);
+    // One-shot execution publishes Init, not unsolicited lifecycle pumps.
+    assert_eq!(report.pending_jobs, 2);
+    assert_eq!(report.jobs_admitted, 3);
+    assert_eq!(report.jobs_executed, 1);
     println!(
         "BOA_WORKER_CALIBRATION {}",
         serde_json::to_string(&report).unwrap()
@@ -204,12 +206,16 @@ fn actual_worker_window_error_keeps_identity_cancellation_and_host_diagnostic() 
         "var traps=0,secret={},saved;for(const key of ['message','name','stack'])Object.defineProperty(secret,key,{get(){traps++;throw 'trap';}});secret[Symbol.toPrimitive]=()=>{traps++;throw 'trap';};window.onerror=function(message,file,line,column,error){if(arguments.length!==5||this!==window||error!==secret||file!==''||line!==0||column!==0||traps)throw 'bad property handler';return true;};window.addEventListener('error',function(event){if(event.error!==secret||event.target!==window||event.currentTarget!==window||event.eventPhase!==2||event.bubbles||!event.cancelable||!event.defaultPrevented||traps)throw 'bad native event';saved=event;});window.onload=()=>{if(saved.currentTarget!==null||saved.eventPhase!==0||saved.error!==secret||traps)throw 'bad escaped event';document.getElementById('status').textContent='owned error identity';};throw secret;",
     ));
     assert!(reply.applied);
-    assert!(reply.html.contains(">owned error identity</p>"));
+    // The same escaped-event identity proof is checked after genuine queued
+    // load by the retained-worker companion, not invented inside one-shot Init.
+    assert!(!reply.html.contains(">owned error identity</p>"));
     assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
     assert!(reply.errors[0].contains("JavaScript threw a value (not coerced by the host)"));
     let report = reply.boa.unwrap();
     assert!(report.fatal_reason.is_none());
-    assert_eq!(report.pending_jobs, 0);
+    assert_eq!(report.pending_jobs, 2);
+    assert_eq!(report.jobs_admitted, 2);
+    assert_eq!(report.jobs_executed, 0);
 }
 
 #[test]
@@ -340,7 +346,9 @@ fn frozen_modern_and_retained_event_startups_fit_the_worker_profile() {
         assert_eq!(reply.scripts_executed, scripts);
         let report = reply.boa.unwrap();
         assert!(report.fatal_reason.is_none());
-        assert_eq!(report.pending_jobs, 0);
+        // This endpoint returns Init only; the retained-session gate proves
+        // the separately parent-pumped DCL/load completion.
+        assert_eq!(report.pending_jobs, 2);
         if name == "script-boa" {
             assert!(reply.html.contains("Boa JavaScript page ready"));
             assert!(reply.html.contains("Boa Promise checkpoint: 42"));

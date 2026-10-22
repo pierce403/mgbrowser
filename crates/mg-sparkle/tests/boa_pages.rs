@@ -25,6 +25,30 @@ fn projected(reply: &SessionReply) -> document::Document {
     )
     .unwrap()
 }
+fn loaded(request: Request) -> (Option<BoaPageRealm>, SessionReply) {
+    let (mut realm, mut reply) = BoaPageRealm::start(request);
+    let mut errors = Vec::new();
+    for _ in 0..63 {
+        if reply.state != RealmState::Ready
+            || reply.navigation.is_some()
+            || reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete
+        {
+            break;
+        }
+        errors.append(&mut reply.errors);
+        let wake = reply.task_wake.as_ref().expect("initial lifecycle wake");
+        assert_eq!(wake.delay_ms, 0);
+        reply = realm.as_mut().unwrap().pump_tasks(TaskPump {
+            wake_token: wake.token,
+        });
+    }
+    errors.append(&mut reply.errors);
+    reply.errors = errors;
+    if reply.state == RealmState::Ready && reply.navigation.is_none() {
+        assert_eq!(reply.lifecycle.unwrap().phase, LifecyclePhase::LoadComplete);
+    }
+    (realm, reply)
+}
 
 #[test]
 fn native_journey_fixture_creates_real_form_through_boa() {
@@ -161,7 +185,7 @@ fn dom_string_conversion_replaces_lone_surrogates_and_ignores_unused_arguments()
 
 #[test]
 fn startup_does_not_dispatch_an_arbitrary_replacement_onload_getter() {
-    let reply = execute(page(
+    let (_realm, reply) = loaded(page(
         r#"
         globalThis = {};
         Object.defineProperty(window, 'onload', { get() {
@@ -171,13 +195,15 @@ fn startup_does_not_dispatch_an_arbitrary_replacement_onload_getter() {
     "#,
     ));
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-    assert!(!reply.html.contains("<title>actual global load</title>"));
-    assert!(!reply.html.contains("proof=\"getter\""));
+    let document = projected(&reply);
+    assert_ne!(document.title, "actual global load");
+    let out = document.query_selector(0, "#out").unwrap().unwrap();
+    assert_eq!(document.nodes[out].attr("proof"), None);
 }
 
 #[test]
 fn registered_load_handler_uses_actual_global_and_guards_reentry_and_jobs() {
-    let reply = execute(page(
+    let (_realm, reply) = loaded(page(
         r#"
         globalThis = {};
         window.onload = function(event) {
@@ -192,17 +218,18 @@ fn registered_load_handler_uses_actual_global_and_guards_reentry_and_jobs() {
     "#,
     ));
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-    assert!(reply.html.contains("<title>actual global load</title>"));
-    assert!(reply.html.contains("proof=\"reentered\""));
+    let document = projected(&reply);
+    assert_eq!(document.title, "actual global load");
+    let out = document.query_selector(0, "#out").unwrap().unwrap();
+    assert_eq!(document.nodes[out].attr("proof"), Some("reentered"));
 }
 
 #[test]
 fn fatal_load_handler_stops_later_handlers_and_suppresses_timer_work() {
-    let (realm, reply) = BoaPageRealm::start(page(
+    let (realm, reply) = loaded(page(
         r#"
-        window.onload = function() { while (true) {} };
+        window.onload = function() { setTimeout(() => document.title = 'timer must not run', 0); while (true) {} };
         window.addEventListener('load', () => document.title = 'must not run');
-        setTimeout(() => document.title = 'timer must not run', 0);
     "#,
     ));
     assert_eq!(reply.state, RealmState::Fatal);

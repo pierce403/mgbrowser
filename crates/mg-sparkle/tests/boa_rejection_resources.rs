@@ -10,7 +10,9 @@ use mg_sparkle::{
         ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource, Request,
         boa::BoaPageRealm,
     },
-    page_session::{DefaultAction, InputKind, RealmState, SessionInput, SessionReply, TaskPump},
+    page_session::{
+        DefaultAction, InputKind, LifecyclePhase, RealmState, SessionInput, SessionReply, TaskPump,
+    },
 };
 use std::time::Duration;
 
@@ -37,10 +39,45 @@ fn request(sources: &[&str]) -> Request {
 }
 
 fn start(source: &str) -> (BoaPageRealm, SessionReply) {
-    let (realm, reply) = BoaPageRealm::start(request(&[source]));
+    // Notification/cancellation workloads explicitly begin in a loaded realm.
+    // Report the two real lifecycle admissions/executions, never subtract them.
+    let wrapped = format!("window.onload=function(){{{source}\n}};");
+    let (realm, reply) = BoaPageRealm::start(request(&[&wrapped]));
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
     report(&reply);
-    (realm.expect("owned retained realm"), reply)
+    assert_eq!(
+        (report(&reply).jobs_admitted, report(&reply).jobs_executed),
+        (2, 0)
+    );
+    let mut realm = realm.expect("owned retained realm");
+    let dcl = pump(&mut realm, &reply);
+    assert_eq!(
+        dcl.lifecycle.unwrap().phase,
+        LifecyclePhase::DomContentLoaded
+    );
+    let loaded = pump(&mut realm, &dcl);
+    assert_eq!(
+        loaded.lifecycle.unwrap().phase,
+        LifecyclePhase::LoadComplete
+    );
+    (realm, loaded)
+}
+fn source_then_load(source: &str) -> (BoaPageRealm, SessionReply) {
+    let (realm, reply) = BoaPageRealm::start(request(&[source]));
+    assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+    let mut realm = realm.unwrap();
+    let loaded = finish_load(&mut realm, reply);
+    (realm, loaded)
+}
+fn finish_load(realm: &mut BoaPageRealm, mut reply: SessionReply) -> SessionReply {
+    for _ in 0..4 {
+        if reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete {
+            return reply;
+        }
+        reply = pump(realm, &reply);
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+    }
+    panic!("owned initial lifecycle did not finish")
 }
 
 fn external(
@@ -157,14 +194,14 @@ fn freezing_an_exact_capacity_batch_does_not_spend_an_extra_work_slot() {
         "for(let i=0;i<128;i++)setTimeout(()=>{},100000);for(let i=0;i<127;i++)Promise.resolve().then(()=>{});Promise.reject('owned');",
     );
     assert!(init.errors.is_empty(), "{:?}", init.errors);
-    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT);
-    assert_eq!(report(&init).jobs_executed, 127);
+    assert_eq!(report(&init).jobs_admitted, PENDING_JOB_LIMIT + 2);
+    assert_eq!(report(&init).jobs_executed, 129);
     assert_eq!(report(&init).pending_jobs, 129);
     let notified = pump(&mut realm, &init);
     assert_eq!(notified.state, RealmState::Ready);
     assert_eq!(notified.errors, [NOTICE]);
-    assert_eq!(report(&notified).jobs_admitted, PENDING_JOB_LIMIT);
-    assert_eq!(report(&notified).jobs_executed, 128);
+    assert_eq!(report(&notified).jobs_admitted, PENDING_JOB_LIMIT + 2);
+    assert_eq!(report(&notified).jobs_executed, 130);
     assert_eq!(report(&notified).pending_jobs, 128);
     assert!(notified.task_wake.as_ref().unwrap().delay_ms > 100);
     let closed = realm.dispatch(SessionInput {
@@ -177,14 +214,22 @@ fn freezing_an_exact_capacity_batch_does_not_spend_an_extra_work_slot() {
 }
 
 #[test]
-fn immediate_handles_cancel_pending_but_spend_exactly_2048_lifetime_admissions() {
+fn immediate_handles_spend_exactly_2048_and_leave_no_credit_for_mandatory_lifecycle() {
     // Each of 16 ordinary source checkpoints drains 64 reaction jobs. Every
     // reject/catch pair also spends one canceled notice admission, not a refund.
     let source = "for(let i=0;i<64;i++){const p=Promise.reject(i);p.catch(()=>{});}";
     let sources = vec![source; 16];
     let (_realm, reply) = BoaPageRealm::start(request(&sources));
-    assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
-    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    // Preserve the exact original source workload/counters. Mandatory DCL
+    // admission now correctly fails, rather than receiving free extra credit.
+    assert_eq!(reply.state, RealmState::Fatal, "{:?}", reply.errors);
+    assert!(
+        report(&reply)
+            .fatal_reason
+            .as_ref()
+            .unwrap()
+            .contains("shared job/task")
+    );
     assert_eq!(reply.scripts_executed, 16);
     assert_eq!(report(&reply).source_admissions, 16);
     assert_eq!(report(&reply).jobs_admitted, CUMULATIVE_JOB_LIMIT);
@@ -218,15 +263,15 @@ fn handling_a_frozen_candidate_cancels_only_its_pending_reservation() {
     "#,
     );
     assert!(init.errors.is_empty());
-    assert_eq!(report(&init).jobs_admitted, 1);
+    assert_eq!(report(&init).jobs_admitted, 3);
     assert_eq!(report(&init).pending_jobs, 1);
     assert!(init.task_wake.is_some());
     let handled = click(&mut realm, &init);
     assert_eq!(handled.state, RealmState::Ready, "{:?}", handled.errors);
     assert!(handled.errors.is_empty(), "{:?}", handled.errors);
     assert_eq!(title(&handled), "caught before task");
-    assert_eq!(report(&handled).jobs_admitted, 2);
-    assert_eq!(report(&handled).jobs_executed, 1);
+    assert_eq!(report(&handled).jobs_admitted, 4);
+    assert_eq!(report(&handled).jobs_executed, 3);
     assert_eq!(report(&handled).pending_jobs, 0);
     assert!(
         handled.task_wake.is_none(),
@@ -251,19 +296,19 @@ fn genuinely_late_handling_admits_its_own_later_notification_work() {
     assert!(init.errors.is_empty(), "{:?}", init.errors);
     let notified = pump(&mut realm, &init);
     assert_eq!(notified.errors, [NOTICE]);
-    assert_eq!(report(&notified).jobs_admitted, 1);
-    assert_eq!(report(&notified).jobs_executed, 1);
+    assert_eq!(report(&notified).jobs_admitted, 3);
+    assert_eq!(report(&notified).jobs_executed, 3);
     assert_eq!(report(&notified).pending_jobs, 0);
     let handled = click(&mut realm, &notified);
     assert_eq!(title(&handled), "reaction");
-    assert_eq!(report(&handled).jobs_admitted, 3);
-    assert_eq!(report(&handled).jobs_executed, 2);
+    assert_eq!(report(&handled).jobs_admitted, 5);
+    assert_eq!(report(&handled).jobs_executed, 4);
     assert_eq!(report(&handled).pending_jobs, 1);
     let later = pump(&mut realm, &handled);
     assert_eq!(title(&later), "handled task");
     assert!(later.errors.is_empty(), "{:?}", later.errors);
-    assert_eq!(report(&later).jobs_admitted, 3);
-    assert_eq!(report(&later).jobs_executed, 3);
+    assert_eq!(report(&later).jobs_admitted, 5);
+    assert_eq!(report(&later).jobs_executed, 5);
     assert_eq!(report(&later).pending_jobs, 0);
     assert!(later.task_wake.is_none());
 }
@@ -284,24 +329,26 @@ fn initial_unknown_or_foreign_floor_suppresses_payloads_without_task_admission()
         "#,
             visibility,
         );
+        let init = finish_load(&mut realm, init);
         gap(&init);
         assert_eq!(title(&init), "muted:0:0");
-        // Only the actual catch reaction, never a suppressed-notice permit.
-        assert_eq!(report(&init).jobs_admitted, 1);
-        assert_eq!(report(&init).jobs_executed, 1);
+        // Two lifecycle tasks plus the actual catch, never a suppressed notice.
+        assert_eq!(report(&init).jobs_admitted, 3);
+        assert_eq!(report(&init).jobs_executed, 3);
         let later = click(&mut realm, &init);
         gap(&later);
         assert_eq!(title(&later), "later:0:0");
-        assert_eq!(report(&later).jobs_admitted, 1);
+        assert_eq!(report(&later).jobs_admitted, 3);
     }
 }
 
 #[test]
 fn same_origin_proof_does_not_blanket_suppress_local_notifications() {
     let (mut realm, init) = external(
-        "window.addEventListener('unhandledrejection',()=>{document.title='proven local';});Promise.reject({owned:true});",
+        "window.onload=()=>{window.addEventListener('unhandledrejection',()=>{document.title='proven local';});Promise.reject({owned:true});};",
         Some(ClassicErrorVisibility::SameOrigin),
     );
+    let init = finish_load(&mut realm, init);
     assert!(init.errors.is_empty(), "{:?}", init.errors);
     assert_eq!(report(&init).pending_jobs, 1);
     let notified = pump(&mut realm, &init);
@@ -318,7 +365,7 @@ fn successful_or_failed_dynamic_compilation_suppresses_before_retention_and_stay
         "Function('return 1')()",
         "try{Function(')')}catch(e){}",
     ] {
-        let (mut realm, init) = start(&format!(
+        let (mut realm, init) = source_then_load(&format!(
             r#"
             var calls=0,traps=0;
             window.addEventListener('unhandledrejection',()=>calls++);
@@ -331,7 +378,7 @@ fn successful_or_failed_dynamic_compilation_suppresses_before_retention_and_stay
         ));
         gap(&init);
         assert_eq!(title(&init), "dynamic:0:0", "{dynamic}");
-        assert_eq!(report(&init).jobs_admitted, 1, "{dynamic}");
+        assert_eq!(report(&init).jobs_admitted, 3, "{dynamic}");
         let later = click(&mut realm, &init);
         gap(&later);
         assert_eq!(title(&later), "later:0:0", "{dynamic}");
@@ -345,13 +392,13 @@ fn successful_or_failed_dynamic_compilation_suppresses_before_retention_and_stay
 
 #[test]
 fn a_floor_change_before_checkpoint_cancels_the_old_candidate_without_refund() {
-    let (_realm, init) = start(
+    let (_realm, init) = source_then_load(
         "Promise.reject({owned:true});try{eval(')')}catch(e){}document.title='floor changed';",
     );
     gap(&init);
     assert_eq!(title(&init), "floor changed");
-    assert_eq!(report(&init).jobs_admitted, 1);
-    assert_eq!(report(&init).jobs_executed, 0);
+    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).jobs_executed, 2);
 }
 
 #[test]
@@ -368,11 +415,11 @@ fn a_floor_change_after_freezing_disarms_the_batch_and_persists_the_gap() {
     let muted = click(&mut realm, &init);
     gap(&muted);
     assert_eq!(title(&muted), "floor fell before pump");
-    assert_eq!(report(&muted).jobs_admitted, 1);
-    assert_eq!(report(&muted).jobs_executed, 0);
+    assert_eq!(report(&muted).jobs_admitted, 3);
+    assert_eq!(report(&muted).jobs_executed, 2);
     let later = click(&mut realm, &muted);
     gap(&later);
-    assert_eq!(report(&later).jobs_admitted, 1);
+    assert_eq!(report(&later).jobs_admitted, 3);
 }
 
 #[test]
@@ -389,12 +436,13 @@ fn suppression_floods_keep_one_notice_and_no_candidate_work_or_wake() {
     "#,
         None,
     );
+    let init = finish_load(&mut realm, init);
     gap(&init);
-    assert_eq!(report(&init).jobs_admitted, 0);
+    assert_eq!(report(&init).jobs_admitted, 2);
     let later = click(&mut realm, &init);
     gap(&later);
-    assert_eq!(report(&later).jobs_admitted, 0);
-    assert_eq!(report(&later).jobs_executed, 0);
+    assert_eq!(report(&later).jobs_admitted, 2);
+    assert_eq!(report(&later).jobs_executed, 2);
     assert_eq!(title(&later), "suppressed:0");
 }
 
@@ -412,8 +460,9 @@ fn suppressed_unknown_values_have_no_hidden_strong_roots() {
     "#,
         None,
     );
+    let init = finish_load(&mut realm, init);
     gap(&init);
-    assert_eq!(report(&init).jobs_admitted, 0);
+    assert_eq!(report(&init).jobs_admitted, 2);
     boa_gc::force_collect();
     let checked = click(&mut realm, &init);
     gap(&checked);
@@ -512,8 +561,8 @@ fn handling_before_delivery_releases_candidate_roots_after_the_real_checkpoint()
     let handled = click(&mut realm, &init);
     assert!(handled.errors.is_empty(), "{:?}", handled.errors);
     assert_eq!(title(&handled), "handled");
-    assert_eq!(report(&handled).jobs_admitted, 2);
-    assert_eq!(report(&handled).jobs_executed, 1);
+    assert_eq!(report(&handled).jobs_admitted, 4);
+    assert_eq!(report(&handled).jobs_executed, 3);
     assert_eq!(report(&handled).pending_jobs, 0);
     assert!(handled.task_wake.is_none());
     boa_gc::force_collect();
@@ -527,7 +576,7 @@ fn invalid_input_releases_frozen_candidates_and_existing_timer_work_together() {
     let (mut realm, init) = start(
         "Promise.reject({proof:1});Promise.reject({proof:2});setTimeout(()=>{throw 'must not run';},100000);",
     );
-    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).jobs_admitted, 5);
     assert_eq!(report(&init).pending_jobs, 3);
     let rejected = realm.dispatch(SessionInput {
         kind: InputKind::Click { target: usize::MAX },
@@ -535,8 +584,8 @@ fn invalid_input_releases_frozen_candidates_and_existing_timer_work_together() {
     });
     assert_eq!(rejected.state, RealmState::Closed);
     assert!(rejected.snapshot.is_none());
-    assert_eq!(report(&rejected).jobs_admitted, 3);
-    assert_eq!(report(&rejected).jobs_executed, 0);
+    assert_eq!(report(&rejected).jobs_admitted, 5);
+    assert_eq!(report(&rejected).jobs_executed, 2);
     assert_eq!(report(&rejected).pending_jobs, 0);
     assert!(rejected.task_wake.is_none());
     let replay = realm.pump_tasks(TaskPump {
@@ -560,12 +609,12 @@ fn fatal_notification_discards_the_rest_of_its_batch_and_existing_timer_work() {
     "#,
     );
     assert!(init.errors.is_empty(), "{:?}", init.errors);
-    assert_eq!(report(&init).jobs_admitted, 3);
+    assert_eq!(report(&init).jobs_admitted, 5);
     assert_eq!(report(&init).pending_jobs, 3);
     let fatal = pump(&mut realm, &init);
     assert_eq!(fatal.state, RealmState::Fatal, "{:?}", fatal.errors);
-    assert_eq!(report(&fatal).jobs_admitted, 3);
-    assert_eq!(report(&fatal).jobs_executed, 1);
+    assert_eq!(report(&fatal).jobs_admitted, 5);
+    assert_eq!(report(&fatal).jobs_executed, 3);
     assert_eq!(report(&fatal).pending_jobs, 0);
     assert!(report(&fatal).fatal_reason.is_some());
     assert!(fatal.task_wake.is_none());
@@ -607,23 +656,23 @@ fn losing_outstanding_handled_observation_is_sticky_without_rewriting_escaped_pa
         let notified = pump(&mut realm, &init);
         assert_eq!(notified.errors, [NOTICE]);
         assert_eq!(title(&notified), "local notice");
-        assert_eq!(report(&notified).jobs_admitted, 1);
-        assert_eq!(report(&notified).jobs_executed, 1);
+        assert_eq!(report(&notified).jobs_admitted, 3);
+        assert_eq!(report(&notified).jobs_executed, 3);
         assert_eq!(report(&notified).pending_jobs, 0);
 
         let muted = click(&mut realm, &notified);
         gap(&muted);
         assert_eq!(title(&muted), "floor fell:0");
-        assert_eq!(report(&muted).jobs_admitted, if immediate { 2 } else { 1 });
+        assert_eq!(report(&muted).jobs_admitted, if immediate { 4 } else { 3 });
         let caught = click(&mut realm, &muted);
         gap(&caught);
         assert_eq!(title(&caught), "late catch:0");
-        assert_eq!(report(&caught).jobs_admitted, 2);
-        assert_eq!(report(&caught).jobs_executed, 2);
+        assert_eq!(report(&caught).jobs_admitted, 4);
+        assert_eq!(report(&caught).jobs_executed, 4);
         let later = click(&mut realm, &caught);
         gap(&later);
         assert_eq!(title(&later), "gap persists:0");
-        assert_eq!(report(&later).jobs_admitted, 2);
+        assert_eq!(report(&later).jobs_admitted, 4);
         assert_eq!(notified.errors, [NOTICE], "old evidence remains immutable");
     }
 }

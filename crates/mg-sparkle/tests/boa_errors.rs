@@ -6,7 +6,7 @@ use mg_sparkle::{
         ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource, Request,
         boa::BoaPageRealm,
     },
-    page_session::{InputKind, RealmState, SessionInput, SessionReply, TaskPump},
+    page_session::{InputKind, LifecyclePhase, RealmState, SessionInput, SessionReply, TaskPump},
 };
 use std::time::Duration;
 
@@ -20,7 +20,36 @@ fn start(source: &str) -> (BoaPageRealm, SessionReply) {
         ),
     });
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
-    (realm.expect("retained authored realm"), reply)
+    finish_initial(realm.expect("retained authored realm"), reply)
+}
+fn finish_initial(
+    mut realm: BoaPageRealm,
+    mut reply: SessionReply,
+) -> (BoaPageRealm, SessionReply) {
+    // Historical error-service assertions inspect the whole initial load. Keep
+    // every transaction's diagnostic, rather than accepting the last clean one.
+    // Per-transaction immutability and failure bits have independent lifecycle controls.
+    let mut errors = Vec::new();
+    for _ in 0..63 {
+        if reply.state != RealmState::Ready
+            || reply.navigation.is_some()
+            || reply.lifecycle.unwrap().phase == LifecyclePhase::LoadComplete
+        {
+            break;
+        }
+        errors.append(&mut reply.errors);
+        reply = pump(&mut realm, &reply);
+    }
+    errors.append(&mut reply.errors);
+    reply.errors = errors;
+    if reply.state == RealmState::Ready && reply.navigation.is_none() {
+        assert_eq!(
+            reply.lifecycle.unwrap().phase,
+            LifecyclePhase::LoadComplete,
+            "finite initial-load wait"
+        );
+    }
+    (realm, reply)
 }
 fn projected(reply: &SessionReply) -> Document {
     document::project_nodes(reply.snapshot.as_ref().unwrap().nodes.clone(), URL).unwrap()
@@ -73,7 +102,7 @@ fn external(
         }]),
     });
     assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
-    (realm.unwrap(), reply)
+    finish_initial(realm.unwrap(), reply)
 }
 
 #[test]
@@ -247,7 +276,7 @@ fn startup_retained_click_and_timer_failures_report_once_and_continue_listeners(
         window.addEventListener('load',()=>{order.push('load-after');document.title=order.join(',');});
         document.getElementById('a').onclick=event=>{event.preventDefault();order.push('click');throw 3;};
         document.getElementById('a').addEventListener('click',()=>{order.push('click-after');document.title=order.join(',');});
-        setTimeout(()=>{order.push('timer');Promise.resolve().then(()=>{order.push('job');document.title=order.join(',');});throw 4;},0);
+        window.addEventListener('load',()=>setTimeout(()=>{order.push('timer');Promise.resolve().then(()=>{order.push('job');document.title=order.join(',');});throw 4;},0));
     "#,
     );
     assert_eq!(title(&init), "dcl,error,dcl-after,load,error,load-after");
@@ -432,7 +461,7 @@ fn dynamic_string_compilation_is_sticky_even_if_caught_or_successful() {
             var secret={{proof:42}};
             window.onerror=(m,f,l,c,e)=>{{if(m!=='Script error.'||e!==null)throw 'dynamic leaked';document.title='dynamic muted';}};
             {dynamic};
-            setTimeout(()=>{{throw secret;}},0);
+            window.onload=()=>setTimeout(()=>{{throw secret;}},0);
         "#
         ));
         assert!(init.errors.is_empty(), "{dynamic}: {:?}", init.errors);
@@ -492,7 +521,7 @@ fn promise_rejection_queues_a_real_later_notification_without_becoming_a_window_
             if(errors!==0||event.promise!==promise||event.reason!==reason)throw 'fake rejection payload';
             event.preventDefault();document.title='actual later notification';
         });
-        promise=Promise.reject(reason);document.title='no delivery';
+        window.onload=()=>{promise=Promise.reject(reason);document.title='no delivery';};
     "#,
     );
     assert_eq!(title(&reply), "no delivery");

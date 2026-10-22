@@ -629,6 +629,7 @@ impl PageRealm {
             state,
             acknowledgements: Vec::new(),
             task_wake: None,
+            lifecycle: None,
         };
         (realm, reply)
     }

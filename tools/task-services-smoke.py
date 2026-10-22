@@ -57,6 +57,8 @@ def check_tasks(log, name):
     source = (REPO / "tests/fixtures/script/task-events.html").read_text().split("<script>", 1)[1].split("</script>", 1)[0]
     realm = [report for report in reports if report["source_admissions"] == 1 and
              report["source_bytes"] == len(source.encode())]
+    services.check_lifecycle_tasks(log, reports, (1, len(source.encode())),
+                                   [(3, 1, 2), (3, 2, 1), (6, 4, 1), (7, 6, 0)], name)
     require(len(realm) >= 2, f"{name}: missing original fixture realm's task report")
     require(realm[0]["pending_jobs"] > 0 and realm[-1]["pending_jobs"] == 0,
             f"{name}: original fixture task did not settle")

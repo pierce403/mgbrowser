@@ -1,0 +1,96 @@
+<!doctype html><html><head><title>Authored queued lifecycle fixture</title></head><body>
+<h1>Authored queued document lifecycle with retained events</h1>
+<p id="state">Waiting for actual lifecycle tasks and later work</p>
+<div id="controls"></div><div id="parking"></div>
+<script>
+// Authored acceptance only: not upstream WPT or typed testharness completion.
+var lifecycleOrder = ['script:' + document.readyState], starts = 1, deferred = false;
+var savedDcl, savedLoad, lateDone = false;
+Promise.resolve().then(function () { lifecycleOrder.push('script-job:' + document.readyState); });
+document.addEventListener('readystatechange', function (event) {
+  if (event.target !== document || event.currentTarget !== document || event.eventPhase !== 2)
+    throw new Error('Wrong readiness event identity');
+  lifecycleOrder.push('ready:' + document.readyState);
+  Promise.resolve().then(function () { lifecycleOrder.push('ready-job:' + document.readyState); });
+});
+window.addEventListener('message', function (event) {
+  if (event.data !== 'earlier' || event.source !== window || event.origin !== location.origin ||
+      event.target !== window || event.currentTarget !== window || document.readyState !== 'interactive')
+    throw new Error('Source-created message did not precede lifecycle tasks');
+  lifecycleOrder.push('early-message:' + document.readyState);
+  Promise.resolve().then(function () { lifecycleOrder.push('message-job:' + document.readyState); });
+});
+postMessage('earlier', '/');
+setTimeout(function () {
+  if (document.readyState !== 'interactive') throw new Error('Source-created timer lost queue order');
+  lifecycleOrder.push('early-timer:' + document.readyState);
+  Promise.resolve().then(function () { lifecycleOrder.push('timer-job:' + document.readyState); });
+}, 0);
+// Initial load must not wait for arbitrary future work or for an empty queue.
+setTimeout(function () { throw new Error('Initial load incorrectly drained a long timer'); }, 60000);
+window.addEventListener('DOMContentLoaded', function (event) {
+  if (event.target !== document || event.currentTarget !== window || event.eventPhase !== 1 ||
+      !event.bubbles || event.cancelable || !deferred || document.readyState !== 'interactive')
+    throw new Error('Wrong DCL capture/deferred readiness');
+  savedDcl = event; lifecycleOrder.push('dcl-capture:' + document.readyState);
+}, true);
+document.addEventListener('DOMContentLoaded', function (event) {
+  if (event !== savedDcl || event.currentTarget !== document || event.eventPhase !== 2)
+    throw new Error('Wrong DCL target identity');
+  event.preventDefault();
+  if (event.defaultPrevented) throw new Error('DCL incorrectly cancelable');
+  lifecycleOrder.push('dcl:' + document.readyState);
+  Promise.resolve().then(function () { lifecycleOrder.push('dcl-job:' + document.readyState); });
+});
+window.addEventListener('DOMContentLoaded', function (event) {
+  if (event !== savedDcl || event.currentTarget !== window || event.eventPhase !== 3)
+    throw new Error('Wrong DCL bubble/checkpoint identity');
+  lifecycleOrder.push('dcl-bubble:' + document.readyState);
+});
+document.addEventListener('load', function () { throw new Error('Window load reached document listener'); });
+window.onload = function (event) {
+  if (event.target !== document || event.currentTarget !== window || event.eventPhase !== 2 ||
+      event.bubbles || event.cancelable || document.readyState !== 'complete' ||
+      savedDcl.currentTarget !== null || savedDcl.eventPhase !== 0)
+    throw new Error('Wrong separate Window load identity');
+  savedLoad = event; lifecycleOrder.push('load:' + document.readyState);
+  setTimeout(function () {
+    if (savedLoad.currentTarget !== null || savedLoad.eventPhase !== 0 || lateDone)
+      throw new Error('Load event escaped state or duplicate later task');
+    Promise.resolve().then(function () {
+      lateDone = true;
+      document.body.setAttribute('data-lifecycle-later', 'after-load-task-and-checkpoint');
+      document.getElementById('controls').innerHTML = '<a id="cancel" href="/event-trap">Cancel this link</a><form id="search" action="/event-trap" method="get"><input id="query" name="q" type="text"><button id="submit" type="submit" name="submit" value="events">Search</button></form>';
+      var count = 0, clicked = false, form = document.getElementById('search');
+      var query = document.getElementById('query'), state = document.getElementById('state');
+      document.getElementById('cancel').onclick = function (click) {
+        click.preventDefault();
+        if (!lateDone || starts !== 1 || query.value !== 'Rust & café')
+          throw new Error('Retained lifecycle state or native input lost');
+        clicked = true; state.textContent = 'link canceled';
+      };
+      form.onsubmit = function (submit) {
+        count++;
+        if (!clicked || !lateDone || starts !== 1) { submit.preventDefault(); throw new Error('Lifecycle handler replay'); }
+        if (count === 1) {
+          submit.preventDefault(); document.getElementById('parking').appendChild(query); form.appendChild(query);
+          var proof = document.createElement('input');
+          proof.id = 'proof'; proof.type = 'hidden'; proof.name = 'proof'; proof.value = 'pending'; form.appendChild(proof);
+          state.textContent = 'first submit canceled';
+        } else if (count === 2 && query.value === 'Rust & café again') {
+          document.getElementById('proof').value = 'retained-1-2'; form.action = '/event-search';
+        } else { submit.preventDefault(); throw new Error('Unexpected lifecycle activation'); }
+      };
+      document.title = 'Lifecycle controls ready'; state.textContent = 'lifecycle ready';
+    });
+  }, 120);
+  Promise.resolve().then(function () {
+    lifecycleOrder.push('load-job:' + document.readyState);
+    var expected = 'script:loading,script-job:loading,ready:interactive,ready-job:interactive,defer:interactive,defer-job:interactive,early-message:interactive,message-job:interactive,early-timer:interactive,timer-job:interactive,dcl-capture:interactive,dcl:interactive,dcl-job:interactive,dcl-bubble:interactive,ready:complete,ready-job:complete,load:complete,load-job:complete';
+    if (lifecycleOrder.join(',') !== expected) throw new Error('Wrong queued/deferred lifecycle order: ' + lifecycleOrder.join(','));
+    document.body.setAttribute('data-lifecycle-order', expected);
+  });
+};
+</script>
+<script src="/lifecycle-deferred.js" defer></script>
+</body></html>

@@ -78,6 +78,73 @@ pub enum RealmState {
     Closed,
 }
 
+/// Completed snapshot milestones, independent of mutable DOM readiness and
+/// whether the retained realm can still execute work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum LifecyclePhase {
+    Initializing,
+    Interactive,
+    DomContentLoaded,
+    LoadComplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleProgress {
+    pub phase: LifecyclePhase,
+    pub initial_failure: bool,
+}
+
+/// Bounded cumulative accounting only; never retains a document or JS value.
+#[derive(Debug, Clone)]
+pub struct AccountingSnapshot {
+    allocations: Option<AllocationReport>,
+    #[cfg(feature = "modern")]
+    boa: Option<mg_butane::modern::Report>,
+}
+
+impl AccountingSnapshot {
+    pub fn is_valid_after(&self, previous: &Self) -> bool {
+        #[cfg(feature = "modern")]
+        match (&self.boa, &previous.boa) {
+            (Some(next), Some(old)) => {
+                return self.allocations.is_none()
+                    && previous.allocations.is_none()
+                    && next.validate_after(old).is_ok();
+            }
+            (None, None) => {}
+            _ => return false,
+        }
+        let (Some(old), Some(next)) = (previous.allocations, self.allocations) else {
+            return false;
+        };
+        let values = |report: AllocationReport| {
+            let phases = report.phases;
+            [
+                report.accepted_bytes,
+                phases.bootstrap,
+                phases.source,
+                phases.ast,
+                phases.function_code,
+                phases.runtime,
+                phases.regex_compile,
+                phases.regex_result,
+            ]
+        };
+        old.is_valid()
+            && next.is_valid()
+            && old.limit_bytes == 4 * 1024 * 1024
+            && next.limit_bytes == old.limit_bytes
+            && values(old)
+                .iter()
+                .zip(values(next))
+                .all(|(old, new)| new >= *old)
+            && old
+                .first_rejected
+                .is_none_or(|old| next.first_rejected == Some(old))
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventOutcome {
@@ -111,15 +178,159 @@ pub struct SessionReply {
     /// Modern parent task scheduling only; absent in the legacy protocol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_wake: Option<TaskWake>,
+    /// Required by modern v5, absent from the strict legacy v1 wire shape.
+    /// The trusted transport must distinguish absence from an explicit null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<LifecycleProgress>,
 }
 
 impl SessionReply {
+    pub fn accounting_snapshot(&self) -> AccountingSnapshot {
+        AccountingSnapshot {
+            allocations: self.allocations,
+            #[cfg(feature = "modern")]
+            boa: self.boa.clone(),
+        }
+    }
+
+    pub fn accounting_valid_after(&self, previous: &AccountingSnapshot) -> bool {
+        self.accounting_valid() && self.accounting_snapshot().is_valid_after(previous)
+    }
+
+    /// A valid pre-realm rejection can retain readable source fallback, but
+    /// cannot stand in for a report-less later reply. Trusted wire selection
+    /// still requires modern lifecycle presence or strict legacy absence.
+    pub fn is_rejected_initial(&self) -> bool {
+        #[cfg(feature = "modern")]
+        let has_boa = self.boa.is_some();
+        #[cfg(not(feature = "modern"))]
+        let has_boa = false;
+        self.revision == 0
+            && self.state == RealmState::Closed
+            && self.snapshot.is_none()
+            && self.allocations.is_none()
+            && !has_boa
+            && self.scripts_executed == 0
+            && self.outcome.click_canceled.is_none()
+            && self.outcome.submit_canceled.is_none()
+            && self.default_action == DefaultAction::None
+            && self.navigation.is_none()
+            && self.acknowledgements.is_empty()
+            && self.task_wake.is_none()
+            && self.lifecycle.is_none_or(|progress| {
+                progress.phase == LifecyclePhase::Initializing && progress.initial_failure
+            })
+    }
+
+    fn lifecycle_profile(&self) -> Result<Option<LifecycleProgress>, String> {
+        #[cfg(feature = "modern")]
+        let has_boa = self.boa.is_some();
+        #[cfg(not(feature = "modern"))]
+        let has_boa = false;
+        match self.lifecycle {
+            None if has_boa => Err("Modern reply omitted lifecycle progress".into()),
+            None => Ok(None), // The transport separately selects the strict legacy shape.
+            Some(_) if self.allocations.is_some() => {
+                Err("Legacy accounting cannot advertise modern lifecycle progress".into())
+            }
+            Some(progress) if !has_boa => {
+                if self.is_rejected_initial() {
+                    Ok(Some(progress))
+                } else {
+                    Err("Lifecycle progress omitted its modern engine report".into())
+                }
+            }
+            Some(progress) => Ok(Some(progress)),
+        }
+    }
+
+    fn lifecycle_wait_valid(&self, progress: LifecycleProgress) -> Result<(), String> {
+        if self.state == RealmState::Ready && self.navigation.is_none() {
+            if progress.phase == LifecyclePhase::Initializing {
+                return Err("Ready initialization made no lifecycle progress or navigation".into());
+            }
+            if progress.phase != LifecyclePhase::LoadComplete && self.task_wake.is_none() {
+                return Err("Incomplete lifecycle omitted its task wake".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate an Init observation. A trusted modern transport must also
+    /// require presence; None is reserved for its explicitly selected v1 lane.
+    pub fn validate_lifecycle_initial(&self) -> Result<Option<LifecycleProgress>, String> {
+        let Some(progress) = self.lifecycle_profile()? else {
+            return Ok(None);
+        };
+        if progress.phase > LifecyclePhase::Interactive {
+            return Err("Init cannot complete a queued lifecycle task".into());
+        }
+        if (!self.errors.is_empty() || self.state != RealmState::Ready) && !progress.initial_failure
+        {
+            return Err("Initial lifecycle failure was not recorded".into());
+        }
+        self.lifecycle_wait_valid(progress)?;
+        Ok(Some(progress))
+    }
+
+    /// Validate a cumulative observation, without claiming to identify the
+    /// worker-local selected task behind an opaque TaskPump token.
+    pub fn validate_lifecycle_after(
+        &self,
+        previous: Option<LifecycleProgress>,
+        is_task_pump: bool,
+    ) -> Result<Option<LifecycleProgress>, String> {
+        let next = self.lifecycle_profile()?;
+        let (Some(previous), Some(next)) = (previous, next) else {
+            return if previous == next {
+                Ok(None)
+            } else {
+                Err("Script session changed lifecycle protocol lanes".into())
+            };
+        };
+        if next.phase < previous.phase {
+            return Err("Lifecycle phase moved backward".into());
+        }
+        if next.phase != previous.phase
+            && (!is_task_pump
+                || self.state != RealmState::Ready
+                || self.navigation.is_some()
+                || !matches!(
+                    (previous.phase, next.phase),
+                    (
+                        LifecyclePhase::Interactive,
+                        LifecyclePhase::DomContentLoaded
+                    ) | (
+                        LifecyclePhase::DomContentLoaded,
+                        LifecyclePhase::LoadComplete
+                    )
+                ))
+        {
+            return Err("Invalid lifecycle phase advancement".into());
+        }
+        if previous.initial_failure && !next.initial_failure {
+            return Err("Initial lifecycle failure was reset".into());
+        }
+        if previous.phase == LifecyclePhase::LoadComplete {
+            if next.initial_failure != previous.initial_failure {
+                return Err("Completed initialization history changed".into());
+            }
+        } else if (!self.errors.is_empty() || self.state != RealmState::Ready)
+            && !next.initial_failure
+        {
+            return Err("Initial lifecycle failure was not recorded".into());
+        }
+        self.lifecycle_wait_valid(next)?;
+        Ok(Some(next))
+    }
+
     /// One explicit accounting profile: never accept mixed or missing reports.
     pub fn accounting_valid(&self) -> bool {
         #[cfg(feature = "modern")]
         if let Some(report) = &self.boa {
             return self.allocations.is_none()
                 && report.is_valid()
+                && (self.state == RealmState::Ready || report.pending_jobs == 0)
                 && (self.state != RealmState::Ready
                     || (report.fatal_reason.is_none() && report.opcodes_remaining > 0));
         }
@@ -128,5 +339,309 @@ impl SessionReply {
                 && report.limit_bytes == 4 * 1024 * 1024
                 && (self.state != RealmState::Ready || report.first_rejected.is_none())
         })
+    }
+}
+
+#[cfg(all(test, feature = "modern"))]
+mod lifecycle_tests {
+    use super::*;
+
+    fn reply(phase: LifecyclePhase) -> SessionReply {
+        SessionReply {
+            revision: 0,
+            snapshot: Some(ArenaSnapshot { nodes: Vec::new() }),
+            outcome: EventOutcome::default(),
+            default_action: DefaultAction::None,
+            navigation: None,
+            errors: Vec::new(),
+            scripts_executed: 0,
+            allocations: None,
+            boa: Some(mg_butane::modern::Engine::new().unwrap().report()),
+            state: RealmState::Ready,
+            acknowledgements: Vec::new(),
+            task_wake: (phase != LifecyclePhase::LoadComplete).then_some(TaskWake {
+                token: 1,
+                delay_ms: 0,
+            }),
+            lifecycle: Some(LifecycleProgress {
+                phase,
+                initial_failure: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn lifecycle_object_requires_exact_typed_fields() {
+        for malformed in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({"phase":"Interactive"}),
+            serde_json::json!({"phase":"Interactive","initial_failure":null}),
+            serde_json::json!({"phase":"Interactive","initial_failure":0}),
+            serde_json::json!({"phase":"Interactive","initial_failure":"false"}),
+            serde_json::json!({"phase":"Complete","initial_failure":false}),
+            serde_json::json!({"phase":"Interactive","initial_failure":false,"extra":0}),
+        ] {
+            assert!(serde_json::from_value::<LifecycleProgress>(malformed).is_err());
+        }
+        let progress = LifecycleProgress {
+            phase: LifecyclePhase::Interactive,
+            initial_failure: false,
+        };
+        assert_eq!(
+            serde_json::from_slice::<LifecycleProgress>(&serde_json::to_vec(&progress).unwrap())
+                .unwrap(),
+            progress
+        );
+    }
+
+    #[test]
+    fn init_requires_interactive_wake_but_preserves_early_navigation() {
+        let mut value = reply(LifecyclePhase::Interactive);
+        value.validate_lifecycle_initial().unwrap();
+        value.task_wake = None;
+        assert!(value.validate_lifecycle_initial().is_err());
+        value.navigation = Some("https://example.test/next".into());
+        value.lifecycle.as_mut().unwrap().phase = LifecyclePhase::Initializing;
+        value.validate_lifecycle_initial().unwrap();
+        value.navigation = None;
+        assert!(value.validate_lifecycle_initial().is_err());
+        for phase in [
+            LifecyclePhase::DomContentLoaded,
+            LifecyclePhase::LoadComplete,
+        ] {
+            assert!(reply(phase).validate_lifecycle_initial().is_err());
+        }
+        let mut value = reply(LifecyclePhase::Interactive);
+        value.lifecycle = None;
+        assert!(value.validate_lifecycle_initial().is_err());
+    }
+
+    #[test]
+    fn only_ready_pumps_can_advance_one_lifecycle_phase() {
+        let interactive = reply(LifecyclePhase::Interactive).lifecycle;
+        let dcl = reply(LifecyclePhase::DomContentLoaded).lifecycle;
+        let complete = reply(LifecyclePhase::LoadComplete).lifecycle;
+        reply(LifecyclePhase::DomContentLoaded)
+            .validate_lifecycle_after(interactive, true)
+            .unwrap();
+        reply(LifecyclePhase::LoadComplete)
+            .validate_lifecycle_after(dcl, true)
+            .unwrap();
+        reply(LifecyclePhase::Interactive)
+            .validate_lifecycle_after(interactive, false)
+            .unwrap();
+        assert!(
+            reply(LifecyclePhase::LoadComplete)
+                .validate_lifecycle_after(interactive, true)
+                .is_err()
+        );
+        assert!(
+            reply(LifecyclePhase::Interactive)
+                .validate_lifecycle_after(dcl, true)
+                .is_err()
+        );
+        assert!(
+            reply(LifecyclePhase::DomContentLoaded)
+                .validate_lifecycle_after(interactive, false)
+                .is_err()
+        );
+        let mut terminal = reply(LifecyclePhase::DomContentLoaded);
+        terminal.state = RealmState::Fatal;
+        terminal.task_wake = None;
+        terminal.lifecycle.as_mut().unwrap().initial_failure = true;
+        assert!(
+            terminal
+                .validate_lifecycle_after(interactive, true)
+                .is_err()
+        );
+        terminal.lifecycle.as_mut().unwrap().phase = LifecyclePhase::Interactive;
+        terminal
+            .validate_lifecycle_after(interactive, true)
+            .unwrap();
+        let mut navigating = reply(LifecyclePhase::DomContentLoaded);
+        navigating.navigation = Some("https://example.test/next".into());
+        assert!(
+            navigating
+                .validate_lifecycle_after(interactive, true)
+                .is_err()
+        );
+        navigating.lifecycle.as_mut().unwrap().phase = LifecyclePhase::Interactive;
+        navigating
+            .validate_lifecycle_after(interactive, true)
+            .unwrap();
+        assert!(
+            reply(LifecyclePhase::Interactive)
+                .validate_lifecycle_after(complete, true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ordinary_errors_latch_including_the_load_transition_and_cannot_reset() {
+        let mut initial = reply(LifecyclePhase::Interactive);
+        initial.errors.push("ordinary initial error".into());
+        assert!(initial.validate_lifecycle_initial().is_err());
+        initial.lifecycle.as_mut().unwrap().initial_failure = true;
+        initial.validate_lifecycle_initial().unwrap();
+        let prior = reply(LifecyclePhase::DomContentLoaded).lifecycle;
+        let mut load = reply(LifecyclePhase::LoadComplete);
+        load.errors.push("load callback error".into());
+        assert!(load.validate_lifecycle_after(prior, true).is_err());
+        load.lifecycle.as_mut().unwrap().initial_failure = true;
+        load.validate_lifecycle_after(prior, true).unwrap();
+        let failed = load.lifecycle;
+        let mut clean = reply(LifecyclePhase::LoadComplete);
+        assert!(clean.validate_lifecycle_after(failed, true).is_err());
+        clean.lifecycle.as_mut().unwrap().initial_failure = true;
+        clean.validate_lifecycle_after(failed, true).unwrap();
+    }
+
+    #[test]
+    fn post_load_work_cannot_rewrite_initial_history_or_require_queue_drain() {
+        let previous = reply(LifecyclePhase::LoadComplete).lifecycle;
+        let mut later = reply(LifecyclePhase::LoadComplete);
+        later.errors.push("unrelated later timer error".into());
+        later.task_wake = Some(TaskWake {
+            token: 9,
+            delay_ms: 60_000,
+        });
+        later.validate_lifecycle_after(previous, true).unwrap();
+        later.lifecycle.as_mut().unwrap().initial_failure = true;
+        assert!(later.validate_lifecycle_after(previous, true).is_err());
+    }
+
+    #[test]
+    fn reportless_rejection_is_an_exact_initial_only_exception() {
+        let mut rejected = reply(LifecyclePhase::Initializing);
+        rejected.boa = None;
+        rejected.snapshot = None;
+        rejected.state = RealmState::Closed;
+        rejected.task_wake = None;
+        rejected.lifecycle.as_mut().unwrap().initial_failure = true;
+        rejected
+            .errors
+            .push("rejected before creating realm".into());
+        assert!(rejected.is_rejected_initial());
+        assert!(
+            !rejected.accounting_valid(),
+            "pre-realm rejection is not ordinary engine accounting"
+        );
+        rejected.validate_lifecycle_initial().unwrap();
+        assert!(
+            rejected
+                .validate_lifecycle_after(reply(LifecyclePhase::Interactive).lifecycle, true)
+                .is_err()
+        );
+        for field in [
+            "revision",
+            "scripts",
+            "outcome",
+            "navigation",
+            "ack",
+            "wake",
+            "phase",
+        ] {
+            let mut changed: SessionReply =
+                serde_json::from_value(serde_json::to_value(&rejected).unwrap()).unwrap();
+            match field {
+                "revision" => changed.revision = 1,
+                "scripts" => changed.scripts_executed = 1,
+                "outcome" => changed.outcome.click_canceled = Some(false),
+                "navigation" => changed.navigation = Some("https://example.test/".into()),
+                "ack" => changed.acknowledgements.push(ControlAck {
+                    node: 0,
+                    version: 1,
+                }),
+                "wake" => {
+                    changed.task_wake = Some(TaskWake {
+                        token: 1,
+                        delay_ms: 0,
+                    })
+                }
+                "phase" => changed.lifecycle.as_mut().unwrap().phase = LifecyclePhase::Interactive,
+                _ => unreachable!(),
+            }
+            assert!(!changed.is_rejected_initial(), "{field}");
+            assert!(changed.validate_lifecycle_initial().is_err(), "{field}");
+        }
+        rejected.lifecycle = None;
+        assert!(rejected.is_rejected_initial());
+        assert_eq!(rejected.validate_lifecycle_initial().unwrap(), None);
+        assert!(
+            rejected
+                .validate_lifecycle_after(reply(LifecyclePhase::Interactive).lifecycle, true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_boa_accounting_cannot_retain_pending_work() {
+        let mut value = reply(LifecyclePhase::DomContentLoaded);
+        let report = value.boa.as_mut().unwrap();
+        report.jobs_admitted = 1;
+        report.pending_jobs = 1;
+        assert!(report.is_valid());
+        assert!(value.accounting_valid(), "Ready work is genuinely retained");
+        for state in [RealmState::Closed, RealmState::Fatal] {
+            value.state = state;
+            assert!(
+                !value.accounting_valid(),
+                "terminal {state:?} cannot retain a permit/job"
+            );
+        }
+        value.boa.as_mut().unwrap().pending_jobs = 0;
+        assert!(
+            value.accounting_valid(),
+            "terminal cancellation preserves lifetime admission without pending work"
+        );
+    }
+
+    #[test]
+    fn accounting_snapshots_preserve_profiles_and_every_legacy_phase() {
+        use mg_butane::runtime::{AllocationPhase, AllocationTotals, RejectedAllocation};
+        let mut modern = reply(LifecyclePhase::LoadComplete);
+        let initial = modern.accounting_snapshot();
+        modern.boa.as_mut().unwrap().opcodes_remaining -= 1;
+        assert!(modern.accounting_valid_after(&initial));
+        let advanced = modern.accounting_snapshot();
+        assert!(!initial.is_valid_after(&advanced));
+
+        let mut legacy = reply(LifecyclePhase::LoadComplete);
+        legacy.boa = None;
+        legacy.lifecycle = None;
+        legacy.allocations = Some(AllocationReport {
+            limit_bytes: 4 * 1024 * 1024,
+            accepted_bytes: 10,
+            phases: AllocationTotals {
+                runtime: 10,
+                ..AllocationTotals::default()
+            },
+            first_rejected: None,
+        });
+        assert!(!legacy.accounting_valid_after(&initial));
+        let before = legacy.accounting_snapshot();
+        legacy.allocations.as_mut().unwrap().accepted_bytes += 1;
+        legacy.allocations.as_mut().unwrap().phases.runtime += 1;
+        assert!(legacy.accounting_valid_after(&before));
+        let after = legacy.accounting_snapshot();
+        assert!(!before.is_valid_after(&after));
+        legacy.allocations.as_mut().unwrap().phases.runtime -= 1;
+        legacy.allocations.as_mut().unwrap().phases.source += 1;
+        assert!(legacy.accounting_valid());
+        assert!(!legacy.accounting_valid_after(&after));
+        legacy.allocations.as_mut().unwrap().first_rejected = Some(RejectedAllocation {
+            phase: AllocationPhase::Runtime,
+            accepted_bytes: 11,
+            requested_bytes: 4 * 1024 * 1024,
+            limit_bytes: 4 * 1024 * 1024,
+        });
+        legacy.state = RealmState::Fatal;
+        let rejected = legacy.accounting_snapshot();
+        assert!(rejected.is_valid_after(&rejected));
+        legacy.allocations.as_mut().unwrap().first_rejected = None;
+        assert!(!legacy.accounting_snapshot().is_valid_after(&rejected));
+        legacy.allocations = None;
+        assert!(!legacy.accounting_snapshot().is_valid_after(&rejected));
     }
 }

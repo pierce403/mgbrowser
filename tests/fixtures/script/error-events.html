@@ -80,12 +80,15 @@ window.addEventListener('error', function (event) {
     state.textContent = 'window error ready';
   });
 });
-var canceled = setTimeout(function () { throw new Error('Canceled error task ran'); }, 1000);
-clearTimeout(canceled);
-setTimeout(function (argument) {
-  if (argument !== retainedError || document.readyState !== 'complete')
-    throw new Error('Wrong later timer argument or document readiness');
-  errorOrder.push('timer');
-  throw argument;
-}, 60, retainedError);
+window.onload = function () {
+  // Establish the post-load premise without racing initial lifecycle tasks.
+  var canceled = setTimeout(function () { throw new Error('Canceled error task ran'); }, 1000);
+  clearTimeout(canceled);
+  setTimeout(function (argument) {
+    if (argument !== retainedError || document.readyState !== 'complete')
+      throw new Error('Wrong later timer argument or document readiness');
+    errorOrder.push('timer');
+    throw argument;
+  }, 60, retainedError);
+};
 </script></body></html>

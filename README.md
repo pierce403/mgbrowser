@@ -2,7 +2,25 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.10 Experimental Preview
+## v0.9.11 Experimental Preview
+
+This increment queues DOMContentLoaded and Window load as two genuine later
+tasks after pre-parsed/preloaded classic sources. Readiness, event propagation,
+checkpoints and mandatory admissions follow the shared existing work ledger.
+Browser loading waits for actual load completion, not arbitrary queue idle;
+typed bounded startup outcomes preserve initial errors across later clean work.
+Strict modern v5 progress separates CDP commit, DCL, load and loading stopped.
+[Lifecycle contract and limitations](docs/DOCUMENT_LIFECYCLE.md).
+
+Full local debug/release regressions, restricted workers, package installation,
+updater fixture, frozen JSPLAN and all thirteen packaged native/CDP helpers pass.
+Exact-commit CI, tagged packaging and public install/update/native acceptance
+are separately recorded in the [dated work log](memory/logs/2026-10-22.md).
+The installer selects the latest actually published release. This is not a
+streaming parser, general event loop, new upstream pass or full WPT harness.
+See the [release notes and limitations](docs/RELEASE-v0.9.11.md).
+
+### Previous v0.9.10 increment
 
 This release adds genuine later Window self-messaging: `postMessage`,
 `message`/`messageerror` listeners and handler slots, cloned data, trusted origins
@@ -21,11 +39,6 @@ acceptance helpers pass. Receipts are recorded in the
 [dated work log](memory/logs/2026-10-22.md).
 See the [release notes and limitations](docs/RELEASE-v0.9.10.md).
 
-The next [queued document-lifecycle contract](docs/DOCUMENT_LIFECYCLE.md) is
-reviewed, not implemented: actual v0.9.10 controls establish the old startup and
-resource premises before changing event order, worker progress and initial-load
-reporting. The public browser still bundles startup; this adds no WPT passes.
-
 ### Previous v0.9.9 increment
 
 The v0.9.9 increment adds queued Window `unhandledrejection` and
@@ -37,7 +50,7 @@ no rejected payload; a persistent notice explicitly reports incomplete
 observation. [Rejection policy and acceptance](docs/PROMISE_REJECTIONS.md).
 
 Function timers remain real later parent-issued worker tasks, sharing the
-existing cumulative limits. Startup is still **bundled**, not a complete HTML
+existing cumulative limits. Startup was still **bundled** in v0.9.9, not a complete HTML
 lifecycle. Cross-context messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
@@ -216,8 +229,9 @@ See [updater behavior and trust](docs/UPDATES.md).
   require UTF-8 and a supported JavaScript MIME type. The v0.9.7 release adds
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
   v0.9.8 adds conservatively muted Window errors; v0.9.9 adds bounded rejection
-  notification. Startup remains bundled; fully task-separated lifecycle,
-  cross-context messaging and typed JavaScript testharness results remain unfinished.
+  notification. The v0.9.11 candidate separates DCL/load after pre-parsed/preloaded
+  classic sources, not a streaming parser or dynamic-resource load barrier.
+  Cross-context messaging and typed JavaScript testharness results remain unfinished.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
   browser event loop remain unsupported. No React/Vue browser-app compatibility
   is claimed.

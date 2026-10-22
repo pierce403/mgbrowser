@@ -81,3 +81,11 @@
   already fatal. The probe also reproduces a document capture-stop phase bug.
   These are recorded baseline observations, not completed queued lifecycle or
   full-harness readiness. docs/DOCUMENT_LIFECYCLE.md fixes the next contract.
+- 2026-10-22: A new queued-DCL fault control exposes one specific Closed cleanup
+  edge: at 255 retained events, the DCL callback queues a Promise then throws;
+  its Window error reporter exhausts record 257 and closes the host before the
+  normal checkpoint. Dropping only host tasks leaves one VM job pending. The
+  existing engine cancellation latch clears that residual queue, conditionally
+  after host drops and without replacing an earlier fatal reason; outward Closed
+  and the uncompleted lifecycle prefix remain. This does not prove all VM roots
+  release without Context teardown or justify a general test-only GC repair.

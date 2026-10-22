@@ -23,22 +23,17 @@ class Controls(unittest.TestCase):
         source = (task.REPO / "tests/fixtures/script/task-events.html").read_text().split("<script>", 1)[1].split("</script>", 1)[0]
         common = {"profile": "boa-page-process-v1", "fatal_reason": None,
                   "source_admissions": 1, "source_bytes": len(source.encode())}
-        before = dict(common, opcodes_remaining=999900, jobs_admitted=4,
-                      jobs_executed=2, pending_jobs=1,
-                      worker_memory={"outstanding_bytes": 1000, "peak_bytes": 2000,
-                                     "cumulative_bytes": 3000, "allocations": 10,
-                                     "outstanding_limit_bytes": 32 * 1024 * 1024,
-                                     "cumulative_limit_bytes": 64 * 1024 * 1024})
-        after = dict(common, opcodes_remaining=999800, jobs_admitted=5,
-                     jobs_executed=4, pending_jobs=0,
-                     worker_memory={"outstanding_bytes": 1000, "peak_bytes": 2500,
-                                    "cumulative_bytes": 4000, "allocations": 20,
-                                    "outstanding_limit_bytes": 32 * 1024 * 1024,
-                                    "cumulative_limit_bytes": 64 * 1024 * 1024})
-        return [before, after]
+        memory = {"outstanding_bytes": 1000, "peak_bytes": 2000,
+                  "cumulative_bytes": 3000, "allocations": 10,
+                  "outstanding_limit_bytes": 32 * 1024 * 1024,
+                  "cumulative_limit_bytes": 64 * 1024 * 1024}
+        return [dict(common, opcodes_remaining=999900 - i, jobs_admitted=a,
+                     jobs_executed=e, pending_jobs=p, worker_memory=dict(memory))
+                for i, (a, e, p) in enumerate([(3, 1, 2), (3, 2, 1), (6, 4, 1), (7, 6, 0)])]
 
     def log(self, reports):
-        return "\n".join("SCRIPT_BOA " + json.dumps(report) for report in reports) + "\nPAGE_TASK_APPLIED sequence=1 revision=1\n"
+        return "\n".join([*("SCRIPT_BOA " + json.dumps(report) for report in reports),
+                           *(f"PAGE_TASK_APPLIED sequence={i} revision={i}" for i in range(1, 4)), ""])
 
     def test_consistent_cumulative_fixture_evidence_is_accepted(self):
         task.check_tasks(self.log(self.reports()), "synthetic guard control")
@@ -46,9 +41,10 @@ class Controls(unittest.TestCase):
     def test_invalid_or_renewed_resource_evidence_never_passes(self):
         for change in ("pending", "source", "memory", "opcodes", "admitted", "allocations"):
             with self.subTest(change=change):
-                before, after = self.reports()
+                reports = self.reports()
+                before, after = reports[0], reports[-1]
                 if change == "pending":
-                    before["pending_jobs"] = 3
+                    before["pending_jobs"] = 4
                 elif change == "source":
                     before["source_bytes"] = 4 * 1024 * 1024 + 1
                 elif change == "memory":
@@ -60,7 +56,7 @@ class Controls(unittest.TestCase):
                 elif change == "allocations":
                     after["worker_memory"]["allocations"] = 1
                 with self.assertRaises(RuntimeError):
-                    task.check_tasks(self.log([before, after]), "synthetic guard control")
+                    task.check_tasks(self.log(reports), "synthetic guard control")
 
     def test_missing_task_or_explicit_diagnostic_never_passes(self):
         valid = self.log(self.reports())

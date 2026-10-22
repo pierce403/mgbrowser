@@ -139,7 +139,7 @@
         { "name": "disable", "description": "Disable Page notifications for this connection or session." },
         {
           "name": "navigate",
-          "description": "Navigate to an absolute HTTP(S) URL of at most 16 KiB. The response waits for navigation completion; transport failure or supersession produces errorText. frameId, when present, must identify this target's top-level frame-N (frame-1 for page-1).",
+          "description": "Navigate to an absolute HTTP(S) URL of at most 16 KiB. The response waits for initial load completion, not arbitrary timer/queue idle; transport or terminal initial-script failure and supersession produce errorText without fabricating missing lifecycle events. frameId, when present, must identify this target's top-level frame-N (frame-1 for page-1).",
           "parameters": [
             { "name": "url", "type": "string" },
             { "name": "frameId", "$ref": "FrameId", "optional": true }
