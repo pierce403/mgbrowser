@@ -178,7 +178,7 @@ See [updater behavior and trust](docs/UPDATES.md).
   Deferred sources run after ordinary sources; `nomodule` provides the classic
   fallback while modules remain unsupported. Async scripts, nonempty integrity
   metadata and `crossorigin` are skipped with diagnostics. External sources
-  require UTF-8 and a supported JavaScript MIME type. The v0.9.7 candidate adds
+  require UTF-8 and a supported JavaScript MIME type. The v0.9.7 release adds
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
   Startup remains bundled; fully task-separated lifecycle, error/rejection
   event delivery and typed JavaScript testharness results remain unfinished.
@@ -213,7 +213,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [candidate preview details](docs/RELEASE-v0.9.7.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.7.md) for manual install and uninstall.
 
 ## Components
 

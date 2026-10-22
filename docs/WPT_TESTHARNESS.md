@@ -1,9 +1,10 @@
 # Next milestone: genuine Window testharness readiness
 
-Planning only, 2026-10-21. The 1,011-case flexbox reftest corpus remains separate.
-No JavaScript testharness result or new browser capability is claimed here.
-Implementing browser services below requires a separate feature contribution
-and versioned release after the expanded static baseline is published.
+Original plan: 2026-10-21. The 1,011-case flexbox reftest corpus remains separate.
+The first timer increment is shipped; see the implementation receipt below.
+No JavaScript testharness result or complete Window readiness is claimed here.
+Remaining browser services require separate feature contributions and versioned
+releases after the published expanded static baseline.
 
 ## Immutable input
 
@@ -187,3 +188,15 @@ retained pending work before adopting its score; do not bless a nominal PASS
 whose required task is unfinished. Before introducing any timer-dependent
 selection, separately freeze and test a finite readiness protocol or conservative
 unfinished-task rejection. Do not silently expand scoring in this engine change.
+
+### Implementation receipt
+
+The first timer increment shipped in
+[v0.9.7](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.7) at
+`3afaabdfacb6305d7c8637072fef60bd77d692ee`. Exact-commit CI, packaged/public
+installation, actual v0.9.6 self-upgrade and public native/CDP controls pass,
+including a timer completing while its tab is hidden. The fresh static cohort
+remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011, with no retained task in
+passing scripted cases. See the [dated receipts](../memory/logs/2026-10-21.md).
+This is only the first increment: full Window readiness still requires the
+remaining services and independently reviewed typed observation above.

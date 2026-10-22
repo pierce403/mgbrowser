@@ -476,15 +476,17 @@ plus no-op recheck pass. See the 2026-10-21 work log. This scoped increment
 does not complete the unchecked modules, scheduling, upstream WPT, frameworks,
 cooperative accounting or embedding criteria above.
 
-In progress, v0.9.7 timer increment: function `setTimeout`/`clearTimeout`, traced
+Shipped v0.9.7 at `3afaabdfacb6305d7c8637072fef60bd77d692ee`: function `setTimeout`/`clearTimeout`, traced
 callbacks/arguments and parent-issued one-task pumps share the existing
 256 pending/2,048 lifetime work and session budgets. Single-window identities,
 document-ready/Window-load targeting, property-handler order and deferred-source
 readiness are corrected within still-bundled Init. Full queued lifecycle,
 string timers/intervals, error/rejection delivery and typed WPT testharness
 results remain open; authored task controls do not count as upstream passes.
-See [review and acceptance boundaries](docs/WPT_TESTHARNESS.md). Local, packaged,
-public release and installation gates must be recorded before calling it shipped.
+See [review and acceptance boundaries](docs/WPT_TESTHARNESS.md). Exact-commit CI,
+packaged and public installation, actual v0.9.6 self-upgrade, and public native/CDP
+acceptance including hidden-tab task completion pass; receipts are in the
+2026-10-21 work log. This increment does not complete F-016 or Window readiness.
 
 ## F-015 : Self-updates and build identity
 
@@ -787,7 +789,7 @@ fail closed. This is not general ECMAScript/browser conformance. The original
 evaluator remains an explicit test baseline, not a production fallback. Broader
 events, string timers, intervals and modules remain unsupported. F-016 records
 the bounded classic external-source increment and its v0.9.6 acceptance/release
-evidence, plus the in-progress v0.9.7 function-timer increment.
+evidence, plus the shipped v0.9.7 function-timer increment.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 

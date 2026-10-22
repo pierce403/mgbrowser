@@ -41,10 +41,15 @@ following dependency order, updating evidence as each increment ships:
    **Active:** implement non-scoring complete Window-testharness readiness through the
    restricted worker, following [docs/WPT_TESTHARNESS.md](docs/WPT_TESTHARNESS.md),
    before declaring another scored upstream selection (F-026/F-008/F-016).
-   The bounded v0.9.7 function-timer increment is implemented and locally verified;
-   it preserves bundled Init and does not finish full queued lifecycle,
-   error/rejection delivery or typed harness reporting. Finish its versioned
-   release/public installer/native acceptance before the remaining services.
+   **Shipped v0.9.7** at `3afaabdfacb6305d7c8637072fef60bd77d692ee`: bounded
+   function timers pass exact-commit CI, release/public installation, actual
+   v0.9.6 self-upgrade and public native/CDP acceptance including hidden tabs.
+   Fresh static WPT remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011.
+   Bundled Init does not finish full queued lifecycle, error/rejection delivery
+   or typed harness reporting. Next: review trusted script-source provenance
+   and bounded uncaught Window errors, then queued rejection delivery. Genuine
+   messaging, queued lifecycle and typed observation remain open; corpus and
+   observer/scoring changes require separate frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
