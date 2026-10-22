@@ -1,5 +1,19 @@
 # Candidate learnings
 
+- 2026-10-21: Expanded-source WPT review found exact pixel matches where both
+  sides ignored writing modes, element scrolling or static-position behavior.
+  Empty-image controls alone did not catch these nonuniform shared failures.
+  The reviewed generic diagnostic-free pass prerequisite keeps these failures
+  visible without modifying upstream bytes or selecting cases by outcome.
+  Reference equality still does not independently prove every feature works.
+- 2026-10-21: A test-host ScriptRuntime wrapper initially acknowledged validation
+  before Chassis, consuming the session's exactly-one acknowledgement slot.
+  Review caught the bug; strict pending-state mocks now enforce the contract
+  that permissive mocks missed:
+  defer wrapper duration into Chassis's combined charge; rejected replies charge
+  once before cancellation. Real Boa scripts and the original 24 cases pass
+  after correction. This did not change worker accounting limits.
+
 - 2026-09-23: Release version bumps must synchronize the excluded JSPLAN
   workspace's local mg-butane lock entry and exact dependency-audit records.
   Previous v0.7.1/v0.7.2/v0.8.0/v0.9.0 changes did this; the initial v0.9.1

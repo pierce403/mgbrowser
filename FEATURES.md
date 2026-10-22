@@ -18,8 +18,12 @@ F-003/F-005 production rendering, immutable upstream inputs and truthful results
 
 Maximize genuine upstream passes without rewriting assertions, hiding failures,
 silently shrinking the denominator or weakening browser boundaries. Start with
-the pinned 24-test flexbox reftest pilot in docs/WPT.md: 24 pass, 0 fail,
-0 are unsupported. This does not implement full wptrunner,
+the pinned 24-test flexbox reftest pilot in docs/WPT.md, which reached 24 pass,
+0 fail and 0 unsupported. The complete recursive pinned flexbox selection now
+contains 1,011 tests, retaining every original test and input byte. Expansion
+is a separate tooling contribution measured against the unchanged v0.9.6
+engine, not a browser compatibility improvement. Current counts come from
+tools/wpt/score.json and the freshly checked website report. This does not implement full wptrunner,
 WebDriver, JavaScript testharness or broad web conformance. No production browser
 behavior changed in the initial test-tooling contribution. The v0.9.1 release
 added preferred max-content widths and admitted single-line column baselines
@@ -30,8 +34,11 @@ implicit `<body>` synthesis, row flex first-baseline alignment, bounded
 same-origin `@font-face` TTF/OTF loading and DOM `element.style` camelCase
 normalization; all 24 selected tests now pass. Release and
 public-installer verification are recorded separately in the dated log.
-Every commit reruns the pilot before Pages publishes its score and exact-commit
-JSON report; known passes and runnable tests may not regress.
+Every commit reruns the complete selection before Pages publishes its score and
+exact-commit JSON report; known passes and runnable tests may not regress.
+PASS requires diagnostic-free real Browser rendering and the original exact
+pixel relations. Conservative precondition failures and unsupported protocols
+remain in the denominator; source/tooling changes never rewrite upstream tests.
 
 ### Test criteria
 
@@ -50,8 +57,13 @@ JSPLAN35942827541, Pages/WPT35942827584 and release35944507465 pass.
 v0.9.2 completed the 24-test initial cohort (24/24 PASS) at 36119044b7c6; v0.9.4
 enables Boa ECMAScript by default, adds bottom-left link hover URL previews,
 right-click and Ctrl+click open-in-new-tab, and expands DOM bindings while
-preserving 24/24 WPT passes (see the 2026-10-14 log). Broader cohort expansion
-and testharness/WebDriver prerequisites remain unfinished.
+preserving 24/24 WPT passes (see the 2026-10-14 log). The complete-directory
+expansion is documented in docs/WPT_EXPANSION.md. Testharness/WebDriver and
+broader browser compatibility remain unfinished.
+The unchanged-engine expanded baseline is 317 PASS, 632 FAIL and 62 UNSUPPORTED
+out of 1,011, without infrastructure errors, timeouts or crashes. The active
+ratchet preserves all 317 passes and 949 runnable cases as well as the separate
+original 24-case contract. See the dated log for exact-commit publication gates.
 
 ## F-025 : Google News desktop reading
 

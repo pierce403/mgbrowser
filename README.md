@@ -18,10 +18,13 @@ guarantee. [Performance measurements and limits](docs/PERFORMANCE.md).
 Pure-Rust Boa ECMAScript execution runs inline and classic external scripts by default
 (`--disable-scripts` opts out), alongside bottom-left link hover URL previews,
 **Open link in new tab** from the right-click context menu and **Ctrl+click** on
-links. The initial 24-test WPT
-flexbox reftest selection continues to pass completely (**24 pass, 0 fail,
-0 unsupported out of 24**). This is measured progress on a fixed reftest cohort,
-not broad standards conformance. [Scope and remaining gaps](docs/WPT.md).
+links. All 24 original WPT flexbox reftests remain passing. Current-source
+measurement now covers the complete pinned **1,011-case flexbox markup reftest
+selection**, with failures and unsupported cases retained. The larger corpus is
+a tooling change measured against the unchanged v0.9.6 engine, not a browser
+compatibility improvement. Its initial baseline is **317 PASS, 632 FAIL and
+62 UNSUPPORTED / 1,011**, with no errors, timeouts or crashes.
+[Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,
 positioned headers, clipping, inline SVG and JPEG thumbnails now render the
@@ -108,16 +111,22 @@ mgbrowser https://example.com/
 
 ### Web Platform Tests
 
-Current-source results: **24 pass, 0 fail, 0 unsupported out of 24 selected
-upstream reftests**. This is a pinned CSS reftest pilot, not the full WPT suite
+Current-source results are recorded in [score.json](tools/wpt/score.json) and
+the website's [freshly measured score](https://mgbrowser.org/#wpt).
+The fixed selection contains **1,011 upstream flexbox reftests**. It is not the full WPT suite
 or a JavaScript conformance score. The tests use the real Rust navigation,
 resource-loading, painting and restricted script-worker code. [Method and commands](docs/WPT.md).
 The website reruns the selection before every commit's Pages deployment and
 publishes the [score and exact tested commit](https://mgbrowser.org/wpt-results.json).
 The goal is more genuine passes, without hiding failures or losing old passes.
-v0.9.2 completed all 24 tests in the initial cohort, and the current selection
-remains 24/24. Current-source website scores may
+v0.9.2 completed all 24 tests in the initial cohort; their exact source files and
+passing/runnable requirements remain separately immutable. The expanded lane
+requires diagnostic-free real Browser painting and exact pixel relations.
+Conservative prerequisite failures are not proof that every such image is
+incorrect; both failures and unsupported protocols stay visible. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
+[Selection and review](docs/WPT_EXPANSION.md). JavaScript testharness integration
+is a [separate planned milestone](docs/WPT_TESTHARNESS.md), not current coverage.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if

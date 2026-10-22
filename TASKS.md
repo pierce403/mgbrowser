@@ -21,12 +21,17 @@ following dependency order, updating evidence as each increment ships:
    subsequent no-op check pass. See the 2026-10-21 log for public receipts.
    Release and public verification are complete; the later explicit resume
    authorizes the remaining queue below.
-2. **Active:** expand to the complete pinned recursive flexbox reftest cohort in
-   a separate tooling contribution, retaining all existing 24 cases and
-   establishing the new baseline before engine fixes. Selection, input/resource
-   review and sequencing are fixed in [docs/WPT_EXPANSION.md](docs/WPT_EXPANSION.md).
-   Then implement testharness execution through the restricted worker and the
-   browser services required by those upstream tests (F-026/F-008/F-016).
+2. **Expanded baseline locally verified; publishing:** the complete pinned
+   recursive flexbox reftest cohort reports **317 PASS, 632 FAIL and
+   62 UNSUPPORTED / 1,011**, with no errors, timeouts or crashes. All original
+   24 cases still pass. This separate tooling contribution leaves the v0.9.6
+   engine unchanged and strengthens the ratchet to 317 passes / 949 runnable
+   cases. Selection, input/resource review and sequencing are fixed in
+   [docs/WPT_EXPANSION.md](docs/WPT_EXPANSION.md). Verify exact-commit CI and
+   public delivery before the next engine increment.
+   **Next:** implement non-scoring complete Window-testharness readiness through the
+   restricted worker, following [docs/WPT_TESTHARNESS.md](docs/WPT_TESTHARNESS.md),
+   before declaring another scored upstream selection (F-026/F-008/F-016).
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

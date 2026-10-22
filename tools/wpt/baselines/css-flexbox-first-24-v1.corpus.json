@@ -1,0 +1,561 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "repository": "https://github.com/web-platform-tests/wpt",
+    "revision": "84daed4ae966d9624bed22f43587c79283ad1fea",
+    "license_files": [
+      "LICENSE.md"
+    ],
+    "license_notes": [
+      {
+        "path": "fonts/Ahem.ttf",
+        "license": "CC0-1.0 / public-domain dedication",
+        "evidence": "The original font's embedded name-table copyright and license URL declare public domain ownership with CC0 fallback; the unmodified font retains that notice."
+      }
+    ]
+  },
+  "selection": {
+    "id": "css-flexbox-first-24-v1",
+    "rule": "First 24 lexicographically ordered top-level css/css-flexbox/*.html files with at least one link rel=match or rel=mismatch. No filter based on flags, scripts, references, or mgbrowser results.",
+    "rationale": "A bounded initial CSS layout reftest cohort, fixed before any mgbrowser execution, selected mechanically rather than for known passes. This is not the full WPT suite.",
+    "limit": 24,
+    "top_level_html_candidates_count": 1340,
+    "examined_candidates_count": 59,
+    "cutoff_path": "css/css-flexbox/align-self-013.html",
+    "directory_tree_sha": "9ad051e4d7244fb68fc346148daa8e369ebb4844",
+    "max_files": 100,
+    "max_total_bytes": 10485760
+  },
+  "files": [
+    {
+      "path": "LICENSE.md",
+      "sha256": "5fac07febb0e2a97fb0d7b0def149ec08b642e1ba4b9c345283ab1cbd2af6570",
+      "bytes": 1500
+    },
+    {
+      "path": "css/css-flexbox/align-baseline.html",
+      "sha256": "d89644853c19b4c6a204c3d2a98b37cb3af16bbc4386458d201f423f0cd5905e",
+      "bytes": 718
+    },
+    {
+      "path": "css/css-flexbox/align-content-wrap-004.html",
+      "sha256": "a27ad810fd35c54552c3ad2e6c79e8a81e8468b76eeeb1d4ff75bb0196ea1a54",
+      "bytes": 1169
+    },
+    {
+      "path": "css/css-flexbox/align-content_center.html",
+      "sha256": "13fc68031ab57858dd9ed951a29c1db86b26fcaf67abdba9555515dbbf58d7c1",
+      "bytes": 968
+    },
+    {
+      "path": "css/css-flexbox/align-content_flex-end.html",
+      "sha256": "51cfed3f13d1aa5c3eeb6ffec5aa5391b310b681d57cf36b799b8886d42a86c0",
+      "bytes": 976
+    },
+    {
+      "path": "css/css-flexbox/align-content_flex-start.html",
+      "sha256": "0ab5f42433df7bd58a20e065f455923102c1b8ee0017fc1123b8ee4ae8997fa6",
+      "bytes": 1006
+    },
+    {
+      "path": "css/css-flexbox/align-content_space-around.html",
+      "sha256": "0a111283110d5abc6ce8f4295f6048191ba4eac6399c686477d737dce61e0c91",
+      "bytes": 1139
+    },
+    {
+      "path": "css/css-flexbox/align-content_space-between.html",
+      "sha256": "b01675a64b4119186b1cdc648de5fbd25eea26224cff08a53eb1d3792638175e",
+      "bytes": 1139
+    },
+    {
+      "path": "css/css-flexbox/align-content_stretch.html",
+      "sha256": "096831d10193b670424fe30c884e3dddfab04af57ab3ff94dc0c47753ab4c3f4",
+      "bytes": 1079
+    },
+    {
+      "path": "css/css-flexbox/align-items-006.html",
+      "sha256": "c556f236972b27ed670e2521d344c8a377f587d2c6dd94f652386ac3d4d2f122",
+      "bytes": 1692
+    },
+    {
+      "path": "css/css-flexbox/align-items-007.html",
+      "sha256": "233f6133fbde3387a144841363182d76ee85ee399040e77123a3c0940a5fb83f",
+      "bytes": 843
+    },
+    {
+      "path": "css/css-flexbox/align-items-008.html",
+      "sha256": "41f2b709557970596436d139aa21d9395f106633086cc8a1a44346d023013267",
+      "bytes": 592
+    },
+    {
+      "path": "css/css-flexbox/align-items-009.html",
+      "sha256": "0e1077d120e914e7062c938794d3f39464a9818ef12b621edd83766bcafb0db5",
+      "bytes": 502
+    },
+    {
+      "path": "css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+      "sha256": "1b43240610a694dec6a22604cd78cfa2eb7cf40550ccf65e284d61e199d6d4cd",
+      "bytes": 1066
+    },
+    {
+      "path": "css/css-flexbox/align-self-001.html",
+      "sha256": "64fa91e34ea82d75a82e32e8ad447450cb863fb7925f0317efd75b040dc3280c",
+      "bytes": 1223
+    },
+    {
+      "path": "css/css-flexbox/align-self-002.html",
+      "sha256": "c854adea12b59cc1cfbbdb5ae104fe48e8e92252b422d66ae726ba74ca38efd6",
+      "bytes": 1216
+    },
+    {
+      "path": "css/css-flexbox/align-self-003.html",
+      "sha256": "237b0a96656d0d12f327f2a1d50cad0dca50e09044927ecaaa0d80ef8a2ab8ec",
+      "bytes": 1341
+    },
+    {
+      "path": "css/css-flexbox/align-self-004.html",
+      "sha256": "0fa88863c3659fed07cba88e2cffc7cfa5b47f16ba7a97b21d1b4a1b94310c95",
+      "bytes": 1135
+    },
+    {
+      "path": "css/css-flexbox/align-self-005.html",
+      "sha256": "b6f7695ffbb03560ed38593ac4999b08c34c0f22118f313bb2a260e58504b172",
+      "bytes": 1262
+    },
+    {
+      "path": "css/css-flexbox/align-self-007.html",
+      "sha256": "d2287b288dfb854c7c5232d3b899ffdc069fa3b093dcd8e3f1b4e3b00e2f269a",
+      "bytes": 1373
+    },
+    {
+      "path": "css/css-flexbox/align-self-008.html",
+      "sha256": "ad5d69fef54020a5a5ac9f61e79dcb1690ba2644257dd66884a515e5c2177291",
+      "bytes": 1284
+    },
+    {
+      "path": "css/css-flexbox/align-self-009.html",
+      "sha256": "c1394a61ea48335c568157a1d78fd05e4012cb996a1aaf8070b4d2358bca9145",
+      "bytes": 1415
+    },
+    {
+      "path": "css/css-flexbox/align-self-011.html",
+      "sha256": "b876b8c4f5715506439b6ec5930ba54645058805619ff003eb80baf88416b6ed",
+      "bytes": 1186
+    },
+    {
+      "path": "css/css-flexbox/align-self-012.html",
+      "sha256": "d8f999ae5779d33f82bbac1bac18fbea5f406af7a1f0816f5b26c631272229a5",
+      "bytes": 1103
+    },
+    {
+      "path": "css/css-flexbox/align-self-013.html",
+      "sha256": "ac3555b330b27eba16791c31409d8e23d2e75859bb072893ced039ed25e9d4de",
+      "bytes": 1245
+    },
+    {
+      "path": "css/css-flexbox/reference/align-baseline-ref.html",
+      "sha256": "ed27cfcfe2e17a4e41524a55e5c611b9f7ef5b9569aaed123a15481140bac7dc",
+      "bytes": 426
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content-001-ref.html",
+      "sha256": "5be8b76374b6e0b50d2dcc07e43ce67e1eb827819cee63d305960851277ce5b6",
+      "bytes": 309
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_center-ref.html",
+      "sha256": "72bb6efc9933f1898752198276cb2073c0616736a920ee58e60cd58af957f56d",
+      "bytes": 580
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_flex-end-ref.html",
+      "sha256": "864bc5922ab7ae4997ee5ffd1684858285a641e8cfda406e4f81ae7f94fb9e20",
+      "bytes": 582
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_flex-start-ref.html",
+      "sha256": "ff5c43f3a5ed05c85e774e623b561d9ec69bdf97c261b85ae4d1428d78ba3cbc",
+      "bytes": 519
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_space-around-ref.html",
+      "sha256": "1c48a6f5f105b7e33c69796315e2b7ddf2ffc483ebc78a5c4556ff2393b946bd",
+      "bytes": 830
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_space-between-ref.html",
+      "sha256": "fe7b0c39131293ad85a15685988b49cd38456490096433a09840191a9273f07f",
+      "bytes": 773
+    },
+    {
+      "path": "css/css-flexbox/reference/align-content_stretch-ref.html",
+      "sha256": "987c495ff5e968887ed03d0803e4f55c2fae0563a697cfc10a84a4865497b62a",
+      "bytes": 743
+    },
+    {
+      "path": "css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html",
+      "sha256": "3be60f08bcd6bb3a2ad7719eef6dcb3c2ab827d6b61c7a55e97b01a27bde7a16",
+      "bytes": 256
+    },
+    {
+      "path": "css/css-flexbox/support/flexbox.css",
+      "sha256": "d73d33ec476c6e00a3cc6b526f4c033c6c9df6733e956c48b3e94bc037ab7a63",
+      "bytes": 2900
+    },
+    {
+      "path": "css/css-flexbox/support/test-style.css",
+      "sha256": "a28fb48c693b2cddd95cf0648e268939d53eaaa617dff13b9074b22f11c7dc53",
+      "bytes": 342
+    },
+    {
+      "path": "css/reference/ref-filled-green-100px-square-only.html",
+      "sha256": "16374b3cb3d9ecd468a0a6bd73977b8613a71623c556a556cb15b555dedfe95b",
+      "bytes": 210
+    },
+    {
+      "path": "css/reference/ref-filled-green-100px-square.xht",
+      "sha256": "b7d98bb3f8b7b70e8f76f0b7e99566bc09ca5e5cbae1cef571d7843be87da4f0",
+      "bytes": 568
+    },
+    {
+      "path": "css/support/red-rect.svg",
+      "sha256": "6c5145477eaa607f2332fb2bcfed1795def09a78552a6b57837781827c5e1218",
+      "bytes": 269
+    },
+    {
+      "path": "fonts/Ahem.ttf",
+      "sha256": "b719ecb31c5b21fc573c03f6421c74ac63c271a5a3ff841e34f9705fb94b8448",
+      "bytes": 21768
+    },
+    {
+      "path": "fonts/ahem.css",
+      "sha256": "5d8b9526d7be573871022125d5ec44f4893e4d851c26ab3fb6df44219422111c",
+      "bytes": 74
+    }
+  ],
+  "tests": [
+    {
+      "path": "css/css-flexbox/align-baseline.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-baseline-ref.html",
+          "path": "css/css-flexbox/reference/align-baseline-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content-wrap-004.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-content_center.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_center-ref.html",
+          "path": "css/css-flexbox/reference/align-content_center-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content_flex-end.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_flex-end-ref.html",
+          "path": "css/css-flexbox/reference/align-content_flex-end-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content_flex-start.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_flex-start-ref.html",
+          "path": "css/css-flexbox/reference/align-content_flex-start-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content_space-around.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_space-around-ref.html",
+          "path": "css/css-flexbox/reference/align-content_space-around-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content_space-between.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_space-between-ref.html",
+          "path": "css/css-flexbox/reference/align-content_space-between-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-content_stretch.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content_stretch-ref.html",
+          "path": "css/css-flexbox/reference/align-content_stretch-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": []
+    },
+    {
+      "path": "css/css-flexbox/align-items-006.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-content-001-ref.html",
+          "path": "css/css-flexbox/reference/align-content-001-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "Ahem font required; downloadable/custom font selection is not implemented by this static adapter"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-items-007.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-items-008.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "script execution required by test or reference",
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-items-009.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square-only.html",
+          "path": "css/reference/ref-filled-green-100px-square-only.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "Ahem font required; downloadable/custom font selection is not implemented by this static adapter"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-items-baseline-overflow-non-visible.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "reference/align-items-baseline-overflow-non-visible-ref.html",
+          "path": "css/css-flexbox/reference/align-items-baseline-overflow-non-visible-ref.html"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "Ahem font required; downloadable/custom font selection is not implemented by this static adapter"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-001.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-002.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-003.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-004.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-005.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-007.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-008.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-009.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-011.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-012.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/align-self-013.html",
+      "references": [
+        {
+          "relation": "==",
+          "href": "../reference/ref-filled-green-100px-square.xht",
+          "path": "css/reference/ref-filled-green-100px-square.xht"
+        }
+      ],
+      "flags": [],
+      "unsupported_reasons": [
+        "XHTML reference requires XML parsing, which this static adapter does not implement"
+      ]
+    }
+  ]
+}

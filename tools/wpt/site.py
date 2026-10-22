@@ -74,7 +74,7 @@ def render(score):
         f'<p>Fail: {counts["FAIL"]} · Unsupported: {counts["UNSUPPORTED"]} · '
         f'Errors: {counts["ERROR"]} · Timeouts: {counts["TIMEOUT"]} · '
         f'Crashes: {counts["CRASH"]}.</p>\n'
-        '<p class="muted">A pinned static-reftest pilot using the real Rust browser '
+        '<p class="muted">A pinned flexbox reftest selection using the real Rust browser '
         'navigation, resource and rendering path. This is a selected subset, not '
         'the full Web Platform Tests suite or JavaScript testharness coverage. '
         'These are current-source measurements, not a score for the installed release.</p>\n'

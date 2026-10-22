@@ -4,16 +4,16 @@ The goal is to increase **verified Web Platform Tests passes** while preserving
 existing browser, worker, resource and security assertions. The first increment
 is an honest baseline and regression gate, not a claim of broad web compatibility.
 
-Mg runs a pinned static-reftest pilot from the upstream
+Mg runs a pinned flexbox reftest selection from the upstream
 [Web Platform Tests repository](https://github.com/web-platform-tests/wpt).
 This is not `wptrunner`, WebDriver, a full WPT product integration, or a
 `testharness.js` executor. Test tooling does not change the shipped browser.
 
-## Fixed selection and baseline
+## Original pilot and release history
 
 The input revision is
 [`84daed4ae966d9624bed22f43587c79283ad1fea`](https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea).
-[The manifest](../tools/wpt/corpus.json) fixes the first 24 lexicographically
+[The original manifest](../tools/wpt/baselines/css-flexbox-first-24-v1.corpus.json) fixes the first 24 lexicographically
 ordered top-level `css/css-flexbox/*.html` files having a `rel=match` or
 `rel=mismatch` reference. The selection was made before rendering, with no filter
 for known passes, scripts, flags or reference requirements. The cutoff is
@@ -71,10 +71,41 @@ does not rewrite assertions, turn XHTML into HTML, remove unsupported scripts,
 or substitute a different font for Ahem. Corpus updates need a separate reviewed
 change and a new baseline, not an edit hidden inside a scored implementation fix.
 
-Upstream tests retain their [BSD-3-Clause license](../tools/wpt/upstream/LICENSE.md).
-The included unmodified Ahem font retains its embedded public-domain/CC0 notice;
-the manifest records that exception. The project's Apache-2.0 license does not
+The upstream [BSD-3-Clause license](../tools/wpt/upstream/LICENSE.md) and
+per-file notices are preserved. Many test documents have their own embedded
+public-domain/CC0 notices. The included unmodified Ahem font also retains its
+embedded public-domain/CC0 notice; the manifest records that binary exception.
+The project's Apache-2.0 license does not
 replace third-party notices. These fixtures are not shipped in browser archives.
+
+## Complete pinned flexbox selection
+
+The separate [expansion policy](WPT_EXPANSION.md) freezes the complete recursive
+`css/css-flexbox` markup reftest selection before browser execution: **1,011 tests**
+at the same upstream revision. All 2,042 files in that directory and their static
+dependency/license closure are imported unchanged: 2,062 files / 3,332,952 bytes.
+The manifest preserves original relation/href data, explicit unsupported edges
+and the source-derived roster digest. Flags, scripts and unsupported protocols
+do not exclude tests from this denominator.
+
+The original 24-case corpus and pass/support ratchet are separately retained in
+`tools/wpt/baselines/`. Both their exact bytes and every old required pass/support
+entry remain enforced. The larger selection is a measurement expansion, not
+evidence of a browser improvement or full WPT support. The production engine is
+unchanged from v0.9.6 for this baseline.
+
+The accepted complete baseline is **317 PASS, 632 FAIL and 62 UNSUPPORTED out
+of 1,011**, with **0 ERROR, TIMEOUT or CRASH**. All original 24 tests still pass.
+Manual review strengthened the active ratchet to all 317 passes and all 949
+runnable cases. The full report retains failure reasons and per-page evidence;
+conservative diagnostic/viewport precondition failures are not all proven pixel
+bugs. Broader coverage exposes existing gaps rather than reducing compatibility.
+
+Two stylesheet references are demonstrably absent from the pinned upstream
+directory. Their dependent cases remain visible FAIL outcomes, not invented
+resources, dropped cases or unsupported protocols. Missing/changed inventoried
+files are still infrastructure errors. See the import review for the exact
+paths and source-only evidence.
 
 ## What executes
 
@@ -88,7 +119,8 @@ process for each unique test or reference page:
    worker and explicit `--enable-scripts` admission.
 2. Navigate normally, including the production parser and CSS/image resource
    loader, at an 800 × 600 logical-pixel viewport and scale 1.
-3. Save the actual `Browser::paint` PNG and exact packed RGB bytes.
+3. Save the actual `Browser::paint` PNG and exact packed RGB bytes, then store
+   RGB losslessly compressed after a verified round trip.
 4. Re-render that loaded document with the same font and viewport to collect
    existing style/layout diagnostics. Require pixel equality with the actual
    browser paint before using those diagnostics.
@@ -109,6 +141,11 @@ known foreground/background pixels must be correct. Equality and inequality
 must behave consistently. These controls are excluded from WPT counts.
 Uniform output is not accepted as a pilot pass: legitimate uniform references
 need a separately reviewed precondition before entering a supported lane.
+PASS additionally requires an empty rendering-diagnostic list and zero omitted
+diagnostics on both the test and every reference. Any nonempty diagnostic kind
+is a conservative FAIL, including unknown future kinds. This deliberately goes
+beyond pixel equality: intentional-invalid-CSS cases may undercount until their
+protocol is separately reviewed. No case-specific exemptions are used.
 Missing resources, fallback rendering or absent/wrong-size artifacts cannot
 silently pass because two pages produced the same empty or fallback image.
 
@@ -131,17 +168,35 @@ Every selected test has exactly one visible outcome:
 | `CRASH` | The renderer process terminated by a signal. |
 
 Missing prerequisites remain visible, with reasons, rather than disappearing
-from the denominator. The current adapter supports static XML/XHTML, bounded
+from the denominator. The current adapter supports static HTML/XHTML (including
+XML markup served as XHTML), bounded
 font resources and inline HTML setup. It rejects external/module/XML script
 setup, event-handler attributes, `reftest-wait`, CSS imports, fuzzy or timing metadata,
 animation/transitions, WPT server substitutions, responsive-image setup and
-unsupported embedded-resource protocols. Overflow/scrollbar-dependent results
+unsupported embedded-resource protocols. Top-level SVG/generic XML navigation
+is rejected rather than allowing identical generic resource placeholders to pass.
+Overflow/scrollbar-dependent results
 are outside this viewport-only pilot. No JavaScript conformance, WebDriver,
 general CSS, account workflow or live-site compatibility follows from a pass.
 
 Page navigation has a 35-second inner deadline; the runner has a 45-second
-subprocess deadline that also bounds painting. Partial reports are written as
-tests finish. Errors, timeouts, crashes, missing requests or changed evaluated
+subprocess deadline that also bounds painting. The complete run, including the
+unchanged 20-minute build allowance, has a 25-minute controlled-work deadline;
+a final bounded evidence flush is allowed after a failure/deadline so partial
+results are not lost. This is not an OS kill at precisely 25 minutes. Inputs remain
+under 10 MiB and 4,096 files; evidence is admitted under 512 MiB, reports under
+64 MiB, and request audits under 20,000 entries. Per-page log/metadata/PNG caps
+are 1/1/8 MiB; RGB is exactly 1,440,000 bytes before lossless compression.
+Cargo stdout/stderr share a separate 32 MiB allowance. These are runner admission
+and monitoring controls, not filesystem quotas or production browser limits.
+
+Report schema 2 keeps one full record per unique page in `pages`, with thin
+references from individual test results. Periodic atomic checkpoints retain
+every selected test, including PENDING cases on interruption. PENDING cannot be
+published as a completed score. The deterministic website summary stays schema 1.
+Known admitted script/navigation failures are FAIL; malformed/opaque host or
+artifact failures remain ERROR. Failed rendering geometry never becomes
+UNSUPPORTED after execution. Errors, timeouts, crashes, missing requests or changed evaluated
 source invalidate the overall gate. Existing production navigation, rendering,
 allocation and worker limits remain unchanged. Supported script setup runs only
 through the reviewed restricted child process.
@@ -149,7 +204,14 @@ through the reviewed restricted child process.
 This is trusted, reviewed, pinned test infrastructure, not a sandbox for arbitrary
 web content. Loopback URL checks and a cleared child environment do not provide
 OS network isolation. Do not point it at live sites, unreviewed user content or
-access challenges. Future script/testharness work must use the reviewed restricted
+access challenges. Source preflight rejects meta-refresh navigation; an
+adapter-only script service rejects proposed navigation, default navigation
+actions and refresh-bearing snapshots before Chassis can act on them. This
+conservative protocol policy also rejects inert/detached refresh nodes; it is
+not a production browser restriction or a general untrusted-source sandbox.
+Owned process groups are killed on completion, timeout or output overflow; the
+runner reaps its direct process, not grandchildren owned by another parent.
+Future script/testharness work must use the reviewed restricted
 worker path and preserve its assertions; adopting a new resource profile requires
 an explicit review.
 
@@ -170,7 +232,7 @@ git diff --check
 
 Replace `UNIQUE` with a new run name each time. The output directory must not
 already exist: stale screenshots are never reused or overwritten. Keep raw
-logs, screenshots and RGB bytes under ignored `tmp/`. `--font` selects an explicit
+logs, screenshots and compressed RGB evidence under ignored `tmp/`. `--font` selects an explicit
 font path for diagnostics; its hash remains in the report. Every runner invocation
 checks Rust 1.91.1 and builds the locked adapter from current source before
 rendering, with a 20-minute build deadline. It uses the executable reported by
@@ -188,7 +250,8 @@ acceptance of weaker expectations.
 
 The source fingerprint hashes evaluated browser/build/adapter/runner file
 contents, not `HEAD`: including the commit containing the score would create a
-circular identity. The runtime report separately records the exact tested Git
+circular identity. It includes runtime Python helpers as well as the runner.
+The runtime report separately records the exact tested Git
 commit and dirty state. Documentation-only commits can retain the same source
 fingerprint while getting a fresh exact-commit report.
 
@@ -202,6 +265,11 @@ user-visible browser change still follows the normal release and public-installe
 verification policy.
 
 ## Maximize verified coverage
+
+The next genuine JavaScript lane is planned in
+[WPT_TESTHARNESS.md](WPT_TESTHARNESS.md). Its first milestone is non-scoring
+full-harness readiness under unchanged restrictions, not another scored corpus
+or a claim that the current browser already implements it.
 
 1. Establish this truthful frozen baseline and keep website results current.
 2. Diagnose failing supported cases using their original sources, screenshots

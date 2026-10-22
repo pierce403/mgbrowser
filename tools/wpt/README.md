@@ -1,6 +1,6 @@
-# Pinned static WPT pilot
+# Pinned flexbox WPT reftests
 
-This directory holds a small, reproducible upstream Web Platform Tests baseline.
+This directory holds a reproducible upstream Web Platform Tests baseline.
 It uses the real Rust Chassis browser and preserves upstream test bytes. It is
 not full `wptrunner`, WebDriver or JavaScript `testharness.js` support.
 
@@ -8,11 +8,14 @@ See [the method, limitations and improvement plan](../../docs/WPT.md).
 
 ## Files
 
-- `corpus.json`: pinned revision, mechanical 24-test selection, reference edges,
+- `corpus.json`: pinned revision, complete recursive 1,011-test selection, reference edges,
   byte/hash inventory and license notes.
+- `baselines/`: immutable original 24-test corpus and required pass/support sets.
+- `import_corpus.py`: source-only pinned Git-tree/blob importer and shared source parser.
 - `upstream/`: unchanged selected tests, references, support files and licenses.
 - `run.py`: static prerequisite checks, loopback serving, real renderer processes,
   control checks, exact pixel comparisons, reports and regression gates.
+- `process_control.py`: owned process groups, deadlines, bounded output and artifact reads.
 - `expectations.json`: explicitly reviewed required passes and supported tests.
 - `score.json`: deterministic current result summary used by the website.
 - `site.py`: strict score validation and generated website section.
@@ -39,11 +42,32 @@ command. The browser renderer stays Rust-only. `--font` allows an explicit
 diagnostic override; reports retain its hash. The runner verifies Rust 1.91.1 and
 rebuilds the locked adapter every time, even when a binary already exists.
 
-Inspect `report.json`, test/reference PNGs, raw RGB files and page logs in the
+Inspect `report.json`, test/reference PNGs, lossless `.rgb.gz` files and page logs in the
 output directory. Every test stays in the denominator, including unsupported
-ones. The first completed baseline is **6 PASS, 1 FAIL, 17 UNSUPPORTED / 24**,
-without errors, timeouts or crashes. The failing baseline-alignment test reports
-a real layout fallback, which is not accepted as a pass.
+ones. Report schema 2 stores full evidence once in `pages`, with references from
+each result. Partial reports retain the full selection and PENDING outcomes;
+PENDING is never a completed score. The deterministic website summary remains
+schema 1. The original pilot began at 6 PASS / 1 FAIL / 17 UNSUPPORTED and reached
+24 PASS; all original passing/runnable requirements are still enforced.
+
+## Reproduce the import without rendering
+
+```sh
+python3 tools/wpt/import_corpus.py --output-dir tmp/wpt-import-UNIQUE
+```
+
+The online provider uses the normal configured GitHub CLI credentials. For a
+local WPT Git repository containing the pinned commit, add
+`--source-checkout /path/to/wpt`; it reads committed Git objects, not modified
+checkout files. `--cache-dir tmp/wpt-blob-cache` optionally reuses only verified
+Git blobs. The importer never runs the browser or reads observed outcomes.
+Compare its manifest and inventory against the tracked corpus before adopting
+a change. Do not copy a new baseline automatically.
+
+The complete flexbox tree and dependency/license closure contain 2,062 files /
+3,332,952 bytes. The reviewed import exceptions record two stylesheets absent
+from upstream; dependent cases remain FAIL, with no fabricated files. Input,
+process and evidence caps are recorded in [the expansion review](../../docs/WPT_EXPANSION.md).
 
 Never hand-edit upstream files, remove failing cases, change pixel tolerances or
 automatically bless weaker expectations to improve the score. `--update-score`

@@ -4,8 +4,9 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
-- `docs/WPT.md`: pinned upstream static-reftest pilot, source-linked score,
-  regression ratchet and every-commit website measurement policy. Broader WPT
+- `docs/WPT.md` and `docs/WPT_EXPANSION.md`: complete pinned 1,011-case flexbox
+  reftest selection, immutable original 24-case ratchet, source-linked score,
+  diagnostic-free pass prerequisites and every-commit website measurement policy. Broader WPT
   support remains open; selected static pixels are not JavaScript conformance.
 
 - `docs/APPEARANCE.md`: System/Light/Dark browser controls, persistent XDG

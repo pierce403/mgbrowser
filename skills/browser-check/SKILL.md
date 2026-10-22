@@ -5,7 +5,7 @@ description: Validate mgbrowser transport, document, paint and native interactio
 
 # Browser check
 
-For every commit, follow docs/WPT.md: run the pinned static pilot into a new
+For every commit, follow docs/WPT.md: run the entire pinned reftest selection into a new
 ignored directory with tools/wpt/run.py --update-score, review its full result,
 then regenerate tmp/site and include the deterministic score and page. The
 runner rebuilds the Rust adapter; do not substitute an old executable. Preserve
@@ -14,6 +14,20 @@ changes. XML, fonts, scripting and other unsupported prerequisites stay visible
 in the denominator. Never count harness controls or readable fallback as WPT
 passes. Pages reruns --check-score on the exact commit, including docs-only work.
 This headless Browser lane does not replace native/public-release acceptance.
+Every PASS page/reference must have an empty rendering-diagnostic list and zero
+omissions as well as all existing replay/resource/viewport/pixel guards. A
+nonempty diagnostic is a conservative FAIL, not a post-render UNSUPPORTED escape
+or permission for a case-specific exemption. Opaque host/artifact failures stay
+ERROR; completed=false or PENDING evidence cannot update the tracked score.
+Corpus/runner expansions must precede scored engine changes. Preserve the
+immutable original 24-test manifest/ratchet as well as the expanded required
+pass/support sets. Freeze a source-derived roster before running the browser;
+never filter by observed failures. Retain full selected/PENDING totals on an
+interrupted run, but never accept PENDING as a completed score. Check the
+documented process, input and evidence bounds and all runtime helper hashes.
+The report stores each unique page once; inspect its lossless RGB/PNG/log and
+typed failure record before accepting new passes. No source navigation or
+script-proposed navigation may escape the local test-server lane.
 
 For JSPLAN engine research, also read `experiments/jsplan/README.md` and
 `docs/jsplan/RESULTS.md`. Keep the experiment's workspace/lockfile separate from
