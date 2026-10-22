@@ -29,6 +29,9 @@ pub struct Response {
     pub status: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    /// Parent resource proof only: every visited URL stayed on the supplied
+    /// document origin. False for non-resource/unknown provenance.
+    pub resource_same_origin_chain: bool,
 }
 
 /// Shared, memory-only browser session. Clones share the same bounded cookie jar.
@@ -200,6 +203,9 @@ fn submit_with_limits_progress(
     // downgrades to the same-origin HTTP exception once visited.
     let mut credentials_allowed = true;
     let mut visited_https = false;
+    // This resource proof is independent of cookie permission. Once a hop
+    // leaves the accepted document origin, a later return cannot upgrade it.
+    let mut resource_same_origin_chain = limits.origin.is_some();
     for redirects in 0..=MAX_REDIRECTS {
         validate_url(&url)?;
         if limits.https_only && url.scheme() != "https" {
@@ -207,6 +213,7 @@ fn submit_with_limits_progress(
         }
         if let Some(origin) = &limits.origin {
             let same_origin = origin.origin() == url.origin();
+            resource_same_origin_chain &= same_origin;
             match limits.resource_kind {
                 ResourceKind::Stylesheet if !same_origin => {
                     return Err(
@@ -290,6 +297,7 @@ fn submit_with_limits_progress(
             status: head.status,
             content_type,
             body: bytes,
+            resource_same_origin_chain,
         });
     }
     unreachable!("bounded redirect loop always returns")
@@ -1189,6 +1197,10 @@ mod tests {
         assert_eq!(response.url.path(), "/result");
         assert_eq!(response.url.query(), Some("q=rust"));
         assert_eq!(response.body, b"Rust");
+        assert!(
+            !response.resource_same_origin_chain,
+            "top-level requests carry no resource-origin proof"
+        );
         let requests = server.join().unwrap();
         assert!(requests[0].starts_with("POST /start HTTP/1.1"));
         assert!(requests[1].starts_with("GET /result?q=rust HTTP/1.1"));
@@ -1526,6 +1538,66 @@ mod tests {
             resource_kind: kind,
             max_body: 512 * 1024,
             deadline: Instant::now() + Duration::from_secs(6),
+        }
+    }
+
+    #[test]
+    fn script_provenance_covers_every_redirect_not_only_the_final_origin() {
+        for chain in [
+            vec![false],
+            vec![false, false],
+            vec![true],
+            vec![false, true],
+            vec![true, false],
+            vec![false, true, false],
+        ] {
+            let (client, tls) = resource_test_tls(true);
+            let local = TcpListener::bind("127.0.0.1:0").unwrap();
+            let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+            let page = format!("https://localhost:{}/", local.local_addr().unwrap().port());
+            let other = format!(
+                "https://localhost:{}/",
+                foreign.local_addr().unwrap().port()
+            );
+            let urls: Vec<_> = chain
+                .iter()
+                .enumerate()
+                .map(|(i, foreign)| format!("{}hop{i}.js", if *foreign { &other } else { &page }))
+                .collect();
+            let (mut local_replies, mut foreign_replies) = (Vec::new(), Vec::new());
+            for (index, foreign) in chain.iter().enumerate() {
+                let reply = if let Some(next) = urls.get(index + 1) {
+                    format!("HTTP/1.1 302 Found\r\nLocation: {next}\r\nContent-Length: 0\r\n\r\n")
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 2\r\n\r\n0;".into()
+                };
+                if *foreign {
+                    foreign_replies.push(reply);
+                } else {
+                    local_replies.push(reply);
+                }
+            }
+            let a = resource_tls_server(local, tls.clone(), local_replies);
+            let b = resource_tls_server(foreign, tls, foreign_replies);
+            let response = submit_with_limits(
+                &urls[0],
+                None,
+                client,
+                &Mutex::new(CookieJar::default()),
+                resource_limits(&page, ResourceKind::Script),
+            )
+            .unwrap();
+            assert_eq!(response.url.as_str(), urls.last().unwrap());
+            assert_eq!(response.body, b"0;");
+            assert_eq!(
+                response.resource_same_origin_chain,
+                !chain.contains(&true),
+                "chain={chain:?}"
+            );
+            assert_eq!(
+                a.join().unwrap().len() + b.join().unwrap().len(),
+                chain.len()
+            );
         }
     }
 

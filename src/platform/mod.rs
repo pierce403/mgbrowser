@@ -6,7 +6,7 @@ pub mod worker_memory;
 
 use mg_chassis::{
     Key,
-    scripts::{ScriptRuntime, ScriptSession, SessionUpdate},
+    scripts::{ScriptRuntime, ScriptSession, SessionUpdate, SourceWireMode},
 };
 use mg_sparkle::{
     js_browser::Request,
@@ -23,6 +23,13 @@ pub struct LinuxScripts {
 }
 
 impl ScriptRuntime for LinuxScripts {
+    fn source_wire_mode(&self) -> SourceWireMode {
+        if script_worker::legacy_test_mode() {
+            SourceWireMode::Legacy
+        } else {
+            SourceWireMode::Modern
+        }
+    }
     fn set_generation(&self, generation: u64) -> Result<(), String> {
         self.pool.set_generation(generation)
     }

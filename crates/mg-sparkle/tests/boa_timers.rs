@@ -136,6 +136,7 @@ fn readiness_precedes_deferred_sources_and_lifecycle_uses_real_paths_and_slots()
         external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
             node,
             source: "order.push('defer:'+document.readyState);".into(),
+            provenance: None,
         }]),
     });
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);

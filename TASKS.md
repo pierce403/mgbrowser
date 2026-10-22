@@ -46,8 +46,10 @@ following dependency order, updating evidence as each increment ships:
    v0.9.6 self-upgrade and public native/CDP acceptance including hidden tabs.
    Fresh static WPT remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011.
    Bundled Init does not finish full queued lifecycle, error/rejection delivery
-   or typed harness reporting. Next: [review trusted script-source provenance
-   and bounded uncaught Window errors](docs/WINDOW_ERRORS.md), then queued rejection delivery. Genuine
+   or typed harness reporting. **Current increment: v0.9.8**, [trusted source
+   provenance and bounded uncaught Window errors](docs/WINDOW_ERRORS.md).
+   Finish its regression, package, exact-commit and public release gates before
+   queued rejection delivery. Genuine
    messaging, queued lifecycle and typed observation remain open; corpus and
    observer/scoring changes require separate frozen review.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

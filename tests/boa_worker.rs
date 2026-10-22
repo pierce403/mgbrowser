@@ -183,6 +183,7 @@ fn actual_worker_accepts_typed_sources_and_never_executes_comment_metadata() {
         url: "https://example.test/owned".into(),
         html: html.into(),
         external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
+            provenance: None,
             node,
             source: "Promise.resolve().then(() => { document.getElementById('status').textContent = shared + ':external'; });".into(),
         }]),
@@ -195,6 +196,124 @@ fn actual_worker_accepts_typed_sources_and_never_executes_comment_metadata() {
     assert_eq!(reply.scripts_executed, 2);
     assert!(reply.html.contains(">inline:external</p>"));
     assert!(reply.boa.unwrap().fatal_reason.is_none());
+}
+
+#[test]
+fn actual_worker_window_error_keeps_identity_cancellation_and_host_diagnostic() {
+    let reply = reply(page(
+        "var traps=0,secret={},saved;for(const key of ['message','name','stack'])Object.defineProperty(secret,key,{get(){traps++;throw 'trap';}});secret[Symbol.toPrimitive]=()=>{traps++;throw 'trap';};window.onerror=function(message,file,line,column,error){if(arguments.length!==5||this!==window||error!==secret||file!==''||line!==0||column!==0||traps)throw 'bad property handler';return true;};window.addEventListener('error',function(event){if(event.error!==secret||event.target!==window||event.currentTarget!==window||event.eventPhase!==2||event.bubbles||!event.cancelable||!event.defaultPrevented||traps)throw 'bad native event';saved=event;});window.onload=()=>{if(saved.currentTarget!==null||saved.eventPhase!==0||saved.error!==secret||traps)throw 'bad escaped event';document.getElementById('status').textContent='owned error identity';};throw secret;",
+    ));
+    assert!(reply.applied);
+    assert!(reply.html.contains(">owned error identity</p>"));
+    assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+    assert!(reply.errors[0].contains("JavaScript threw a value (not coerced by the host)"));
+    let report = reply.boa.unwrap();
+    assert!(report.fatal_reason.is_none());
+    assert_eq!(report.pending_jobs, 0);
+}
+
+#[test]
+fn actual_worker_precomputes_external_error_floor_before_earlier_inline_throw() {
+    use mg_sparkle::js_browser::{
+        ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource,
+    };
+    for visibility in [
+        None,
+        Some(ClassicErrorVisibility::Muted),
+        Some(ClassicErrorVisibility::SameOrigin),
+    ] {
+        let local = visibility == Some(ClassicErrorVisibility::SameOrigin);
+        let html = "<p id=status>readable fallback</p><script>var secret={};window.onerror=function(message,file,line,column,error){document.getElementById('status').textContent=(error===secret?'local':(error===null&&message==='Script error.'?'muted':'bad'))+':'+file+':'+line+':'+column;return true;};throw secret;</script><script id=external defer src=/owned.js></script>";
+        let document =
+            mg_sparkle::document::parse_with_scripting(html, "https://example.test/owned", true);
+        let request = Request {
+            url: "https://example.test/owned".into(),
+            html: html.into(),
+            external_scripts: Some(vec![ExternalScriptSource {
+                node: document.query_selector(0, "#external").unwrap().unwrap(),
+                source: "var later=true;".into(),
+                provenance: visibility.map(|error_visibility| ClassicSourceProvenance {
+                    response_url: if local {
+                        "https://example.test/owned.js"
+                    } else {
+                        "https://foreign.test/owned.js"
+                    }
+                    .into(),
+                    error_visibility,
+                }),
+            }]),
+        };
+        let reply = reply(run(
+            &["--script-worker"],
+            &serde_json::to_vec(&request).unwrap(),
+        ));
+        assert!(
+            reply.html.contains(if local {
+                ">local::0:0</p>"
+            } else {
+                ">muted::0:0</p>"
+            }),
+            "{:?}",
+            reply.errors
+        );
+        assert_eq!(reply.errors.len(), 1);
+        // A throwing inline source is diagnosed, not counted as completed.
+        assert_eq!(reply.scripts_executed, 1);
+        assert!(reply.boa.unwrap().fatal_reason.is_none());
+    }
+}
+
+#[test]
+fn actual_worker_dynamic_floor_is_sticky_but_fatal_limits_never_call_error_handlers() {
+    for dynamic in [
+        "eval('1')",
+        "eval('var =')",
+        "Function('return 1')",
+        "Function('var =')",
+    ] {
+        let reply = reply(page(&format!(
+            "var secret={{}};window.onerror=(message,file,line,column,error)=>{{if(message!=='Script error.'||error!==null)throw 'exposed';document.getElementById('status').textContent='dynamic muted';return true;}};try{{{dynamic};}}catch(ignored){{}}throw secret;"
+        )));
+        assert!(
+            reply.html.contains(">dynamic muted</p>"),
+            "{dynamic}: {:?}",
+            reply.errors
+        );
+        assert_eq!(reply.errors.len(), 1);
+        assert!(reply.boa.unwrap().fatal_reason.is_none());
+    }
+    let reply = reply(page(
+        "window.onerror=()=>{document.getElementById('status').textContent='reporter ran';return true;};while(true){}",
+    ));
+    fatal(&reply);
+    assert!(!reply.html.contains(">reporter ran</p>"));
+}
+
+#[test]
+fn actual_worker_rejects_contradictory_provenance_before_any_javascript() {
+    let html = "<p id=status>readable fallback</p><script>document.getElementById('status').textContent='MUST_NOT_RUN';</script><script id=external src=/owned.js></script>";
+    let parsed =
+        mg_sparkle::document::parse_with_scripting(html, "https://example.test/owned", true);
+    let request = serde_json::json!({
+        "url":"https://example.test/owned", "html":html, "external_scripts":[{
+            "node":parsed.query_selector(0, "#external").unwrap().unwrap(),
+            "source":"throw 'MUST_NOT_RUN'", "provenance":{
+                "response_url":"https://foreign.test/script.js", "error_visibility":"same-origin"
+            }
+        }]
+    });
+    let (status, stdout, stderr) =
+        run(&["--script-worker"], &serde_json::to_vec(&request).unwrap());
+    assert!(status.success(), "{status}: {stdout}\n{stderr}");
+    assert!(stderr.is_empty());
+    let rejected: Reply = serde_json::from_str(&stdout).unwrap();
+    assert!(!rejected.applied);
+    assert!(rejected.boa.is_none(), "rejected before engine creation");
+    assert_eq!(rejected.scripts_executed, 0);
+    assert!(rejected.navigation.is_none());
+    assert_eq!(rejected.html, html);
+    assert_eq!(rejected.errors.len(), 1);
+    assert!(rejected.errors[0].contains("contradictory classic source provenance"));
 }
 
 #[test]

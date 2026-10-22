@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -37,20 +37,72 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RequestFrame {
+struct RequestFrame<I = Request, E = SessionInput, T = TaskPump> {
     version: u8,
     generation: u64,
     session_id: u64,
     sequence: u64,
     expected_revision: u64,
-    command: FrameCommand,
+    command: FrameCommand<I, E, T>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", deny_unknown_fields)]
-enum FrameCommand {
-    Init(Request),
-    Event(SessionInput),
-    TaskPump(TaskPump),
+enum FrameCommand<I = Request, E = SessionInput, T = TaskPump> {
+    Init(I),
+    Event(E),
+    TaskPump(T),
+}
+
+/// The executable's trusted lane chooses the decoder, never a wire field.
+/// A legacy payload keeps its original strict shape, including unknown-field
+/// rejection, while conversion moves strings without a Value tree or reparse.
+fn decode_request_frame(payload: &[u8], legacy: bool) -> Result<RequestFrame, String> {
+    if legacy {
+        let frame: RequestFrame<mg_sparkle::js_browser::LegacyRequest> =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        Ok(RequestFrame {
+            version: frame.version,
+            generation: frame.generation,
+            session_id: frame.session_id,
+            sequence: frame.sequence,
+            expected_revision: frame.expected_revision,
+            command: match frame.command {
+                FrameCommand::Init(request) => FrameCommand::Init(request.into()),
+                FrameCommand::Event(input) => FrameCommand::Event(input),
+                FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+            },
+        })
+    } else {
+        serde_json::from_slice(payload).map_err(|error| error.to_string())
+    }
+}
+
+fn encode_request_frame(
+    frame: &RequestFrame,
+    legacy: bool,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    if !legacy {
+        return encode(frame, limit);
+    }
+    // Borrow sources, edits and pumps. Counting and transmission use the same
+    // view; no modern-only provenance can change old v1 bytes or renew a budget.
+    let command = match &frame.command {
+        FrameCommand::Init(request) => FrameCommand::Init(request.legacy_wire_view()),
+        FrameCommand::Event(input) => FrameCommand::Event(input),
+        FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+    };
+    encode(
+        &RequestFrame {
+            version: frame.version,
+            generation: frame.generation,
+            session_id: frame.session_id,
+            sequence: frame.sequence,
+            expected_revision: frame.expected_revision,
+            command,
+        },
+        limit,
+    )
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -524,7 +576,7 @@ impl Worker {
         } else {
             MAX_EVENT_BYTES
         };
-        let input = encode(request, limit)
+        let input = encode_request_frame(request, self.legacy, limit)
             .map_err(|error| format!("Script-session request rejected: {error}"))?;
         if input.len().saturating_add(4) > WIRE_LIMIT.saturating_sub(self.wire) {
             return Err("Script session exceeded its 32 MiB combined wire limit".into());
@@ -1157,8 +1209,7 @@ fn child_loop_for(
     let Some(payload) = read_frame(reader, &mut wire, INPUT_LIMIT)? else {
         return Err("Session initialization missing".into());
     };
-    let request: RequestFrame =
-        serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+    let request = decode_request_frame(&payload, legacy)?;
     if request.version != version
         || request.sequence != 0
         || request.expected_revision != 0
@@ -1192,8 +1243,7 @@ fn child_loop_for(
         let Some(payload) = read_frame(reader, &mut wire, MAX_EVENT_BYTES)? else {
             return Ok(());
         };
-        let event: RequestFrame =
-            serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+        let event = decode_request_frame(&payload, legacy)?;
         if event.version != version
             || event.generation != request.generation
             || event.session_id != request.session_id
@@ -1711,6 +1761,149 @@ mod tests {
             frame[field] = serde_json::json!(99);
             let frame: ReplyFrame = serde_json::from_value(frame).unwrap();
             assert!(validate_reply(&request, &frame).is_err(), "{field}");
+        }
+    }
+    #[test]
+    fn provenance_modern_session_uses_v4_and_rejects_v3_before_execution() {
+        assert_eq!(VERSION, 4);
+        let mut initial = request(0);
+        initial.version = 3;
+        let mut input = Vec::new();
+        write_frame(&mut input, &initial, &mut 0).unwrap();
+        let mut output = Vec::new();
+        assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
+        assert!(
+            output.is_empty(),
+            "old modern frames must execute no source"
+        );
+    }
+    #[test]
+    fn provenance_modern_v4_accepts_old_absent_metadata_request_shape() {
+        let mut initial = request(0);
+        initial.version = 4;
+        let mut input = Vec::new();
+        write_frame(&mut input, &initial, &mut 0).unwrap();
+        let mut output = Vec::new();
+        child_loop_for(&mut Cursor::new(input), &mut output, false).unwrap();
+        let bytes = read_frame(&mut Cursor::new(output), &mut 0, OUTPUT_LIMIT)
+            .unwrap()
+            .unwrap();
+        let reply: ReplyFrame = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(reply.version, 4);
+        assert_eq!(reply.reply.state, RealmState::Ready);
+    }
+    #[test]
+    fn provenance_modern_v4_rejects_later_v3_events_and_task_pumps_without_replies() {
+        for task in [false, true] {
+            let mut initial = request(0);
+            initial.version = 4;
+            let FrameCommand::Init(page) = &mut initial.command else {
+                unreachable!()
+            };
+            page.html = "<p id=o></p><script>window.onclick=()=>{document.getElementById('o').textContent='RAN';};setTimeout(()=>{document.getElementById('o').textContent='RAN';},0);</script>".into();
+            let mut later = request(1);
+            later.version = 3;
+            if task {
+                later.command = FrameCommand::TaskPump(TaskPump { wake_token: 1 });
+            }
+            let mut input = Vec::new();
+            write_frame(&mut input, &initial, &mut 0).unwrap();
+            write_frame(&mut input, &later, &mut 0).unwrap();
+            let mut output = Vec::new();
+            assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
+            let mut cursor = Cursor::new(output);
+            let first = read_frame(&mut cursor, &mut 0, OUTPUT_LIMIT)
+                .unwrap()
+                .unwrap();
+            let first: ReplyFrame = serde_json::from_slice(&first).unwrap();
+            assert_eq!(first.version, 4);
+            assert_eq!(first.reply.state, RealmState::Ready);
+            assert_eq!(first.reply.boa.unwrap().pending_jobs, 1);
+            assert!(
+                read_frame(&mut cursor, &mut 0, OUTPUT_LIMIT)
+                    .unwrap()
+                    .is_none(),
+                "old-version commands must not execute or emit another reply"
+            );
+        }
+    }
+    #[test]
+    fn provenance_legacy_init_rejects_new_metadata_including_null_before_execution() {
+        for provenance in [
+            serde_json::Value::Null,
+            serde_json::json!({
+                "response_url":"https://example.test/script.js",
+                "error_visibility":"same-origin"
+            }),
+        ] {
+            let mut initial = serde_json::to_value(request(0)).unwrap();
+            initial["command"]["payload"]["html"] =
+                serde_json::json!("<script src='/script.js'></script>");
+            initial["command"]["payload"]["external_scripts"] = serde_json::json!([{
+                "node":1,"source":"throw 'MUST_NOT_RUN'","provenance":provenance
+            }]);
+            let mut input = Vec::new();
+            write_frame(&mut input, &initial, &mut 0).unwrap();
+            let mut output = Vec::new();
+            assert!(child_loop_for(&mut Cursor::new(input), &mut output, true).is_err());
+            assert!(
+                output.is_empty(),
+                "legacy provenance must reject before Init"
+            );
+        }
+    }
+    #[test]
+    fn provenance_selected_legacy_frame_encoding_keeps_old_bytes_and_strict_ingress() {
+        let mut value = serde_json::to_value(request(0)).unwrap();
+        value["command"]["payload"]["html"] = serde_json::json!("<script src='/s.js'></script>");
+        value["command"]["payload"]["external_scripts"] = serde_json::json!([{
+            "node":1,"source":"'owned \\ café'","provenance":{
+                "response_url":"https://example.test/s.js?escaped=\"",
+                "error_visibility":"same-origin"
+            }
+        }]);
+        let frame: RequestFrame = serde_json::from_value(value.clone()).unwrap();
+        let modern = encode_request_frame(&frame, false, INPUT_LIMIT).unwrap();
+        assert!(decode_request_frame(&modern, true).is_err());
+        value["command"]["payload"]["external_scripts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("provenance");
+        // Derive the frozen old field order from the original frame shape,
+        // not Value's sorted object order.
+        let old: RequestFrame = serde_json::from_value(value).unwrap();
+        let expected = encode(&old, INPUT_LIMIT).unwrap();
+        let actual = encode_request_frame(&frame, true, INPUT_LIMIT).unwrap();
+        assert_eq!(actual, expected);
+        let golden = r#"{"version":1,"generation":7,"session_id":8,"sequence":0,"expected_revision":0,"command":{"kind":"Init","payload":{"url":"https://example.test/","html":"<script src='/s.js'></script>","external_scripts":[{"node":1,"source":"'owned \\ café'"}]}}}"#;
+        assert_eq!(
+            actual,
+            golden.as_bytes(),
+            "frozen old external-source field order/escaping"
+        );
+        assert_eq!(
+            encode_request_frame(&frame, true, actual.len()).unwrap(),
+            actual
+        );
+        assert!(encode_request_frame(&frame, true, actual.len() - 1).is_err());
+        assert!(encode_request_frame(&frame, false, actual.len()).is_err());
+        let decoded = decode_request_frame(&actual, true).unwrap();
+        let FrameCommand::Init(legacy_request) = decoded.command else {
+            unreachable!()
+        };
+        let source = &legacy_request.external_scripts.unwrap()[0];
+        assert!(source.provenance.is_none());
+        assert_eq!(source.source, "'owned \\ café'");
+        for sources in [None, Some(Vec::new())] {
+            let mut frame = request(0);
+            let FrameCommand::Init(initial) = &mut frame.command else {
+                unreachable!()
+            };
+            initial.external_scripts = sources;
+            assert_eq!(
+                encode_request_frame(&frame, true, INPUT_LIMIT).unwrap(),
+                encode(&frame, INPUT_LIMIT).unwrap()
+            );
         }
     }
     #[test]

@@ -488,6 +488,17 @@ packaged and public installation, actual v0.9.6 self-upgrade, and public native/
 acceptance including hidden-tab task completion pass; receipts are in the
 2026-10-21 work log. This increment does not complete F-016 or Window readiness.
 
+v0.9.8 adds bounded native Window error dispatch and five-argument `onerror`,
+GC-traced exception retention, recursion protection and diagnostics surviving
+cancellation. Parent-supplied whole-redirect-chain provenance and a sticky
+realm-wide floor conservatively mute all errors after foreign/unknown sources
+or dynamic string compilation. Locations remain unknown rather than fabricated.
+Modern v4 rejects old v3 sessions; explicit legacy v1 encoding/admission remains
+unchanged. No quotas, syscall authority or third-party graph are expanded.
+See [contract and acceptance](docs/WINDOW_ERRORS.md) and the 2026-10-22 log for
+local and publication gates. Rejection notification, messaging, queued lifecycle,
+typed harness results and the wider unchecked F-016 criteria remain open.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable
@@ -789,7 +800,8 @@ fail closed. This is not general ECMAScript/browser conformance. The original
 evaluator remains an explicit test baseline, not a production fallback. Broader
 events, string timers, intervals and modules remain unsupported. F-016 records
 the bounded classic external-source increment and its v0.9.6 acceptance/release
-evidence, plus the shipped v0.9.7 function-timer increment.
+evidence, the shipped v0.9.7 function-timer increment and v0.9.8 bounded
+Window-error/provenance controls.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 

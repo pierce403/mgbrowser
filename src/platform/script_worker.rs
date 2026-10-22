@@ -25,7 +25,7 @@ pub fn use_legacy_for_tests() {
     LEGACY_TEST_MODE.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-fn legacy_test_mode() -> bool {
+pub(super) fn legacy_test_mode() -> bool {
     #[cfg(feature = "legacy-test-engine")]
     return LEGACY_TEST_MODE.load(std::sync::atomic::Ordering::SeqCst);
     #[cfg(not(feature = "legacy-test-engine"))]
@@ -109,7 +109,12 @@ mod linux {
     /// The deadline includes encoding, startup, pipe transfer and execution.
     pub fn execute(request: Request) -> Result<Reply, String> {
         let deadline = Instant::now() + WALL_LIMIT;
-        let input = encode(&request, INPUT_LIMIT)
+        let encoded = if super::legacy_test_mode() {
+            encode(&request.legacy_wire_view(), INPUT_LIMIT)
+        } else {
+            encode(&request, INPUT_LIMIT)
+        };
+        let input = encoded
             .map_err(|e| format!("Script-worker request exceeds 2 MiB or is invalid: {e}"))?;
         let outcome = run(&input, None, deadline).map_err(|e| e.message)?;
         if !outcome.status.success() {
@@ -388,7 +393,7 @@ mod linux {
         if bytes.len() > INPUT_LIMIT {
             worker_error("Script-worker request exceeds 2 MiB", REQUEST_EXIT);
         }
-        let request: Request = match serde_json::from_slice(&bytes) {
+        let request = match decode_request(&bytes, legacy) {
             Ok(request) => request,
             Err(error) => worker_error(
                 &format!("Invalid script-worker request: {error}"),
@@ -416,6 +421,14 @@ mod linux {
             std::process::exit(REQUEST_EXIT);
         }
         std::process::exit(0)
+    }
+
+    fn decode_request(bytes: &[u8], legacy: bool) -> Result<Request, serde_json::Error> {
+        if legacy {
+            serde_json::from_slice::<mg_sparkle::js_browser::LegacyRequest>(bytes).map(Into::into)
+        } else {
+            serde_json::from_slice(bytes)
+        }
     }
     fn worker_error(message: &str, code: i32) -> ! {
         let error = serde_json::json!({"worker_error":message});
@@ -650,6 +663,25 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn provenance_one_shot_legacy_decoder_rejects_even_null_without_reparse() {
+            let absent = br#"{"url":"https://example.test/","html":"<script src='/s.js'></script>","external_scripts":[{"node":1,"source":"1;"}]}"#;
+            assert!(decode_request(absent, true).is_ok());
+            assert!(decode_request(absent, false).is_ok());
+            for provenance in [
+                serde_json::Value::Null,
+                serde_json::json!({
+                    "response_url":"https://example.test/s.js",
+                    "error_visibility":"same-origin"
+                }),
+            ] {
+                let mut value: serde_json::Value = serde_json::from_slice(absent).unwrap();
+                value["external_scripts"][0]["provenance"] = provenance;
+                let bytes = serde_json::to_vec(&value).unwrap();
+                assert!(decode_request(&bytes, true).is_err());
+                assert!(decode_request(&bytes, false).is_ok());
+            }
+        }
         #[test]
         fn serializer_rejects_expansion_without_growing_past_limit() {
             let mut output = LimitedBuffer {

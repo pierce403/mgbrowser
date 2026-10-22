@@ -200,3 +200,12 @@ remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011, with no retained task in
 passing scripted cases. See the [dated receipts](../memory/logs/2026-10-21.md).
 This is only the first increment: full Window readiness still requires the
 remaining services and independently reviewed typed observation above.
+
+The next bounded increment, v0.9.8, implements genuine Window uncaught-error
+dispatch with parent-owned provenance, conservative whole-realm muting, traced
+exception retention and five-argument `onerror`. It deliberately does not guess
+source locations, notify Promise rejections, provide messaging, separate the
+bundled lifecycle into tasks or add a typed testharness observer. See
+[the reviewed error contract](WINDOW_ERRORS.md) and the 2026-10-22 work log for
+authored controls and separate release gates. The pinned scored selection and
+observer/scoring protocol remain unchanged; full readiness is still open.

@@ -7,9 +7,11 @@
 use crate::net::{ResourceKind, Response, Session};
 use mg_sparkle::document::{Document, Node, ResourceData, StylesheetRequest, StylesheetSource};
 use mg_sparkle::js_browser::{
-    ExternalScriptSource, MAX_EXTERNAL_SCRIPTS, MAX_EXTERNAL_SOURCE, MAX_SCRIPTS, MAX_SOURCE,
-    MAX_TYPED_REQUEST_BYTES, classic_script_type, external_request_json_bytes,
-    external_source_json_bytes, unsupported_external_attribute,
+    ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource,
+    MAX_CLASSIC_SOURCE_URL_BYTES, MAX_EXTERNAL_SCRIPTS, MAX_EXTERNAL_SOURCE, MAX_SCRIPTS,
+    MAX_SOURCE, MAX_TYPED_REQUEST_BYTES, SourceWireMode, classic_script_type,
+    external_request_json_bytes, external_source_json_bytes_with_provenance,
+    unsupported_external_attribute,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -321,6 +323,7 @@ pub fn prepare_script_sources(
     page_url: &str,
     cancelled: impl Fn() -> bool,
     resources: &ResourceLoadProfile,
+    mode: SourceWireMode,
 ) -> (Vec<ExternalScriptSource>, ScriptFetchProfile) {
     let started = Instant::now();
     let mut profile = ScriptFetchProfile::default();
@@ -400,10 +403,15 @@ pub fn prepare_script_sources(
         resolved.set_fragment(None);
         let url = resolved.to_string();
         if let Some(&previous) = cache.get(&url) {
-            let source = &entries[previous].source;
-            let additional_wire = external_source_json_bytes(index, source)
-                .unwrap_or(usize::MAX)
-                .saturating_add(usize::from(!entries.is_empty()));
+            let previous = &entries[previous];
+            let source = &previous.source;
+            let additional_wire = external_source_json_bytes_with_provenance(
+                index,
+                source,
+                previous.provenance.as_ref(),
+            )
+            .unwrap_or(usize::MAX)
+            .saturating_add(usize::from(!entries.is_empty()));
             if source.len() > MAX_SOURCE.saturating_sub(source_bytes)
                 || additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes)
             {
@@ -419,11 +427,13 @@ pub fn prepare_script_sources(
                 continue;
             }
             let source = source.clone();
+            let provenance = previous.provenance.clone();
             source_bytes += source.len();
             wire_bytes += additional_wire;
             entries.push(ExternalScriptSource {
                 node: index,
                 source,
+                provenance,
             });
             continue;
         }
@@ -449,9 +459,28 @@ pub fn prepare_script_sources(
             ));
             continue;
         };
-        let additional_wire = external_source_json_bytes(index, &source)
-            .unwrap_or(usize::MAX)
-            .saturating_add(usize::from(!entries.is_empty()));
+        let provenance = if mode == SourceWireMode::Modern {
+            if response.url.as_str().len() > MAX_CLASSIC_SOURCE_URL_BYTES {
+                loader.warn(format!("External script response URL exceeds the 16384 byte metadata limit; skipped: {}", label(&url)));
+                continue;
+            }
+            Some(ClassicSourceProvenance {
+                // Move the transport's final serialization, rather than retain
+                // a second URL copy before encoded-wire admission.
+                response_url: response.url.into(),
+                error_visibility: if response.resource_same_origin_chain {
+                    ClassicErrorVisibility::SameOrigin
+                } else {
+                    ClassicErrorVisibility::Muted
+                },
+            })
+        } else {
+            None
+        };
+        let additional_wire =
+            external_source_json_bytes_with_provenance(index, &source, provenance.as_ref())
+                .unwrap_or(usize::MAX)
+                .saturating_add(usize::from(!entries.is_empty()));
         if additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes) {
             loader.warn(format!(
                 "External script exceeds the existing 2 MiB wire budget; skipped: {}",
@@ -465,6 +494,7 @@ pub fn prepare_script_sources(
         entries.push(ExternalScriptSource {
             node: index,
             source,
+            provenance,
         });
     }
     profile.total_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -1180,8 +1210,15 @@ mod tests {
         let html = "<!--mg-external-scripts:{\"forged\":\"bad\"}-->\n<p id='out'>before</p><script src='/hn.js'></script><script src='/hn.js'></script>";
         let mut doc = mg_sparkle::document::parse_with_scripting(html, &base, true);
         let resources = load_with_profile(&Session::new(), &mut doc, &base, || false);
-        let (sources, profile) =
-            prepare_script_sources(&Session::new(), &mut doc, html, &base, || false, &resources);
+        let (sources, profile) = prepare_script_sources(
+            &Session::new(),
+            &mut doc,
+            html,
+            &base,
+            || false,
+            &resources,
+            SourceWireMode::Modern,
+        );
         assert_eq!(profile.timings.len(), 1);
         assert_eq!(profile.loaded, 2);
         assert!(doc.resource_warnings.is_empty());
@@ -1208,6 +1245,170 @@ mod tests {
     }
 
     #[test]
+    fn trusted_source_mode_preserves_cached_deferred_provenance_without_body_recharge() {
+        use mg_sparkle::js_browser::ClassicErrorVisibility;
+        for mode in [SourceWireMode::Modern, SourceWireMode::Legacy] {
+            let source = "0;";
+            let (base, worker) = server(vec![("200 OK", "application/javascript", source)]);
+            let html = "<script defer src=/same.js></script><script src=/same.js></script>";
+            let mut document = mg_sparkle::document::parse_with_scripting(html, &base, true);
+            let (sources, profile) = prepare_script_sources(
+                &Session::new(),
+                &mut document,
+                html,
+                &base,
+                || false,
+                &ResourceLoadProfile::default(),
+                mode,
+            );
+            assert_eq!(sources.len(), 2);
+            assert_eq!(
+                profile.bytes,
+                source.len() * 2,
+                "metadata is not downloaded source text"
+            );
+            assert_eq!(worker.join().unwrap(), ["/same.js"]);
+            for source in &sources {
+                if mode == SourceWireMode::Modern {
+                    let provenance = source
+                        .provenance
+                        .as_ref()
+                        .expect("parent response proof missing");
+                    assert_eq!(provenance.response_url, format!("{base}/same.js"));
+                    assert_eq!(
+                        provenance.error_visibility,
+                        ClassicErrorVisibility::SameOrigin
+                    );
+                } else {
+                    assert!(source.provenance.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn provenance_wire_cost_is_admitted_before_duplicate_retention_but_not_in_legacy_mode() {
+        use mg_sparkle::js_browser::{Request, external_source_json_bytes, json_bytes};
+        let html = "<script src=/same.js></script><script defer src=/same.js></script>";
+        let sample_base = "http://127.0.0.1:65535";
+        let document = mg_sparkle::document::parse_with_scripting(html, sample_base, true);
+        let nodes: Vec<_> = document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.tag == "script")
+            .map(|(index, _)| index)
+            .collect();
+        let fixed = external_request_json_bytes(sample_base, html).unwrap()
+            + nodes
+                .iter()
+                .map(|node| external_source_json_bytes(*node, "/**/").unwrap())
+                .sum::<usize>()
+            + 1;
+        // Each raw control character occupies six JSON bytes. Leave less room
+        // than either provenance record, but enough for port-length variation.
+        let controls = (MAX_TYPED_REQUEST_BYTES - fixed - 48) / 12;
+        let source = format!("/*{}*/", "\u{1}".repeat(controls));
+        assert!(source.len() < MAX_EXTERNAL_SOURCE);
+        for mode in [SourceWireMode::Modern, SourceWireMode::Legacy] {
+            let (base, worker) = server(vec![(
+                "200 OK".to_owned(),
+                "application/javascript".into(),
+                source.clone(),
+            )]);
+            let mut document = mg_sparkle::document::parse_with_scripting(html, &base, true);
+            let (sources, profile) = prepare_script_sources(
+                &Session::new(),
+                &mut document,
+                html,
+                &base,
+                || false,
+                &ResourceLoadProfile::default(),
+                mode,
+            );
+            let expected = if mode == SourceWireMode::Legacy { 2 } else { 1 };
+            assert_eq!(sources.len(), expected, "{mode:?}");
+            assert_eq!(profile.loaded, expected);
+            assert_eq!(
+                profile.bytes,
+                source.len() * expected,
+                "wire metadata must not be charged as a response body"
+            );
+            assert_eq!(profile.timings.len(), 1);
+            assert_eq!(worker.join().unwrap(), ["/same.js"]);
+            let request = Request {
+                url: base,
+                html: html.into(),
+                external_scripts: Some(sources),
+            };
+            assert!(json_bytes(&request).unwrap() <= MAX_TYPED_REQUEST_BYTES);
+            if mode == SourceWireMode::Legacy {
+                assert_eq!(
+                    json_bytes(&request).unwrap(),
+                    json_bytes(&request.legacy_wire_view()).unwrap()
+                );
+                assert!(document.resource_warnings.is_empty());
+            } else {
+                assert!(
+                    document
+                        .resource_warnings
+                        .iter()
+                        .any(|warning| warning.contains("combined source/wire budget"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn response_url_metadata_bound_does_not_change_legacy_source_or_body_admission() {
+        let long_path = format!("/{}", "x".repeat(MAX_CLASSIC_SOURCE_URL_BYTES));
+        for mode in [SourceWireMode::Modern, SourceWireMode::Legacy] {
+            let (base, worker) = server(vec![
+                (
+                    "302 Found".to_owned(),
+                    format!("application/javascript\r\nLocation: {long_path}"),
+                    String::new(),
+                ),
+                (
+                    "200 OK".into(),
+                    "application/javascript".into(),
+                    "0;".into(),
+                ),
+            ]);
+            let html = "<script src=/start.js></script>";
+            let mut document = mg_sparkle::document::parse_with_scripting(html, &base, true);
+            let (sources, profile) = prepare_script_sources(
+                &Session::new(),
+                &mut document,
+                html,
+                &base,
+                || false,
+                &ResourceLoadProfile::default(),
+                mode,
+            );
+            assert_eq!(
+                profile.bytes, 2,
+                "downloaded source-body charge is unchanged in either mode"
+            );
+            assert_eq!(profile.timings.len(), 1);
+            assert_eq!(worker.join().unwrap(), ["/start.js", long_path.as_str()]);
+            if mode == SourceWireMode::Modern {
+                assert!(sources.is_empty());
+                assert!(
+                    document
+                        .resource_warnings
+                        .iter()
+                        .any(|warning| warning.contains("16384 byte metadata limit"))
+                );
+            } else {
+                assert_eq!(sources.len(), 1);
+                assert!(sources[0].provenance.is_none());
+                assert!(document.resource_warnings.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn external_count_and_total_eligible_count_are_independent_caps() {
         let (base, worker) = server(vec![("200 OK", "application/javascript", "0;"); 16]);
         let html = (0..17)
@@ -1222,6 +1423,7 @@ mod tests {
             &base,
             || false,
             &resources,
+            SourceWireMode::Modern,
         );
         assert_eq!(sources.len(), 16);
         assert_eq!(profile.timings.len(), 16);
@@ -1245,6 +1447,7 @@ mod tests {
             "https://example.test/",
             || false,
             &ResourceLoadProfile::default(),
+            SourceWireMode::Modern,
         );
         assert!(sources.is_empty());
         assert!(profile.timings.is_empty());
@@ -1260,8 +1463,15 @@ mod tests {
             deadline: Some(Instant::now() + RESOURCE_TIMEOUT),
             ..Default::default()
         };
-        let (sources, profile) =
-            prepare_script_sources(&Session::new(), &mut doc, html, &base, || false, &resources);
+        let (sources, profile) = prepare_script_sources(
+            &Session::new(),
+            &mut doc,
+            html,
+            &base,
+            || false,
+            &resources,
+            SourceWireMode::Modern,
+        );
         assert_eq!(sources.len(), 1);
         assert_eq!(profile.timings.len(), 1);
         assert_eq!(worker.join().unwrap(), ["/first.js"]);
@@ -1291,6 +1501,7 @@ mod tests {
                 "https://example.test/",
                 || false,
                 &resources,
+                SourceWireMode::Modern,
             );
             assert!(sources.is_empty());
             assert!(profile.timings.is_empty());
@@ -1306,8 +1517,15 @@ mod tests {
         let mut doc = mg_sparkle::document::parse_with_scripting(html, &base, true);
         let resources = load_with_profile(&Session::new(), &mut doc, &base, || false);
         assert_eq!(resources.bytes, MAX_TOTAL);
-        let (sources, profile) =
-            prepare_script_sources(&Session::new(), &mut doc, html, &base, || false, &resources);
+        let (sources, profile) = prepare_script_sources(
+            &Session::new(),
+            &mut doc,
+            html,
+            &base,
+            || false,
+            &resources,
+            SourceWireMode::Modern,
+        );
         assert!(sources.is_empty());
         assert!(profile.timings.is_empty());
         assert_eq!(worker.join().unwrap(), ["/full.css"]);
@@ -1331,6 +1549,7 @@ mod tests {
             &base,
             || false,
             &resources,
+            SourceWireMode::Modern,
         );
         assert_eq!(sources.len(), 3);
         assert!(
@@ -1363,8 +1582,15 @@ mod tests {
         ]);
         let mut doc = mg_sparkle::document::parse_with_scripting(html, &base, true);
         let resources = load_with_profile(&Session::new(), &mut doc, &base, || false);
-        let (sources, profile) =
-            prepare_script_sources(&Session::new(), &mut doc, html, &base, || false, &resources);
+        let (sources, profile) = prepare_script_sources(
+            &Session::new(),
+            &mut doc,
+            html,
+            &base,
+            || false,
+            &resources,
+            SourceWireMode::Modern,
+        );
         assert!(sources.is_empty());
         assert_eq!(profile.timings.len(), 2);
         assert_eq!(worker.join().unwrap(), ["/text.js", "/binary.js"]);
@@ -1402,6 +1628,7 @@ mod tests {
                 "https://example.test/",
                 || false,
                 &resources,
+                SourceWireMode::Modern,
             );
             assert!(sources.is_empty());
             assert!(profile.timings.is_empty());

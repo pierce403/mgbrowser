@@ -33,6 +33,30 @@ module loader cannot acquire filesystem/network access. Passing the separate
 Vue reactivity experiment does not establish a Vue DOM or React browser app.
 Google search to first result remains unfinished and deferred.
 
+## Bounded Window errors: v0.9.8 increment
+
+Uncaught ordinary script, callback and native-job failures dispatch a cancelable,
+non-bubbling Window `error` event. `window.onerror` receives five arguments;
+only literal `true` cancels through its return value. Cancellation never removes
+the bounded host diagnostic. Actual exception values live in GC-traced event
+wrappers; extraction does not invoke page getters or coercions. Fatal resource
+failures do not call JavaScript reporters, and recursive reporting is guarded.
+
+Chassis supplies typed final-response/whole-redirect-chain provenance. Sparkle
+validates it before JS execution and precomputes a sticky realm-wide exposure
+floor: any admitted foreign/unknown source or dynamic string compilation makes
+errors opaque, even later local throws. Opaque errors expose only `Script error.`,
+empty filename, zero line/column and null error. Proven local realms preserve
+thrown-value identity, but still report honest unknown locations. This deliberately
+over-mutes rather than guessing a throw site from a callback or source path.
+Modern sessions use v4; the explicit original-engine lane keeps strict v1 bytes.
+See [the policy and authored controls](WINDOW_ERRORS.md).
+
+No Promise rejection notification, messaging, ErrorEvent constructor, synthetic
+dispatch, fully queued lifecycle or typed WPT reporter is added. Listener/event,
+work, wire, source, allocation and process limits remain unchanged. Authored
+controls are not upstream WPT passes or a whole-browser security claim.
+
 ## Bounded Window timers: v0.9.7 increment
 
 Function-valued `setTimeout` and `clearTimeout` use real later parent-issued
@@ -60,8 +84,8 @@ These are intentionally narrow research limits, not normal-browser longevity.
 Single-window aliases include self/parent/top with null opener. Document-ready
 capture/target/bubble, Window load's document target, property-handler slot order
 and interactive readiness before deferred scripts are corrected. These startup
-phases remain bundled inside Init; all timers run afterward. String compilation,
-intervals, fully queued lifecycle, synthetic dispatch, general message/error/
+phases remain bundled inside Init; all timers run afterward. String timer compilation,
+intervals, fully queued lifecycle, synthetic dispatch, general message/
 rejection-event delivery and typed WPT testharness reporting remain unfinished.
 The one-shot `--script-worker` path returns the initial snapshot, not a task loop.
 Headless profiling measures navigation/initial paint, not completion of arbitrary

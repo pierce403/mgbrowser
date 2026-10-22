@@ -232,6 +232,192 @@ fn dynamic_eval_and_function_fragments_share_source_admission() {
 }
 
 #[test]
+fn dynamic_compilation_static_sources_and_nonstring_eval_leave_flag_clear() {
+    let mut engine = Engine::new().unwrap();
+    assert!(!engine.dynamic_compilation_seen());
+    assert_eq!(
+        engine
+            .evaluate("var value = {}; eval(value) === value && eval(42) === 42;")
+            .unwrap()
+            .as_boolean(),
+        Some(true)
+    );
+    assert!(!engine.dynamic_compilation_seen());
+    assert!(!engine.evaluate("let = ;").unwrap_err().is_fatal());
+    engine.checkpoint().unwrap();
+    assert!(!engine.dynamic_compilation_seen());
+}
+
+#[test]
+fn dynamic_compilation_successful_eval_and_function_mark_before_return() {
+    for source in [
+        "eval('21 + 21')",
+        "(0, eval)('21 + 21')",
+        "Function('a', 'return a + 1')(41)",
+        "new Function('return 42')()",
+    ] {
+        let mut engine = Engine::new().unwrap();
+        assert!(!engine.dynamic_compilation_seen());
+        assert_eq!(engine.evaluate(source).unwrap().as_number(), Some(42.0));
+        assert!(engine.dynamic_compilation_seen(), "{source}");
+        assert_eq!(engine.stats().source_admissions, 2);
+        assert_eq!(engine.stats().jobs_admitted, 0);
+        engine.stats().validate().unwrap();
+    }
+}
+
+#[test]
+fn dynamic_compilation_caught_eval_and_function_syntax_failures_stay_marked() {
+    for expression in [
+        "eval('let = ;')",
+        "(0, eval)('let = ;')",
+        "Function('return )')",
+        "Function('a =', 'return 42')",
+    ] {
+        let mut engine = Engine::new().unwrap();
+        assert_eq!(
+            engine
+                .evaluate(&format!(
+                    "var caught = false; try {{ {expression}; }} catch (error) {{ caught = error instanceof SyntaxError; }} caught;"
+                ))
+                .unwrap()
+                .as_boolean(),
+            Some(true),
+            "{expression}"
+        );
+        assert!(engine.dynamic_compilation_seen(), "{expression}");
+        assert_eq!(engine.stats().source_admissions, 2);
+        assert!(!engine.is_fatal());
+        engine.evaluate("42;").unwrap();
+        engine.checkpoint().unwrap();
+        assert!(engine.dynamic_compilation_seen());
+    }
+}
+
+#[test]
+fn dynamic_compilation_preserves_original_uncaught_exception_identity() {
+    for source in ["eval('throw marker')", "Function('throw marker')()"] {
+        let mut engine = Engine::new().unwrap();
+        engine.evaluate("var marker = {};").unwrap();
+        let marker = engine.get_global("marker").unwrap();
+        let failure = engine.evaluate_raw(source).unwrap_err();
+        assert!(!failure.diagnostic.is_fatal());
+        assert_eq!(failure.exception.unwrap().as_opaque(), Some(&marker));
+        assert!(engine.dynamic_compilation_seen());
+        assert_eq!(engine.evaluate("42;").unwrap().as_number(), Some(42.0));
+    }
+}
+
+#[test]
+fn dynamic_compilation_callback_flag_survives_later_calls_and_checkpoints() {
+    let mut engine = Engine::new().unwrap();
+    let compile = engine
+        .evaluate("(() => eval('42'))")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    let plain = engine.evaluate("(() => 84)").unwrap().as_object().unwrap();
+    assert!(!engine.dynamic_compilation_seen());
+    assert_eq!(
+        engine
+            .call_raw(&compile, &JsValue::undefined(), &[])
+            .unwrap()
+            .as_number(),
+        Some(42.0)
+    );
+    assert!(engine.dynamic_compilation_seen());
+    engine.checkpoint_raw().unwrap();
+    engine.call_raw(&plain, &JsValue::undefined(), &[]).unwrap();
+    engine.evaluate("var later = 42;").unwrap();
+    engine.get_global_raw("later").unwrap();
+    engine.checkpoint().unwrap();
+    let before_read = engine.stats();
+    assert!(engine.dynamic_compilation_seen());
+    assert_eq!(
+        engine.stats(),
+        before_read,
+        "observation changes no counter"
+    );
+    drop(engine);
+    assert!(!Engine::new().unwrap().dynamic_compilation_seen());
+}
+
+#[test]
+fn dynamic_compilation_in_promise_job_marks_only_when_checkpoint_executes_it() {
+    let mut engine = Engine::new().unwrap();
+    engine
+        .evaluate("var answer = 0; Promise.resolve().then(() => answer = eval('42'));")
+        .unwrap();
+    assert!(!engine.dynamic_compilation_seen());
+    assert_eq!(engine.stats().pending_jobs, 1);
+    engine.checkpoint_raw().unwrap();
+    assert!(engine.dynamic_compilation_seen());
+    assert_eq!(engine.get_global("answer").unwrap().as_number(), Some(42.0));
+    assert_eq!(engine.stats().jobs_admitted, 1);
+    assert_eq!(engine.stats().jobs_executed, 1);
+    assert_eq!(engine.stats().pending_jobs, 0);
+}
+
+#[test]
+fn dynamic_compilation_is_marked_before_failed_source_admission_and_survives_fatal() {
+    for source in ["eval(' '.repeat(524289))", "Function(' '.repeat(524289))"] {
+        let mut engine = Engine::new().unwrap();
+        let failure = engine.evaluate_raw(source).unwrap_err();
+        assert!(failure.diagnostic.is_fatal());
+        assert!(failure.exception.is_none());
+        assert!(engine.dynamic_compilation_seen());
+        let exhausted = engine.stats();
+        assert_eq!(exhausted.source_admissions, 1);
+        assert_eq!(exhausted.source_bytes, source.len());
+        assert!(engine.checkpoint_raw().unwrap_err().diagnostic.is_fatal());
+        assert!(
+            engine
+                .evaluate_raw("42;")
+                .unwrap_err()
+                .diagnostic
+                .is_fatal()
+        );
+        assert!(engine.dynamic_compilation_seen());
+        assert_eq!(engine.stats(), exhausted);
+    }
+}
+
+#[test]
+fn dynamic_compilation_function_coercion_failure_before_hook_leaves_flag_clear() {
+    let mut engine = Engine::new().unwrap();
+    engine
+        .evaluate("var marker = {}; var argument = { toString() { throw marker; } };")
+        .unwrap();
+    let marker = engine.get_global("marker").unwrap();
+    let failure = engine.evaluate_raw("Function(argument)").unwrap_err();
+    assert_eq!(failure.exception.unwrap().as_opaque(), Some(&marker));
+    assert!(!engine.dynamic_compilation_seen());
+    assert!(!engine.is_fatal());
+}
+
+#[test]
+fn dynamic_compilation_flag_stays_worker_local_and_out_of_resource_report() {
+    let mut engine = Engine::new().unwrap();
+    engine.evaluate("eval('42')").unwrap();
+    assert!(engine.dynamic_compilation_seen());
+    let report = engine.stats();
+    assert_eq!(
+        serde_json::to_value(&report).unwrap(),
+        serde_json::json!({
+            "profile": report.profile,
+            "opcodes_remaining": report.opcodes_remaining,
+            "source_bytes": report.source_bytes,
+            "source_admissions": report.source_admissions,
+            "jobs_admitted": report.jobs_admitted,
+            "jobs_executed": report.jobs_executed,
+            "pending_jobs": report.pending_jobs,
+            "fatal_reason": report.fatal_reason,
+            "worker_memory": report.worker_memory,
+        })
+    );
+}
+
+#[test]
 fn diagnostics_do_not_invoke_getters_proxies_or_coercion() {
     let mut engine = Engine::new().unwrap();
     engine.evaluate("var sideEffects = 0;").unwrap();

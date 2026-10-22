@@ -220,6 +220,7 @@ impl ResourceStats {
 struct State {
     source_bytes: usize,
     source_admissions: usize,
+    dynamic_compilation_seen: bool,
     jobs_admitted: usize,
     jobs_executed: usize,
     pending_work: usize,
@@ -339,13 +340,17 @@ impl HostHooks for Policy {
         _direct: bool,
         _context: &mut Context,
     ) -> JsResult<()> {
+        // Failed/caught dynamic attempts must lower the binding's exposure floor
+        // too. Latch before admission or parsing, without retaining any JS data.
+        let mut state = self.0.borrow_mut();
+        state.dynamic_compilation_seen = true;
         // Dynamic sources already exist as UTF-16. Charge their storage without
         // an allocation or user-controlled coercion. Function fragments share
         // one admission and include the comma separators inserted by the engine.
         let units = parameters.iter().fold(body.len(), |sum, parameter| {
             sum.saturating_add(parameter.len()).saturating_add(1)
         });
-        self.0.borrow_mut().admit_source(units.saturating_mul(2))
+        state.admit_source(units.saturating_mul(2))
     }
 
     fn local_timezone_offset_seconds(&self, _unix_time_seconds: i64) -> i32 {
@@ -535,6 +540,16 @@ impl Engine {
 
     pub fn context_mut(&mut self) -> &mut Context {
         &mut self.context
+    }
+
+    /// Whether this worker has reached Boa's dynamic-string compilation hook.
+    ///
+    /// This monotonic, worker-local observation includes failed source admission
+    /// and parsing, but not non-string eval or coercion that fails before the
+    /// hook. It is not throw-site attribution or part of the resource report.
+    #[must_use]
+    pub fn dynamic_compilation_seen(&self) -> bool {
+        self.state.borrow().dynamic_compilation_seen
     }
 
     /// Install a worker-local, non-capturing rejection observer. The bridge runs

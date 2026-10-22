@@ -2,6 +2,7 @@
 //!
 //! The host owns process creation, isolation, accounting, cancellation and reaping.
 //! Implementations must reject unavailable isolation; Chassis has no in-process fallback.
+pub use mg_sparkle::js_browser::SourceWireMode;
 use mg_sparkle::{
     js_browser::Request,
     page_session::{SessionInput, SessionReply, TaskPump},
@@ -28,6 +29,12 @@ pub trait ScriptSession: Send {
 }
 
 pub trait ScriptRuntime: Send + Sync {
+    /// Trusted host-selected initial source shape. This grants no fetch or
+    /// execution authority; it preserves old admission in the explicit legacy
+    /// test lane. Page HTML and protocol input cannot select the mode.
+    fn source_wire_mode(&self) -> SourceWireMode {
+        SourceWireMode::Modern
+    }
     /// Fence requests belonging to superseded documents before starting a job.
     fn set_generation(&self, generation: u64) -> Result<(), String>;
     fn start(

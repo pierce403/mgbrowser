@@ -1,6 +1,8 @@
 # Next browser increment: bounded Window error reporting
 
-Design and frozen acceptance plan, 2026-10-22. Not implemented or released.
+Reviewed contract and frozen authored acceptance plan, 2026-10-22.
+The v0.9.8 implementation follows this policy; release/public verification
+receipts are recorded separately in the dated work log.
 This follows the shipped v0.9.7 timer increment in
 [Window-testharness readiness](WPT_TESTHARNESS.md). It does not change the pinned
 WPT selection, expectations, scoring, reporter protocol or resource profile.
@@ -153,3 +155,22 @@ infrastructure, then publish a feature release. The v0.9.7 archive is only 20,96
 bytes below the unchanged 8 MiB updater cap: measure the next actual package;
 do not silently enlarge that cap or claim an installer-only success proves
 compatibility with already installed updaters.
+
+## Local implementation evidence
+
+The final authored error suite has 18 controls, including a regression showing
+that capture-phase stopPropagation permits the remaining capture listeners but
+suppresses the later non-capture invocation. Final focused debug passes 240;
+the complete optimized workspace passes 1,787 with zero failures/two explicitly
+ignored updater gates. Existing original AST/allocation assertions are retained.
+Independent no-chrome embedding and the locked JSPLAN comparison also pass.
+
+The old public v0.9.7 binary fails the new native fixture honestly; the current
+production payload passes native and external CDP error/checkpoint/retained-form
+acceptance with exactly one expected diagnostic per journey and zero trap
+requests. The existing page/task checkers stay unchanged. Fresh complete WPT
+remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011; every page pixel hash and
+request multiset is unchanged and passing scripted pages have no pending work.
+These controls do not complete full Window testharness readiness. Exact-commit,
+tagged-public and old-binary upgrade receipts belong in the
+[dated work log](../memory/logs/2026-10-22.md).

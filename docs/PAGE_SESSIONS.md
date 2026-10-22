@@ -74,7 +74,9 @@ schedules from receipt, then validates and acknowledges projection once before
 admitting new input or work. A wake can be late but must never authorize early
 execution.
 
-Modern protocol v3 adds `TaskPump { wake_token }`, not a fabricated activation.
+Modern protocol v3 introduced `TaskPump { wake_token }`, not a fabricated activation.
+The v0.9.8 provenance-aware Init contract uses v4 and rejects v3 frames,
+including later Event/TaskPump commands; the explicit legacy lane remains v1.
 It shares the activation's one pending command, sequence/revision, lifetime,
 active-time, wire and child ledgers. A valid pump executes at most one eligible
 timer and its microtask checkpoint. Reject early/stale/replayed tokens without
@@ -90,9 +92,15 @@ wait for arbitrary timers. A one-shot worker only returns Init. No child sleeps,
 unsolicited callbacks/output, replay or automatic restart are introduced.
 
 This is not a general HTML event loop: startup remains bundled in Init, and
-string timers, intervals, fully queued lifecycle and general message/error/
+string timers, intervals, fully queued lifecycle and general message/
 rejection-event delivery remain unsupported. The non-scoring full-harness
 readiness milestone remains open in [WPT_TESTHARNESS.md](WPT_TESTHARNESS.md).
+
+The bounded v0.9.8 Window `error`/five-argument `onerror` path retains ordinary
+host diagnostics even after cancellation. A GC-traced native event wrapper owns
+the exception, with a sticky opaque policy for admitted foreign/unknown/dynamic
+sources. It does not provide exact throw locations or rejection notifications.
+See [Window errors](WINDOW_ERRORS.md) for dispatch, provenance and retention.
 
 These semantics are a bounded subset of the [DOM event dispatch algorithm](https://dom.spec.whatwg.org/#dispatching-events)
 and [HTML form submission](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm).
@@ -129,7 +137,7 @@ Use strict versioned, length-prefixed JSON envelopes with parent-issued generati
 session identity, monotonically increasing sequence and expected revision. Reject
 extra, stale, malformed, oversized, truncated or unsolicited replies. New input
 never carries scripts, replacement HTML, callback handles or network authority.
-Production protocol v3 requires a valid Boa profile report, including platform
+Production protocol v4 requires a valid Boa profile report, including platform
 allocator counters. The explicit test-only legacy lane keeps v1 and the original
 allocation phases. Reports must stay cumulative; neither lane can impersonate
 the other's accounting or silently switch engines.

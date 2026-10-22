@@ -396,6 +396,7 @@ fn stale_initial_success_charges_only_its_owned_session_then_cancels() {
             generation: app.generation - 1,
             document: None,
             result: Ok(net::Response {
+                resource_same_origin_chain: false,
                 url: url::Url::parse("https://example.test/stale").unwrap(),
                 status: 200,
                 content_type: "text/html".into(),

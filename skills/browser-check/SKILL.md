@@ -92,6 +92,19 @@ scoring prerequisite/corpus requires its own frozen contribution, not a silent
 change to waits or exceptions while scoring an engine fix. Bundled Init is not
 fully task-separated lifecycle or completed Window-testharness readiness.
 
+For Window uncaught errors, also read docs/WINDOW_ERRORS.md and run boa_errors,
+external_scripts and actual boa_worker/script_tasks controls in debug/release.
+Check five-argument onerror/literal-true cancellation, capture-phase stop versus
+same-invocation continuation, retained diagnostics, recursive/fatal no-JS paths,
+real traced exception release and sticky foreign/unknown/dynamic-source muting.
+Parent origin proof covers every redirect and survives cache/defer; DOM/base
+attributes cannot supply it. Preserve modern v4/strict legacy v1 bytes and the
+existing resource counters. Run tools/error-services-smoke.py on packaged and
+public-installed bytes: require its exact expected diagnostic/PARTIAL per
+journey plus native/CDP identity, checkpoint and retained form proofs. Do not
+relax the old diagnostic-free page/task checkers. These are authored controls,
+not rejection notification, exact source attribution or new upstream WPT passes.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

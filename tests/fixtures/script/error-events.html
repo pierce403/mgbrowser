@@ -1,0 +1,91 @@
+<!doctype html><html><head><title>Authored Window error fixture</title></head><body>
+<h1>Authored Window errors with retained events</h1>
+<p id="state">Waiting for a real later timer error</p>
+<div id="controls"></div><div id="parking"></div>
+<script>
+// Authored acceptance input: not an upstream WPT test or scored harness control.
+var starts = 1;
+var retainedError = { proof: 'owned thrown object' };
+var savedError, propertyMessage, propertyCalls = 0, listenerCalls = 0;
+var checkpointDone = false, errorOrder = ['script'];
+Promise.resolve().then(function () { errorOrder.push('script-microtask'); });
+window.onerror = function (message, filename, line, column, error) {
+  if (arguments.length !== 5 || this !== window || typeof message !== 'string' || !message ||
+      filename !== '' || line !== 0 || column !== 0 || error !== retainedError || propertyCalls !== 0)
+    throw new Error('Wrong Window onerror arguments or retained identity');
+  if (errorOrder.join(',') !== 'script,script-microtask,timer')
+    throw new Error('Wrong checkpoint order before Window onerror');
+  propertyCalls++;
+  propertyMessage = message;
+  errorOrder.push('property');
+  Promise.resolve().then(function () { errorOrder.push('property-microtask'); });
+  return true;
+};
+window.addEventListener('error', function (event) {
+  if (this !== window || event.type !== 'error' || event.target !== window ||
+      event.currentTarget !== window || event.eventPhase !== 2 || event.bubbles !== false ||
+      event.cancelable !== true || event.defaultPrevented !== true || event.error !== retainedError ||
+      event.message !== propertyMessage || event.filename !== '' || event.lineno !== 0 || event.colno !== 0 ||
+      propertyCalls !== 1 || listenerCalls !== 0)
+    throw new Error('Wrong native canceled Window ErrorEvent');
+  if (errorOrder.join(',') !== 'script,script-microtask,timer,property,property-microtask')
+    throw new Error('Window property handler did not precede ordinary error listener');
+  listenerCalls++;
+  savedError = event;
+  errorOrder.push('listener');
+  // These real controls exist only after the native Window error dispatch.
+  document.getElementById('controls').innerHTML = '<a id="cancel" href="/event-trap">Cancel this link</a><form id="search" action="/event-trap" method="get"><input id="query" name="q" type="text"><button id="submit" type="submit" name="submit" value="events">Search</button></form>';
+  var count = 0, clicked = false;
+  var form = document.getElementById('search');
+  var query = document.getElementById('query');
+  var state = document.getElementById('state');
+  function checkSavedError() {
+    if (!checkpointDone || starts !== 1 || propertyCalls !== 1 || listenerCalls !== 1 ||
+        savedError !== event || savedError.error !== retainedError || savedError.target !== window ||
+        savedError.currentTarget !== null || savedError.eventPhase !== 0 || !savedError.defaultPrevented)
+      throw new Error('Escaped native ErrorEvent lost its value or dispatch state');
+  }
+  document.getElementById('cancel').onclick = function (click) {
+    click.preventDefault();
+    checkSavedError();
+    if (query.value !== 'Rust & café') throw new Error('Typed value did not reach error-created handler');
+    clicked = true;
+    state.textContent = 'link canceled';
+  };
+  form.onsubmit = function (submit) {
+    count++;
+    checkSavedError();
+    if (!clicked) { submit.preventDefault(); throw new Error('Retained Window error state failed'); }
+    if (count === 1) {
+      submit.preventDefault();
+      document.getElementById('parking').appendChild(query);
+      form.appendChild(query);
+      var proof = document.createElement('input');
+      proof.id = 'proof'; proof.type = 'hidden'; proof.name = 'proof';
+      proof.value = 'pending'; form.appendChild(proof);
+      state.textContent = 'first submit canceled';
+    } else if (count === 2 && query.value === 'Rust & café again') {
+      document.getElementById('proof').value = 'retained-1-2';
+      form.action = '/event-search';
+    } else { submit.preventDefault(); throw new Error('Unexpected Window error activation'); }
+  };
+  document.body.setAttribute('data-error-proof', 'typed-identity-canceled');
+  Promise.resolve().then(function () {
+    errorOrder.push('listener-microtask');
+    var expected = 'script,script-microtask,timer,property,property-microtask,listener,listener-microtask';
+    if (errorOrder.join(',') !== expected) throw new Error('Wrong Window error checkpoint order');
+    checkpointDone = true;
+    document.body.setAttribute('data-error-checkpoint', expected);
+    document.title = 'Window error controls ready';
+    state.textContent = 'window error ready';
+  });
+});
+var canceled = setTimeout(function () { throw new Error('Canceled error task ran'); }, 1000);
+clearTimeout(canceled);
+setTimeout(function (argument) {
+  if (argument !== retainedError || document.readyState !== 'complete')
+    throw new Error('Wrong later timer argument or document readiness');
+  errorOrder.push('timer');
+  throw argument;
+}, 60, retainedError);
+</script></body></html>

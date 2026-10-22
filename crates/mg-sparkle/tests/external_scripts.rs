@@ -3,8 +3,11 @@
 use mg_sparkle::{
     document,
     js_browser::{
-        ExternalScriptSource, MAX_EXTERNAL_SOURCE, MAX_SOURCE, Request,
+        ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource, LegacyRequest,
+        MAX_CLASSIC_SOURCE_URL_BYTES, MAX_EXTERNAL_SOURCE, MAX_SOURCE, MAX_TYPED_REQUEST_BYTES,
+        Request,
         boa::{BoaPageRealm, execute},
+        external_source_json_bytes, external_source_json_bytes_with_provenance, json_bytes,
     },
     page_session::{InputKind, SessionInput},
 };
@@ -22,6 +25,7 @@ fn request(html: impl Into<String>, scripts: &[(&str, String)]) -> Request {
                 .unwrap()
                 .unwrap(),
             source: source.clone(),
+            provenance: None,
         })
         .collect();
     Request {
@@ -57,6 +61,239 @@ fn legacy_request_wire_form_stays_unchanged_and_metadata_is_strict() {
     assert!(request.external_scripts.is_none());
     assert_eq!(serde_json::to_string(&request).unwrap(), original);
     assert!(serde_json::from_str::<Request>(r#"{"url":"https://example.test/owned","html":"","external_scripts":[{"node":1,"source":"","network":true}]}"#).is_err());
+}
+
+#[test]
+fn explicit_legacy_view_and_reader_preserve_old_fields_without_cloning_sources() {
+    for external in [None, Some(Vec::new())] {
+        let request = Request {
+            url: URL.into(),
+            html: "é\\\"\n".into(),
+            external_scripts: external,
+        };
+        let expected = serde_json::to_string(&request).unwrap();
+        let old = serde_json::to_string(&request.legacy_wire_view()).unwrap();
+        assert_eq!(old, expected, "None and Some([]) are not interchangeable");
+        let decoded: Request = serde_json::from_str::<LegacyRequest>(&old).unwrap().into();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), old);
+    }
+    let mut request = request(
+        "<script id=s src=/s.js></script>",
+        &[("s", "/*é\\\"\n*/0;".into())],
+    );
+    let source = &mut request.external_scripts.as_mut().unwrap()[0];
+    source.provenance = Some(ClassicSourceProvenance {
+        response_url: "https://example.test/s.js".into(),
+        error_visibility: ClassicErrorVisibility::SameOrigin,
+    });
+    let old = serde_json::to_string(&request.legacy_wire_view()).unwrap();
+    let source = &request.external_scripts.as_ref().unwrap()[0];
+    let expected = format!(
+        "{{\"url\":{},\"html\":{},\"external_scripts\":[{{\"node\":{},\"source\":{}}}]}}",
+        serde_json::to_string(&request.url).unwrap(),
+        serde_json::to_string(&request.html).unwrap(),
+        source.node,
+        serde_json::to_string(&source.source).unwrap()
+    );
+    assert_eq!(old, expected);
+    let decoded: Request = serde_json::from_str::<LegacyRequest>(&old).unwrap().into();
+    assert!(decoded.external_scripts.unwrap()[0].provenance.is_none());
+    let modern = serde_json::to_value(&request).unwrap();
+    assert!(serde_json::from_value::<LegacyRequest>(modern.clone()).is_err());
+    let mut null = modern;
+    null["external_scripts"][0]["provenance"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<LegacyRequest>(null).is_err());
+    for unknown in [
+        r#"{"url":"https://example.test/","html":"","new":null}"#,
+        r#"{"url":"https://example.test/","html":"","external_scripts":[{"node":1,"source":"","new":null}]}"#,
+    ] {
+        assert!(serde_json::from_str::<LegacyRequest>(unknown).is_err());
+    }
+}
+
+#[test]
+fn provenance_wire_count_matches_actual_escaped_bytes_and_is_strict() {
+    let source = "/*é\\\"\n\u{1}*/0;";
+    let provenance = ClassicSourceProvenance {
+        response_url: "https://example.test/é?q=\\\"".into(),
+        error_visibility: ClassicErrorVisibility::Muted,
+    };
+    for provenance in [None, Some(provenance)] {
+        let entry = ExternalScriptSource {
+            node: 123,
+            source: source.into(),
+            provenance,
+        };
+        let actual = serde_json::to_vec(&entry).unwrap().len();
+        assert_eq!(json_bytes(&entry).unwrap(), actual);
+        assert_eq!(
+            external_source_json_bytes_with_provenance(
+                entry.node,
+                source,
+                entry.provenance.as_ref()
+            )
+            .unwrap(),
+            actual
+        );
+        if entry.provenance.is_none() {
+            assert_eq!(
+                external_source_json_bytes(entry.node, source).unwrap(),
+                actual
+            );
+        }
+    }
+    for metadata in [
+        serde_json::json!({"response_url":"https://example.test/s.js","error_visibility":"SameOrigin"}),
+        serde_json::json!({"response_url":"https://example.test/s.js","error_visibility":"same-origin","extra":null}),
+        serde_json::json!({"response_url":"https://example.test/s.js","error_visibility":"same-origin","resource_same_origin_chain":true}),
+    ] {
+        assert!(serde_json::from_value::<ClassicSourceProvenance>(metadata).is_err());
+    }
+}
+
+#[test]
+fn classic_source_provenance_has_a_strict_optional_wire_shape() {
+    let html = "<script id=s src=/s.js></script>";
+    let original = request(html, &[("s", "document.title='metadata accepted';".into())]);
+    for (visibility, response_url) in [
+        ("same-origin", "https://example.test/s.js"),
+        ("muted", "https://foreign.test/s.js"),
+        ("muted", "https://example.test/back.js"),
+    ] {
+        let mut value = serde_json::to_value(&original).unwrap();
+        value["external_scripts"][0]["provenance"] = serde_json::json!({
+            "response_url":response_url,"error_visibility":visibility
+        });
+        let decoded: Request =
+            serde_json::from_value(value.clone()).expect("valid typed provenance");
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), value);
+        let reply = execute(decoded);
+        assert!(reply.applied, "{visibility}: {:?}", reply.errors);
+        assert_eq!(reply.scripts_executed, 1);
+        assert_eq!(reply.boa.unwrap().source_admissions, 1);
+    }
+}
+
+#[test]
+fn invalid_provenance_is_rejected_before_any_engine_execution() {
+    let original = request(
+        "<script id=s src=/s.js></script>",
+        &[("s", "document.title='must not run';".into())],
+    );
+    for (response_url, visibility) in [
+        ("https://foreign.test/s.js".to_owned(), "same-origin"),
+        ("https://user:secret@example.test/s.js".into(), "muted"),
+        ("https://@example.test/s.js".into(), "muted"),
+        ("https:////@example.test/s.js".into(), "muted"),
+        (r"https:\\@example.test/s.js".into(), "muted"),
+        ("https:\t//\n/@example.test/s.js".into(), "muted"),
+        ("file:///tmp/s.js".into(), "muted"),
+        ("data:text/javascript,0".into(), "muted"),
+        ("/relative.js".into(), "muted"),
+        ("https://[invalid".into(), "muted"),
+        (
+            format!("https://example.test/{}", "é".repeat(8193)),
+            "muted",
+        ),
+    ] {
+        let mut value = serde_json::to_value(&original).unwrap();
+        value["external_scripts"][0]["provenance"] =
+            serde_json::json!({"response_url":response_url,"error_visibility":visibility});
+        let decoded: Request = serde_json::from_value(value).unwrap();
+        let reply = execute(decoded);
+        assert!(
+            !reply.applied,
+            "{response_url}: must reject provenance before creating the realm"
+        );
+        assert_eq!(reply.scripts_executed, 0);
+        assert!(reply.boa.is_none());
+        assert!(!reply.errors.is_empty());
+    }
+}
+
+#[test]
+fn provenance_authority_guard_does_not_mistake_path_or_query_for_userinfo() {
+    for response_url in [
+        "https://example.test/@script.js",
+        "https://example.test/s.js?mail=@example.test",
+        "https://example.test/s.js#@fragment",
+        r"https://example.test\@script.js",
+    ] {
+        let mut request = request("<script id=s src=/s.js></script>", &[("s", "0;".into())]);
+        request.external_scripts.as_mut().unwrap()[0].provenance = Some(ClassicSourceProvenance {
+            response_url: response_url.into(),
+            error_visibility: ClassicErrorVisibility::SameOrigin,
+        });
+        let reply = execute(request);
+        assert!(reply.applied, "{response_url}: {:?}", reply.errors);
+        assert_eq!(reply.scripts_executed, 1);
+        assert_eq!(
+            reply.boa.unwrap().source_bytes,
+            2,
+            "URL bytes are not source-text bytes"
+        );
+    }
+}
+
+#[test]
+fn actual_external_record_capacity_is_a_separate_host_admission() {
+    let mut request = request(
+        "<script id=s src=/s.js></script>",
+        &[("s", "document.title='must not run';".into())],
+    );
+    let source = request.external_scripts.as_mut().unwrap().pop().unwrap();
+    let mut oversized =
+        Vec::with_capacity(4 * 1024 * 1024 / std::mem::size_of::<ExternalScriptSource>() + 1);
+    oversized.push(source);
+    request.external_scripts = Some(oversized);
+    let reply = execute(request);
+    assert!(
+        !reply.applied,
+        "actual retained record capacity escaped host admission"
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert!(reply.boa.is_none());
+}
+
+#[test]
+fn actual_provenance_string_capacity_is_not_a_source_text_or_wire_escape() {
+    let mut request = request("<script id=s src=/s.js></script>", &[("s", "0;".into())]);
+    let mut response_url = String::with_capacity(4 * 1024 * 1024 + 1);
+    response_url.push_str("https://example.test/s.js");
+    assert!(response_url.len() < MAX_CLASSIC_SOURCE_URL_BYTES);
+    request.external_scripts.as_mut().unwrap()[0].provenance = Some(ClassicSourceProvenance {
+        response_url,
+        error_visibility: ClassicErrorVisibility::SameOrigin,
+    });
+    assert!(json_bytes(&request).unwrap() < 1024);
+    let reply = execute(request);
+    assert!(
+        !reply.applied,
+        "actual retained URL capacity escaped host admission"
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert!(reply.boa.is_none());
+}
+
+#[test]
+fn modern_absent_external_sources_still_obey_the_full_encoded_wire_bound() {
+    let request = Request {
+        url: URL.into(),
+        html: format!("<p>{}</p>", "\u{1}".repeat(MAX_TYPED_REQUEST_BYTES / 6 + 1)),
+        external_scripts: None,
+    };
+    assert!(request.html.len() < MAX_SOURCE);
+    assert!(json_bytes(&request).unwrap() > MAX_TYPED_REQUEST_BYTES);
+    let reply = execute(request);
+    assert!(
+        !reply.applied,
+        "None must not bypass modern encoded-wire admission"
+    );
+    assert_eq!(reply.scripts_executed, 0);
+    assert!(
+        reply.boa.is_none(),
+        "wire rejection must precede Engine creation"
+    );
 }
 
 #[test]

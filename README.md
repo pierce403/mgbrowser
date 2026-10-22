@@ -2,23 +2,24 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.7 Experimental Preview
+## v0.9.8 Experimental Preview
 
-The v0.9.7 increment adds function-valued `setTimeout` and `clearTimeout`.
-Callbacks and their arguments stay in the restricted worker until a genuine
-later parent-issued task transaction runs them, followed by Promise checkpoints.
-Cancellation releases their roots without renewing cumulative work limits.
-Single-Window identities, document/Window event targets, property-handler order
-and readiness before deferred scripts are corrected within the existing
-**bundled snapshot startup**, not a streaming parser or fully task-separated
-HTML lifecycle. String timers, intervals, error/rejection event delivery and
-the testharness result observer remain unfinished.
-[Timer scope and remaining readiness work](docs/WPT_TESTHARNESS.md).
+The v0.9.8 increment adds bounded Window `error` events and five-argument
+`window.onerror`. Proven local errors retain their actual thrown value in a
+GC-traced native event; foreign/unknown sources and dynamic string compilation
+conservatively mute the whole realm. Cancellation preserves host diagnostics;
+fatal resource failures never call JavaScript reporters. No throw location is
+fabricated. [Error policy and acceptance](docs/WINDOW_ERRORS.md).
+
+Function timers remain real later parent-issued worker tasks, sharing the
+existing cumulative limits. Startup is still **bundled**, not a complete HTML
+lifecycle. Rejection notification, messaging, string timers/intervals and the
+typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
 The installer below selects the latest published release. Exact-commit CI,
 package and public-install verification receipts are recorded in the
-[dated work log](memory/logs/2026-10-21.md).
-[Release notes](docs/RELEASE-v0.9.7.md).
+[dated work log](memory/logs/2026-10-22.md).
+[Release notes](docs/RELEASE-v0.9.8.md).
 
 v0.9.6 corrects classic external script loading (`<script src="...">`) with
 typed parent-supplied sources, shared resource admission and explicit handling
@@ -180,7 +181,8 @@ See [updater behavior and trust](docs/UPDATES.md).
   metadata and `crossorigin` are skipped with diagnostics. External sources
   require UTF-8 and a supported JavaScript MIME type. The v0.9.7 release adds
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
-  Startup remains bundled; fully task-separated lifecycle, error/rejection
+  v0.9.8 adds conservatively muted Window errors. Startup remains bundled;
+  fully task-separated lifecycle, rejection
   event delivery and typed JavaScript testharness results remain unfinished.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
   browser event loop remain unsupported. No React/Vue browser-app compatibility
@@ -213,7 +215,7 @@ preserves the styled-document path described in [Hacker News scope](docs/HACKER_
 HTTP pages have a red title/address strip and an "HTTP: Not secure" label.
 Ctrl+L selects the location; type a URL and press Enter. Re-running the installer
 updates to the latest release. Restart any open browser windows after updating.
-See [preview details](docs/RELEASE-v0.9.7.md) for manual install and uninstall.
+See [preview details](docs/RELEASE-v0.9.8.md) for manual install and uninstall.
 
 ## Components
 

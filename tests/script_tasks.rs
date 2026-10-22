@@ -1,4 +1,4 @@
-//! Owned modern-v3 process controls; no display, fixture server or parent JS.
+//! Owned modern-v4 process controls; no display, fixture server or parent JS.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use mg_butane::modern::Report;
@@ -55,8 +55,18 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
+        self.send_version(4, sequence, revision, kind, payload);
+    }
+    fn send_version(
+        &mut self,
+        version: u8,
+        sequence: u64,
+        revision: u64,
+        kind: &str,
+        payload: Value,
+    ) {
         let payload = serde_json::to_vec(&json!({
-            "version":3,"generation":31,"session_id":47,"sequence":sequence,
+            "version":version,"generation":31,"session_id":47,"sequence":sequence,
             "expected_revision":revision,"command":{"kind":kind,"payload":payload}
         }))
         .unwrap();
@@ -111,7 +121,7 @@ impl Peer {
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 3),
+            ("version", 4),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -300,5 +310,100 @@ fn real_worker_timer_pumps_share_the_fixed_64_transaction_budget() {
             break;
         }
         peer.tick();
+    }
+}
+
+#[test]
+fn real_worker_timer_error_retains_native_event_across_following_input_transaction() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize("var value={},saved,order=[];window.onerror=function(message,file,line,column,error){if(arguments.length!==5||this!==window||error!==value||file!==''||line!==0||column!==0)throw 'bad onerror';order.push('property');Promise.resolve().then(()=>order.push('property-job'));return true;};window.addEventListener('error',event=>{if(event.error!==value||event.target!==window||event.currentTarget!==window||event.eventPhase!==2||!event.defaultPrevented||event.bubbles||!event.cancelable)throw 'bad event';saved=event;order.push('listener');Promise.resolve().then(()=>{order.push('listener-job');document.getElementById('o').setAttribute('data-order',order.join(','));});});document.getElementById('o').onclick=event=>{if(saved.error!==value||saved.currentTarget!==null||saved.eventPhase!==0||!saved.defaultPrevented)throw 'lost event';event.preventDefault();document.getElementById('o').setAttribute('data-retained','yes');};setTimeout(()=>{throw value;},60);");
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(report(&initial).pending_jobs, 1);
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let fired = peer.pump(1, 0, token);
+    no_activation(&fired);
+    assert_eq!(fired["reply"]["state"], "Ready");
+    assert_eq!(fired["reply"]["errors"].as_array().unwrap().len(), 1);
+    assert!(
+        fired["reply"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Timer callback:")
+    );
+    assert_eq!(
+        attribute(&fired, "data-order").as_deref(),
+        Some("property,property-job,listener,listener-job")
+    );
+    assert_eq!(report(&fired).pending_jobs, 0);
+    assert!(fired["reply"]["task_wake"].is_null());
+    report(&fired).validate_after(&report(&initial)).unwrap();
+    let target = fired["reply"]["snapshot"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|node| {
+            node["attributes"]
+                .as_array()
+                .is_some_and(|attrs| attrs.iter().any(|pair| pair == &json!(["id", "o"])))
+        })
+        .unwrap();
+    peer.send(
+        2,
+        1,
+        "Event",
+        json!({"kind":{"kind":"Click","target":target},"edits":[]}),
+    );
+    let clicked = peer.receive(2, 1);
+    assert_eq!(clicked["reply"]["errors"], json!([]));
+    assert_eq!(clicked["reply"]["state"], "Ready");
+    assert_eq!(clicked["reply"]["outcome"]["click_canceled"], true);
+    assert_eq!(attribute(&clicked, "data-retained").as_deref(), Some("yes"));
+    assert_eq!(report(&clicked).pending_jobs, 0);
+    report(&clicked).validate_after(&report(&fired)).unwrap();
+    peer.finish();
+}
+
+#[test]
+fn real_worker_rejects_v3_init_and_later_commands_without_reply_or_execution() {
+    for kind in ["Init", "Event", "TaskPump"] {
+        let mut peer = Peer::start();
+        let (sequence, payload) = match kind {
+            "Init" => (
+                0,
+                json!({"url":"https://example.test/tasks","html":"<script>throw 'MUST_NOT_RUN'</script>"}),
+            ),
+            later => {
+                let initial = peer.initialize("setTimeout(()=>{throw 'MUST_NOT_RUN';},100000);");
+                assert_eq!(initial["reply"]["state"], "Ready");
+                assert_eq!(report(&initial).pending_jobs, 1);
+                (
+                    1,
+                    if later == "Event" {
+                        json!({"kind":{"kind":"Click","target":0},"edits":[]})
+                    } else {
+                        json!({"wake_token":wake(&initial).0})
+                    },
+                )
+            }
+        };
+        peer.send_version(3, sequence, 0, kind, payload);
+        loop {
+            if let Some(status) = peer.child.try_wait().unwrap() {
+                assert!(
+                    !status.success(),
+                    "old modern version must fail closed: {kind}"
+                );
+                break;
+            }
+            peer.tick();
+        }
+        let mut byte = [0];
+        assert_eq!(
+            peer.output.read(&mut byte).unwrap(),
+            0,
+            "no reply for {kind}"
+        );
     }
 }

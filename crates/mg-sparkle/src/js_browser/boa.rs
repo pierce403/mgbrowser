@@ -7,7 +7,9 @@
 //! teardown, within the unchanged 32-registration/300-second session bounds.
 //! This bounded retention policy is not full DOM ephemeron garbage collection.
 use super::events::{Kind, Target};
-use super::{BrowserHost, MAX_SOURCE, Request, bounded, inert, text_content};
+use super::{
+    BrowserHost, ClassicErrorVisibility, MAX_SOURCE, Request, bounded, inert, text_content,
+};
 use crate::{document, page_session::*};
 use mg_butane::{
     modern::{self, Engine},
@@ -37,8 +39,17 @@ static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
 struct Brand {
     handle: String,
     realm: u64,
+    // Only the actual wrapper retains a thrown value. The Rust-only event
+    // record and weak wrapper cache must not become hidden exception roots.
+    error: Option<ErrorPayload>,
     #[unsafe_ignore_trace]
     finalized: Rc<Cell<usize>>,
+}
+
+#[derive(Clone, Trace, Finalize)]
+struct ErrorPayload {
+    message: JsString,
+    error: JsValue,
 }
 impl Finalize for Brand {
     fn finalize(&self) {
@@ -103,6 +114,10 @@ struct State {
     js_depth: usize,
     #[unsafe_ignore_trace]
     checkpointing: bool,
+    #[unsafe_ignore_trace]
+    error_exposure_allowed: bool,
+    #[unsafe_ignore_trace]
+    reporting_error: bool,
     #[cfg(test)]
     #[unsafe_ignore_trace]
     test_now: Option<Instant>,
@@ -229,6 +244,14 @@ fn event_target(value: &JsValue, context: &mut Context) -> JsResult<Target> {
 }
 
 fn wrap(handle: &str, context: &mut Context) -> JsResult<JsValue> {
+    wrap_payload(handle, None, context)
+}
+
+fn wrap_payload(
+    handle: &str,
+    error: Option<ErrorPayload>,
+    context: &mut Context,
+) -> JsResult<JsValue> {
     modern::check_context(context)?;
     let handle = if handle == "node:0" {
         "document"
@@ -266,6 +289,7 @@ fn wrap(handle: &str, context: &mut Context) -> JsResult<JsValue> {
         Brand {
             handle: handle.into(),
             realm,
+            error,
             finalized,
         },
     );
@@ -399,6 +423,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         }
         return fallback_get(args, context);
     };
+    if let Some(value) = error_property(&args[0], &name) {
+        return Ok(value);
+    }
     if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
         && matches!(name.as_str(), "forEach" | "values" | "entries" | "keys")
     {
@@ -432,7 +459,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                     matches!(event.kind, Kind::DomReady | Kind::Click | Kind::Submit).into(),
                 );
             }
-            "cancelable" => return Ok(matches!(event.kind, Kind::Click | Kind::Submit).into()),
+            "cancelable" => {
+                return Ok(matches!(event.kind, Kind::Click | Kind::Submit | Kind::Error).into());
+            }
             _ => {}
         }
     }
@@ -487,6 +516,9 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
     if let Some(name) = property_name(&property) {
+        if error_property(&args[0], &name).is_some() {
+            return Ok(true.into());
+        }
         if handle.starts_with("collection:") {
             if let Ok(index) = name.parse::<usize>() {
                 return state(context)
@@ -514,6 +546,19 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         .unwrap()
         .has_property(property, context)
         .map(Into::into)
+}
+
+fn error_property(target: &JsValue, name: &str) -> Option<JsValue> {
+    let object = target.as_object()?;
+    let data = object.downcast_ref::<Brand>()?;
+    let payload = data.error.as_ref()?;
+    match name {
+        "message" => Some(payload.message.clone().into()),
+        "filename" => Some(js_string!("").into()),
+        "lineno" | "colno" => Some(0.into()),
+        "error" => Some(payload.error.clone()),
+        _ => None,
+    }
 }
 fn define_property(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
@@ -676,7 +721,7 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
             .events
             .get(id)
             .ok_or_else(|| failure("Stale event handle"))?;
-        if !matches!(event.kind, Kind::Click | Kind::Submit) {
+        if !matches!(event.kind, Kind::Click | Kind::Submit | Kind::Error) {
             return Ok(JsValue::undefined());
         }
     }
@@ -748,13 +793,23 @@ impl BoaPageRealm {
             }
         };
         let document = document::parse_with_scripting(&request.html, url.as_str(), true);
-        let allocated = match request.validate_external_sources(&document) {
+        let allocated = match request.validate_modern_external_sources(&document) {
             Ok(bytes) => bytes,
             Err(error) => {
                 reply.errors.push(error);
                 return (None, reply);
             }
         };
+        // Validate and decide the realm's floor before Engine::new, parsing or
+        // evaluating even the first inline source. Later foreign/deferred code
+        // cannot retroactively make an earlier exposed object safe.
+        let error_exposure_allowed = request.external_scripts.as_ref().is_none_or(|sources| {
+            sources.iter().all(|source| {
+                source.provenance.as_ref().is_some_and(|provenance| {
+                    provenance.error_visibility == ClassicErrorVisibility::SameOrigin
+                })
+            })
+        });
         let mut sources = Vec::new();
         let mut deferred = Vec::new();
         let mut count = 0;
@@ -813,7 +868,7 @@ impl BoaPageRealm {
             events: Vec::new(),
             ready: "loading",
         };
-        let mut realm = match Self::new(host) {
+        let mut realm = match Self::new(host, error_exposure_allowed) {
             Ok(realm) => realm,
             Err(error) => {
                 reply.errors.push(error);
@@ -833,15 +888,15 @@ impl BoaPageRealm {
             let label = if *is_external { "External" } else { "Inline" };
             let result = {
                 let _ingress = Ingress::enter(realm.state.clone());
-                realm.engine.evaluate(source)
+                realm.engine.evaluate_raw(source)
             };
             match result {
                 Ok(_) => reply.scripts_executed += 1,
-                Err(error) => reply.errors.push(format!(
-                    "{label} script {}: {}",
-                    index + 1,
-                    bounded(&error.to_string(), 512)
-                )),
+                Err(error) => realm.execution_failure(
+                    &format!("{label} script {}", index + 1),
+                    error,
+                    &mut reply.errors,
+                ),
             }
             realm.checkpoint(&mut reply.errors);
             if realm.closed
@@ -864,7 +919,7 @@ impl BoaPageRealm {
         reply.errors.truncate(64);
         (reply.snapshot.is_some().then_some(realm), reply)
     }
-    fn new(host: BrowserHost) -> Result<Self, String> {
+    fn new(host: BrowserHost, error_exposure_allowed: bool) -> Result<Self, String> {
         let mut engine = Engine::new().map_err(|e| e.to_string())?;
         let context = engine.context_mut();
         let constructor = context.intrinsics().constructors().weak_ref().constructor();
@@ -897,6 +952,8 @@ impl BoaPageRealm {
             timer_nesting: None,
             js_depth: 0,
             checkpointing: false,
+            error_exposure_allowed,
+            reporting_error: false,
             #[cfg(test)]
             test_now: None,
             wrappers: HashMap::new(),
@@ -957,6 +1014,7 @@ impl BoaPageRealm {
             "onsubmit",
             "onload",
             "onreadystatechange",
+            "onerror",
         ] {
             let getter = FunctionObjectBuilder::new(
                 context.realm(),
@@ -1034,7 +1092,167 @@ impl BoaPageRealm {
             task_wake: None,
         }
     }
+    fn execution_failure(
+        &mut self,
+        prefix: &str,
+        failure: modern::ExecutionFailure,
+        errors: &mut Vec<String>,
+    ) {
+        let message = bounded(&failure.diagnostic.to_string(), 512);
+        if errors.len() < 64 {
+            errors.push(format!("{prefix}: {message}"));
+        }
+        // The data-only diagnostic survives cancellation, recursive reporting
+        // and fatal failure. Never turn a policy failure into another JS call.
+        if self.closed || self.engine.is_fatal() || self.state.borrow().reporting_error {
+            return;
+        }
+        let Some(exception) = failure.exception else {
+            return;
+        };
+        let expose =
+            self.state.borrow().error_exposure_allowed && !self.engine.dynamic_compilation_seen();
+        let (message, error) = if expose {
+            // Native conversion uses only captured engine intrinsics, not
+            // script properties/coercion. Opaque thrown values retain identity.
+            match exception.into_opaque(self.engine.context_mut()) {
+                Ok(value) => (message, value),
+                Err(_) => {
+                    if errors.len() < 64 {
+                        errors.push("Error payload conversion rejected".into());
+                    }
+                    self.closed = true;
+                    return;
+                }
+            }
+        } else {
+            // Drop the actual foreign value before wrapper allocation/dispatch.
+            // An escaped muted event must not retain a hidden foreign root.
+            drop(exception);
+            ("Script error.".into(), JsValue::null())
+        };
+        self.window_error(message, error, errors);
+    }
+
+    fn window_error(&mut self, message: String, error: JsValue, errors: &mut Vec<String>) {
+        if !self.state.borrow().listeners.iter().any(|listener| {
+            listener.target == Target::Window
+                && listener.kind == Kind::Error
+                && listener.callback.is_some()
+        }) {
+            return;
+        }
+        self.state.borrow_mut().reporting_error = true;
+        let event = (|| {
+            let mut data = self.state.borrow_mut();
+            // Native payload/storage admission is separate from JS source-text
+            // statistics and uses the unchanged cumulative DOM host allowance.
+            data.host
+                .charge(std::mem::size_of::<ErrorPayload>() + message.len() * 2)?;
+            data.host.new_event(Kind::Error, Target::Window, None)
+        })();
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                if errors.len() < 64 {
+                    errors.push(bounded(&error, 512));
+                }
+                self.closed = true;
+                self.state.borrow_mut().reporting_error = false;
+                return;
+            }
+        };
+        let message = JsString::from(message);
+        let wrapper = wrap_payload(
+            &format!("event:{event}"),
+            Some(ErrorPayload {
+                message: message.clone(),
+                error: error.clone(),
+            }),
+            self.engine.context_mut(),
+        );
+        if let Ok(wrapper) = wrapper {
+            // This single rooted wrapper spans all callbacks and checkpoints.
+            // Only it (or an escaped JS reference) retains the actual payload.
+            for capture in [true, false] {
+                // Capture and noncapture are separate at-target invocations.
+                // stopPropagation leaves the current invocation's remaining
+                // listeners eligible, but prevents the following invocation.
+                if self.state.borrow().host.events[event].stopped {
+                    break;
+                }
+                let ids: Vec<_> = {
+                    let mut data = self.state.borrow_mut();
+                    data.host.events[event].current = Some(Target::Window);
+                    data.host.events[event].phase = 2;
+                    data.listeners
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, listener)| {
+                            listener.target == Target::Window
+                                && listener.kind == Kind::Error
+                                && listener.capture == capture
+                                && listener.callback.is_some()
+                        })
+                        .map(|(id, _)| id)
+                        .collect()
+                };
+                for id in ids {
+                    if self.closed
+                        || self.engine.is_fatal()
+                        || self.state.borrow().host.events[event].immediate
+                    {
+                        break;
+                    }
+                    let listener = {
+                        let data = self.state.borrow();
+                        data.listeners[id]
+                            .callback
+                            .clone()
+                            .map(|callback| (callback, data.listeners[id].property))
+                    };
+                    let Some((callback, property)) = listener else {
+                        continue;
+                    };
+                    let arguments = if property {
+                        vec![
+                            message.clone().into(),
+                            js_string!("").into(),
+                            0.into(),
+                            0.into(),
+                            error.clone(),
+                        ]
+                    } else {
+                        vec![wrapper.clone()]
+                    };
+                    let this = self.engine.context().global_object().into();
+                    match self.call_function(&callback, &this, &arguments) {
+                        Ok(value) if property && value.as_boolean() == Some(true) => {
+                            self.state.borrow_mut().host.events[event].canceled = true;
+                        }
+                        Ok(_) => {}
+                        Err(error) => self.execution_failure("Event handler", error, errors),
+                    }
+                    self.checkpoint(errors);
+                }
+            }
+        } else {
+            if errors.len() < 64 {
+                errors.push("Error event wrapper rejected".into());
+            }
+            self.closed = true;
+        }
+        let mut data = self.state.borrow_mut();
+        data.host.events[event].current = None;
+        data.host.events[event].phase = 0;
+        data.reporting_error = false;
+    }
+
     fn checkpoint(&mut self, errors: &mut Vec<String>) {
+        if self.closed {
+            self.engine.context_mut().clear_kept_objects();
+            return;
+        }
         let old_nesting = {
             let mut data = self.state.borrow_mut();
             if data.js_depth != 0 || data.checkpointing {
@@ -1044,26 +1262,24 @@ impl BoaPageRealm {
             // A timer created by a Promise job is not nested in a timer task.
             data.timer_nesting.take()
         };
-        if let Err(error) = self.engine.checkpoint() {
-            if errors.len() < 64 {
-                errors.push(format!(
-                    "Promise checkpoint: {}",
-                    bounded(&error.to_string(), 512)
-                ));
-            }
+        let result = self.engine.checkpoint_raw();
+        // run_jobs has returned and no JS stack is active. Error reporting may
+        // now checkpoint its own callbacks, never re-enter an active executor.
+        self.state.borrow_mut().checkpointing = false;
+        if let Err(error) = result {
+            self.execution_failure("Promise checkpoint", error, errors);
         }
         let mut data = self.state.borrow_mut();
         data.timer_nesting = old_nesting;
-        data.checkpointing = false;
     }
     fn call_function(
         &mut self,
         callback: &JsObject,
         this: &JsValue,
         arguments: &[JsValue],
-    ) -> Result<JsValue, modern::Error> {
+    ) -> Result<JsValue, modern::ExecutionFailure> {
         let _ingress = Ingress::enter(self.state.clone());
-        self.engine.call(callback, this, arguments)
+        self.engine.call_raw(callback, this, arguments)
     }
     fn invoke(
         &mut self,
@@ -1073,16 +1289,21 @@ impl BoaPageRealm {
         property: bool,
         errors: &mut Vec<String>,
     ) -> bool {
-        let result = (|| {
+        let prepared: Result<(JsValue, JsValue), String> = (|| {
             let this = from_host(target.value(), self.engine.context_mut())
                 .map_err(|_| "Invalid callback target".to_string())?;
             let event = wrap(event, self.engine.context_mut())
                 .map_err(|_| "Invalid event wrapper".to_string())?;
-            self.call_function(&callback, &this, &[event])
-                .map_err(|e| e.to_string())
+            Ok((this, event))
         })();
-        let canceled = match result {
-            Ok(value) => property && value.as_boolean() == Some(false),
+        let canceled = match prepared {
+            Ok((this, event)) => match self.call_function(&callback, &this, &[event]) {
+                Ok(value) => property && value.as_boolean() == Some(false),
+                Err(error) => {
+                    self.execution_failure("Event handler", error, errors);
+                    false
+                }
+            },
             Err(error) => {
                 if errors.len() < 64 {
                     errors.push(format!("Event handler: {}", bounded(&error, 512)));
@@ -1289,10 +1510,7 @@ impl BoaPageRealm {
                 self.state.borrow_mut().timer_nesting = Some(timer.nesting);
                 let this = self.engine.context().global_object().into();
                 if let Err(error) = self.call_function(&timer.callback, &this, &timer.arguments) {
-                    reply.errors.push(format!(
-                        "Timer callback: {}",
-                        bounded(&error.to_string(), 512)
-                    ));
+                    self.execution_failure("Timer callback", error, &mut reply.errors);
                 }
                 self.checkpoint(&mut reply.errors);
                 self.state.borrow_mut().timer_nesting = None;
@@ -1338,7 +1556,10 @@ impl BoaPageRealm {
                 .collect()
         };
         for id in ids {
-            if self.engine.is_fatal() || self.state.borrow().host.events[event].immediate {
+            if self.closed
+                || self.engine.is_fatal()
+                || self.state.borrow().host.events[event].immediate
+            {
                 break;
             }
             let listener = {
@@ -1607,6 +1828,214 @@ mod tests {
     fn evaluate(realm: &mut BoaPageRealm, source: &str) {
         realm.engine.evaluate(source).unwrap();
         realm.engine.checkpoint().unwrap();
+    }
+    #[test]
+    fn escaped_error_event_roots_its_exception_then_releases_it_when_unreachable() {
+        let mut realm = realm(
+            "window.addEventListener('error',event=>globalThis.savedError=event);setTimeout(()=>{const node=document.createElement('div');node.id='thrown';throw node;},0);",
+        );
+        collect(&mut realm);
+        let before = realm.state.borrow().finalized.get();
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.errors.len(), 1);
+        collect(&mut realm);
+        let retained = realm.state.borrow().finalized.get();
+        evaluate(
+            &mut realm,
+            "if(savedError.error.id!=='thrown')throw 'exception root lost';",
+        );
+        collect(&mut realm);
+        assert_eq!(realm.state.borrow().finalized.get(), retained);
+        evaluate(&mut realm, "savedError=null;");
+        collect(&mut realm);
+        assert!(
+            realm.state.borrow().finalized.get() >= before + 2,
+            "both event and thrown wrapper must release"
+        );
+    }
+
+    #[test]
+    fn escaped_muted_error_event_does_not_root_the_unexposed_exception() {
+        let html = "<html><body><script>window.addEventListener('error',event=>globalThis.savedError=event);setTimeout(()=>{const node=document.createElement('div');node.id='foreign';throw node;},0);</script><script id=unknown src='/unknown.js'></script></body></html>";
+        let parsed = document::parse_with_scripting(html, "https://example.test/owned", true);
+        let node = parsed.query_selector(0, "#unknown").unwrap().unwrap();
+        let (realm, reply) = BoaPageRealm::start(Request {
+            url: "https://example.test/owned".into(),
+            html: html.into(),
+            external_scripts: Some(vec![super::super::ExternalScriptSource {
+                node,
+                source: String::new(),
+                provenance: None,
+            }]),
+        });
+        assert_eq!(reply.state, RealmState::Ready, "{:?}", reply.errors);
+        assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+        let mut realm = realm.unwrap();
+        collect(&mut realm);
+        let before = realm.state.borrow().finalized.get();
+        let fired = pump_next(&mut realm);
+        assert_eq!(fired.errors.len(), 1);
+        collect(&mut realm);
+        assert!(
+            realm.state.borrow().finalized.get() > before,
+            "muted exception must release even while event escapes"
+        );
+        evaluate(
+            &mut realm,
+            "if(savedError.error!==null||savedError.message!=='Script error.')throw 'muted payload';",
+        );
+    }
+
+    #[test]
+    fn collection_between_error_listeners_keeps_the_same_event_and_exception() {
+        let mut realm = realm("");
+        realm
+            .engine
+            .context_mut()
+            .register_global_builtin_callable(
+                JsString::from("testCollect"),
+                0,
+                NativeFunction::from_fn_ptr(|_, _, context| {
+                    let _ = context;
+                    modern::boa_gc::force_collect();
+                    Ok(JsValue::undefined())
+                }),
+            )
+            .unwrap();
+        evaluate(
+            &mut realm,
+            r#"
+            var sameEvent,value={proof:42};
+            window.addEventListener('error',event=>{sameEvent=event;testCollect();if(event.error!==value)throw 'payload lost';});
+            window.addEventListener('error',event=>{testCollect();if(event!==sameEvent||event.error!==value)throw 'identity lost';document.title='same rooted event';});
+            setTimeout(()=>{throw value;},0);
+        "#,
+        );
+        let mut advertised = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut advertised);
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.errors.len(), 1, "{:?}", reply.errors);
+        assert_eq!(
+            document::project_nodes(reply.snapshot.unwrap().nodes, "https://example.test/owned")
+                .unwrap()
+                .title,
+            "same rooted event"
+        );
+    }
+
+    #[test]
+    fn native_error_message_is_bounded_in_unicode_scalars_not_utf16_units() {
+        let mut realm = realm(
+            r#"
+            window.addEventListener('error',event=>{
+                if(Array.from(event.message).length!==512||event.message.length<=512||
+                    event.filename!==''||event.lineno!==0||event.colno!==0)throw 'message bound';
+                document.title='Unicode bounded';
+            });
+            TypeError=function(){throw 'page constructor ran';};
+        "#,
+        );
+        let exception: JsError = JsNativeError::typ().with_message("🦀".repeat(800)).into();
+        let diagnostic = modern::safe_error(&exception);
+        let mut errors = Vec::new();
+        realm.execution_failure(
+            "Owned native exception",
+            modern::ExecutionFailure {
+                diagnostic,
+                exception: Some(exception),
+            },
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let mut reply = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut reply);
+        assert_eq!(
+            document::project_nodes(reply.snapshot.unwrap().nodes, "https://example.test/owned")
+                .unwrap()
+                .title,
+            "Unicode bounded"
+        );
+    }
+
+    #[test]
+    fn ordinary_native_job_failure_still_cancels_old_queue_then_reports_and_drains_new_jobs() {
+        use modern::boa_engine::job::GenericJob;
+        let mut realm = realm(
+            r#"
+            window.onerror=(message,file,line,column,error)=>{
+                if(error!==42)throw 'native job identity';
+                Promise.resolve().then(()=>document.title='reporter checkpoint');
+            };
+        "#,
+        );
+        let canceled_job = Rc::new(Cell::new(false));
+        let observed = canceled_job.clone();
+        let js_realm = realm.engine.context().realm().clone();
+        realm.engine.context_mut().enqueue_job(
+            GenericJob::new(|_| Err(JsError::from_opaque(42.into())), js_realm.clone()).into(),
+        );
+        realm.engine.context_mut().enqueue_job(
+            GenericJob::new(
+                move |_| {
+                    observed.set(true);
+                    Ok(JsValue::undefined())
+                },
+                js_realm,
+            )
+            .into(),
+        );
+        let mut errors = Vec::new();
+        realm.checkpoint(&mut errors);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            !canceled_job.get(),
+            "old native-job failure queue behavior changed"
+        );
+        assert_eq!(realm.engine.stats().pending_jobs, 0);
+        assert_eq!(realm.engine.stats().jobs_admitted, 3);
+        assert_eq!(realm.engine.stats().jobs_executed, 2);
+        let mut reply = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut reply);
+        assert_eq!(reply.state, RealmState::Ready);
+        assert!(reply.task_wake.is_none());
+        assert_eq!(
+            document::project_nodes(reply.snapshot.unwrap().nodes, "https://example.test/owned")
+                .unwrap()
+                .title,
+            "reporter checkpoint"
+        );
+    }
+
+    #[test]
+    fn error_payload_admission_failure_runs_no_reporter_and_releases_tasks() {
+        let mut realm = realm(
+            "var reported=false;window.onerror=()=>{reported=true;};setTimeout(()=>{},100000);",
+        );
+        let events = realm.state.borrow().host.events.len();
+        realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+        let exception = JsError::from_opaque(42.into());
+        let mut errors = Vec::new();
+        realm.execution_failure(
+            "Owned admission failure",
+            modern::ExecutionFailure {
+                diagnostic: modern::safe_error(&exception),
+                exception: Some(exception),
+            },
+            &mut errors,
+        );
+        assert!(realm.closed);
+        assert_eq!(realm.state.borrow().host.events.len(), events);
+        assert_eq!(
+            realm.engine.get_global("reported").unwrap().as_boolean(),
+            Some(false)
+        );
+        let mut reply = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut reply);
+        assert_eq!(reply.state, RealmState::Closed);
+        assert!(reply.task_wake.is_none());
+        assert_eq!(reply.boa.unwrap().pending_jobs, 0);
+        assert!(realm.state.borrow().timers.is_empty());
+        assert_eq!(errors.len(), 2, "original diagnostic retained: {errors:?}");
     }
     #[test]
     fn weak_wrapper_cache_does_not_permanently_root_detached_nodes() {

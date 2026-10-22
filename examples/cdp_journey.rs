@@ -348,7 +348,10 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
 
     if matches!(
         fixture.path(),
-        "/script-events" | "/script-external-events" | "/script-task-events"
+        "/script-events"
+            | "/script-external-events"
+            | "/script-task-events"
+            | "/script-error-events"
     ) {
         return run_events(client, &fixture, evidence);
     }
@@ -524,8 +527,11 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
         println!("CDP_EVENTS_STATE {expected}; stale node rejected, no navigation");
         Ok(())
     }
-    if fixture.path() == "/script-task-events" {
-        // Only this new fixture creates controls in a later timer task. Poll
+    if matches!(
+        fixture.path(),
+        "/script-task-events" | "/script-error-events"
+    ) {
+        // These fixtures create controls in a later timer/error dispatch. Poll
         // ordinary public DOM state within the client's existing deadline;
         // never execute JS or weaken the original event-journey assertions.
         fn with_attribute<'a>(tree: &'a Value, name: &str, expected: &str) -> Option<&'a Value> {
@@ -541,20 +547,45 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 .iter()
                 .find_map(|child| with_attribute(child, name, expected))
         }
-        let expected = "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask";
+        let error_fixture = fixture.path() == "/script-error-events";
+        let expected = if error_fixture {
+            "typed-identity-canceled"
+        } else {
+            "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask"
+        };
+        let attribute = if error_fixture {
+            "data-error-proof"
+        } else {
+            "data-task-order"
+        };
+        let checkpoint =
+            "script,script-microtask,timer,property,property-microtask,listener,listener-microtask";
         loop {
             remaining(client.deadline)?;
             let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
             // Read one complete snapshot rather than keeping IDs across the
             // pending task projection, which correctly invalidates old IDs.
-            if with_attribute(&document["root"], "data-task-order", expected).is_some() {
+            if with_attribute(&document["root"], attribute, expected).is_some()
+                && (!error_fixture
+                    || with_attribute(&document["root"], "data-error-checkpoint", checkpoint)
+                        .is_some())
+            {
                 let state = with_attribute(&document["root"], "id", "state")
                     .and_then(|node| node["nodeId"].as_u64())
                     .ok_or_else(|| failure("Missing timer state node"))?;
-                if text_of(&document["root"], state).as_deref() != Some("timer task ready") {
+                let expected_state = if error_fixture {
+                    "window error ready"
+                } else {
+                    "timer task ready"
+                };
+                if text_of(&document["root"], state).as_deref() != Some(expected_state) {
                     return Err(failure("Timer task proof and visible state disagree"));
                 }
-                println!("CDP_TASK_ORDER_OK {expected}");
+                if error_fixture {
+                    println!("CDP_WINDOW_ERROR_OK {expected} checkpoint={checkpoint}");
+                } else {
+                    println!("CDP_TASK_ORDER_OK {expected}");
+                }
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));

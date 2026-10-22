@@ -333,6 +333,7 @@ fn external_scripts_and_global_event_handler_function_declarations_succeed() {
     let reply = execute(Request {
         external_scripts: Some(vec![mg_sparkle::js_browser::ExternalScriptSource {
             node: 5,
+            provenance: None,
             source: "function onclick(ev) { return ev; } function onsubmit(ev) { return ev; } document.getElementById('out').textContent = typeof onclick;".to_owned(),
         }]),
         url: "https://example.test/owned".into(),

@@ -40,6 +40,7 @@ pub(super) enum Kind {
     ReadyState,
     Click,
     Submit,
+    Error,
 }
 impl Kind {
     pub(super) fn name(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Kind {
             Self::DomReady => "DOMContentLoaded",
             Self::Load => "load",
             Self::ReadyState => "readystatechange",
+            Self::Error => "error",
             Self::Click => "click",
             Self::Submit => "submit",
         }
@@ -69,16 +71,17 @@ impl Kind {
     }
     // The original interpreter's event/serialization contract stays unchanged.
     pub(super) fn modern_parse(name: &str) -> Result<Self, String> {
-        if name == "readystatechange" {
-            Ok(Self::ReadyState)
-        } else {
-            Self::parse(name)
+        match name {
+            "readystatechange" => Ok(Self::ReadyState),
+            "error" => Ok(Self::Error),
+            _ => Self::parse(name),
         }
     }
     pub(super) fn modern_property(name: &str) -> Option<Self> {
         match name {
             "onload" => Some(Self::Load),
             "onreadystatechange" => Some(Self::ReadyState),
+            "onerror" => Some(Self::Error),
             _ => Self::property(name),
         }
     }

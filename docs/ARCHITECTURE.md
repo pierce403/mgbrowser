@@ -109,11 +109,14 @@ when a host has no isolated worker. The desktop enables scripts by default since
 v0.9.4 (`--disable-scripts` opts out);
 unsupported platforms retain the existing refusal path. The extraction preserved
 behavior; the later Boa adoption explicitly introduces the versioned profile in
-[BOA.md](BOA.md) and protocol v3 with validated engine-specific accounting and
-parent-issued timer tasks. Host polling drives task eligibility; painting/CDP
+[BOA.md](BOA.md) and protocol v4 with validated engine-specific accounting,
+typed classic-source provenance and parent-issued timer tasks. Host polling drives task eligibility; painting/CDP
 event draining alone does not. Timers share existing job/session resource
 ledgers rather than acquiring network, filesystem or process authority.
 Original protocol/allocation assertions remain in the explicit legacy test lane.
+Provenance is parent resource metadata, not a page/DOM capability. New modern
+readers accept absent provenance conservatively; old v3 readers do not accept
+the new field. See [Window errors](WINDOW_ERRORS.md) for the exposure floor.
 
 The host owns render dimensions and the resulting pixel allocation. Chassis
 emits update/restart requests only after explicit UI actions; the host authorizes

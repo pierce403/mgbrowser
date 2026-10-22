@@ -736,6 +736,7 @@ impl Browser {
         let session = self.session.clone();
         let scripts_enabled = self.scripts_enabled;
         let pool = self.child_pool.clone();
+        let source_wire_mode = pool.source_wire_mode();
         let resource_generation = self.resource_generation.clone();
         eprintln!(
             "NAVIGATE {} {}",
@@ -784,6 +785,7 @@ impl Browser {
                             response.url.as_str(),
                             cancel,
                             &resource_profile,
+                            source_wire_mode,
                         );
                         external_scripts = Some(sources);
                         script_fetch_profile = profile;
@@ -2883,6 +2885,7 @@ mod tests {
                     script: None,
                     document: None,
                     result: Ok(net::Response {
+                        resource_same_origin_chain: false,
                         url: url::Url::parse(url).unwrap(),
                         status: 200,
                         content_type: "text/html".into(),
@@ -3015,6 +3018,7 @@ mod tests {
                 script: None,
                 document: None,
                 result: Ok(net::Response {
+                    resource_same_origin_chain: false,
                     url: url::Url::parse("https://example.org/").unwrap(),
                     status: 200,
                     content_type: "text/html".into(),
@@ -3113,6 +3117,7 @@ mod tests {
                     script: Some(script),
                     document: None,
                     result: Ok(net::Response {
+                        resource_same_origin_chain: false,
                         url: url::Url::parse("https://example.test/").unwrap(),
                         status: 200,
                         content_type: "text/html".into(),
@@ -3188,6 +3193,7 @@ mod tests {
                     },
                 })),
                 result: Ok(net::Response {
+                    resource_same_origin_chain: false,
                     url: url::Url::parse("https://example.test/old").unwrap(),
                     status: 200,
                     content_type: "text/html".into(),

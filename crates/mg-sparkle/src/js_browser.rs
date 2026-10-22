@@ -1,6 +1,7 @@
 //! Explicit browser capabilities for the isolated original JavaScript interpreter.
 use crate::document::{self, Document, Node};
 use mg_butane::runtime::{AllocationReport, Host, Runtime, Value};
+use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
@@ -18,6 +19,7 @@ pub const MAX_EXTERNAL_SCRIPTS: usize = 16;
 pub const MAX_SCRIPTS: usize = 32;
 // Leave room for the existing versioned session envelope within its 2 MiB cap.
 pub const MAX_TYPED_REQUEST_BYTES: usize = 2 * 1024 * 1024 - 1024;
+pub const MAX_CLASSIC_SOURCE_URL_BYTES: usize = 16_384;
 const MAX_DOM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NODES: usize = 50_000;
 
@@ -37,6 +39,105 @@ pub struct Request {
 pub struct ExternalScriptSource {
     pub node: usize,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ClassicSourceProvenance>,
+}
+
+/// Parent-selected initial request encoding; page markup cannot select this.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SourceWireMode {
+    #[default]
+    Modern,
+    Legacy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClassicErrorVisibility {
+    SameOrigin,
+    Muted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassicSourceProvenance {
+    pub response_url: String,
+    pub error_visibility: ClassicErrorVisibility,
+}
+
+/// Old reader shape: even `provenance: null` is an unknown field in v1.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyRequest {
+    url: String,
+    html: String,
+    #[serde(default)]
+    external_scripts: Option<Vec<LegacyExternalSource>>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyExternalSource {
+    node: usize,
+    source: String,
+}
+impl From<LegacyRequest> for Request {
+    fn from(value: LegacyRequest) -> Self {
+        Self {
+            url: value.url,
+            html: value.html,
+            external_scripts: value.external_scripts.map(|sources| {
+                sources
+                    .into_iter()
+                    .map(|source| ExternalScriptSource {
+                        node: source.node,
+                        source: source.source,
+                        provenance: None,
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
+pub struct LegacyWireView<'a>(&'a Request);
+struct LegacySourceView<'a>(&'a ExternalScriptSource);
+struct LegacySourcesView<'a>(&'a [ExternalScriptSource]);
+impl Serialize for LegacySourceView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut output = serializer.serialize_struct("LegacyExternalSource", 2)?;
+        output.serialize_field("node", &self.0.node)?;
+        output.serialize_field("source", &self.0.source)?;
+        output.end()
+    }
+}
+impl Serialize for LegacySourcesView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut output = serializer.serialize_seq(Some(self.0.len()))?;
+        for source in self.0 {
+            output.serialize_element(&LegacySourceView(source))?;
+        }
+        output.end()
+    }
+}
+impl Serialize for LegacyWireView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut output = serializer.serialize_struct(
+            "Request",
+            2 + usize::from(self.0.external_scripts.is_some()),
+        )?;
+        output.serialize_field("url", &self.0.url)?;
+        output.serialize_field("html", &self.0.html)?;
+        if let Some(sources) = &self.0.external_scripts {
+            output.serialize_field("external_scripts", &LegacySourcesView(sources))?;
+        }
+        output.end()
+    }
+}
+impl Request {
+    /// Borrow source strings and stream the exact original field/entry shape.
+    pub fn legacy_wire_view(&self) -> LegacyWireView<'_> {
+        LegacyWireView(self)
+    }
 }
 
 pub fn classic_script_type(kind: &str) -> bool {
@@ -99,12 +200,26 @@ pub fn external_request_json_bytes(url: &str, html: &str) -> Result<usize, Strin
 }
 
 pub fn external_source_json_bytes(node: usize, source: &str) -> Result<usize, String> {
+    external_source_json_bytes_with_provenance(node, source, None)
+}
+
+pub fn external_source_json_bytes_with_provenance(
+    node: usize,
+    source: &str,
+    provenance: Option<&ClassicSourceProvenance>,
+) -> Result<usize, String> {
     #[derive(Serialize)]
     struct BorrowedSource<'a> {
         node: usize,
         source: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<&'a ClassicSourceProvenance>,
     }
-    json_bytes(&BorrowedSource { node, source })
+    json_bytes(&BorrowedSource {
+        node,
+        source,
+        provenance,
+    })
 }
 
 impl Request {
@@ -146,6 +261,41 @@ impl Request {
             if source.source.len() > MAX_EXTERNAL_SOURCE {
                 return Err("External script exceeds the 256 KiB source limit".into());
             }
+            if let Some(provenance) = &source.provenance {
+                // Check raw UTF-8 bytes before URL parsing/canonicalization.
+                if provenance.response_url.len() > MAX_CLASSIC_SOURCE_URL_BYTES {
+                    return Err("Classic source response URL exceeds 16384 bytes".into());
+                }
+                let response = url::Url::parse(&provenance.response_url)
+                    .map_err(|_| "Invalid classic source response URL")?;
+                let document_url =
+                    url::Url::parse(&self.url).map_err(|_| "Invalid script document origin")?;
+                let raw_userinfo =
+                    provenance
+                        .response_url
+                        .split_once(':')
+                        .is_some_and(|(_, tail)| {
+                            // Special HTTP(S) URLs normalize leading slash/backslash
+                            // runs and discard these ASCII controls. Detect even
+                            // empty userinfo before the parser normalizes it away;
+                            // an @ in a path/query/fragment is not authority.
+                            tail.chars()
+                                .filter(|ch| !matches!(ch, '\t' | '\n' | '\r'))
+                                .skip_while(|ch| matches!(ch, '/' | '\\'))
+                                .take_while(|ch| !matches!(ch, '/' | '\\' | '?' | '#'))
+                                .any(|ch| ch == '@')
+                        });
+                if !matches!(response.scheme(), "http" | "https")
+                    || response.host().is_none()
+                    || !response.username().is_empty()
+                    || response.password().is_some()
+                    || raw_userinfo
+                    || (provenance.error_visibility == ClassicErrorVisibility::SameOrigin
+                        && response.origin() != document_url.origin())
+                {
+                    return Err("Invalid or contradictory classic source provenance".into());
+                }
+            }
             bytes = bytes
                 .checked_add(source.source.len())
                 .filter(|bytes| *bytes <= MAX_SOURCE)
@@ -155,6 +305,37 @@ impl Request {
             return Err("Script request exceeds the existing 2 MiB wire limit".into());
         }
         Ok(bytes)
+    }
+
+    /// Modern retained host storage is distinct from source-text admission.
+    /// The explicit original evaluator keeps its historical logical counters.
+    fn validate_modern_external_sources(&self, document: &Document) -> Result<usize, String> {
+        let bytes = self.validate_external_sources(document)?;
+        let Some(sources) = &self.external_scripts else {
+            if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+                return Err("Script request exceeds the existing 2 MiB wire limit".into());
+            }
+            return Ok(bytes);
+        };
+        let mut metadata_bytes = sources
+            .capacity()
+            .checked_mul(std::mem::size_of::<ExternalScriptSource>())
+            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .ok_or("External source records exceed the existing host-storage limit")?;
+        for source in sources {
+            if let Some(provenance) = &source.provenance {
+                metadata_bytes = metadata_bytes
+                    .checked_add(provenance.response_url.capacity())
+                    .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+                    .ok_or("External provenance exceeds the existing host-storage limit")?;
+            }
+        }
+        bytes
+            .checked_add(metadata_bytes)
+            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .ok_or_else(|| {
+                "External sources and metadata exceed the existing host-storage limit".into()
+            })
     }
 
     fn external_source(&self, index: usize) -> Option<&str> {
@@ -1570,6 +1751,45 @@ impl Host for BrowserHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modern_metadata_storage_does_not_change_original_source_counters() {
+        let html = "<script id=s src=/s.js></script>";
+        let document = document::parse_with_scripting(html, "https://example.test/", true);
+        let node = document.query_selector(0, "#s").unwrap().unwrap();
+        let mut sources = Vec::with_capacity(8);
+        let mut response_url = String::with_capacity(512);
+        response_url.push_str("https://example.test/s.js");
+        sources.push(ExternalScriptSource {
+            node,
+            source: "0;".into(),
+            provenance: Some(ClassicSourceProvenance {
+                response_url,
+                error_visibility: ClassicErrorVisibility::SameOrigin,
+            }),
+        });
+        let expected_metadata = sources.capacity() * std::mem::size_of::<ExternalScriptSource>()
+            + sources[0]
+                .provenance
+                .as_ref()
+                .unwrap()
+                .response_url
+                .capacity();
+        let request = Request {
+            url: "https://example.test/".into(),
+            html: html.into(),
+            external_scripts: Some(sources),
+        };
+        let original = request.validate_external_sources(&document).unwrap();
+        assert_eq!(
+            original,
+            html.len() + 2,
+            "historical evaluator logical counters measure source bytes"
+        );
+        assert_eq!(
+            request.validate_modern_external_sources(&document).unwrap(),
+            original + expected_metadata
+        );
+    }
     fn page(script: &str) -> Reply {
         execute(Request {
             external_scripts: None,
