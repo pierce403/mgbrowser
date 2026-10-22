@@ -21,6 +21,11 @@ acceptance helpers pass. Receipts are recorded in the
 [dated work log](memory/logs/2026-10-22.md).
 See the [release notes and limitations](docs/RELEASE-v0.9.10.md).
 
+The next [queued document-lifecycle contract](docs/DOCUMENT_LIFECYCLE.md) is
+reviewed, not implemented: actual v0.9.10 controls establish the old startup and
+resource premises before changing event order, worker progress and initial-load
+reporting. The public browser still bundles startup; this adds no WPT passes.
+
 ### Previous v0.9.9 increment
 
 The v0.9.9 increment adds queued Window `unhandledrejection` and

@@ -72,3 +72,12 @@
   exact child/listener ownership fixes this particular harness failure; real
   ephemeral controls distinguish TIME_WAIT reuse from a still-active listener.
   This is not permission to reuse an unrelated service or enable SO_REUSEPORT.
+
+- 2026-10-22: A five-case probe against the exact public v0.9.10 retained worker
+  confirms bundled lifecycle, zero empty-start work and Ready at exactly 256
+  pending / 2,048 canceled lifetime admissions. A queued-lifecycle increment must
+  explicitly migrate these premises while retaining the same inclusive limits;
+  adding two to every expected counter is not valid when source execution was
+  already fatal. The probe also reproduces a document capture-stop phase bug.
+  These are recorded baseline observations, not completed queued lifecycle or
+  full-harness readiness. docs/DOCUMENT_LIFECYCLE.md fixes the next contract.

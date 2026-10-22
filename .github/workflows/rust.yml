@@ -31,6 +31,7 @@ jobs:
           python3 tools/test_task_services_smoke.py
           python3 tools/test_rejection_services_smoke.py
           python3 tools/test_message_services_smoke.py
+          python3 -B -m unittest discover -s tools -p test_lifecycle_baseline.py
       - name: Check layout geometry and diagnostics in release mode
         run: cargo +1.91.1 test --locked --release -p mg-sparkle --test percentage_heights --test style_diagnostics --test style_layout --test formatting_contexts --test layout_boundaries --test positioned_layout --test viewport_overflow --test stacking_layout --test svg_styles --test inline_svg_render --test gradient_styles --test gradient_render --test fit_content_width --test max_content_width --test column_baseline --test anonymous_table_layout
       - name: Build browser and local fixture server

@@ -532,6 +532,14 @@ jobs pending: not typed completion or complete runtime feasibility. This adds no
 upstream score, full structured clone, cross-context messaging, queued lifecycle
 or trusted typed observation claim; unchecked F-016 criteria remain open.
 
+Next-contract review, 2026-10-22: [queued snapshot lifecycle](docs/DOCUMENT_LIFECYCLE.md)
+freezes mandatory shared-work admission, strict proposed modern v5 progress,
+sticky initial-script failure and parent/CDP/headless integration before engine
+changes. Five controls against the actual public v0.9.10 reproduce bundled
+ordering, exact admission boundaries and a capture-stop phase bug. This review
+does not implement the contract, change production v4, add WPT passes or complete
+any unchecked criterion above.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable

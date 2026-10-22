@@ -140,6 +140,12 @@ relax older diagnostic checkers. A full unchanged harness bootstrap probe is
 non-scoring: successful initialization or pending work is not typed completion,
 full lifecycle readiness or an upstream pass.
 
+Before implementing queued snapshot lifecycle, read docs/DOCUMENT_LIFECYCLE.md.
+Its proposed v5 progress, mandatory shared-work admission, typed sticky initial
+outcome and renderer integration are a frozen prerequisite, not shipped behavior.
+Separate semantic timing migrations from resource assertions; never blanket-add
+lifecycle counters or accept a new status string in place of initial failures.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

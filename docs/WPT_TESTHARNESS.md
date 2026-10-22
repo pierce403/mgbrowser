@@ -6,6 +6,13 @@ No JavaScript testharness result or complete Window readiness is claimed here.
 Remaining browser services require separate feature contributions and versioned
 releases after the published expanded static baseline.
 
+The next [queued snapshot-lifecycle contract](DOCUMENT_LIFECYCLE.md) is frozen
+before implementation: actual v0.9.10 worker baselines, mandatory shared
+admission, proposed strict modern v5 progress and typed sticky initial outcomes.
+Production remains v4 with bundled startup. The contract also freezes the static
+renderer's readiness integration independently of any scored engine gain;
+it does not add timer waits, a typed observer or another scored selection.
+
 ## Immutable input
 
 The current corpus already retains the complete upstream harness at revision

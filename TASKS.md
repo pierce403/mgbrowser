@@ -68,12 +68,17 @@ following dependency order, updating evidence as each increment ships:
    The complete unchanged harness now initializes without the old registration
    error, but two jobs remain pending in the navigation-only probe. This is not
    typed completion, a new upstream pass or proof that full execution fits.
-   **Next:** separately review queued snapshot lifecycle, then typed observation.
-   Freeze mandatory-work admission, versioned monotonic progress, parent loading/
-   pump behavior, sticky initial-load failures and CDP/headless completion before
-   implementation. Keep the existing limits; do not add a free lifecycle queue
-   or silently drain arbitrary timers. Corpus and observer/scoring changes
-   require their own frozen review.
+   **Next:** implement [the separately reviewed queued snapshot lifecycle
+   contract](docs/DOCUMENT_LIFECYCLE.md), then typed observation. Five actual
+   public-v0.9.10 worker controls freeze the old synchronous ordering, exact
+   zero/256/2,048 work premises and a capture-stop phase bug. The contract fixes
+   two shared mandatory permits, strict modern v5 monotonic progress, parent
+   fetch-versus-lifecycle admission, sticky typed initial outcome and real
+   CDP/headless completion. This is a pre-implementation freeze: no new lifecycle
+   behavior or protocol is shipped yet. Keep every existing limit; no free
+   queue, blanket counter adjustment or arbitrary-timer drain. Renderer readiness
+   integration must preserve failure/diagnostic/pixel guards; corpus and typed
+   observer/scoring expansions still require separate frozen contributions.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
