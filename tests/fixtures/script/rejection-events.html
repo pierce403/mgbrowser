@@ -1,0 +1,84 @@
+<!doctype html><html><head><title>Authored Promise rejection fixture</title></head><body>
+<h1>Authored Promise rejection with retained events</h1>
+<p id="state">Waiting for a real later rejection notification</p>
+<div id="controls"></div><div id="parking"></div>
+<script>
+// Authored acceptance input: not upstream WPT or a scored harness control.
+var starts = 1, retainedReason = { proof: 'owned rejection object' };
+var rejected, savedRejection, propertyCalls = 0, listenerCalls = 0;
+var checkpointDone = false, rejectionOrder = ['script'];
+Promise.resolve().then(function () { rejectionOrder.push('script-microtask'); });
+window.onerror = function () { throw new Error('Rejection must not dispatch Window error'); };
+window.onunhandledrejection = function (event) {
+  if (arguments.length !== 1 || this !== window || event.promise !== rejected ||
+      event.reason !== retainedReason || event.target !== window || event.currentTarget !== window ||
+      event.eventPhase !== 2 || event.bubbles || !event.cancelable || event.defaultPrevented ||
+      document.readyState !== 'complete' || propertyCalls !== 0 ||
+      rejectionOrder.join(',') !== 'script,script-microtask')
+    throw new Error('Wrong later Promise rejection property delivery');
+  propertyCalls++;
+  savedRejection = event;
+  rejectionOrder.push('property');
+  Promise.resolve().then(function () { rejectionOrder.push('property-microtask'); });
+  return false;
+};
+window.addEventListener('unhandledrejection', function (event) {
+  if (this !== window || arguments.length !== 1 || event !== savedRejection ||
+      event.type !== 'unhandledrejection' || event.promise !== rejected ||
+      event.reason !== retainedReason || event.target !== window || event.currentTarget !== window ||
+      event.eventPhase !== 2 || event.bubbles || !event.cancelable || !event.defaultPrevented ||
+      propertyCalls !== 1 || listenerCalls !== 0 ||
+      rejectionOrder.join(',') !== 'script,script-microtask,property,property-microtask')
+    throw new Error('Wrong native canceled PromiseRejectionEvent');
+  listenerCalls++;
+  rejectionOrder.push('listener');
+  // These controls cannot exist until a genuine native rejection notification.
+  document.getElementById('controls').innerHTML = '<a id="cancel" href="/event-trap">Cancel this link</a><form id="search" action="/event-trap" method="get"><input id="query" name="q" type="text"><button id="submit" type="submit" name="submit" value="events">Search</button></form>';
+  var count = 0, clicked = false;
+  var form = document.getElementById('search');
+  var query = document.getElementById('query');
+  var state = document.getElementById('state');
+  function checkSavedRejection() {
+    if (!checkpointDone || starts !== 1 || propertyCalls !== 1 || listenerCalls !== 1 ||
+        savedRejection !== event || event.promise !== rejected || event.reason !== retainedReason ||
+        event.target !== window || event.currentTarget !== null || event.eventPhase !== 0 ||
+        !event.defaultPrevented)
+      throw new Error('Escaped native rejection lost its payload or dispatch state');
+  }
+  document.getElementById('cancel').onclick = function (click) {
+    click.preventDefault();
+    checkSavedRejection();
+    if (query.value !== 'Rust & café') throw new Error('Typed value did not reach rejection-created handler');
+    clicked = true;
+    state.textContent = 'link canceled';
+  };
+  form.onsubmit = function (submit) {
+    count++;
+    checkSavedRejection();
+    if (!clicked) { submit.preventDefault(); throw new Error('Retained rejection state failed'); }
+    if (count === 1) {
+      submit.preventDefault();
+      document.getElementById('parking').appendChild(query);
+      form.appendChild(query);
+      var proof = document.createElement('input');
+      proof.id = 'proof'; proof.type = 'hidden'; proof.name = 'proof';
+      proof.value = 'pending'; form.appendChild(proof);
+      state.textContent = 'first submit canceled';
+    } else if (count === 2 && query.value === 'Rust & café again') {
+      document.getElementById('proof').value = 'retained-1-2';
+      form.action = '/event-search';
+    } else { submit.preventDefault(); throw new Error('Unexpected rejection activation'); }
+  };
+  document.body.setAttribute('data-rejection-proof', 'typed-identity-canceled');
+  Promise.resolve().then(function () {
+    rejectionOrder.push('listener-microtask');
+    var expected = 'script,script-microtask,property,property-microtask,listener,listener-microtask';
+    if (rejectionOrder.join(',') !== expected) throw new Error('Wrong rejection checkpoint order');
+    checkpointDone = true;
+    document.body.setAttribute('data-rejection-checkpoint', expected);
+    document.title = 'Promise rejection controls ready';
+    state.textContent = 'promise rejection ready';
+  });
+});
+rejected = Promise.reject(retainedReason);
+</script></body></html>

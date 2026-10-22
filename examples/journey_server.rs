@@ -30,6 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "200 OK",
                 include_str!("../tests/fixtures/script/error-events.html"),
             ),
+            "/script-rejection-events" => (
+                "200 OK",
+                include_str!("../tests/fixtures/script/rejection-events.html"),
+            ),
             "/external-events.js" => (
                 "200 OK",
                 include_str!("../tests/fixtures/script/external-events.js"),

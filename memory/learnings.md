@@ -1,5 +1,14 @@
 # Candidate learnings
 
+- 2026-10-22: Authored Window-error and Promise-rejection native/CDP fixtures
+  intentionally retain execution diagnostics after cancellation. Dedicated
+  checkers require the exact expected diagnostic and partial transaction while
+  preserving the older diagnostic-free checkers. Their negative controls reject
+  missing/extra/erased errors, phantom tasks and invalid/renewed counters. Both
+  native paths have been exercised locally; final release/public verification
+  remains separately required. Curator extends browser-check for this recurring
+  acceptance pattern, not to count these authored controls as WPT passes.
+
 - 2026-10-21: Expanded WPT validation took over 20 minutes to publish its
   canonical artifact, exposing a race against the native publisher's 18-minute
   wait and documented 20-minute build maximum. The old native failure's exact

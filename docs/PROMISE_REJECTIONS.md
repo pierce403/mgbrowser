@@ -1,7 +1,7 @@
 # Next increment: queued Promise rejection notification
 
-Reviewed implementation contract, 2026-10-22. This is proposed v0.9.9 work,
-not implemented or released behavior. v0.9.8 at
+Reviewed implementation contract, 2026-10-22. The v0.9.9 implementation candidate
+passes focused local controls but is not yet released. v0.9.8 at
 `3e2955800de32e6442412734398d5cbdf6f884cd` supplies Window errors and source
 provenance; this increment follows it toward
 [Window-testharness readiness](WPT_TESTHARNESS.md). No WPT selection, observer,
@@ -80,6 +80,19 @@ close and realm teardown must release the relevant strong roots and permits.
 Clear queued records, weak-map roots, active payloads and wakes on terminal
 publication; invalidating permits alone does not release JavaScript values.
 
+This binding-root rule is not immediate whole-VM reclamation. Pinned Boa 0.22's
+fuzz opcode-exhaustion return bypasses its usual VM-stack truncation; a fatal
+callback can leave its argument values rooted in the private VM until Context
+teardown. Clearing kept objects does not repair that stack. Library callers must
+discard a Fatal or Closed BoaPageRealm, never retain it as a reusable idle realm.
+The production child loop returns after a terminal reply, dropping the realm;
+the parent manager also stops the terminal worker before publishing completion.
+Test binding cleanup immediately and finalization after actual teardown, without
+test-only GC repair, new VM-stack APIs, replacement engines or renewed budgets.
+The original stronger development assertion demanding unescaped VM finalization
+while retaining the fatal Context failed; keep that receipt as a known upstream
+terminal-retention limitation, not a passed reclamation control.
+
 Every record, queue capacity and weak-membership entry uses existing host/System
 allocation admission. There is no prepaid rejection allowance. Optional fixed
 storage still requires actual admission; no uncharged reserve or renewed counter
@@ -127,11 +140,24 @@ false success; it is not a new fatal resource failure or a whole-browser sandbox
 A future typed harness observer must preserve/classify that uncertainty rather
 than invent an unhandled result or accept clean completion.
 
+Discarding an existing weak outstanding-membership map when the floor falls
+also sets that flag: future handled observation is lost even when the original
+unhandled reply already retained its diagnostic. A muted late Handle that finds
+outstanding membership sets the same flag when deleting it. Conservatively
+discarding a map may over-report uncertainty after its keys were collected or
+handled; no page code or extra strong root is used to prove the map empty.
+
 For actual local unhandled notification, retain a bounded data-only host
 diagnostic independently of event cancellation or subsequent handling. Never
 read reason getters, coercions, message or stack for host extraction. Page
 listeners may inspect their own exposed values as ordinary guarded JavaScript.
 Missing or completion-looking output cannot erase a retained execution failure.
+The actual-notification diagnostic is exactly `Unhandled Promise rejection`,
+recorded in that transaction like existing Window-error diagnostics. A later
+handled notification does not mutate/retract the earlier reply or host log;
+unrelated later replies need not repeat it. Only the observation-gap notice is
+realm-sticky in every reply. Future typed observation must aggregate all
+transaction failures, never infer success from the last reply alone.
 
 ## Frozen authored acceptance before implementation
 
@@ -177,3 +203,16 @@ raise the cap, drop license material or optimize unrelated JavaScript to ship.
 Versioned release and verified current public installer finish this increment,
 not source-only publication. Messaging, fully queued lifecycle, typed harness
 observation and full-harness runtime feasibility remain separate next gates.
+
+Local development receipt: all 292 focused tests pass in both debug and release,
+including 28 private Boa binding controls, 22 semantic and 19 resource/privacy
+cases. The original 18 resource controls and 22 semantic controls have recorded
+old-source failures before implementation. Root's actual-worker controls and an
+initial debug native/external-CDP rejection-created form pass separately. See
+the dated log for exact failures, additive review controls and terminal-policy
+clarification. Complete workspace debug/release each pass 1,851 tests, with no
+failure and the same two manually invoked updater tests ignored. A fresh complete
+WPT run retains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011, with unchanged
+case outcomes, page pixels and requests. All eleven packaged native helpers pass.
+Exact-commit CI/tag and public release/installer/old-updater acceptance remain
+required; no new WPT pass or full Window readiness is claimed.

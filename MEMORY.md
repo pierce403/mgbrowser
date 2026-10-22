@@ -26,9 +26,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/PERFORMANCE.md`: Browser paint/CLI measurements, cache identity and
   explicit retained-payload ceilings; unavailable worker accounting stays visible.
 
-- `docs/PROMISE_REJECTIONS.md`: reviewed next-increment contract for queued
-  rejection notification, shared work, traced/weak ownership and privacy-related
-  incomplete observation. Planning is not shipped behavior or WPT acceptance.
+- `docs/PROMISE_REJECTIONS.md`: v0.9.9 candidate's queued rejection notification,
+  shared work, traced/weak ownership and persistent privacy-observation gaps.
+  Pinned Boa fatal VM roots require actual terminal teardown, not an extra
+  kept-object clear. Local implementation is not public-release/WPT acceptance.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

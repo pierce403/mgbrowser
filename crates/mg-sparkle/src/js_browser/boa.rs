@@ -17,10 +17,11 @@ use mg_butane::{
 };
 use modern::boa_engine::{
     Context, JsData, JsError, JsNativeError, JsResult, JsString, JsValue, NativeFunction,
+    builtins::promise::{OperationType, Promise, PromiseState},
     js_string,
     object::{
         FunctionObjectBuilder, JsObject,
-        builtins::{JsProxy, JsWeakMap},
+        builtins::{JsPromise, JsProxy, JsWeakMap},
     },
     property::{Attribute, PropertyDescriptor, PropertyKey},
 };
@@ -34,6 +35,10 @@ use std::{
 };
 
 static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
+const REJECTION_FAILURE: &str = "Promise rejection tracking invariant or storage admission failed";
+const UNHANDLED_REJECTION: &str = "Unhandled Promise rejection";
+const REJECTION_GAP: &str =
+    "Promise rejection observation suppressed by source-exposure policy; handled status unknown.";
 
 #[derive(Trace, JsData)]
 struct Brand {
@@ -42,6 +47,7 @@ struct Brand {
     // Only the actual wrapper retains a thrown value. The Rust-only event
     // record and weak wrapper cache must not become hidden exception roots.
     error: Option<ErrorPayload>,
+    rejection: Option<RejectionPayload>,
     #[unsafe_ignore_trace]
     finalized: Rc<Cell<usize>>,
 }
@@ -50,6 +56,54 @@ struct Brand {
 struct ErrorPayload {
     message: JsString,
     error: JsValue,
+}
+
+#[derive(Clone, Trace, Finalize)]
+struct RejectionPayload {
+    promise: JsObject<Promise>,
+    reason: JsValue,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CandidatePhase {
+    Pending,
+    Frozen,
+    Active { handled: bool },
+}
+
+#[derive(Trace, Finalize)]
+struct RejectionCandidate {
+    #[unsafe_ignore_trace]
+    id: u64,
+    #[unsafe_ignore_trace]
+    phase: CandidatePhase,
+    #[unsafe_ignore_trace]
+    permit: Option<modern::WorkPermit>,
+    payload: RejectionPayload,
+}
+
+#[derive(Trace, Finalize)]
+enum DomTaskKind {
+    Batch(#[unsafe_ignore_trace] Vec<u64>),
+    Handled {
+        #[unsafe_ignore_trace]
+        permit: modern::WorkPermit,
+        payload: RejectionPayload,
+    },
+}
+
+enum SelectedTask {
+    Timer(Timer),
+    Dom(DomTask),
+}
+
+#[derive(Trace, Finalize)]
+struct DomTask {
+    #[unsafe_ignore_trace]
+    handle: u64,
+    #[unsafe_ignore_trace]
+    deadline: Instant,
+    kind: DomTaskKind,
 }
 impl Finalize for Brand {
     fn finalize(&self) {
@@ -100,6 +154,15 @@ struct State {
     realm: u64,
     listeners: Vec<Listener>,
     timers: Vec<Timer>,
+    rejections: Vec<RejectionCandidate>,
+    dom_tasks: Vec<DomTask>,
+    // Values are scalar membership markers. This private native map must never
+    // turn notified promises/reasons into strong realm-lifetime roots.
+    outstanding_rejections: Option<JsWeakMap>,
+    #[unsafe_ignore_trace]
+    next_candidate: u64,
+    #[unsafe_ignore_trace]
+    rejection_observation_gap: bool,
     #[unsafe_ignore_trace]
     next_timer: u32,
     #[unsafe_ignore_trace]
@@ -144,10 +207,184 @@ impl State {
             Instant::now()
         }
     }
-    fn clear_timers(&mut self) {
+    fn take_work(
+        &mut self,
+    ) -> (
+        Vec<Timer>,
+        Vec<RejectionCandidate>,
+        Vec<DomTask>,
+        Option<JsWeakMap>,
+    ) {
         self.armed_wake = None;
-        self.timers.clear();
+        (
+            std::mem::take(&mut self.timers),
+            std::mem::take(&mut self.rejections),
+            std::mem::take(&mut self.dom_tasks),
+            self.outstanding_rejections.take(),
+        )
     }
+}
+
+// The host ledger admits actual retained Vec capacity, separately from JS
+// source statistics. System allocator admission independently covers the native
+// allocation itself in a production worker. No queue has a prepaid allowance.
+fn reserve_storage<T>(host: &mut BrowserHost, values: &mut Vec<T>, extra: usize) -> Result<(), ()> {
+    let needed = values.len().checked_add(extra).ok_or(())?;
+    if needed <= values.capacity() {
+        return Ok(());
+    }
+    let old = values.capacity();
+    let bytes = (needed - old)
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(())?;
+    host.charge(bytes).map_err(|_| ())?;
+    values
+        .try_reserve_exact(needed - values.len())
+        .map_err(|_| ())?;
+    let excess = values.capacity().checked_sub(needed).ok_or(())?;
+    if excess != 0 {
+        host.charge(excess.checked_mul(std::mem::size_of::<T>()).ok_or(())?)
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+fn rejection_exposure(context: &Context) -> Result<bool, ()> {
+    let dynamic = modern::context_dynamic_compilation_seen(context).ok_or(())?;
+    let shared = context.get_data::<Shared>().ok_or(())?;
+    Ok(shared.borrow().error_exposure_allowed && !dynamic)
+}
+
+fn observe_rejection(promise: &JsObject<Promise>, operation: OperationType, context: &mut Context) {
+    // This no-result hook is bookkeeping only: no script calls, property reads,
+    // coercion, diagnostics allocation or retained values before admission.
+    if modern::check_context(context).is_err() {
+        return;
+    }
+    if track_rejection(promise, operation, context).is_err() {
+        // All State/policy borrows and local permits have ended before latching.
+        modern::latch_context(context, REJECTION_FAILURE);
+    }
+}
+
+fn track_rejection(
+    promise: &JsObject<Promise>,
+    operation: OperationType,
+    context: &mut Context,
+) -> Result<(), ()> {
+    let allowed = rejection_exposure(context)?;
+    let shared = context.get_data::<Shared>().ok_or(())?.clone();
+    match operation {
+        OperationType::Reject => {
+            if !allowed {
+                shared.borrow_mut().rejection_observation_gap = true;
+                return Ok(());
+            }
+            if shared
+                .borrow()
+                .rejections
+                .iter()
+                .any(|candidate| &candidate.payload.promise == promise)
+            {
+                return Err(());
+            }
+            let permit = modern::admit_host_task(context).map_err(|_| ())?;
+            let id = {
+                let mut data = shared.borrow_mut();
+                let id = data.next_candidate.checked_add(1).ok_or(())?;
+                let State {
+                    host, rejections, ..
+                } = &mut *data;
+                reserve_storage(host, rejections, 1)?;
+                id
+            };
+            let PromiseState::Rejected(reason) = JsPromise::from(promise.clone()).state() else {
+                return Err(());
+            };
+            let mut data = shared.borrow_mut();
+            data.next_candidate = id;
+            data.rejections.push(RejectionCandidate {
+                id,
+                phase: CandidatePhase::Pending,
+                permit: Some(permit),
+                payload: RejectionPayload {
+                    promise: promise.clone(),
+                    reason,
+                },
+            });
+        }
+        OperationType::Handle => {
+            let removed = {
+                let mut data = shared.borrow_mut();
+                if let Some(index) = data
+                    .rejections
+                    .iter()
+                    .position(|candidate| &candidate.payload.promise == promise)
+                {
+                    if let CandidatePhase::Active { handled } = &mut data.rejections[index].phase {
+                        *handled = true;
+                        return Ok(());
+                    }
+                    Some(data.rejections.swap_remove(index))
+                } else {
+                    None
+                }
+            };
+            if removed.is_some() {
+                drop(removed);
+                return Ok(());
+            }
+            let map = shared.borrow().outstanding_rejections.clone();
+            let Some(map) = map else {
+                return Ok(());
+            };
+            let object = promise.clone().upcast();
+            let membership = map.get(&object, context).map_err(|_| ())?;
+            if membership.is_undefined() {
+                return Ok(());
+            }
+            if membership.as_number() != Some(1.0) {
+                return Err(());
+            }
+            if !map.delete(&object, context).map_err(|_| ())? {
+                return Err(());
+            }
+            if !allowed {
+                shared.borrow_mut().rejection_observation_gap = true;
+                return Ok(());
+            }
+            // Late handling creates a genuinely new task, not a refund or reuse
+            // of the already consumed notification's reservation.
+            let permit = modern::admit_host_task(context).map_err(|_| ())?;
+            let (handle, deadline) = {
+                let mut data = shared.borrow_mut();
+                let handle = data.next_handle.checked_add(1).ok_or(())?;
+                let deadline = data.now();
+                let State {
+                    host, dom_tasks, ..
+                } = &mut *data;
+                reserve_storage(host, dom_tasks, 1)?;
+                (handle, deadline)
+            };
+            let PromiseState::Rejected(reason) = JsPromise::from(promise.clone()).state() else {
+                return Err(());
+            };
+            let mut data = shared.borrow_mut();
+            data.next_handle = handle;
+            data.dom_tasks.push(DomTask {
+                handle,
+                deadline,
+                kind: DomTaskKind::Handled {
+                    permit,
+                    payload: RejectionPayload {
+                        promise: promise.clone(),
+                        reason,
+                    },
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 // A native conversion may re-enter JS. Only the outer driver, after that whole
@@ -252,6 +489,15 @@ fn wrap_payload(
     error: Option<ErrorPayload>,
     context: &mut Context,
 ) -> JsResult<JsValue> {
+    wrap_event_payload(handle, error, None, context)
+}
+
+fn wrap_event_payload(
+    handle: &str,
+    error: Option<ErrorPayload>,
+    rejection: Option<RejectionPayload>,
+    context: &mut Context,
+) -> JsResult<JsValue> {
     modern::check_context(context)?;
     let handle = if handle == "node:0" {
         "document"
@@ -290,6 +536,7 @@ fn wrap_payload(
             handle: handle.into(),
             realm,
             error,
+            rejection,
             finalized,
         },
     );
@@ -423,7 +670,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         }
         return fallback_get(args, context);
     };
-    if let Some(value) = error_property(&args[0], &name) {
+    if let Some(value) =
+        error_property(&args[0], &name).or_else(|| rejection_property(&args[0], &name))
+    {
         return Ok(value);
     }
     if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
@@ -460,7 +709,11 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                 );
             }
             "cancelable" => {
-                return Ok(matches!(event.kind, Kind::Click | Kind::Submit | Kind::Error).into());
+                return Ok(matches!(
+                    event.kind,
+                    Kind::Click | Kind::Submit | Kind::Error | Kind::UnhandledRejection
+                )
+                .into());
             }
             _ => {}
         }
@@ -516,7 +769,9 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
     if let Some(name) = property_name(&property) {
-        if error_property(&args[0], &name).is_some() {
+        if error_property(&args[0], &name).is_some()
+            || rejection_property(&args[0], &name).is_some()
+        {
             return Ok(true.into());
         }
         if handle.starts_with("collection:") {
@@ -557,6 +812,16 @@ fn error_property(target: &JsValue, name: &str) -> Option<JsValue> {
         "filename" => Some(js_string!("").into()),
         "lineno" | "colno" => Some(0.into()),
         "error" => Some(payload.error.clone()),
+        _ => None,
+    }
+}
+fn rejection_property(target: &JsValue, name: &str) -> Option<JsValue> {
+    let object = target.as_object()?;
+    let data = object.downcast_ref::<Brand>()?;
+    let payload = data.rejection.as_ref()?;
+    match name {
+        "promise" => Some(payload.promise.clone().upcast().into()),
+        "reason" => Some(payload.reason.clone()),
         _ => None,
     }
 }
@@ -721,7 +986,10 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
             .events
             .get(id)
             .ok_or_else(|| failure("Stale event handle"))?;
-        if !matches!(event.kind, Kind::Click | Kind::Submit | Kind::Error) {
+        if !matches!(
+            event.kind,
+            Kind::Click | Kind::Submit | Kind::Error | Kind::UnhandledRejection
+        ) {
             return Ok(JsValue::undefined());
         }
     }
@@ -945,6 +1213,11 @@ impl BoaPageRealm {
             realm: NEXT_REALM.fetch_add(1, Ordering::Relaxed),
             listeners: Vec::new(),
             timers: Vec::new(),
+            rejections: Vec::new(),
+            dom_tasks: Vec::new(),
+            outstanding_rejections: None,
+            next_candidate: 0,
+            rejection_observation_gap: false,
             next_timer: 0,
             next_handle: 0,
             next_wake: 0,
@@ -1015,6 +1288,8 @@ impl BoaPageRealm {
             "onload",
             "onreadystatechange",
             "onerror",
+            "onunhandledrejection",
+            "onrejectionhandled",
         ] {
             let getter = FunctionObjectBuilder::new(
                 context.realm(),
@@ -1068,6 +1343,9 @@ impl BoaPageRealm {
                 )
                 .map_err(|_| "Global accessor failed")?;
         }
+        engine
+            .set_rejection_observer(observe_rejection)
+            .map_err(|e| e.to_string())?;
         engine.check().map_err(|e| e.to_string())?;
         Ok(Self {
             engine,
@@ -1269,8 +1547,341 @@ impl BoaPageRealm {
         if let Err(error) = result {
             self.execution_failure("Promise checkpoint", error, errors);
         }
+        self.state.borrow_mut().timer_nesting = old_nesting;
+        if !self.closed && !self.engine.is_fatal() {
+            if self.freeze_rejections().is_err() {
+                self.rejection_failure(errors);
+            }
+        }
+    }
+
+    fn clear_work(&mut self) {
+        // In particular, a permit's Drop must not run under the State borrow.
+        let discarded = self.state.borrow_mut().take_work();
+        drop(discarded);
+    }
+
+    fn rejection_failure(&mut self, errors: &mut Vec<String>) {
+        let error = self.engine.latch_failure(REJECTION_FAILURE);
+        if errors.len() < 64 {
+            errors.push(bounded(&error.to_string(), 512));
+        }
+    }
+
+    fn observation_notice(&self, errors: &mut Vec<String>) {
+        if self.state.borrow().rejection_observation_gap
+            && errors.len() < 64
+            && !errors.iter().any(|error| error == REJECTION_GAP)
+        {
+            errors.push(REJECTION_GAP.into());
+        }
+    }
+
+    fn prune_batches(&mut self) {
         let mut data = self.state.borrow_mut();
-        data.timer_nesting = old_nesting;
+        let State {
+            rejections,
+            dom_tasks,
+            ..
+        } = &mut *data;
+        dom_tasks.retain(|task| match &task.kind {
+            DomTaskKind::Batch(ids) => ids
+                .iter()
+                .any(|id| rejections.iter().any(|candidate| candidate.id == *id)),
+            DomTaskKind::Handled { .. } => true,
+        });
+    }
+
+    fn purge_private_notices(&mut self) -> Result<bool, ()> {
+        if rejection_exposure(self.engine.context())? {
+            return Ok(false);
+        }
+        let discarded = {
+            let mut data = self.state.borrow_mut();
+            if !data.rejections.is_empty()
+                || !data.dom_tasks.is_empty()
+                || data.outstanding_rejections.is_some()
+            {
+                data.rejection_observation_gap = true;
+            }
+            (
+                std::mem::take(&mut data.rejections),
+                std::mem::take(&mut data.dom_tasks),
+                data.outstanding_rejections.take(),
+            )
+        };
+        drop(discarded);
+        Ok(true)
+    }
+
+    fn freeze_rejections(&mut self) -> Result<(), ()> {
+        if self.purge_private_notices()? {
+            return Ok(());
+        }
+        self.prune_batches();
+        let mut data = self.state.borrow_mut();
+        let count = data
+            .rejections
+            .iter()
+            .filter(|candidate| candidate.phase == CandidatePhase::Pending)
+            .count();
+        if count == 0 {
+            return Ok(());
+        }
+        let handle = data.next_handle.checked_add(1).ok_or(())?;
+        let deadline = data.now();
+        let mut ids = Vec::new();
+        reserve_storage(&mut data.host, &mut ids, count)?;
+        let State {
+            host, dom_tasks, ..
+        } = &mut *data;
+        reserve_storage(host, dom_tasks, 1)?;
+        for candidate in &mut data.rejections {
+            if candidate.phase == CandidatePhase::Pending {
+                ids.push(candidate.id);
+                candidate.phase = CandidatePhase::Frozen;
+            }
+        }
+        // Vec swap-removal on Handle must not change original Reject order.
+        ids.sort_unstable();
+        data.next_handle = handle;
+        data.dom_tasks.push(DomTask {
+            handle,
+            deadline,
+            kind: DomTaskKind::Batch(ids),
+        });
+        Ok(())
+    }
+
+    fn add_outstanding(&mut self, promise: &JsObject<Promise>) -> Result<(), ()> {
+        // The native WeakMap's own GC/hash allocations are admitted by the
+        // worker System allocator. Charge each retained native membership and
+        // the optional map wrapper separately in the cumulative host ledger.
+        let map = {
+            let mut data = self.state.borrow_mut();
+            let map_storage = usize::from(data.outstanding_rejections.is_none())
+                * std::mem::size_of::<JsWeakMap>();
+            data.host.charge(256 + map_storage).map_err(|_| ())?;
+            data.outstanding_rejections.clone()
+        };
+        let map = match map {
+            Some(map) => map,
+            None => {
+                let map = JsWeakMap::new(self.engine.context_mut());
+                self.state.borrow_mut().outstanding_rejections = Some(map.clone());
+                map
+            }
+        };
+        let object = promise.clone().upcast();
+        if map
+            .has(&object, self.engine.context_mut())
+            .map_err(|_| ())?
+        {
+            return Err(());
+        }
+        map.set(&object, 1.into(), self.engine.context_mut())
+            .map_err(|_| ())?;
+        Ok(())
+    }
+
+    fn rejection_event(&mut self, kind: Kind, payload: RejectionPayload, errors: &mut Vec<String>) {
+        let event = {
+            let mut data = self.state.borrow_mut();
+            data.host
+                .charge(std::mem::size_of::<RejectionPayload>())
+                .and_then(|_| data.host.new_event(kind, Target::Window, None))
+        };
+        let event = match event {
+            Ok(event) => event,
+            Err(_) => {
+                self.rejection_failure(errors);
+                return;
+            }
+        };
+        let wrapper = match wrap_event_payload(
+            &format!("event:{event}"),
+            None,
+            Some(payload),
+            self.engine.context_mut(),
+        ) {
+            Ok(wrapper) => wrapper,
+            Err(_) => {
+                self.rejection_failure(errors);
+                return;
+            }
+        };
+        for capture in [true, false] {
+            if self.closed
+                || self.engine.is_fatal()
+                || self.state.borrow().host.events[event].stopped
+            {
+                break;
+            }
+            let ids = {
+                let mut data = self.state.borrow_mut();
+                data.host.events[event].current = Some(Target::Window);
+                data.host.events[event].phase = 2;
+                let count = data
+                    .listeners
+                    .iter()
+                    .filter(|listener| {
+                        listener.target == Target::Window
+                            && listener.kind == kind
+                            && listener.capture == capture
+                            && listener.callback.is_some()
+                    })
+                    .count();
+                let mut ids = Vec::new();
+                match reserve_storage(&mut data.host, &mut ids, count) {
+                    Ok(()) => {
+                        ids.extend(
+                            data.listeners
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, listener)| {
+                                    listener.target == Target::Window
+                                        && listener.kind == kind
+                                        && listener.capture == capture
+                                        && listener.callback.is_some()
+                                })
+                                .map(|(id, _)| id),
+                        );
+                        Some(ids)
+                    }
+                    Err(()) => None,
+                }
+            };
+            let Some(ids) = ids else {
+                self.rejection_failure(errors);
+                break;
+            };
+            for id in ids {
+                if self.closed
+                    || self.engine.is_fatal()
+                    || self.state.borrow().host.events[event].immediate
+                {
+                    break;
+                }
+                let listener = {
+                    let data = self.state.borrow();
+                    data.listeners[id]
+                        .callback
+                        .clone()
+                        .map(|callback| (callback, data.listeners[id].property))
+                };
+                let Some((callback, property)) = listener else {
+                    continue;
+                };
+                let this = self.engine.context().global_object().into();
+                match self.call_function(&callback, &this, std::slice::from_ref(&wrapper)) {
+                    Ok(value)
+                        if property
+                            && kind == Kind::UnhandledRejection
+                            && value.as_boolean() == Some(false) =>
+                    {
+                        self.state.borrow_mut().host.events[event].canceled = true;
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.execution_failure("Event handler", error, errors),
+                }
+                self.checkpoint(errors);
+            }
+        }
+        let mut data = self.state.borrow_mut();
+        data.host.events[event].current = None;
+        data.host.events[event].phase = 0;
+    }
+
+    fn rejection_batch(&mut self, ids: &[u64], errors: &mut Vec<String>) {
+        for id in ids {
+            if self.closed || self.engine.is_fatal() {
+                break;
+            }
+            match self.purge_private_notices() {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(()) => {
+                    self.rejection_failure(errors);
+                    break;
+                }
+            }
+            let permit = {
+                let mut data = self.state.borrow_mut();
+                data.rejections
+                    .iter_mut()
+                    .find(|candidate| candidate.id == *id)
+                    .map(|candidate| {
+                        if candidate.phase != CandidatePhase::Frozen {
+                            return Err(());
+                        }
+                        candidate.phase = CandidatePhase::Active { handled: false };
+                        candidate.permit.take().ok_or(())
+                    })
+            };
+            let mut permit = match permit {
+                None => continue, // handled while frozen, before its turn
+                Some(Ok(permit)) => permit,
+                Some(Err(())) => {
+                    self.rejection_failure(errors);
+                    break;
+                }
+            };
+            if modern::begin_host_task(self.engine.context_mut(), &mut permit).is_err() {
+                self.rejection_failure(errors);
+                break;
+            }
+            let payload = self
+                .state
+                .borrow()
+                .rejections
+                .iter()
+                .find(|candidate| candidate.id == *id)
+                .map(|candidate| candidate.payload.clone());
+            let Some(payload) = payload else {
+                self.rejection_failure(errors);
+                break;
+            };
+            if errors.len() < 64 {
+                errors.push(UNHANDLED_REJECTION.into());
+            }
+            self.rejection_event(Kind::UnhandledRejection, payload, errors);
+            // Active tracking survives every callback/error-report checkpoint.
+            // Boa's Handle hook runs before its private handled flag changes.
+            if self.closed || self.engine.is_fatal() {
+                break;
+            }
+            match self.purge_private_notices() {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(()) => {
+                    self.rejection_failure(errors);
+                    break;
+                }
+            }
+            let candidate = {
+                let mut data = self.state.borrow_mut();
+                data.rejections
+                    .iter()
+                    .position(|candidate| candidate.id == *id)
+                    .map(|index| data.rejections.swap_remove(index))
+            };
+            match candidate {
+                Some(candidate)
+                    if candidate.phase == (CandidatePhase::Active { handled: false }) =>
+                {
+                    if self.add_outstanding(&candidate.payload.promise).is_err() {
+                        self.rejection_failure(errors);
+                        break;
+                    }
+                }
+                Some(candidate)
+                    if candidate.phase == (CandidatePhase::Active { handled: true }) => {}
+                _ => {
+                    self.rejection_failure(errors);
+                    break;
+                }
+            }
+        }
     }
     fn call_function(
         &mut self,
@@ -1386,6 +1997,12 @@ impl BoaPageRealm {
         data.host.events[event].phase = 0;
     }
     fn snapshot(&mut self, reply: &mut SessionReply) {
+        if !self.engine.is_fatal() && !self.closed {
+            match self.purge_private_notices() {
+                Ok(_) => self.prune_batches(),
+                Err(()) => self.rejection_failure(&mut reply.errors),
+            }
+        }
         if let Err(error) = self.engine.check() {
             if reply.errors.len() < 64 {
                 reply.errors.push(bounded(&error.to_string(), 512));
@@ -1401,13 +2018,13 @@ impl BoaPageRealm {
         if reply.state != RealmState::Ready {
             reply.default_action = DefaultAction::None;
             self.closed = true;
-            self.state.borrow_mut().clear_timers();
+            self.clear_work();
         } else if let Err(error) = self.advertise_wake(reply) {
             reply.errors.push(error);
             reply.state = RealmState::Closed;
             reply.default_action = DefaultAction::None;
             self.closed = true;
-            self.state.borrow_mut().clear_timers();
+            self.clear_work();
         }
         reply.boa = Some(self.engine.stats());
         let mut data = self.state.borrow_mut();
@@ -1429,9 +2046,12 @@ impl BoaPageRealm {
         }
         if reply.state != RealmState::Ready {
             reply.task_wake = None;
-            data.clear_timers();
         }
         drop(data);
+        if reply.state != RealmState::Ready {
+            self.clear_work();
+        }
+        self.observation_notice(&mut reply.errors);
         reply.boa = Some(self.engine.stats());
     }
 
@@ -1439,11 +2059,20 @@ impl BoaPageRealm {
         let mut data = self.state.borrow_mut();
         data.armed_wake = None;
         reply.task_wake = None;
-        let Some((handle, deadline)) = data
+        let timer = data
             .timers
             .iter()
             .min_by_key(|timer| (timer.deadline, timer.handle))
-            .map(|timer| (timer.handle, timer.deadline))
+            .map(|timer| (timer.handle, timer.deadline));
+        let dom = data
+            .dom_tasks
+            .iter()
+            .min_by_key(|task| (task.deadline, task.handle))
+            .map(|task| (task.handle, task.deadline));
+        let Some((handle, deadline)) = timer
+            .into_iter()
+            .chain(dom)
+            .min_by_key(|(handle, deadline)| (*deadline, *handle))
         else {
             return Ok(());
         };
@@ -1464,7 +2093,7 @@ impl BoaPageRealm {
         Ok(())
     }
 
-    /// Run one advertised eligible timer, only after a parent-issued transaction.
+    /// Run one timer, frozen batch or handled task after a parent transaction.
     /// No native edits/defaults are implied by a task; later handlers share its realm.
     pub fn pump_tasks(&mut self, pump: TaskPump) -> SessionReply {
         let mut reply = Self::empty_reply();
@@ -1478,14 +2107,23 @@ impl BoaPageRealm {
                         && data.now() >= wake.deadline
                 })
                 .and_then(|wake| {
-                    data.timers
+                    if let Some(index) = data
+                        .timers
                         .iter()
                         .position(|timer| timer.handle == wake.handle)
+                    {
+                        Some((true, index))
+                    } else {
+                        data.dom_tasks
+                            .iter()
+                            .position(|task| task.handle == wake.handle)
+                            .map(|index| (false, index))
+                    }
                 })
         };
         if self.closed || self.engine.is_fatal() || eligible.is_none() {
             self.closed = true;
-            self.state.borrow_mut().clear_timers();
+            self.clear_work();
             reply
                 .errors
                 .push("Inactive realm or early, stale or replayed task wake".into());
@@ -1495,36 +2133,73 @@ impl BoaPageRealm {
                 RealmState::Closed
             };
             reply.boa = Some(self.engine.stats());
+            self.observation_notice(&mut reply.errors);
             return reply;
         }
         self.revision += 1;
         reply.revision = self.revision;
-        let mut timer = {
+        let selected = {
             let mut data = self.state.borrow_mut();
             data.armed_wake = None;
             data.host.navigation = None;
-            data.timers.swap_remove(eligible.unwrap())
-        };
-        match modern::begin_host_task(self.engine.context_mut(), &mut timer.permit) {
-            Ok(()) => {
-                self.state.borrow_mut().timer_nesting = Some(timer.nesting);
-                let this = self.engine.context().global_object().into();
-                if let Err(error) = self.call_function(&timer.callback, &this, &timer.arguments) {
-                    self.execution_failure("Timer callback", error, &mut reply.errors);
-                }
-                self.checkpoint(&mut reply.errors);
-                self.state.borrow_mut().timer_nesting = None;
+            let (timer, index) = eligible.unwrap();
+            if timer {
+                SelectedTask::Timer(data.timers.swap_remove(index))
+            } else {
+                SelectedTask::Dom(data.dom_tasks.swap_remove(index))
             }
-            Err(error) => {
-                self.closed = true;
-                reply
-                    .errors
-                    .push(bounded(&modern::safe_error(&error).to_string(), 512));
+        };
+        match selected {
+            SelectedTask::Timer(mut timer) => {
+                match modern::begin_host_task(self.engine.context_mut(), &mut timer.permit) {
+                    Ok(()) => {
+                        self.state.borrow_mut().timer_nesting = Some(timer.nesting);
+                        let this = self.engine.context().global_object().into();
+                        if let Err(error) =
+                            self.call_function(&timer.callback, &this, &timer.arguments)
+                        {
+                            self.execution_failure("Timer callback", error, &mut reply.errors);
+                        }
+                        self.checkpoint(&mut reply.errors);
+                        self.state.borrow_mut().timer_nesting = None;
+                    }
+                    Err(error) => {
+                        self.closed = true;
+                        reply
+                            .errors
+                            .push(bounded(&modern::safe_error(&error).to_string(), 512));
+                    }
+                }
+            }
+            SelectedTask::Dom(mut task) => {
+                self.state.borrow_mut().timer_nesting = None;
+                match &mut task.kind {
+                    DomTaskKind::Batch(ids) => self.rejection_batch(&ids, &mut reply.errors),
+                    DomTaskKind::Handled { permit, payload } => {
+                        match rejection_exposure(self.engine.context()) {
+                            Ok(true) => {
+                                if modern::begin_host_task(self.engine.context_mut(), permit)
+                                    .is_err()
+                                {
+                                    self.rejection_failure(&mut reply.errors);
+                                } else {
+                                    self.rejection_event(
+                                        Kind::RejectionHandled,
+                                        payload.clone(),
+                                        &mut reply.errors,
+                                    );
+                                }
+                            }
+                            Ok(false) => self.state.borrow_mut().rejection_observation_gap = true,
+                            Err(()) => self.rejection_failure(&mut reply.errors),
+                        }
+                    }
+                }
             }
         }
-        // Callback/argument roots and the consumed permit need not survive reply
-        // allocation. Unexecuted timers remain rooted in State.
-        drop(timer);
+        // Selected roots are dropped before the final real checkpoint, including
+        // WeakRef kept-object cleanup. Later tasks are never recursively pumped.
+        self.checkpoint(&mut reply.errors);
         self.snapshot(&mut reply);
         reply.errors.truncate(64);
         reply
@@ -1709,7 +2384,7 @@ impl BoaPageRealm {
         reply.boa = Some(self.engine.stats());
         if self.closed || self.engine.is_fatal() {
             self.closed = true;
-            self.state.borrow_mut().clear_timers();
+            self.clear_work();
             reply.boa = Some(self.engine.stats());
             reply.state = if self.engine.is_fatal() {
                 RealmState::Fatal
@@ -1717,6 +2392,7 @@ impl BoaPageRealm {
                 RealmState::Closed
             };
             reply.errors.push("Page realm is no longer active".into());
+            self.observation_notice(&mut reply.errors);
             return reply;
         }
         let validation = self.state.borrow().host.validate_input(&input);
@@ -1724,8 +2400,9 @@ impl BoaPageRealm {
             self.closed = true;
             // End the validation borrow before dropping callback/argument roots.
             reply.errors.push(error);
-            self.state.borrow_mut().clear_timers();
+            self.clear_work();
             reply.boa = Some(self.engine.stats());
+            self.observation_notice(&mut reply.errors);
             return reply;
         }
         self.revision += 1;
@@ -1772,6 +2449,12 @@ impl BoaPageRealm {
         self.snapshot(&mut reply);
         reply.errors.truncate(64);
         reply
+    }
+}
+
+impl Drop for BoaPageRealm {
+    fn drop(&mut self) {
+        self.clear_work();
     }
 }
 
@@ -1828,6 +2511,294 @@ mod tests {
     fn evaluate(realm: &mut BoaPageRealm, source: &str) {
         realm.engine.evaluate(source).unwrap();
         realm.engine.checkpoint().unwrap();
+    }
+
+    fn terminal_rejection_snapshot(realm: &mut BoaPageRealm) -> SessionReply {
+        let mut reply = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut reply);
+        assert_eq!(reply.state, RealmState::Fatal, "{:?}", reply.errors);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+        let data = realm.state.borrow();
+        assert!(data.rejections.is_empty());
+        assert!(data.dom_tasks.is_empty());
+        assert!(data.timers.is_empty());
+        assert!(data.outstanding_rejections.is_none());
+        reply
+    }
+
+    #[test]
+    fn rejection_candidate_storage_failure_latches_before_retaining_payloads() {
+        let mut realm =
+            realm("var value={owned:true};window.onerror=()=>document.title='wrong reporter';");
+        realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+        assert!(realm.engine.evaluate("Promise.reject(value);").is_err());
+        assert!(realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        assert!(realm.state.borrow().rejections.is_empty());
+        assert!(realm.state.borrow().dom_tasks.is_empty());
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    #[test]
+    fn rejection_batch_storage_failure_latches_and_terminal_publication_releases_roots() {
+        let mut realm = realm("");
+        collect(&mut realm);
+        let before = realm.state.borrow().finalized.get();
+        realm
+            .engine
+            .evaluate("(()=>{const value=document.createElement('div');Promise.reject(value);})();")
+            .unwrap();
+        assert_eq!(realm.state.borrow().rejections.len(), 1);
+        realm.state.borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+        let mut errors = Vec::new();
+        realm.checkpoint(&mut errors);
+        assert!(realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 1);
+        terminal_rejection_snapshot(&mut realm);
+        modern::boa_gc::force_collect();
+        assert!(realm.state.borrow().finalized.get() > before);
+    }
+
+    #[test]
+    fn rejection_candidate_and_batch_id_overflow_are_fatal_not_catchable_success() {
+        for candidate_id in [true, false] {
+            let mut realm = realm("window.onerror=()=>document.title='wrong reporter';");
+            if candidate_id {
+                realm.state.borrow_mut().next_candidate = u64::MAX;
+                assert!(realm.engine.evaluate("Promise.reject(1);").is_err());
+            } else {
+                realm.engine.evaluate("Promise.reject(1);").unwrap();
+                realm.state.borrow_mut().next_handle = u64::MAX;
+                realm.checkpoint(&mut Vec::new());
+            }
+            assert!(realm.engine.is_fatal());
+            assert_eq!(realm.engine.stats().jobs_admitted, 1);
+            terminal_rejection_snapshot(&mut realm);
+        }
+    }
+
+    #[test]
+    fn late_handled_task_id_overflow_latches_from_the_no_result_hook() {
+        let mut realm = realm("var p=Promise.reject(1);");
+        assert_eq!(pump_next(&mut realm).errors, [UNHANDLED_REJECTION]);
+        realm.state.borrow_mut().next_handle = u64::MAX;
+        assert!(realm.engine.evaluate("p.catch(()=>{});").is_err());
+        assert!(realm.engine.is_fatal());
+        assert_eq!(realm.engine.stats().jobs_admitted, 2);
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    #[test]
+    fn malformed_private_weak_membership_latches_from_the_no_result_handle_hook() {
+        let mut realm = realm("var p=Promise.reject(1);");
+        assert_eq!(pump_next(&mut realm).errors, [UNHANDLED_REJECTION]);
+        let map = realm.state.borrow().outstanding_rejections.clone().unwrap();
+        let context = realm.engine.context_mut();
+        let object = context
+            .global_object()
+            .get(js_string!("p"), context)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        map.set(&object, 2.into(), context).unwrap();
+        assert!(realm.engine.evaluate("p.catch(()=>{});").is_err());
+        assert!(realm.engine.is_fatal());
+        terminal_rejection_snapshot(&mut realm);
+    }
+
+    #[test]
+    fn missing_context_policy_cannot_authorize_rejection_exposure_or_retention() {
+        let mut realm = realm("");
+        let mut bare = Context::default();
+        // A binding State alone is not execution-policy authority. The policy
+        // type remains Butane-private; do not add a public removal/fault API.
+        bare.insert_data(realm.state.clone());
+        assert_eq!(modern::context_dynamic_compilation_seen(&bare), None);
+        assert!(rejection_exposure(&bare).is_err());
+        assert!(
+            modern::check_context(&mut bare)
+                .unwrap_err()
+                .as_engine()
+                .is_some()
+        );
+        assert_eq!(realm.engine.stats().jobs_admitted, 0);
+        assert!(realm.state.borrow().rejections.is_empty());
+        realm.engine.check().unwrap();
+    }
+
+    #[test]
+    fn invalid_input_and_realm_drop_release_pending_native_reason_roots() {
+        for invalid_input in [true, false] {
+            let mut realm = realm(
+                "(()=>{const value=document.createElement('div');Promise.reject(value);})();",
+            );
+            collect(&mut realm);
+            let finalized = realm.state.borrow().finalized.clone();
+            let before = finalized.get();
+            if invalid_input {
+                let reply = realm.dispatch(SessionInput {
+                    kind: InputKind::Click { target: usize::MAX },
+                    edits: vec![],
+                });
+                assert_eq!(reply.state, RealmState::Closed);
+                assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+                assert!(realm.state.borrow().rejections.is_empty());
+                collect(&mut realm);
+                assert!(finalized.get() > before);
+            } else {
+                drop(realm);
+                modern::boa_gc::force_collect();
+                assert!(finalized.get() > before);
+            }
+        }
+    }
+
+    #[test]
+    fn active_fatal_delivery_clears_binding_roots_and_realm_teardown_releases_vm_payloads() {
+        for escaped in [false, true] {
+            let mut realm = realm(&format!(
+                "window.onerror=()=>document.title='wrong reporter';document.getElementById('a').onclick=()=>document.title='wrong later listener';window.addEventListener('unhandledrejection',event=>{{document.title='callback entered';{}while(true){{}}}});(()=>{{const value=document.createElement('div');Promise.reject(value);}})();",
+                if escaped {
+                    "globalThis.saved=event;"
+                } else {
+                    ""
+                },
+            ));
+            collect(&mut realm);
+            let finalized = realm.state.borrow().finalized.clone();
+            let before = finalized.get();
+            let reply = pump_next(&mut realm);
+            assert_eq!(reply.state, RealmState::Fatal);
+            assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+            assert!(reply.task_wake.is_none());
+            assert!(reply.navigation.is_none());
+            {
+                let data = realm.state.borrow();
+                assert!(data.rejections.is_empty());
+                assert!(data.dom_tasks.is_empty());
+                assert!(data.timers.is_empty());
+                assert!(data.outstanding_rejections.is_none());
+                assert!(data.armed_wake.is_none());
+                assert_eq!(
+                    document::project_nodes(
+                        data.host.document.nodes.clone(),
+                        "https://example.test/owned"
+                    )
+                    .unwrap()
+                    .title,
+                    "callback entered"
+                );
+            }
+            let target = realm
+                .state
+                .borrow()
+                .host
+                .document
+                .query_selector(0, "#a")
+                .unwrap()
+                .unwrap();
+            let rejected = realm.dispatch(SessionInput {
+                kind: InputKind::Click { target },
+                edits: vec![],
+            });
+            assert_eq!(rejected.state, RealmState::Fatal);
+            assert!(rejected.snapshot.is_none());
+            assert_eq!(
+                document::project_nodes(
+                    realm.state.borrow().host.document.nodes.clone(),
+                    "https://example.test/owned"
+                )
+                .unwrap()
+                .title,
+                "callback entered"
+            );
+            modern::boa_gc::force_collect();
+            // Pinned Boa's fuzz-opcode early return can retain the fatal call's
+            // argument in its private VM value stack until Context teardown.
+            // The original stricter control measured before=0, after=0; do not
+            // fake reclamation with ClearKeptObjects or reset an Engine/budget.
+            // Terminal library callers must drop the realm, as workers do.
+            drop(realm);
+            modern::boa_gc::force_collect();
+            assert!(finalized.get() >= before + 2);
+        }
+    }
+
+    #[test]
+    fn newly_private_handled_task_cancels_instead_of_claiming_execution() {
+        let mut realm = realm("var p=Promise.reject(1);");
+        pump_next(&mut realm);
+        evaluate(&mut realm, "p.catch(()=>{});");
+        let mut queued = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut queued);
+        assert_eq!(queued.boa.as_ref().unwrap().pending_jobs, 1);
+        let executed = queued.boa.as_ref().unwrap().jobs_executed;
+        // Private transition control, not a new page-controlled policy API.
+        realm.state.borrow_mut().error_exposure_allowed = false;
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Ready);
+        assert_eq!(reply.errors, [REJECTION_GAP]);
+        assert_eq!(reply.boa.as_ref().unwrap().jobs_executed, executed);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+    }
+
+    #[test]
+    fn native_membership_storage_failure_is_fatal_without_another_reporter() {
+        let mut realm = realm("");
+        realm
+            .engine
+            .context_mut()
+            .register_global_builtin_callable(
+                js_string!("testExhaustHost"),
+                0,
+                NativeFunction::from_fn_ptr(|_, _, context| {
+                    state(context).borrow_mut().host.allocated = super::super::MAX_DOM_BYTES;
+                    Ok(JsValue::undefined())
+                }),
+            )
+            .unwrap();
+        evaluate(
+            &mut realm,
+            "window.onerror=()=>document.title='wrong reporter';window.addEventListener('unhandledrejection',()=>testExhaustHost());Promise.reject(1);",
+        );
+        realm.checkpoint(&mut Vec::new());
+        let mut queued = BoaPageRealm::empty_reply();
+        realm.snapshot(&mut queued);
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Fatal);
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
+        assert!(realm.state.borrow().outstanding_rejections.is_none());
+    }
+
+    #[test]
+    fn rejection_delivery_preserves_the_existing_cumulative_event_record_cap() {
+        let mut realm = realm(
+            "window.onerror=()=>document.title='wrong reporter';window.addEventListener('unhandledrejection',()=>document.title='wrong notification');Promise.reject(1);",
+        );
+        {
+            let mut data = realm.state.borrow_mut();
+            for _ in 0..MAX_EVENTS {
+                data.host
+                    .new_event(Kind::Click, Target::Window, None)
+                    .unwrap();
+            }
+        }
+        let reply = pump_next(&mut realm);
+        assert_eq!(reply.state, RealmState::Fatal);
+        assert_eq!(realm.state.borrow().host.events.len(), MAX_EVENTS);
+        let title = document::project_nodes(
+            realm.state.borrow().host.document.nodes.clone(),
+            "https://example.test/owned",
+        )
+        .unwrap()
+        .title;
+        assert_ne!(title, "wrong reporter");
+        assert_ne!(title, "wrong notification");
+        assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 0);
+        assert!(reply.task_wake.is_none());
     }
     #[test]
     fn escaped_error_event_roots_its_exception_then_releases_it_when_unreachable() {

@@ -105,6 +105,25 @@ journey plus native/CDP identity, checkpoint and retained form proofs. Do not
 relax the old diagnostic-free page/task checkers. These are authored controls,
 not rejection notification, exact source attribution or new upstream WPT passes.
 
+For Promise rejection notification, also read docs/PROMISE_REJECTIONS.md. Run
+boa_rejections, boa_rejection_resources and real script_tasks in debug/release,
+plus core private fault/storage/ID/weak-map/finalizer controls and all old gates.
+Check one frozen batch per parent pump, true late handling, shared work admission,
+active-candidate re-entry, genuinely weak outstanding membership, and terminal
+root/permit/wake cleanup. GC tests must use normal checkpoints, not test-only
+kept-object repairs. Muted Reject retains no payload/permit; the conservative
+observation-gap notice is sticky across replies, including loss of outstanding
+handled observation. Actual notification diagnostics belong to their transaction
+and cannot be retracted by cancellation, handling or later clean-looking output.
+Run tools/test_rejection_services_smoke.py, then tools/rejection-services-smoke.py
+on packaged and public-installed bytes. Its notification-created form requires
+native/CDP payload identity, checkpoints, retained input/cancellation/navigation,
+exactly one expected diagnostic and zero trap requests. Keep the old
+diagnostic-free and Window-error checkers unchanged. This procedure derives from
+the separately exercised authored error/rejection journeys, not WPT coverage or
+completion of general Window-testharness readiness. Release/public receipts
+still establish final delivery separately from local development success.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

@@ -847,3 +847,249 @@ mod rejection_bridge {
         );
     }
 }
+
+mod context_dynamic_compilation {
+    use super::*;
+    use mg_butane::modern::{
+        boa_engine::{
+            Context,
+            builtins::promise::{OperationType, Promise},
+            object::JsObject,
+        },
+        context_dynamic_compilation_seen,
+    };
+    use std::cell::RefCell;
+
+    // Native scalar observations only: no Promise/reason clone, JS root or work
+    // admission is needed merely to read the private policy from the hook.
+    type Observations = Rc<RefCell<Vec<(bool, Option<bool>)>>>;
+
+    fn observer(_: &JsObject<Promise>, operation: OperationType, context: &mut Context) {
+        let seen = context_dynamic_compilation_seen(context);
+        context
+            .get_data::<Observations>()
+            .unwrap()
+            .borrow_mut()
+            .push((matches!(operation, OperationType::Reject), seen));
+    }
+
+    fn observed_engine() -> (Engine, Observations) {
+        let mut engine = Engine::new().unwrap();
+        let observations = Rc::new(RefCell::new(Vec::new()));
+        engine.context_mut().insert_data(observations.clone());
+        engine.set_rejection_observer(observer).unwrap();
+        (engine, observations)
+    }
+
+    #[test]
+    fn context_dynamic_compilation_missing_policy_is_none_not_false() {
+        let bare = Context::default();
+        assert_eq!(context_dynamic_compilation_seen(&bare), None);
+        let engine = Engine::new().unwrap();
+        let before = engine.stats();
+        for _ in 0..16 {
+            assert_eq!(
+                context_dynamic_compilation_seen(engine.context()),
+                Some(false)
+            );
+        }
+        assert_eq!(engine.stats(), before);
+        assert!(!engine.dynamic_compilation_seen());
+    }
+
+    #[test]
+    fn context_dynamic_compilation_static_and_prehook_rejection_observers_see_false() {
+        for prefix in [
+            "",
+            "eval(42); eval({});",
+            "try { Function({toString(){throw 1}}); } catch (error) {}",
+        ] {
+            let (mut engine, observations) = observed_engine();
+            engine
+                .evaluate(&format!(
+                    "{prefix} var rejected=Promise.reject(1); rejected.catch(()=>0);"
+                ))
+                .unwrap();
+            assert_eq!(
+                *observations.borrow(),
+                [(true, Some(false)), (false, Some(false))],
+                "{prefix}"
+            );
+            assert_eq!(
+                context_dynamic_compilation_seen(engine.context()),
+                Some(false)
+            );
+            assert!(!engine.dynamic_compilation_seen());
+            engine.checkpoint().unwrap();
+            assert_eq!(engine.stats().jobs_admitted, 1);
+            assert_eq!(engine.stats().jobs_executed, 1);
+        }
+    }
+
+    #[test]
+    fn context_dynamic_compilation_rejection_inside_dynamic_source_sees_true_synchronously() {
+        for expression in [
+            "eval('Promise.reject(1)')",
+            "(0, eval)('Promise.reject(1)')",
+            "Function('return Promise.reject(1)')()",
+            "new Function('return Promise.reject(1)')()",
+        ] {
+            let (mut engine, observations) = observed_engine();
+            engine
+                .evaluate(&format!(
+                    "var rejected={expression}; rejected.catch(()=>0);"
+                ))
+                .unwrap();
+            // This is observed inside Reject, before evaluate returns to an
+            // embedding that could update a separate exposure-policy mirror.
+            assert_eq!(
+                *observations.borrow(),
+                [(true, Some(true)), (false, Some(true))],
+                "{expression}"
+            );
+            assert_eq!(engine.stats().source_admissions, 2);
+            engine.checkpoint().unwrap();
+            assert_eq!(
+                context_dynamic_compilation_seen(engine.context()),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn context_dynamic_compilation_caught_failed_attempt_precedes_rejection_hook() {
+        for expression in [
+            "eval('let = ;')",
+            "(0, eval)('let = ;')",
+            "Function('return )')",
+            "Function('a =', 'return 42')",
+        ] {
+            let (mut engine, observations) = observed_engine();
+            engine
+                .evaluate(&format!(
+                    "var caught=false; try {{ {expression}; }} catch(error) {{ caught=true; }} var rejected=Promise.reject(1); rejected.catch(()=>0);"
+                ))
+                .unwrap();
+            assert_eq!(
+                engine.get_global("caught").unwrap().as_boolean(),
+                Some(true)
+            );
+            assert_eq!(
+                *observations.borrow(),
+                [(true, Some(true)), (false, Some(true))],
+                "{expression}"
+            );
+            assert_eq!(engine.stats().source_admissions, 2);
+            assert!(!engine.is_fatal());
+            engine.checkpoint().unwrap();
+        }
+    }
+
+    #[test]
+    fn context_dynamic_compilation_hook_and_checkpoint_observation_is_monotonic() {
+        let (mut engine, observations) = observed_engine();
+        engine
+            .evaluate("Promise.resolve().then(function(){eval('0');Promise.reject(1);});")
+            .unwrap();
+        assert!(observations.borrow().is_empty());
+        assert_eq!(
+            context_dynamic_compilation_seen(engine.context()),
+            Some(false)
+        );
+        let before = engine.stats();
+        engine.checkpoint_raw().unwrap();
+        assert_eq!(*observations.borrow(), [(true, Some(true))]);
+        engine.stats().validate_after(&before).unwrap();
+        engine.evaluate("Promise.reject(2);").unwrap();
+        engine.checkpoint().unwrap();
+        assert_eq!(
+            *observations.borrow(),
+            [(true, Some(true)), (true, Some(true))]
+        );
+        let current = engine.stats();
+        assert_eq!(
+            context_dynamic_compilation_seen(engine.context()),
+            Some(true)
+        );
+        assert_eq!(engine.stats(), current);
+        drop(engine);
+        let fresh = Engine::new().unwrap();
+        assert_eq!(
+            context_dynamic_compilation_seen(fresh.context()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn context_dynamic_compilation_fatal_policy_is_still_readable_without_side_effects() {
+        for compiled in [false, true] {
+            let mut engine = Engine::new().unwrap();
+            if compiled {
+                engine.evaluate("eval('0')").unwrap();
+            }
+            engine.latch_failure("owned Context observation test");
+            let fatal = engine.stats();
+            for _ in 0..16 {
+                assert_eq!(
+                    context_dynamic_compilation_seen(engine.context()),
+                    Some(compiled)
+                );
+            }
+            assert_eq!(engine.stats(), fatal);
+            assert_eq!(engine.dynamic_compilation_seen(), compiled);
+            assert!(engine.is_fatal());
+        }
+    }
+
+    #[test]
+    fn context_dynamic_compilation_failed_source_admission_is_observable_after_fatal() {
+        for source in ["eval(' '.repeat(524289))", "Function(' '.repeat(524289))"] {
+            let mut engine = Engine::new().unwrap();
+            assert!(
+                engine
+                    .evaluate_raw(source)
+                    .unwrap_err()
+                    .diagnostic
+                    .is_fatal()
+            );
+            let fatal = engine.stats();
+            assert_eq!(
+                context_dynamic_compilation_seen(engine.context()),
+                Some(true)
+            );
+            assert_eq!(engine.stats(), fatal);
+            assert_eq!(fatal.source_admissions, 1);
+            assert_eq!(fatal.source_bytes, source.len());
+        }
+    }
+
+    #[test]
+    fn context_dynamic_compilation_native_observer_changes_no_resource_report_or_user_value() {
+        for source in [
+            "var traps=0;var reason=new Proxy({},{get(){traps++;throw 1}});Promise.reject(reason);",
+            "var traps=0;eval('Promise.reject(1)');",
+            "var traps=0;try{Function('return )')}catch(error){}Promise.reject(1);",
+        ] {
+            let (mut observed, observations) = observed_engine();
+            let mut control = Engine::new().unwrap();
+            observed.evaluate(source).unwrap();
+            control.evaluate(source).unwrap();
+            assert_eq!(observed.stats(), control.stats());
+            assert_eq!(observations.borrow().len(), 1);
+            let before = observed.stats();
+            for _ in 0..16 {
+                assert_eq!(
+                    context_dynamic_compilation_seen(observed.context()),
+                    Some(observed.dynamic_compilation_seen())
+                );
+            }
+            assert_eq!(observed.stats(), before);
+            observed.checkpoint().unwrap();
+            control.checkpoint().unwrap();
+            assert_eq!(observed.stats(), control.stats());
+            assert_eq!(observed.get_global("traps").unwrap().as_number(), Some(0.0));
+            assert_eq!(control.get_global("traps").unwrap().as_number(), Some(0.0));
+            assert_eq!(observed.stats(), control.stats());
+        }
+    }
+}

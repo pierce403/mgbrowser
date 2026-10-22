@@ -2,25 +2,32 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.8 Experimental Preview
+## v0.9.9 Experimental Preview
 
-The v0.9.8 increment adds bounded Window `error` events and five-argument
-`window.onerror`. Proven local errors retain their actual thrown value in a
-GC-traced native event; foreign/unknown sources and dynamic string compilation
-conservatively mute the whole realm. Cancellation preserves host diagnostics;
-fatal resource failures never call JavaScript reporters. No throw location is
-fabricated. [Error policy and acceptance](docs/WINDOW_ERRORS.md).
+The v0.9.9 increment adds queued Window `unhandledrejection` and
+`rejectionhandled` events with real Promise/reason identity, traced pending
+payloads and weak post-notification membership. Frozen batches run in later
+parent-issued tasks under the existing shared limits. Cancellation and later
+handling never retract a notification's host diagnostic. Muted sources retain
+no rejected payload; a persistent notice explicitly reports incomplete
+observation. [Rejection policy and acceptance](docs/PROMISE_REJECTIONS.md).
 
 Function timers remain real later parent-issued worker tasks, sharing the
 existing cumulative limits. Startup is still **bundled**, not a complete HTML
-lifecycle. Rejection notification, messaging, string timers/intervals and the
+lifecycle. Messaging, string timers/intervals and the
 typed testharness observer remain unfinished. Authored controls are not WPT passes.
 
-Released at `3e2955800de32e6442412734398d5cbdf6f884cd`; the installer below
-selects the latest published release. Exact-commit CI, package and public-install
-verification receipts are recorded in the
+The installer below selects the latest actually published release. This
+candidate's exact-commit CI, package and public-install
+verification must be recorded before feature completion in the
 [dated work log](memory/logs/2026-10-22.md).
-[Release notes](docs/RELEASE-v0.9.8.md).
+[Release notes and publication status](docs/RELEASE-v0.9.9.md).
+
+The v0.9.8 Window-error/five-argument `onerror` service remains. Proven local
+errors preserve thrown-value identity; foreign/unknown sources and dynamic
+compilation conservatively mute the whole realm. Fatal resource failures never
+call page reporters, and no throw location is fabricated.
+[Window error policy](docs/WINDOW_ERRORS.md).
 
 v0.9.6 corrects classic external script loading (`<script src="...">`) with
 typed parent-supplied sources, shared resource admission and explicit handling
@@ -182,9 +189,9 @@ See [updater behavior and trust](docs/UPDATES.md).
   metadata and `crossorigin` are skipped with diagnostics. External sources
   require UTF-8 and a supported JavaScript MIME type. The v0.9.7 release adds
   function-valued `setTimeout`/`clearTimeout`, not string timers or intervals.
-  v0.9.8 adds conservatively muted Window errors. Startup remains bundled;
-  fully task-separated lifecycle, rejection
-  event delivery and typed JavaScript testharness results remain unfinished.
+  v0.9.8 adds conservatively muted Window errors; v0.9.9 adds bounded rejection
+  notification. Startup remains bundled; fully task-separated lifecycle,
+  messaging and typed JavaScript testharness results remain unfinished.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
   browser event loop remain unsupported. No React/Vue browser-app compatibility
   is claimed.
@@ -197,6 +204,9 @@ See [updater behavior and trust](docs/UPDATES.md).
   limits, not GC/RSS measurement, complete cooperative budgeting or a global
   browser quota. Native work retains final OS/parent containment. Active detached
   listeners persist until removal/teardown.
+- Pinned Boa may retain fatal callback arguments in its private VM until Context
+  teardown. The browser discards terminal workers; library embedders must drop
+  Fatal/Closed realms. Binding cleanup is not immediate whole-VM reclamation.
 - Full CSS is not implemented. Flex/grid, positioning and stacking are bounded
   subsets; rounded corners, transforms and independently scrolling elements are
   not implemented. Stylesheets remain same-origin with no imports; `@font-face`

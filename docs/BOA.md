@@ -52,10 +52,30 @@ over-mutes rather than guessing a throw site from a callback or source path.
 Modern sessions use v4; the explicit original-engine lane keeps strict v1 bytes.
 See [the policy and authored controls](WINDOW_ERRORS.md).
 
-No Promise rejection notification, messaging, ErrorEvent constructor, synthetic
-dispatch, fully queued lifecycle or typed WPT reporter is added. Listener/event,
+That v0.9.8 release adds no Promise rejection notification, messaging, ErrorEvent
+constructor, synthetic dispatch, fully queued lifecycle or typed WPT reporter. Listener/event,
 work, wire, source, allocation and process limits remain unchanged. Authored
 controls are not upstream WPT passes or a whole-browser security claim.
+
+## Queued Promise notifications: v0.9.9 candidate
+
+Window `unhandledrejection` and `rejectionhandled` now use real later parent
+tasks. Candidates freeze after an outer checkpoint; one pump selects one batch,
+one handled notice or one timer, not every later task. Real Promise/reason values
+live in branded traced events. A same-stack/microtask catch suppresses delivery;
+genuinely late handling has a new admission. Property handlers receive one event
+argument, with literal-false cancellation for unhandled notification. Cancellation
+is not handling and never retracts the transaction's host diagnostic.
+
+Rejection candidates, jobs and timers share existing admission and lifetime
+limits. Post-notification membership is native-weak, not a hidden strong root.
+Foreign/unknown/dynamic-source suppression retains no rejected payload or permit;
+a sticky data-only notice in every reply explicitly reports incomplete
+observation, even if the muted rejection is caught. Losing future handled
+observation also sets that conservative flag. No new wire fields, sources,
+syscalls, network/filesystem authority or replacement engine are introduced.
+See [the contract and acceptance](PROMISE_REJECTIONS.md). Exact release/public
+verification remains separately required; full Window readiness stays open.
 
 ## Bounded Window timers: v0.9.7 increment
 
@@ -85,8 +105,8 @@ Single-window aliases include self/parent/top with null opener. Document-ready
 capture/target/bubble, Window load's document target, property-handler slot order
 and interactive readiness before deferred scripts are corrected. These startup
 phases remain bundled inside Init; all timers run afterward. String timer compilation,
-intervals, fully queued lifecycle, synthetic dispatch, general message/
-rejection-event delivery and typed WPT testharness reporting remain unfinished.
+intervals, fully queued lifecycle, synthetic dispatch, messaging
+and typed WPT testharness reporting remain unfinished.
 The one-shot `--script-worker` path returns the initial snapshot, not a task loop.
 Headless profiling measures navigation/initial paint, not completion of arbitrary
 delayed tasks. Authored timer controls are not upstream WPT results.
@@ -178,6 +198,14 @@ and discards the unanswered activation's navigation/defaults.
 Pending timers trace callbacks and arguments; firing, cancellation and terminal
 publication release their roots. Scalar weak work permits cannot keep the policy
 or realm alive. Fatal policy failure invalidates every outstanding permit.
+
+Binding work/map/payload roots are cleared on terminal publication, but this is
+not immediate whole-VM reclamation. Pinned Boa can retain fatal callback
+arguments in its private value stack until Context teardown. Library callers
+must discard Fatal/Closed BoaPageRealm values. The browser's terminal child loop
+and parent manager already drop/stop those workers; no budget or Context is
+reset for reuse. Tests preserve the observed upstream retention failure and
+verify actual finalization at teardown, not test-only kept-object repair.
 
 ## Evidence and reproduction
 

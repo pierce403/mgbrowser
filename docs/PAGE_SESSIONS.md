@@ -63,7 +63,7 @@ event requests still cannot supply sources or network authority. Unsupported
   v0.9.7 corrects event targeting, handler-slot order and readiness before deferred
   sources. Function timers use the separate bounded transaction below.
 
-## Parent-issued timer tasks: v0.9.7 increment
+## Parent-issued tasks: timers and rejection notifications
 
 `setTimeout(function, delay, ...arguments)` retains traced callback/argument roots
 under the same shared work admission as Promise jobs; `clearTimeout` cancels
@@ -78,11 +78,21 @@ Modern protocol v3 introduced `TaskPump { wake_token }`, not a fabricated activa
 The v0.9.8 provenance-aware Init contract uses v4 and rejects v3 frames,
 including later Event/TaskPump commands; the explicit legacy lane remains v1.
 It shares the activation's one pending command, sequence/revision, lifetime,
-active-time, wire and child ledgers. A valid pump executes at most one eligible
-timer and its microtask checkpoint. Reject early/stale/replayed tokens without
+active-time, wire and child ledgers. A valid pump selects one eligible
+task and its microtask checkpoints. Reject early/stale/replayed tokens without
 callback effects. The reply has no control acknowledgements, activation outcome,
 default action or startup-script count. Newer native form edits remain pending;
 independent script navigation remains parent-validated and hop-limited.
+
+The v0.9.9 candidate adds Window rejection notification to this same scheduler.
+After an outer checkpoint, candidates freeze into a later batch. One pump
+selects one timer, one frozen batch or one handled-notification task using its
+deadline and common checked task sequence. A batch can begin several candidate
+permits, not several parent transactions; new rejections during delivery belong
+to later batches. A catch before delivery cancels pending admission without
+refunding lifetime work. Genuine late handling admits a new task. Traced payloads,
+weak outstanding membership and conservative sticky observation gaps follow
+[the reviewed contract](PROMISE_REJECTIONS.md). No v4 wire shape changes.
 
 `Browser::poll` schedules tasks for every polled live page, including hidden
 native tabs. Embedders must keep polling; CDP event draining and painting alone
@@ -92,14 +102,15 @@ wait for arbitrary timers. A one-shot worker only returns Init. No child sleeps,
 unsolicited callbacks/output, replay or automatic restart are introduced.
 
 This is not a general HTML event loop: startup remains bundled in Init, and
-string timers, intervals, fully queued lifecycle and general message/
-rejection-event delivery remain unsupported. The non-scoring full-harness
+string timers, intervals, fully queued lifecycle and messaging
+remain unsupported. The non-scoring full-harness
 readiness milestone remains open in [WPT_TESTHARNESS.md](WPT_TESTHARNESS.md).
 
 The bounded v0.9.8 Window `error`/five-argument `onerror` path retains ordinary
 host diagnostics even after cancellation. A GC-traced native event wrapper owns
 the exception, with a sticky opaque policy for admitted foreign/unknown/dynamic
-sources. It does not provide exact throw locations or rejection notifications.
+sources. It does not provide exact throw locations; rejection notification is
+the separate v0.9.9 candidate above.
 See [Window errors](WINDOW_ERRORS.md) for dispatch, provenance and retention.
 
 These semantics are a bounded subset of the [DOM event dispatch algorithm](https://dom.spec.whatwg.org/#dispatching-events)

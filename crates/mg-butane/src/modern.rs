@@ -371,6 +371,17 @@ fn policy_error() -> JsError {
     EngineError::NoInstructionsRemain.into()
 }
 
+/// Read the worker-local dynamic-compilation flag without executing or checking JS.
+///
+/// Missing policy authority returns `None`, never permission to expose values.
+/// Existing policy remains readable after fatal failure. This scalar observation
+/// allocates nothing and changes no limits, counters, reports or policy state.
+#[must_use]
+pub fn context_dynamic_compilation_seen(context: &Context) -> Option<bool> {
+    let policy = context.get_data::<Policy>()?;
+    Some(policy.0.borrow().dynamic_compilation_seen)
+}
+
 /// Check shared policy at the start of every DOM/native callback before effects.
 pub fn check_context(context: &mut Context) -> JsResult<()> {
     let Some(policy) = context.get_data::<Policy>().cloned() else {

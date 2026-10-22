@@ -12,7 +12,9 @@ install -m 644 assets/mgbrowser.svg LICENSE NOTICE "$payload/"
 install -m 644 "docs/RELEASE-v$version.md" "$payload/README.md"
 install -m 644 assets/mgbrowser-256.png "$payload/"
 python3 tools/license-inventory.py "$payload/THIRD_PARTY_LICENSES.txt"
-tar -czf "$out/mgbrowser-linux-x86_64.tar.gz" -C "$out" mgbrowser-linux-x86_64
+# Stronger gzip compression preserves every tar/payload byte without raising
+# older updaters' download limit. -n omits gzip filename/timestamp metadata.
+tar -cf - -C "$out" mgbrowser-linux-x86_64 | gzip -9n > "$out/mgbrowser-linux-x86_64.tar.gz"
 # Existing installed updaters use the transport's 8 MiB response-body ceiling.
 # A payload below the separate 64 MiB unpacked ceiling can still be too large
 # to download. Fail before publishing either the archive or its checksum.

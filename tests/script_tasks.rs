@@ -407,3 +407,181 @@ fn real_worker_rejects_v3_init_and_later_commands_without_reply_or_execution() {
         );
     }
 }
+
+#[test]
+fn real_worker_runs_one_frozen_rejection_batch_and_its_listener_checkpoints() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        var order=['script'],a={proof:'a'},b={proof:'b'},pa,pb;
+        function show(){document.getElementById('o').setAttribute('data-order',order.join(','));}
+        window.addEventListener('error',()=>document.getElementById('o').setAttribute('data-window-error','wrong'));
+        window.addEventListener('unhandledrejection',function(event){
+            const id=event.promise===pa?'a':event.promise===pb?'b':'wrong';
+            if(id==='wrong'||event.reason!==(id==='a'?a:b)||this!==window||
+               event.target!==window||event.currentTarget!==window||event.eventPhase!==2||
+               event.bubbles||!event.cancelable||event.defaultPrevented)throw 'invalid rejection payload';
+            if(id==='b'&&order.join(',')!=='script,init-job,u-a,m-a')throw 'missing first listener checkpoint';
+            event.preventDefault();order.push('u-'+id);
+            Promise.resolve().then(()=>{order.push('m-'+id);show();});
+        });
+        pa=Promise.reject(a);pb=Promise.reject(b);
+        Promise.resolve().then(()=>{order.push('init-job');show();});
+    "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(
+        attribute(&initial, "data-order").as_deref(),
+        Some("script,init-job")
+    );
+    assert_eq!(report(&initial).jobs_admitted, 3);
+    assert_eq!(report(&initial).jobs_executed, 1);
+    assert_eq!(report(&initial).pending_jobs, 2);
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    peer.idle();
+    let notified = peer.pump(1, 0, token);
+    no_activation(&notified);
+    assert_eq!(notified["reply"]["state"], "Ready");
+    assert_eq!(
+        notified["reply"]["errors"],
+        json!(["Unhandled Promise rejection", "Unhandled Promise rejection"])
+    );
+    assert_eq!(
+        attribute(&notified, "data-order").as_deref(),
+        Some("script,init-job,u-a,m-a,u-b,m-b")
+    );
+    assert!(attribute(&notified, "data-window-error").is_none());
+    assert_eq!(report(&notified).jobs_admitted, 5);
+    assert_eq!(report(&notified).jobs_executed, 5);
+    assert_eq!(report(&notified).pending_jobs, 0);
+    assert!(notified["reply"]["task_wake"].is_null());
+    report(&notified).validate_after(&report(&initial)).unwrap();
+    peer.idle();
+    peer.finish();
+}
+
+#[test]
+fn real_worker_synchronous_rejections_cannot_bypass_shared_pending_admission() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        window.onerror=()=>document.getElementById('o').setAttribute('data-reporter','wrong');
+        for(let i=0;i<257;i++)Promise.reject(i);
+        document.getElementById('o').setAttribute('data-after','wrong');
+    "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Fatal");
+    assert_eq!(report(&initial).jobs_admitted, 256);
+    assert_eq!(report(&initial).jobs_executed, 0);
+    assert_eq!(report(&initial).pending_jobs, 0);
+    assert!(report(&initial).fatal_reason.is_some());
+    assert!(initial["reply"]["task_wake"].is_null());
+    assert!(attribute(&initial, "data-reporter").is_none());
+    assert!(attribute(&initial, "data-after").is_none());
+    let errors = initial["reply"]["errors"].as_array().unwrap();
+    assert!(!errors.is_empty());
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.as_str().unwrap().contains("EngineLimit:")),
+        "{errors:?}"
+    );
+    peer.finish();
+}
+
+#[test]
+fn real_worker_muted_rejection_observation_gap_survives_catch_and_later_reply() {
+    const NOTICE: &str = "Promise rejection observation suppressed by source-exposure policy; handled status unknown.";
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        try{eval(')')}catch(error){}
+        Promise.reject({proof:'private'}).catch(()=>document.getElementById('o').setAttribute('data-caught','yes'));
+        setTimeout(()=>document.getElementById('o').setAttribute('data-later','yes'),0);
+    "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([NOTICE]));
+    assert_eq!(attribute(&initial, "data-caught").as_deref(), Some("yes"));
+    // Suppressed observation retains no rejection permit. Only the real catch
+    // reaction and timer consume work, under the unchanged shared report.
+    assert_eq!(report(&initial).jobs_admitted, 2);
+    assert_eq!(report(&initial).jobs_executed, 1);
+    assert_eq!(report(&initial).pending_jobs, 1);
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let later = peer.pump(1, 0, token);
+    no_activation(&later);
+    assert_eq!(later["reply"]["state"], "Ready");
+    assert_eq!(later["reply"]["errors"], json!([NOTICE]));
+    assert_eq!(attribute(&later, "data-later").as_deref(), Some("yes"));
+    assert_eq!(report(&later).jobs_admitted, 2);
+    assert_eq!(report(&later).jobs_executed, 2);
+    assert_eq!(report(&later).pending_jobs, 0);
+    assert!(later["reply"]["task_wake"].is_null());
+    report(&later).validate_after(&report(&initial)).unwrap();
+    peer.finish();
+}
+
+#[test]
+fn real_worker_fatal_rejection_delivery_exits_with_parent_input_still_open() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        window.onerror=()=>document.getElementById('o').setAttribute('data-reporter','wrong');
+        window.addEventListener('unhandledrejection',event=>{
+            document.getElementById('o').setAttribute('data-entered','yes');
+            Promise.resolve().then(()=>document.getElementById('o').setAttribute('data-job','wrong'));
+            while(true){}
+        });
+        window.addEventListener('unhandledrejection',()=>document.getElementById('o').setAttribute('data-listener','wrong'));
+        (()=>{const reason=document.createElement('div');Promise.reject(reason);})();
+        Promise.reject('second candidate');
+    "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(report(&initial).pending_jobs, 2);
+    let (token, delay) = wake(&initial);
+    peer.wait_due(delay);
+    let fatal = peer.pump(1, 0, token);
+    no_activation(&fatal);
+    assert_eq!(fatal["reply"]["state"], "Fatal");
+    assert_eq!(report(&fatal).jobs_admitted, 3);
+    assert_eq!(report(&fatal).jobs_executed, 1);
+    assert_eq!(report(&fatal).pending_jobs, 0);
+    assert!(report(&fatal).fatal_reason.is_some());
+    assert!(fatal["reply"]["task_wake"].is_null());
+    assert_eq!(attribute(&fatal, "data-entered").as_deref(), Some("yes"));
+    for field in ["data-reporter", "data-job", "data-listener"] {
+        assert!(attribute(&fatal, field).is_none(), "{field}");
+    }
+    let errors = fatal["reply"]["errors"].as_array().unwrap();
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.as_str() == Some("Unhandled Promise rejection"))
+            .count(),
+        1
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.as_str().unwrap().contains("EngineLimit:"))
+    );
+    report(&fatal).validate_after(&report(&initial)).unwrap();
+    // Do not close stdin to manufacture EOF cleanup: a terminal reply itself
+    // must make the real restricted child drop its realm and exit successfully.
+    assert!(peer.input.is_some());
+    loop {
+        if let Some(status) = peer.child.try_wait().unwrap() {
+            assert!(status.success(), "terminal task child {status}");
+            break;
+        }
+        peer.tick();
+    }
+    let mut byte = [0];
+    assert_eq!(peer.output.read(&mut byte).unwrap(), 0);
+}

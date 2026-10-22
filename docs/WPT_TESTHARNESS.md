@@ -216,8 +216,11 @@ diagnostic and proves actual callback/checkpoint/exception identity. Queued
 Promise rejection notification is the next separately reviewed increment, not
 implemented or accepted by this release.
 
-The [queued rejection contract](PROMISE_REJECTIONS.md) records that next
+The [queued rejection contract](PROMISE_REJECTIONS.md) records the v0.9.9 candidate
 increment's shared admissions, frozen batches, weak membership, no-result-hook
-failures and conservative observation-gap policy. It is not new implementation
-or full-harness acceptance. Keep its authored controls separate from the scored
+failures and conservative observation-gap policy. Focused local debug/release
+controls pass; complete regression, package and public delivery remain separate
+gates. Pinned Boa's fatal VM argument roots require terminal Context teardown,
+which the actual browser worker already performs. This is not full-harness
+acceptance. Keep its authored controls separate from the scored
 upstream corpus and future typed observation.

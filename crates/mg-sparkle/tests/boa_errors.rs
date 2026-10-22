@@ -483,17 +483,27 @@ fn navigation_proposal_does_not_unmute_but_a_fresh_realm_has_its_own_floor() {
 }
 
 #[test]
-fn promise_rejection_is_not_a_window_error_or_fake_rejection_service() {
-    let (_realm, reply) = start(
+fn promise_rejection_queues_a_real_later_notification_without_becoming_a_window_error() {
+    let (mut realm, reply) = start(
         r#"
-        window.addEventListener('error',()=>{document.title='wrong error';});
-        var rejected=false;try{window.addEventListener('unhandledrejection',()=>{});}catch(e){rejected=true;}
-        if(!rejected)throw 'fake rejection support';Promise.reject({proof:1});document.title='no delivery';
+        var errors=0,reason={proof:1},promise;
+        window.addEventListener('error',()=>{errors++;document.title='wrong error';});
+        window.addEventListener('unhandledrejection',event=>{
+            if(errors!==0||event.promise!==promise||event.reason!==reason)throw 'fake rejection payload';
+            event.preventDefault();document.title='actual later notification';
+        });
+        promise=Promise.reject(reason);document.title='no delivery';
     "#,
     );
     assert_eq!(title(&reply), "no delivery");
     assert!(reply.errors.is_empty(), "{:?}", reply.errors);
-    assert!(reply.task_wake.is_none());
+    assert!(reply.task_wake.is_some());
+    assert_eq!(reply.boa.as_ref().unwrap().pending_jobs, 1);
+    let notified = pump(&mut realm, &reply);
+    assert_eq!(title(&notified), "actual later notification");
+    assert_eq!(notified.errors, ["Unhandled Promise rejection"]);
+    assert!(notified.task_wake.is_none());
+    assert_eq!(notified.boa.as_ref().unwrap().pending_jobs, 0);
 }
 
 #[test]

@@ -504,6 +504,16 @@ authored controls add no upstream passes. Rejection notification, messaging,
 queued lifecycle, typed harness results and the wider unchecked F-016 criteria
 remain open.
 
+v0.9.9 candidate: queued `unhandledrejection`/`rejectionhandled` with actual
+Promise/reason payloads, frozen later batches, shared admissions and weak
+outstanding membership. Source muting keeps no rejected payload and retains an
+explicit sticky observation-gap notice. Focused debug/release and initial
+native/CDP controls pass; full regression, exact-commit release/public installer
+gates remain separate. Fatal binding work clears immediately; pinned Boa VM
+argument roots require actual Context teardown, already performed by the browser
+worker. See [contract and limits](docs/PROMISE_REJECTIONS.md). This completes
+neither Window-testharness readiness nor any unchecked F-016 requirement.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable
@@ -806,7 +816,7 @@ evaluator remains an explicit test baseline, not a production fallback. Broader
 events, string timers, intervals and modules remain unsupported. F-016 records
 the bounded classic external-source increment and its v0.9.6 acceptance/release
 evidence, the shipped v0.9.7 function-timer increment and v0.9.8 bounded
-Window-error/provenance controls.
+Window-error/provenance controls, followed by the v0.9.9 queued-rejection candidate.
 
 Live Google search currently requires this work. Develop against bounded local language and DOM fixtures; retain the original Google journey as the end-to-end acceptance gate.
 

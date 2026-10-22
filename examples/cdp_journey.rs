@@ -352,6 +352,7 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
             | "/script-external-events"
             | "/script-task-events"
             | "/script-error-events"
+            | "/script-rejection-events"
     ) {
         return run_events(client, &fixture, evidence);
     }
@@ -529,7 +530,7 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
     }
     if matches!(
         fixture.path(),
-        "/script-task-events" | "/script-error-events"
+        "/script-task-events" | "/script-error-events" | "/script-rejection-events"
     ) {
         // These fixtures create controls in a later timer/error dispatch. Poll
         // ordinary public DOM state within the client's existing deadline;
@@ -548,18 +549,23 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 .find_map(|child| with_attribute(child, name, expected))
         }
         let error_fixture = fixture.path() == "/script-error-events";
-        let expected = if error_fixture {
+        let rejection_fixture = fixture.path() == "/script-rejection-events";
+        let expected = if error_fixture || rejection_fixture {
             "typed-identity-canceled"
         } else {
             "script,script-microtask,document-ready-capture,document-ready,document-ready-bubble,load-property,load,load-microtask,timer,timer-microtask"
         };
-        let attribute = if error_fixture {
+        let attribute = if rejection_fixture {
+            "data-rejection-proof"
+        } else if error_fixture {
             "data-error-proof"
         } else {
             "data-task-order"
         };
         let checkpoint =
             "script,script-microtask,timer,property,property-microtask,listener,listener-microtask";
+        let rejection_checkpoint =
+            "script,script-microtask,property,property-microtask,listener,listener-microtask";
         loop {
             remaining(client.deadline)?;
             let document = client.command("DOM.getDocument", json!({"depth": -1}))?;
@@ -569,11 +575,20 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 && (!error_fixture
                     || with_attribute(&document["root"], "data-error-checkpoint", checkpoint)
                         .is_some())
+                && (!rejection_fixture
+                    || with_attribute(
+                        &document["root"],
+                        "data-rejection-checkpoint",
+                        rejection_checkpoint,
+                    )
+                    .is_some())
             {
                 let state = with_attribute(&document["root"], "id", "state")
                     .and_then(|node| node["nodeId"].as_u64())
                     .ok_or_else(|| failure("Missing timer state node"))?;
-                let expected_state = if error_fixture {
+                let expected_state = if rejection_fixture {
+                    "promise rejection ready"
+                } else if error_fixture {
                     "window error ready"
                 } else {
                     "timer task ready"
@@ -581,7 +596,11 @@ fn run_events(mut client: Client, fixture: &url::Url, evidence: &Path) -> Result
                 if text_of(&document["root"], state).as_deref() != Some(expected_state) {
                     return Err(failure("Timer task proof and visible state disagree"));
                 }
-                if error_fixture {
+                if rejection_fixture {
+                    println!(
+                        "CDP_PROMISE_REJECTION_OK {expected} checkpoint={rejection_checkpoint}"
+                    );
+                } else if error_fixture {
                     println!("CDP_WINDOW_ERROR_OK {expected} checkpoint={checkpoint}");
                 } else {
                     println!("CDP_TASK_ORDER_OK {expected}");

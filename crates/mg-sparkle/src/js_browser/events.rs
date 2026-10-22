@@ -41,6 +41,8 @@ pub(super) enum Kind {
     Click,
     Submit,
     Error,
+    UnhandledRejection,
+    RejectionHandled,
 }
 impl Kind {
     pub(super) fn name(self) -> &'static str {
@@ -49,6 +51,8 @@ impl Kind {
             Self::Load => "load",
             Self::ReadyState => "readystatechange",
             Self::Error => "error",
+            Self::UnhandledRejection => "unhandledrejection",
+            Self::RejectionHandled => "rejectionhandled",
             Self::Click => "click",
             Self::Submit => "submit",
         }
@@ -74,6 +78,8 @@ impl Kind {
         match name {
             "readystatechange" => Ok(Self::ReadyState),
             "error" => Ok(Self::Error),
+            "unhandledrejection" => Ok(Self::UnhandledRejection),
+            "rejectionhandled" => Ok(Self::RejectionHandled),
             _ => Self::parse(name),
         }
     }
@@ -82,6 +88,8 @@ impl Kind {
             "onload" => Some(Self::Load),
             "onreadystatechange" => Some(Self::ReadyState),
             "onerror" => Some(Self::Error),
+            "onunhandledrejection" => Some(Self::UnhandledRejection),
+            "onrejectionhandled" => Some(Self::RejectionHandled),
             _ => Self::property(name),
         }
     }
