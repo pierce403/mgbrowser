@@ -1,7 +1,7 @@
 # Work queue
 
-2026-10-21 closeout direction: finish the current v0.9.6 increment and push.
-Do not start the next feature during this request.
+2026-10-21 resumed: the user explicitly chose **Resume feature work** after the
+v0.9.6 closeout. Continue the broader goal without weakening its acceptance gates.
 
 The broader recorded goal is **implement all features in FEATURES.md**. Keep each
 feature's recorded acceptance criteria and release policy. Work through the
@@ -19,9 +19,12 @@ following dependency order, updating evidence as each increment ships:
    website gates are green at e5c3e32, tagged v0.9.6; the normal release and
    checksum-verified public installer pass. Actual v0.9.5 self-upgrade and the
    subsequent no-op check pass. See the 2026-10-21 log for public receipts.
-   Stop after this closeout; the remaining queue needs a new request.
-2. Expand the pinned WPT cohort in a separate tooling contribution, retaining all
-   existing 24 cases and establishing the new baseline before engine fixes.
+   Release and public verification are complete; the later explicit resume
+   authorizes the remaining queue below.
+2. **Active:** expand to the complete pinned recursive flexbox reftest cohort in
+   a separate tooling contribution, retaining all existing 24 cases and
+   establishing the new baseline before engine fixes. Selection, input/resource
+   review and sequencing are fixed in [docs/WPT_EXPANSION.md](docs/WPT_EXPANSION.md).
    Then implement testharness execution through the restricted worker and the
    browser services required by those upstream tests (F-026/F-008/F-016).
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
