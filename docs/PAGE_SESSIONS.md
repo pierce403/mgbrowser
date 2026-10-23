@@ -21,11 +21,12 @@ successful combined charge. The v5 references below remain release history;
 v0.9.12 modern v6 does not accept v5 frames. Exact local controls, unchanged
 limits and separate public receipts are in [WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md).
 
-The in-progress v0.9.13 source uses strict modern v7 for the additional fixed
-trusted output-disabled contract; v6 is intentionally rejected, not translated.
-Its [local implementation and pending acceptance](WPT_HARNESS_OUTPUT_STATUS.md)
-are separate from the published v0.9.12 receipts. The v6 statements below describe
-that historical release; required progress, legacy-v1 and resource policy remain.
+The v0.9.13 release at `948e86206c23c0310d17dc286ac5107a15f1f434` uses strict
+modern v7 for the additional fixed trusted output-disabled contract; v6 is
+intentionally rejected, not translated. Its [scope and release acceptance](WPT_HARNESS_OUTPUT_STATUS.md)
+keep local and public evidence separate; the public closeout log is
+[dated log](../memory/logs/2026-10-22.md#v0913-public-release-closeout). The v6 statements below describe historical
+v0.9.12; required progress, strict legacy-v1 and resource policy remain unchanged.
 
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit

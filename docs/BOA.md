@@ -142,10 +142,12 @@ delayed tasks. Authored timer controls are not upstream WPT results.
 
 ## Default-off typed test observation: v0.9.12
 
-In-progress v0.9.13 source adds the separately frozen fixed output-disabled
-contract and strict modern v7, rejecting v6 without a compatibility shim.
-[Implementation status and remaining gates](WPT_HARNESS_OUTPUT_STATUS.md)
-distinguish local checks from delivery. The following v6 receipts are historical.
+Shipped v0.9.13 at `948e86206c23c0310d17dc286ac5107a15f1f434` adds the separately
+frozen fixed output-disabled contract and strict modern v7, rejecting v6 without
+a compatibility shim. [Implementation scope and release evidence](WPT_HARNESS_OUTPUT_STATUS.md)
+separate local worker/Browser from packaged/public acceptance; public closeout
+log is [dated log](../memory/logs/2026-10-22.md#v0913-public-release-closeout). The following v6 description
+and receipts remain historical v0.9.12 evidence.
 
 The release implements the frozen [Window observer contract](WPT_OBSERVER.md)
 for trusted contributor test hosts. Normal browsing and `BoaPageRealm::start`

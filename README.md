@@ -2,9 +2,9 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.13 in development
+## v0.9.13 Experimental Preview
 
-The fixed trusted `setup({output:false})` contributor mode is locally implemented
+This release ships the fixed trusted `setup({output:false})` contributor mode
 without injected JavaScript, changed harness/vendor bytes or larger resource
 allowances. Five new authored controls and all sixteen original controls meet
 their frozen expectations in both normal release-mode worker and separate real
@@ -12,11 +12,16 @@ Browser paths, preserving assertion failures, genuine timeout and native errors.
 They add **zero upstream WPT passes**. Full local Rust and frozen JSPLAN gates
 pass; the fresh complete static score remains 317/632/62 of 1,011. The packaged
 installer/updater, all thirteen native helpers and both frozen worker suites
-also pass. Exact-commit CI and public release/install/update gates remain pending. See
+also pass. Published as [v0.9.13](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.13)
+at `948e86206c23c0310d17dc286ac5107a15f1f434`. Exact-source CI/site, tagged
+release, public install/reinstall, actual v0.9.12 upgrade/no-op, both five-new
+and sixteen-original public-worker suites and all thirteen existing public-native
+helpers pass. Public closeout log: [dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout). See
 [implementation and evidence](docs/WPT_HARNESS_OUTPUT_STATUS.md).
-The website installer still selects the latest published release, not this draft.
+The website installer delivers the latest published release. See the
+[v0.9.13 release notes and limitations](docs/RELEASE-v0.9.13.md).
 
-## v0.9.12 Experimental Preview
+### Previous v0.9.12 increment
 
 This increment adds bounded, default-off typed Window testharness observation
 for contributor test hosts. Results retain raw statuses, weak identities and

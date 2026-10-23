@@ -80,13 +80,14 @@ and the dated log. The older public v0.9.11 prefix remains
 prefix evidence only. There is no new scored cohort, upstream pass or complete
 Window readiness claim; no criterion above is newly checked.
 
-In-progress v0.9.13 adds fixed trusted output:false configuration under the
-separately frozen docs/WPT_HARNESS_OUTPUT.md contract. Focused local debug checks
-and both frozen complete-harness suites pass in local worker/Browser paths.
-Full local Rust and JSPLAN gates pass; fresh complete static scoring remains
-317/632/62 of 1,011. Packaged installer/updater, all thirteen native helpers
-and both frozen worker suites pass; public release gates remain pending in
-docs/WPT_HARNESS_OUTPUT_STATUS.md. This does not add WPT passes or check a criterion.
+Shipped v0.9.13 at `948e86206c23c0310d17dc286ac5107a15f1f434`: fixed trusted
+output:false configuration under the separately frozen docs/WPT_HARNESS_OUTPUT.md
+contract. Both frozen complete-harness suites pass in local worker/Browser and
+public-worker paths; full local Rust/JSPLAN, packaged installer/updater, exact-source
+CI/site, normal release/public install, actual v0.9.12 update/no-op and all thirteen
+existing public-native helpers pass. Public evidence:
+[dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout) and docs/WPT_HARNESS_OUTPUT_STATUS.md.
+Static scoring stays 317/632/62 of 1,011. No WPT pass or criterion is added.
 
 ## F-025 : Google News desktop reading
 
@@ -580,8 +581,13 @@ executable; finite causal settlement retains errors after captured completion.
 All thirteen existing public-native helpers pass. No broader F-016 criterion
 or WPT testharness cohort is completed by these controls.
 
-The fixed output-disabled v0.9.13 increment is locally implemented but not yet
-released; docs/WPT_HARNESS_OUTPUT_STATUS.md keeps its remaining acceptance open.
+Shipped v0.9.13 adds only the fixed trusted output-disabled contract and strict
+modern v7 under docs/WPT_HARNESS_OUTPUT_STATUS.md. Its five new authored controls
+and all sixteen original V1 controls retain their actual positive/negative
+outcomes in local worker/Browser and public-worker lanes. Exact-source release,
+public install/update and thirteen public-native helper receipts are recorded
+in [dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout). No larger resource profile, general
+Window readiness, upstream cohort or unchecked F-016/F-026/MVP gate is completed.
 
 ## F-015 : Self-updates and build identity
 

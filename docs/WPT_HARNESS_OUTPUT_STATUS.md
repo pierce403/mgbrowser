@@ -1,11 +1,12 @@
 # Fixed harness output configuration: implementation status
 
-2026-10-22: v0.9.13 local implementation, not a published release or new WPT score.
+2026-10-22: v0.9.13 is published at `948e86206c23c0310d17dc286ac5107a15f1f434`.
+Public closeout log: [dated log](../memory/logs/2026-10-22.md#v0913-public-release-closeout) below. No new WPT score.
 The immutable preimplementation contract and five authored controls remain in
 [WPT_HARNESS_OUTPUT.md](WPT_HARNESS_OUTPUT.md) and its companion JSON. Their
 historical wording and hashes are intentionally unchanged.
 
-## Implemented locally
+## Implemented bounded scope
 
 Trusted test hosts may select the single fixed
 `PinnedWindowHarnessOutputDisabledV1` contract. After the verified complete
@@ -77,8 +78,11 @@ Measured final admitted/executed/pending work is H1 and H2: 5/3/1; H3: 6/4/1;
 H4: 5/4/0; H5: 4/4/0 in both paths. New-profile Init admits four lifetime tasks
 with three still pending; original H5 admits three with three pending. This
 retains the actual canceled timer admission rather than refunding it. These are
-observations, not replacement quota assertions. All reports fit unchanged limits;
-the maximum cumulative requested System allocation is 18,700,930 bytes.
+observations, not replacement quota assertions. All new-five reports fit unchanged
+limits; the new-five maximum cumulative requested System allocation is 18,700,930
+bytes. Across the original-sixteen and new-five local direct-worker suites the
+maximum is 18,755,476 bytes. These are requested-System counters, not GC live
+heap or RSS; neither number is asserted as a public-binary peak.
 
 New-suite receipts: worker SHA-256
 `514663b1780911e0b78177163e08040d9b5fbb6c09aedd268b5a366b073f43a4`;
@@ -89,7 +93,7 @@ Browser `54d05af0c1142c9185053230d769b4378179bbe6e3b795a38fecff18223b2802`.
 The dated log separates those lanes and executable hashes. Expected negatives
 are verified outcomes, not browser PASS or upstream score gains.
 
-## Remaining acceptance
+## Regression, packaged and public acceptance
 
 The two fixed suites remain distinct: `--suite observer` selects all sixteen
 original inputs; `--suite output-config` selects exactly the new five. The new
@@ -135,10 +139,26 @@ negative outcomes, not newly passing tests. Packaged-suite receipt SHA-256:
 new five `c36b5e0a959baf3153257be87e1a00f56606f00ed48347c51f13946148f4fef3`;
 old sixteen `e6ac38e8f372b90b48e63afa722c258f5df85d57ba1a5a61b6d4258a52ee5336`.
 
-Both frozen suites through public bytes, public installation, actual
-previous-release self-upgrade, all thirteen public-native helpers and
-exact-commit CI/site/tag/release verification remain pending.
-Do not describe v0.9.13 as delivered until those gates are recorded.
+Exact-source CI/site, normal tag/release assets, public install/reinstall,
+actual v0.9.12 self-upgrade/no-op, both frozen public-worker suites and all
+thirteen public-native helpers pass at the release source above. The exact
+public evidence is separate from early-local and packaged receipts:
+
+- Source CI and canonical/public-byte/result parity: `63ace3f18ee28b2628af26db71bb4b69478713df140f8471f06583e45ca0cc9b`.
+- Tag workflow, normal release/assets and safe archive review: `b32da60bcf528af60749feeaf55104b251bb8c0befb04127c8d0603fc3d94c41`.
+- Public archive: `8,003,791` bytes, SHA-256 `2fb4bfc22793e1b982bc423eff8c6bf999de7ab48da417faecdadf364829156e`.
+- Actual advertised installer/reinstall: `131bbeafeb0562ef6bd437b4cb5a98742478c74082e60087be870d4e1e0eb8e4`;
+  installed executable SHA-256 `fc4cf0033230885795c3d3e3e8d928a487c53119eca1ec4a4844d3bde1d9b977`.
+- Actual v0.9.12 upgrade and following no-op: `e1a1ac3c826b81be859a55711fd39dce7bccc285d4ba104edb44c61be2c4445f`.
+- All five new public-worker controls: `23f13e41bf823b0d0d1d78cffea70a59ba47f44082a3d5b4d2e507eaad86b287`.
+- All sixteen original public-worker controls: `8cd625891104cfbc02a2f5ee0abc1924a048eab76cf4f4de10740c7d6f52b385`.
+- All thirteen public-native helpers (runtime and documented cleanup): `e149a94ce4a20280bc08079bc22f2ae3878a39945b71117f93fa4fedd0aa415b`.
+  Root's separate screenshot review is recorded in the dated closeout log.
+- Fresh documentation-closeout WPT/full deep review: `cdaad49303795f373c75786d59fa8f2daa1240459a265fcbbbf1a5219056f182`.
+
+Public closeout log: [dated log](../memory/logs/2026-10-22.md#v0913-public-release-closeout).
+Each owner confirms its documented cleanup scope; no unknown cleanup or
+unfinished selected case is accepted. Negative control outcomes remain negative.
 
 The published static score remains 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011.
 Authored controls add zero WPT passes. No upstream Window cohort, full readiness,
