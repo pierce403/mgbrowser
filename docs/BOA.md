@@ -140,9 +140,9 @@ The one-shot `--script-worker` path returns the initial snapshot, not a task loo
 Headless profiling measures navigation/initial paint, not completion of arbitrary
 delayed tasks. Authored timer controls are not upstream WPT results.
 
-## Default-off typed test observation: v0.9.12 candidate
+## Default-off typed test observation: v0.9.12
 
-The candidate implements the frozen [Window observer contract](WPT_OBSERVER.md)
+The release implements the frozen [Window observer contract](WPT_OBSERVER.md)
 for trusted contributor test hosts. Normal browsing and `BoaPageRealm::start`
 remain Disabled; only explicit `start_with_observer` / configured `LinuxScripts`
 enable capture after a verified complete harness bootstrap. Strict modern v6
@@ -168,8 +168,10 @@ All sixteen frozen authored controls meet their expected outcomes locally in
 both the normal restricted executable and a separate real Browser/manager host.
 Expected negatives are not browser passes, and neither run adds WPT passes or
 attests hostile-page callbacks. See [implementation, exact receipts and usage](WPT_OBSERVER_STATUS.md).
-Final-version CI, packaging, public installation/update and native release gates
-are pending; v0.9.12 is not yet a published release.
+v0.9.12 is published at `1d14f8b57e9a6743c32be4fc2aafa3811d121837`.
+Exact-source CI, release/public installation, actual old update/no-op, all
+sixteen public-worker controls and all thirteen existing native helpers pass;
+see that companion for separate receipts and cleanup scope.
 
 ## Classic external sources
 

@@ -2,6 +2,17 @@
 
 ## Purpose and responsibilities
 
+Completed increment (2026-10-22): bounded default-off typed Window observation
+ships as v0.9.12 at `1d14f8b57e9a6743c32be4fc2aafa3811d121837`.
+Exact-source CI/site/release, public installation, actual v0.9.11 update/no-op,
+all sixteen public-worker controls and all thirteen existing native helpers
+pass. Receipts are in docs/WPT_OBSERVER_STATUS.md and the dated log. Frozen
+contract/inputs, legacy bytes and all limits remain unchanged; zero upstream
+passes are added.
+F-016/F-026/formal MVP remain open. The resumed broader goal continues with a
+separate reviewed harness configuration/output protocol before a new cohort or
+CSS work; do not treat this release as permission to skip that freeze.
+
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and
 T-023 / F-026. Keep corpus/runner changes separate from engine changes scored

@@ -41,6 +41,12 @@ before publishing a normal GitHub Release. Then verify assets/checksum, the publ
 installer command in an isolated prefix, version, worker selftest and desktop/icon
 files. Preview publication does not complete F-007 or the Google compatibility goal.
 
+Default installer checks with release-smoke.py and public-release-smoke.py must
+remove inherited MGBROWSER_NO_AUTO_UPDATE when expecting the enabled marker.
+Keep native/worker private opt-outs, explicit opt-out tests and installer
+assertions unchanged. Preserve any contaminated failure; correct only the
+owner environment and rerun in a fresh prefix, never a reused evidence tree.
+
 After publication, run `python3 tools/public-release-smoke.py VERSION` from the
 repo root. It verifies public bytes, the exact advertised curl command, current
 version, replacement of an in-use executable, a fresh worker selftest, desktop/icons

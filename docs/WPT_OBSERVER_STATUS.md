@@ -1,6 +1,6 @@
 # Typed Window observer: implementation and evidence
 
-2026-10-22: **v0.9.12 candidate, locally verified, not yet released**.
+2026-10-22: **v0.9.12 released with separate public verification**.
 The [reviewed contract](WPT_OBSERVER.md) and
 [sixteen frozen authored inputs](WPT_OBSERVER_CONTROLS.json) remain byte-for-byte
 unchanged, including their historical preimplementation status. This companion
@@ -207,11 +207,40 @@ The host's process/report cutoff is owner deadline minus 2.1 s, not a new local
 25-second allowance. Do not reuse a stale deadline/output or point it at a
 mutable/general-purpose server.
 
-## Remaining release and standards gates
+## Published release and public verification
 
-Exact-commit CI/site delivery, tagged release, public assets/checksum/install,
-actual old-binary update and all public native/direct-observer acceptance remain
-pending. Completed local candidate gates above do not satisfy public delivery.
+[v0.9.12](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.12) is immutable
+at `1d14f8b57e9a6743c32be4fc2aafa3811d121837`, evaluated source `9f7b953a`.
+All six exact-source checks pass: Rust 39883752495, JSPLAN 39883752543 and
+Pages 39883752600 plus canonical/native publication. Normal release 39885893728
+passes. Public source/assets/report parity receipt SHA-256:
+`12353d5dce7e145678259be7dfdb0a175100e76d977562208bbed545b8d1d15d`.
+The public archive is 8,000,527 bytes, SHA-256
+`51adb92ae0498ae17cf76372db738d1c8e9a6675672f1150fa3ea925ee3c1d8f`.
+Asset verification receipt: `611ec0947be9658a2fc557a4dd9af71963ad6a8e96afc6282dbf4e592e3bfe88`.
+
+The exact advertised curl install/reinstall passes with real Boa/worker/session,
+desktop/icons and latest links; receipt `0abbee66bf6880bea0c15208b1777a0a8b442337d3d407d66e2c7652c90667d8`.
+Its executable is 22,991,288 bytes, SHA-256
+`f7c2987f7333cc718c87ac9a4ab42ef77f6c0c709af51b2033b0fd414f02c9ef`.
+Actual v0.9.11 CLI upgrade, one no-op and fresh worker/session pass, original
+old bytes unchanged: `1d8ed82cb3e0ba559b18a940a18ae43e036e2d5601c42857ae88e277985c4db7`.
+All sixteen frozen controls pass on that actual public executable in 34.575 s,
+with confirmed cleanup and no reservation; receipt
+`fa9c36d144a765599e7d0cf29df120395c978970784b93a1a2f3affe5779af0e`.
+Public MissingCompletion remains Waiting through 23.027 s; the genuine original
+ten-second harness Timeout takes 10.083 s, not the Browser host's 22-second cutoff.
+All thirteen existing public-native helpers and before/after version/About
+checks pass on those unchanged bytes; receipt
+`7a4e5289ed9e1977deb70b56da8d735d9ae95ccc8aa6d4b7fd2cca07cce91742`.
+Their supervisor groups are confirmed clean, nested cleanup uncertainty is
+false and no reservations remain. This proves the existing helpers' own cleanup,
+not an independent inventory of every descendant.
+Fresh same-source closeout WPT review: `37407970b0a360242c091d43c278d685a13a3492b2936c975c5d72972ef5899a`.
+These public-worker controls remain distinct from the real Browser host above;
+neither authored path adds upstream passes or completes full Window readiness.
+
+## Remaining standards gates
 
 The published static selection remains 1,011 upstream files: last published
 317 PASS / 632 FAIL / 62 UNSUPPORTED. Corpus, scorer, assertions and expectations

@@ -5,8 +5,8 @@
   checkers require the exact expected diagnostic and partial transaction while
   preserving the older diagnostic-free checkers. Their negative controls reject
   missing/extra/erased errors, phantom tasks and invalid/renewed counters. Both
-  native paths have been exercised locally; final release/public verification
-  remains separately required. Curator extends browser-check for this recurring
+  native paths now also pass in the public v0.9.12 helper acceptance, recorded
+  in the dated log. Curator extends browser-check for this recurring
   acceptance pattern, not to count these authored controls as WPT passes.
 
 - 2026-10-21: Expanded WPT validation took over 20 minutes to publish its
@@ -107,3 +107,9 @@
   different outcomes. Curator records the two acceptance paths and same-deadline
   cleanup reservation in browser-check; none of these authored controls adds
   upstream passes or proves public/native delivery by itself.
+- 2026-10-22: Package A's installer fixture correctly rejected an inherited
+  MGBROWSER_NO_AUTO_UPDATE=1: that intentional product opt-out omits the marker
+  the default-install test requires. The corrected owner removes only that
+  variable for default installer checks; native/worker opt-outs stay intact.
+  Fresh package/public installation passes without changing installer/assertions.
+  Curator records the environment distinction in publish-site; keep the failure.

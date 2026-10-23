@@ -15,13 +15,13 @@ baseline used v4 and bundled startup. Static renderer
 readiness integration stays independent of interpreting score gains: no arbitrary
 timer wait, typed observer or new scored selection is added.
 
-The v0.9.12 candidate implements the separately frozen
+The released v0.9.12 implements the separately frozen
 [bounded typed observer contract](WPT_OBSERVER.md). Observation remains Disabled
-in normal browsing. All sixteen frozen authored controls meet their exact
-positive/negative expectations through both a local restricted executable and
-a separate real Browser/manager host under unchanged limits. These are local
-non-scoring results, not sixteen WPT passes, hostile-page attestation or general
-Window compatibility. Final release/public gates remain pending. See
+in normal browsing. All sixteen frozen authored outcomes meet their exact
+expectations through local restricted workers, a real Browser/manager host and
+the actual public executable. All thirteen existing public-native helpers also
+pass under unchanged limits. These results are not WPT passes, hostile-page
+attestation or general Window compatibility. Public receipts are in
 [current implementation, receipts and contributor usage](WPT_OBSERVER_STATUS.md).
 The frozen contract and inputs retain their original preimplementation text and
 hashes; that companion records subsequent implementation evidence.

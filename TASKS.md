@@ -95,20 +95,25 @@ following dependency order, updating evidence as each increment ships:
    comparison pass locally. The corrected exact-source/public release gates
    subsequently pass at the immutable v0.9.11 tag source; the failed first-CI
    receipt remains preserved.
-   **Active release: v0.9.12 bounded typed observer.** The
+   **Shipped v0.9.12 bounded typed observer** at
+   `1d14f8b57e9a6743c32be4fc2aafa3811d121837`. The
    [frozen contract](docs/WPT_OBSERVER.md) now has strict modern v6/default-off
    trusted observation, lossless typed records and finite causal error/rejection
    settlement. All sixteen immutable authored controls pass locally through the
    normal release-mode worker and a separate real Browser/resource-broker host.
-   The v1/one-shot lanes and every resource bound remain unchanged. Finish
-   exact-commit CI/website, versioned release, public install/update and all
-   public native gates before calling
-   this increment shipped. [Scope and evidence](docs/WPT_OBSERVER_STATUS.md).
+   The v1/one-shot lanes and every resource bound remain unchanged. Exact-source
+   CI/site, release/public install, actual old update/no-op, all sixteen public-
+   worker controls and all thirteen existing native helpers pass.
+   [Scope and evidence](docs/WPT_OBSERVER_STATUS.md).
    Final-version local regressions/JSPLAN, fresh complete static scoring,
    packaged installer/updater, all thirteen native helpers and both sixteen-
-   control observer paths pass. These receipts do not establish public delivery.
-   Then freeze the next scored selection separately; do not invent upstream
-   passes from these controls or change the current 1,011 cases/expectations.
+   control observer paths pass separately from the final public receipts.
+   **Next bounded contribution:** freeze a trusted harness configuration/output
+   protocol before any upstream Window cohort or CSS iteration. Review real
+   setup/default-timer accounting and controls without source injection, hidden
+   allowances or implied approval of a new resource profile. Then select and
+   freeze a separate scored cohort; never invent passes from these controls or
+   change the current 1,011 cases/expectations. F-016/F-026/MVP stay unfinished.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

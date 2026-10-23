@@ -69,12 +69,14 @@ case, raw-pixel and per-page-request evidence while reducing measured local
 runtime. It changes test tooling only, not browser behavior or the WPT score.
 See docs/WPT_EXPANSION.md for the separate safety/equivalence and public gates.
 The non-scoring Window observer in docs/WPT_OBSERVER.md is implemented for the
-v0.9.12 candidate: default-off trusted callbacks, distinct raw statuses, weak
+v0.9.12 release: default-off trusted callbacks, distinct raw statuses, weak
 identities, lossless UTF-16, provisional completion and ordinary error/rejection
 settlement. All sixteen frozen authored controls pass locally through the normal
-release-mode worker and separate real Browser/resource-broker host. Final-version
-CI, publication and public acceptance remain separate gates; see
-docs/WPT_OBSERVER_STATUS.md and the dated log. The public v0.9.11 prefix remains
+release-mode worker and separate real Browser/resource-broker host. Exact-source
+CI, normal release/public install, actual old update/no-op, all sixteen public-
+worker controls and all thirteen existing native helpers pass at
+`1d14f8b57e9a6743c32be4fc2aafa3811d121837`; see docs/WPT_OBSERVER_STATUS.md
+and the dated log. The older public v0.9.11 prefix remains
 prefix evidence only. There is no new scored cohort, upstream pass or complete
 Window readiness claim; no criterion above is newly checked.
 
@@ -563,12 +565,12 @@ all 13 packaged/public native/CDP helpers pass. Static WPT remains 317/632/62 of
 1,011; authored controls add no upstream passes. Do not mark any broader F-016
 or F-026 gate complete from these authored results.
 
-The v0.9.12 candidate adds the separate default-off typed observer described in
-docs/WPT_OBSERVER_STATUS.md. Sixteen frozen authored controls pass locally in
-both normal release-mode restricted workers and real Browser/resource-broker
-hosts; finite causal settlement retains errors after captured completion.
-Public release acceptance remains separate. No broader F-016 criterion or WPT
-testharness cohort is completed by these controls.
+The released v0.9.12 adds the separate default-off typed observer described in
+docs/WPT_OBSERVER_STATUS.md. Sixteen frozen authored outcomes are verified in
+local restricted workers, real Browser/resource-broker hosts and the public
+executable; finite causal settlement retains errors after captured completion.
+All thirteen existing public-native helpers pass. No broader F-016 criterion
+or WPT testharness cohort is completed by these controls.
 
 ## F-015 : Self-updates and build identity
 

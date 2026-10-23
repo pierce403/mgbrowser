@@ -15,8 +15,12 @@ All sixteen frozen authored controls pass locally through both the normal
 release-mode restricted worker and a separate real Browser/resource-broker host.
 They add **zero upstream WPT passes**. Final-version regressions, fresh full
 scoring, the packaged installer and all thirteen native helpers pass locally.
-Exact-commit CI, tagged publication and public install/update/native acceptance
-remain pending in the [dated log](memory/logs/2026-10-22.md).
+Published as [v0.9.12](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.12)
+at `1d14f8b57e9a6743c32be4fc2aafa3811d121837`. Exact-commit CI/site and tagged
+publication pass. Public install/reinstall, actual v0.9.11 upgrade/no-op, all
+sixteen public-executable observer controls and all thirteen existing native
+helpers also pass. Fresh WPT scoring reproduces 317 PASS, 632 FAIL and
+62 UNSUPPORTED / 1,011. See the [dated log](memory/logs/2026-10-22.md).
 The installer selects the [latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
 See the [v0.9.12 release notes and limitations](docs/RELEASE-v0.9.12.md).
 

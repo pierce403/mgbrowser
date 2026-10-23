@@ -14,12 +14,12 @@ at LoadComplete, not arbitrary queue idle. Exact release/public, actual old-upda
 and all 13 packaged/public native receipts are in the dated log. The v4/bundled
 descriptions below record the historical v0.9.10 baseline.
 
-The v0.9.12 candidate adds strict modern v6 with required default-Disabled
+The v0.9.12 release adds strict modern v6 with required default-Disabled
 observer configuration and replies. Its trusted test-host mode stages bounded
 typed records alongside the normal arena and publishes them only after one
 successful combined charge. The v5 references below remain release history;
 current modern v6 does not accept v5 frames. Exact local controls, unchanged
-limits and pending public gates are in [WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md).
+limits and separate public receipts are in [WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md).
 
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit
@@ -202,7 +202,7 @@ Event completions are separate from navigation accounting. An accepted projectio
 invalidates CDP node IDs and emits DOM.documentUpdated, not synthetic page-load
 events. No CDP commands are added and Runtime.evaluate remains unsupported.
 
-## Trusted observer publication: v0.9.12 candidate
+## Trusted observer publication: v0.9.12
 
 Modern Init is `ModernInit { page: Request, observer: ObserverInit }`, with both
 fields required and non-null. `ObserverInit::Disabled` is the default; explicit
@@ -235,7 +235,10 @@ keeps the exact Closed/Initializing exception with RejectedInit/prefix zero;
 reportless later replies remain forbidden. All existing execution, process,
 wire and work bounds stay in force. The narrowing observer caps and distinct
 local direct-worker/Browser receipts are recorded in
-[WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md). Public v0.9.12 gates are pending.
+[WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md). v0.9.12 is published at
+`1d14f8b57e9a6743c32be4fc2aafa3811d121837`, with all thirteen existing public-
+native helpers and all sixteen public-worker controls verified separately.
+This does not add a scored cohort.
 
 ## Independent acceptance
 

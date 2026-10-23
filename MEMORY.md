@@ -35,13 +35,12 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/DOCUMENT_LIFECYCLE.md`: shipped v0.9.11 queued snapshot lifecycle,
   strict v5 progress and sticky initial outcomes, after the measured public
   v0.9.10 baseline. Exact release/public receipts are in the dated log; full
-  Window readiness, trusted typed observation and broader WPT integration remain
+  Window readiness and broader WPT integration remain
   open.
-- `docs/WPT_OBSERVER.md`: next non-scoring bounded typed Window-harness observer
-  design, strict modern v6/default-off host authority, weak identities/lossless
-  UTF-16, provisional completion and finite causal settlement. Public v0.9.11
-  prefix evidence is not typed completion; implementation and acceptance remain
-  future work. The static corpus/score and all worker limits remain unchanged.
+- `docs/WPT_OBSERVER.md`: immutable frozen bounded typed observer contract.
+  `docs/WPT_OBSERVER_STATUS.md`: released v0.9.12 implementation and separate
+  local/public receipts at source `9f7b953a`. Full Window readiness and broader
+  WPT integration remain open; zero added passes, static corpus/limits unchanged.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.
