@@ -56,11 +56,12 @@ following dependency order, updating evidence as each increment ships:
    release, public install/reinstall/CSSOM/worker/session/desktop/icon checks,
    actual v0.9.13 update/no-op, both frozen public-worker suites and all thirteen
    public native helpers pass. No v0.9.14 release gate remains. Independently
-   reviewed current-source scores remain static 317/632/62 of 1,011 and
+   reviewed scores at that release were static 317/632/62 of 1,011 and
    Window 15/16 passing files, 77/79 actual final subtests; preserve the two genuine
-   flex-valid failures and the manually protected fifteen files. **Active:** the
+   flex-valid failures and the manually protected fifteen files. **Shipped
+   v0.9.15** at `7e13cca45c525921a5072a00eab658cf2782d4e9`: the
    frozen [physical justify-content contract](docs/PHYSICAL_JUSTIFY.md)
-   targets context-aware left/right alignment using the existing Rust layout
+   implements context-aware left/right alignment using the existing Rust layout
    adapter. Actual pre-feature assertion failures are retained; the minimal
    implementation and fourteen private/nineteen public controls pass focused
    debug/release checks. Full final-version regressions, embedding/dependency/
@@ -69,8 +70,12 @@ following dependency order, updating evidence as each increment ships:
    gain real reference equality and are manually protected. Separate Window
    scoring remains15/16 files and77/79 final rows. Normal package/install/updater,
    all thirteen existing native helpers, the separate physical native/CDP proof
-   and both frozen worker-control suites pass locally. Finish exact-source CI
-   and public v0.9.15 acceptance before claiming delivery. Container-unit grammar needs a
+   and both frozen worker-control suites pass locally. Exact-source CI/site,
+   normal tagged release, public install/reinstall, actual v0.9.14 update/no-op,
+   both public-worker suites, thirteen public native helpers and the separate
+   public physical proof pass. No v0.9.15 release gate remains; see
+   [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout). **Active:** review the next bounded
+   feature before implementation. Container-unit grammar needs a
    separate dependency/renderer review and remains deferred. Preserve the
    smallest remaining feature increment's acceptance gates;
    full CSSOM/F-016/F-026/MVP remain open. Preserve the fixed score lanes.

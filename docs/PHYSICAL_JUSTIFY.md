@@ -1,8 +1,8 @@
-# Physical content justification: next bounded increment
+# Physical content justification: bounded shipped increment
 
 2026-10-23: the contract below was frozen before authored controls and the
-implementation. The minimal adapter is now implemented for v0.9.15 preparation,
-not yet released. Fourteen private controls and nineteen public geometry/pixel/
+implementation. The minimal adapter shipped as v0.9.15 at
+`7e13cca45c525921a5072a00eab658cf2782d4e9`. Fourteen private controls and nineteen public geometry/pixel/
 hit controls pass in both debug and release profiles, with the selected existing
 layout regressions. Before implementation, the same frozen controls recorded
 five PASS/nine FAIL and four PASS/fifteen FAIL respectively; those were real
@@ -18,9 +18,13 @@ Normal package/installer/updater and all thirteen existing native helpers pass.
 The separate installed physical proof passes literal native/CDP pixels, boxes,
 link hits and destination paints, with exact request/lifecycle/cleanup evidence.
 Both frozen worker-control suites also pass through direct workers and the real
-Browser/HTTP host. Exact-source CI and public delivery remain pending. No WPT
-gain is inferred from authored controls. v0.9.14 remains the public
-release; retain both fixed score lanes and every resource/security assertion.
+Browser/HTTP host. Exact-source CI/site and normal tagged release, public
+install/reinstall, actual v0.9.14 update/no-op, both public-worker suites,
+thirteen public native helpers and the separate public-binary physical proof
+pass. No v0.9.15 release gate remains; see
+[the public closeout](../memory/logs/2026-10-23.md#v0915-public-release-closeout).
+No WPT gain is inferred from authored controls. Retain both fixed score lanes
+and every resource/security assertion.
 
 The initial installed fixture used empty anchors: its initial pixels/boxes
 passed, but existing default-action validation rejected their activation.

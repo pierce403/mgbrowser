@@ -35,8 +35,8 @@ under docs/CSSOM.md. Full local debug/release, frozen JSPLAN, all eight
 exact-source CI/hosting checks and normal tagged release pass. Public
 install/reinstall/CSSOM/worker/session/desktop/icon checks, actual v0.9.13
 update/no-op, both frozen public-worker suites and all thirteen public native
-helpers pass. No v0.9.14 release gate remains. Separate current-source scores
-are static 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011 and Window 15/16 files,
+helpers pass. No v0.9.14 release gate remains. At that release, separate scores
+were static 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011 and Window 15/16 files,
 77/79 final subtests; two genuine flex-valid assertions still fail and the manual
 ratchet protects fifteen files. Full CSSOM/F-016/F-026/formal MVP remain open.
 The broader goal remains
@@ -44,14 +44,19 @@ active: review the next bounded feature before implementation, preserving its
 acceptance and release gates. Never widen a resource profile, synthesize missing
 rows or merge the two score lanes.
 
-Current bounded increment (2026-10-23): physical content justification under
-docs/PHYSICAL_JUSTIFY.md is implemented for v0.9.15 preparation. Full local
+Completed bounded increment (2026-10-23): physical content justification under
+docs/PHYSICAL_JUSTIFY.md shipped as v0.9.15 at
+`7e13cca45c525921a5072a00eab658cf2782d4e9`. Full local
 regressions/JSPLAN pass; independently reviewed static319/630/62 of1011 protects
 two additional original column passes, with separate Window15/16 and77/79
 unchanged. Normal package/install/updater, existing native gates and separate
 physical native/CDP proof pass, as do both frozen worker-control suites.
-Exact-source CI/public release gates remain pending.
-Do not begin another engine increment before this release finishes.
+Exact-source CI/site, tagged release, public install/reinstall, actual v0.9.14
+update/no-op, both frozen public-worker suites, thirteen public native helpers
+and the separate public-binary physical proof pass. No v0.9.15 release gate
+remains; see [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout). The broader goal stays active:
+review the next bounded feature before implementation. Preserve the existing
+resource profile, full CSSOM/F-016/F-026/MVP limitations and both score lanes.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and

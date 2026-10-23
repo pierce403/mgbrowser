@@ -2,9 +2,9 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.15 Experimental Preview: release verification
+## v0.9.15 Experimental Preview
 
-Current source adds physical `justify-content:left/right` placement to the
+v0.9.15 adds physical `justify-content:left/right` placement to the
 existing bounded Rust flex/grid adapter. Reversing flex children does not reverse
 the physical edge; columns pack at the top and grid ignores irrelevant flex
 direction. Safe physical alignment in reversed flex containers is explicitly
@@ -26,12 +26,15 @@ subtests, with its two genuine failures retained.
 The normal package, fixture installer/updater, all thirteen existing native
 helpers and the separate physical-layout native/CDP proof pass. Both frozen
 worker-control suites pass through direct workers and the real Browser/HTTP host.
-Exact-source CI and public release/install/update verification remain pending.
-v0.9.14 remains the latest verified published binary during
-preparation; the installer selects the
+Published as [v0.9.15](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.15)
+at `7e13cca45c525921a5072a00eab658cf2782d4e9`. Exact-source CI/site and the
+normal tagged release pass. Public install/reinstall, worker/session and
+desktop/icon checks, actual v0.9.14 update/no-op, both frozen public-worker
+suites, all thirteen existing native helpers and the separate public-binary
+physical-layout native/CDP proof pass. See [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout)
+for the separate delivery receipts. The installer selects the
 [latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
-See the [dated log](memory/logs/2026-10-23.md) for separate delivery receipts.
-These local results do not complete F-005/F-016/F-026 or the formal MVP.
+This bounded release does not complete F-005/F-016/F-026 or the formal MVP.
 
 ### Previous v0.9.14 increment
 

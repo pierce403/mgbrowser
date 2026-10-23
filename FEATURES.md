@@ -114,15 +114,15 @@ measurement reports 15/16 passing files and 77/79 passing actual final subtests,
 with two assertion failures retained in `flex-valid.html`. Full final inventories,
 64 original resource requests, accounting, clocks and cleanup are reviewed.
 The Window ratchet is manually strengthened to protect the fifteen passing
-files, excluding the still-failing flex-valid file. Static ratchets remain
-317 passes/949 runnable cases plus the original 24-case contract. Inputs,
+files, excluding the still-failing flex-valid file. At that release, static
+ratchets protected 317 passes/949 runnable cases plus the original 24-case contract. Inputs,
 assertions, scorer and resource limits remain unchanged. Separate exact-source
 CI/site/release, public install/reinstall, actual v0.9.13 update/no-op, both frozen
 public-worker suites and all thirteen public native helpers pass; see the
 [dated log](memory/logs/2026-10-23.md). No v0.9.14 release gate remains, and no
 acceptance criterion above is newly checked by this bounded increment.
 
-Next browser increment in preparation: context-aware physical `justify-content:left/right`
+Shipped v0.9.15: context-aware physical `justify-content:left/right`
 under [docs/PHYSICAL_JUSTIFY.md](docs/PHYSICAL_JUSTIFY.md). Authored pre-feature
 assertion failures are recorded; the minimal adapter and frozen fourteen private/
 nineteen public controls pass focused debug/release checks. Full final-version
@@ -132,7 +132,11 @@ the two genuine newly passing column cases without changing input bytes or
 limits. Separate Window scoring remains15/16 files and77/79 final subtests.
 Normal package/install/updater, thirteen existing native helpers, the separate
 physical native/CDP proof and both frozen worker-control suites pass locally.
-Exact-source CI/public release gates remain pending; no delivery is inferred. Preserve
+Exact-source CI/site and normal release, public install/reinstall, actual v0.9.14
+update/no-op, both frozen public-worker suites, thirteen public native helpers
+and the separate public-binary physical proof pass at
+`7e13cca45c525921a5072a00eab658cf2782d4e9`. No v0.9.15 release gate remains;
+see [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout). Preserve
 both fixed score lanes, diagnostics, all prior passing/runnable ratchets and the
 standing release policy. Full CSSOM and container-unit sizing remain separate.
 
@@ -902,7 +906,8 @@ F-005 remains in progress; F-025 records the separate reading/release gates.
 The separately frozen physical content-justification increment is implemented
 with focused local controls under [docs/PHYSICAL_JUSTIFY.md](docs/PHYSICAL_JUSTIFY.md).
 Its full local regressions and reviewed two-pass static WPT gain are recorded;
-Normal packaged/native/CDP checks pass; v0.9.15 public delivery gates are pending.
+Normal packaged/native/CDP and v0.9.15 public delivery checks pass; see
+[the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout).
 This changes neither the broader fixture
 criteria nor the existing RTL/writing-mode and Safe/reversed-flex limitations.
 

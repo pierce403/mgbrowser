@@ -66,9 +66,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
   manually protected. Exact-source CI/site/release, public install/reinstall,
   actual v0.9.13 update/no-op, both frozen public-worker suites and all thirteen
   public native helpers pass; no v0.9.14 release gate remains. Separate static
-  scoring stays 317/632/62 of 1,011. Full CSSOM and F-016/F-026/MVP remain incomplete;
+  measurement at that release was 317/632/62 of 1,011. Full CSSOM and F-016/F-026/MVP remain incomplete;
   the active broader goal next requires a separately reviewed feature increment.
-- `docs/PHYSICAL_JUSTIFY.md`: frozen next-increment layout contract for
+- `docs/PHYSICAL_JUSTIFY.md`: shipped v0.9.15 layout contract at
+  `7e13cca45c525921a5072a00eab658cf2782d4e9` for
   physical left/right content justification. Existing static failures motivate
   axis-aware flex/grid mapping, with explicit reversed-flex Safe refusal until
   correct overflow fallback exists. Authored old-behavior failures and focused
@@ -76,7 +77,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
   the minimal adapter implementation. Reviewed static coverage is319/630/62
   of1011, with two genuine column reftest passes manually protected; the Window
   lane remains15/16 files and77/79 final rows. Normal package/native/CDP and frozen
-  worker-control checks pass; exact-source CI/public v0.9.15 delivery is pending;
+  worker-control checks pass. Exact-source CI/site, release/public install,
+  actual v0.9.14 update/no-op, both public-worker suites, thirteen public native
+  helpers and the separate public physical proof pass; no v0.9.15 release gate
+  remains. See [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout);
   the separate container-unit dependency/renderer change remains deferred.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
