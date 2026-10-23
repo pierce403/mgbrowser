@@ -2,6 +2,19 @@
 
 ## Purpose and responsibilities
 
+Completed bounded increment (2026-10-23): v0.9.18 scripted empty-anchor defaults
+ship at `0d79fa66ae3e91de7aaf2c868f09589a3f898312` under docs/LINK_DEFAULTS.md.
+Full local Rust/JSPLAN, both fresh reviewed score lanes, all eight exact-source
+CI/hosting checks and normal tagged publication pass. Public install/reinstall,
+worker/session/Boa/CSSOM/desktop/icons, actual v0.9.17 update/no-op, thirteen
+existing native helpers, six additive native/CDP proofs and both frozen public-
+worker suites pass; all 28 additive public images were inspected. See the dated
+public closeout. Static338/611/62 of1,011 and separate Window15/16 files,77/79
+final subtests remain unchanged. No new upstream pass or completed formal
+criterion follows. The broader goal remains active: verify the documentation
+closeout's exact-source CI/site, then review the next bounded increment before
+implementation. Preserve both score lanes, all limits and immutable old tags.
+
 Completed increment (2026-10-22): fixed trusted Window harness configuration
 ships as v0.9.13 at `948e86206c23c0310d17dc286ac5107a15f1f434`.
 Exact-source CI/site/release, public install/reinstall, actual v0.9.12 update/no-op,

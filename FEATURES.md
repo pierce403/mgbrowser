@@ -937,8 +937,8 @@ TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEP
 
 Evidence: 15 transport tests passed for framing, verified TLS/rejection cases, redirects, request/body/time limits and in-memory cookie scope. A real local HTTP form submission/result click completed in the native window. Async navigation ignores stale results and caps requests at two, but lacks a transport cancellation API. Full manual keyboard/history acceptance remains open.
 
-Local candidate, not yet released: the bounded [scripted link-default
-increment](docs/LINK_DEFAULTS.md) uses the exact connected anchor's own final
+Shipped v0.9.18 at `0d79fa66ae3e91de7aaf2c868f09589a3f898312`: the bounded
+[scripted link-default increment](docs/LINK_DEFAULTS.md) uses the exact connected anchor's own final
 href and reconstructed base rather than requiring a text projection. The
 selected checked URL is staged before DOM/observer publication and consumed
 after successful charge/Ready acceptance; forms, cancellation, explicit
@@ -948,8 +948,13 @@ failure. All twelve candidate images were inspected. Full final-version0.9.18
 Rust/JSPLAN gates and both fresh, reviewed WPT lanes pass with unchanged results
 and protections. Normal package/install/updater, thirteen existing native
 helpers, six additive native/CDP proofs and both frozen worker suites pass;
-all 28 additive screenshots were inspected. Public repeats and a normal release
-remain. This adds no upstream pass or completed criterion above.
+all 28 additive screenshots were inspected. All eight exact-source CI/hosting
+checks and the normal tagged release pass. Public install/reinstall,
+worker/session/Boa/CSSOM/desktop/icons, actual v0.9.17 update/no-op, all thirteen
+existing native helpers, six additive native/CDP proofs and both frozen public-
+worker suites pass; all 28 additive public screenshots were inspected. See the
+[public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
+This adds no upstream pass or completed criterion above.
 
 ## F-005 : Styled text and images
 

@@ -2,7 +2,7 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.18 Experimental Preview: release candidate
+## v0.9.18 Experimental Preview
 
 v0.9.18 corrects scripted activation of painted empty, whitespace-only and
 non-text anchors. Navigation uses the same clicked anchor's own post-handler
@@ -10,7 +10,7 @@ non-text anchors. Navigation uses the same clicked anchor's own post-handler
 destination is checked before DOM edits, acknowledgements and observer results
 commit. Cancellation, explicit script-navigation precedence, forms and existing
 worker/resource limits are preserved.
-[Scoped contract](docs/LINK_DEFAULTS.md) and [candidate release notes](docs/RELEASE-v0.9.18.md).
+[Scoped contract](docs/LINK_DEFAULTS.md) and [release notes](docs/RELEASE-v0.9.18.md).
 
 Final-version full Rust and separate JSPLAN regressions pass, preserving all364
 frozen research outcomes. Both complete, independently reviewed WPT selections
@@ -18,11 +18,18 @@ remain unchanged: static338 pass /611 fail /62 unsupported of1,011; Window15/16
 files and77/79 final subtests passing, with no infrastructure failures or weaker
 protections. Normal package/install/update checks, all thirteen existing native
 helpers, six additive native/CDP proofs and both frozen worker suites pass.
-All 28 additive screenshots were inspected. Exact-source CI/site and
-public-release verification must still finish.
+All 28 additive screenshots were inspected.
 Authored link controls do not add upstream WPT passes or denominators.
-The installer still selects the latest published release, v0.9.17; this candidate
-is not yet public delivery. Full DOM/CSSOM/WPT and the formal MVP remain open.
+
+Published as [v0.9.18](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.18)
+at `0d79fa66ae3e91de7aaf2c868f09589a3f898312`. All eight exact-source CI/hosting
+checks and the normal tagged release pass. Checksum-verified public install/
+reinstall, worker/session/Boa/CSSOM/desktop/icon checks and an actual v0.9.17
+update followed by a no-op check pass. All thirteen existing public native
+helpers, six additive native/CDP proofs and both frozen public-worker suites
+pass; all 28 additive public screenshots were inspected. The installer delivers
+v0.9.18. See the [public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
+Full DOM/CSSOM/WPT and the formal MVP remain open.
 
 ### Previous v0.9.17 increment
 
@@ -92,7 +99,8 @@ The installer follows the
 Auto/intrinsic sizing, tables, replaced elements and buttons retain their
 existing scope. Flex/grid inner formatting and baseline algorithms are unchanged.
 Full inline formatting, vertical alignment, bidi, floats,
-CSSOM, empty-anchor activation and F-003/F-005/F-016/F-026/MVP remain unfinished.
+CSSOM, empty-anchor activation and F-003/F-005/F-016/F-026/MVP remained unfinished
+in that release.
 
 ### Previous v0.9.15 increment
 
@@ -447,8 +455,7 @@ See [updater behavior and trust](docs/UPDATES.md).
   News still has font/icon/corner differences and destination fallbacks. Mobile
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
-- The v0.9.18 link-default correction is a release candidate, not yet a published
-  fix for v0.9.17. Its scripted activation requires the same connected anchor
+- The v0.9.18 link-default correction requires the same connected anchor
   with a present resolvable href; full download, target, referrer and detached-
   anchor behavior remain outside this increment. It does not complete DOM or WPT.
 - Boa-backed JavaScript integration runs inline and bounded classic external

@@ -4,8 +4,9 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
-- `docs/LINK_DEFAULTS.md`: next bounded increment's pre-implementation contract
-  after v0.9.17 and its verified `7fb7d2e` documentation closeout. Resolve exact
+- `docs/LINK_DEFAULTS.md`: shipped v0.9.18 at
+  `0d79fa66ae3e91de7aaf2c868f09589a3f898312`, following its frozen pre-implementation
+  contract and retained old-public v0.9.17 failure. Resolve exact
   clicked anchors from the validated post-handler DOM instead of text items;
   stage selected checked URLs before projection commit. Preserve cancellation,
   explicit-navigation precedence, typed outcomes and existing limits. The
@@ -14,8 +15,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
   regressions, both reviewed score lanes, normal package/install/updater,
   thirteen existing native helpers, six additive native/CDP proofs and both
   frozen worker suites pass. All 28 additive screenshots were inspected.
-  Exact-source CI/site, public gates and a new release remain; authored tests
-  add no WPT passes. See the 2026-10-23 log.
+  All eight exact-source CI/hosting checks and the normal tagged release pass.
+  Public install/reinstall, actual v0.9.17 update/no-op, thirteen existing native
+  helpers, six additive native/CDP proofs and both frozen public-worker suites
+  pass; all 28 additive public images were inspected. See the 2026-10-23 public
+  closeout. Broader DOM/CSSOM/WPT/MVP remain open; authored tests add no WPT passes.
 
 - `docs/CSSOM_METHODS.md`: shipped v0.9.17 bounded modern style `setProperty`,
   `removeProperty` and `getPropertyPriority`, using the locked Rust parser and
@@ -23,8 +27,9 @@ summary: Compact map of mgbrowser project decisions and evidence.
   `6b3c36f37aaa33bc2941d7a5bfa1eed2d48cc73b`; public install/update and separate
   native/CDP/worker receipts are in the 2026-10-23 log. Complete current-source
   static338/611/62 of1,011 and separate Window15/16 files,77/79 final subtests
-  are unchanged. Full CSSOM, empty-anchor activation and broader feature/MVP
-  gates remain open; authored controls are not upstream WPT passes.
+  were unchanged. Empty-anchor activation remained open in that release;
+  full CSSOM and broader feature/MVP gates remain open. Authored controls are
+  not upstream WPT passes.
 
 - `docs/WPT.md` and `docs/WPT_EXPANSION.md`: complete pinned 1,011-case flexbox
   reftest selection, immutable original 24-case ratchet, source-linked score,
