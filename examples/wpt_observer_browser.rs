@@ -1,9 +1,12 @@
-//! Non-scoring candidate Browser acceptance for the 16 frozen Window controls.
+//! Non-scoring Browser acceptance: original16 by default, or fixed output-config5.
 //! The immutable owned server is a prerequisite, not arbitrary-network isolation.
 //! This composes the real Browser, resource broker, restricted worker and ledger.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "wpt_observer_browser/guard.rs"]
 mod guard;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "wpt_observer/output_config.rs"]
+mod output_config;
 
 #[global_allocator]
 static ALLOCATOR: mg_browser::platform::worker_memory::WorkerAllocator =
@@ -12,6 +15,7 @@ static ALLOCATOR: mg_browser::platform::worker_memory::WorkerAllocator =
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux {
     use super::guard::{self, HostState, Inventory, InventoryScripts};
+    use super::output_config::{self, Suite};
     use mg_browser::platform;
     use mg_chassis::{
         Browser, ScriptWorkStatus,
@@ -603,6 +607,13 @@ mod linux {
     }
     #[derive(Serialize)]
     struct Receipt<'a> {
+        suite: &'static str,
+        vendor_sha256: Option<&'static str>,
+        source_plan: Option<output_config::SourcePlan>,
+        source_metadata_scope: &'static str,
+        observer_contract: ObserverContract,
+        control_html_sha256: Option<&'a str>,
+        control_body_sha256: Option<&'a str>,
         scope: &'static str,
         case: &'a str,
         expected_negative: bool,
@@ -673,7 +684,7 @@ mod linux {
         )?;
         Ok(())
     }
-    fn write_accepted(browser: &Browser, case: &Case, output: &Path) -> Result<Cutoff> {
+    fn write_accepted(browser: &Browser, run_id: u64, output: &Path) -> Result<Cutoff> {
         let ledger = browser
             .script_observation()
             .ok_or("Browser has no accepted observer ledger")?;
@@ -695,7 +706,7 @@ mod linux {
         let parent_failure = view.parent_failure.map(|v| format!("{v:?}"));
         let value = Accepted {
             scope: "Only parent-validated, charged Browser observations; not page metadata",
-            run_id: case.run_id,
+            run_id,
             cursor: view.cursor,
             progress: view.progress,
             execution_failed: view.execution_failed,
@@ -751,6 +762,7 @@ mod linux {
             mut output,
             mut deadline_ns,
         ) = (None, None, None, None, None, None);
+        let mut suite = None;
         while let Some(key) = args.next() {
             let value = args.next().ok_or("Each argument requires one value")?;
             match key.as_str() {
@@ -762,6 +774,7 @@ mod linux {
                     ensure(case_arg.is_none(), "Duplicate case")?;
                     case_arg = Some(value);
                 }
+                "--suite" => Suite::select(&mut suite, &value)?,
                 "--font" => {
                     ensure(font_path.is_none(), "Duplicate font")?;
                     font_path = Some(PathBuf::from(value));
@@ -789,6 +802,7 @@ mod linux {
             started,
             deadline_ns.ok_or("--deadline-monotonic-ns is required")?,
         )?;
+        let suite = suite.unwrap_or_default();
         let fixture = origin(&origin_arg.ok_or("--origin is required")?)?;
         let selected = case_arg.ok_or("--case is required")?;
         let font_path = font_path.ok_or("--font is required")?;
@@ -834,14 +848,47 @@ mod linux {
                 && manifest.fixture_url_binding.stdio_source_error_visibility == "same-origin",
             "Pinned synthetic source binding differs",
         )?;
-        let case = manifest
-            .cases
-            .iter()
-            .find(|case| case.id == selected)
-            .ok_or("Unknown frozen case")?;
-        let requested = fixture.join(&case.url_path)?;
+        let output_manifest = if suite == Suite::OutputConfig {
+            Some(output_config::Manifest::parse(&pinned(
+                &root.join(output_config::MANIFEST_PATH),
+                output_config::MANIFEST_BYTES,
+                output_config::MANIFEST_SHA,
+            )?)?)
+        } else {
+            None
+        };
+        let output_case = output_manifest
+            .as_ref()
+            .map(|manifest| manifest.case(&selected))
+            .transpose()?;
+        let case = if output_case.is_some() {
+            &manifest.cases[0]
+        } else {
+            manifest
+                .cases
+                .iter()
+                .find(|case| case.id == selected)
+                .ok_or("Unknown frozen case")?
+        };
+        let case_id = output_case.map_or(case.id.as_str(), |case| case.id.as_str());
+        let run_id = output_case.map_or(case.run_id, |case| case.run_id);
+        let expected_negative = output_case
+            .map_or(case.expected.verifier_accepts_expected_negative, |case| {
+                case.expected.verifier_expected_negative
+            });
+        let expected_outcome = output_case.map_or(case.expected.browser_outcome.as_str(), |case| {
+            case.expected_outcome()
+        });
+        let requested = fixture
+            .join(output_case.map_or(case.url_path.as_str(), |case| case.url_path.as_str()))?;
         let requested_string = requested.to_string();
-        preflight(case, &requested_string)?;
+        let source_plan = if let Some(case) = output_case {
+            Some(case.source_plan(&requested_string)?)
+        } else {
+            preflight(case, &requested_string)?;
+            None
+        };
+        let expected_sources = if output_case.is_some() { 3 } else { 2 };
         let harness = String::from_utf8(pinned(
             &root.join("tools/wpt/upstream/resources/testharness.js"),
             198291,
@@ -850,27 +897,46 @@ mod linux {
         let font = read_regular(&font_path, 32 * 1024 * 1024)?;
         ensure(hash(&font) == font_sha, "Font identity differs")?;
         let fonts = Fonts::from_bytes(font)?;
+        let output_inventory = if let Some(case) = output_case {
+            Some(output_config::SourceInventory {
+                plan: source_plan.unwrap(),
+                body: case.body_source_utf8.clone(),
+                vendor: String::from_utf8(pinned(
+                    &root.join("tools/wpt/upstream/resources/testharnessreport.js"),
+                    output_config::VENDOR_BYTES,
+                    output_config::VENDOR_SHA,
+                )?)?,
+                vendor_url: fixture.join(output_config::VENDOR_ROUTE)?.to_string(),
+            })
+        } else {
+            None
+        };
         clock.account()?;
         let observer = ObserverInit::WindowHarness {
-            contract: ObserverContract::PinnedWindowHarnessV1,
-            run_id: case.run_id,
-            bootstrap_node: 1,
+            contract: output_case.map_or(ObserverContract::PinnedWindowHarnessV1, |case| {
+                case.observer_contract
+            }),
+            run_id,
+            bootstrap_node: source_plan.map_or(1, |plan| plan.harness_node as u32),
         };
         let raw = Arc::new(platform::LinuxScripts::with_observer(observer));
         ensure(
             raw.source_wire_mode() == SourceWireMode::Modern,
             "Candidate host cannot select legacy mode",
         )?;
-        let evidence = Arc::new(HostState::new(
-            case.expected.diagnostics_exact.clone().unwrap_or_default(),
-        ));
+        let evidence = Arc::new(HostState::new(output_case.map_or_else(
+            || case.expected.diagnostics_exact.clone().unwrap_or_default(),
+            |case| case.expected.diagnostics_exact.clone(),
+        )));
         let scripts: Arc<dyn ScriptRuntime> = Arc::new(InventoryScripts::new(
             raw,
             Inventory {
                 url: requested_string.clone(),
-                html: case.html_utf8.clone(),
+                html: output_case
+                    .map_or_else(|| case.html_utf8.clone(), |case| case.html_utf8.clone()),
                 harness,
                 harness_url: fixture.join("/resources/testharness.js")?.to_string(),
+                output: output_inventory,
                 observer,
                 cutoff: clock.cutoff,
             },
@@ -959,8 +1025,8 @@ mod linux {
                     .all(|(index, row)| {
                         row.manager_charge_succeeded
                             && row.manager_charge_ns.is_some()
-                            && row.scripts_executed == if index == 0 { 2 } else { 0 }
-                            && row.source_admissions == Some(2)
+                            && row.scripts_executed == if index == 0 { expected_sources } else { 0 }
+                            && row.source_admissions == Some(expected_sources)
                     }),
                 "Actual source/acknowledgement inventory differs",
             )?;
@@ -976,19 +1042,45 @@ mod linux {
                 browser.last_load_succeeded() && browser.page_url() == requested_string,
                 "Actual Browser document load/URL differs",
             )?;
-            check(
-                case,
-                view,
-                browser.document_lifecycle(),
-                last.state,
-                summary.diagnostics,
-                summary.diagnostics_match,
-                missing,
-                last.pending_jobs.ok_or("No work report")?,
-            )?;
+            if let Some(case) = output_case {
+                ensure(
+                    browser.initial_script_outcome().broker_rejected_sources == 0,
+                    "Output source broker rejected an input",
+                )?;
+                let initial = measured
+                    .charged_trace
+                    .first()
+                    .ok_or("No initial output transaction")?;
+                output_config::check(
+                    case,
+                    view,
+                    output_config::Outcome {
+                        lifecycle: browser.document_lifecycle(),
+                        state: last.state,
+                        diagnostics: summary.diagnostics,
+                        diagnostics_match: summary.diagnostics_match,
+                        missing,
+                        pending: last.pending_jobs.ok_or("No work report")?,
+                        initial_results: initial.result_callbacks,
+                        initial_completions: initial.completion_callbacks,
+                        elapsed: started.elapsed(),
+                    },
+                )?;
+            } else {
+                check(
+                    case,
+                    view,
+                    browser.document_lifecycle(),
+                    last.state,
+                    summary.diagnostics,
+                    summary.diagnostics_match,
+                    missing,
+                    last.pending_jobs.ok_or("No work report")?,
+                )?;
+            }
             Ok(())
         })();
-        let accepted = write_accepted(&browser, case, &output);
+        let accepted = write_accepted(&browser, run_id, &output);
         let host_evidence = evidence.snapshot();
         let artifact_charge = clock.account();
         let cleanup_started = Instant::now();
@@ -1009,10 +1101,20 @@ mod linux {
             error = Some("Runtime cleanup unconfirmed".into());
         }
         let receipt = Receipt {
+            suite: suite.as_str(),
+            vendor_sha256: output_case.map(|_| output_config::VENDOR_SHA),
+            source_plan,
+            source_metadata_scope: "Real Browser source broker and accepted ledger; exact HTTP inventory/owned fixture audited separately",
+            observer_contract: output_case
+                .map_or(ObserverContract::PinnedWindowHarnessV1, |case| {
+                    case.observer_contract
+                }),
+            control_html_sha256: output_case.map(|case| case.html_sha256()),
+            control_body_sha256: output_case.map(|case| case.body_sha256()),
             scope: "Candidate real Browser + resource broker + manager acceptance; not native UI/CDP or WPT score",
-            case: &case.id,
-            expected_negative: case.expected.verifier_accepts_expected_negative,
-            expected_outcome: &case.expected.browser_outcome,
+            case: case_id,
+            expected_negative,
+            expected_outcome,
             verifier_expectation_met: error.is_none(),
             error,
             cleanup_confirmed,
@@ -1023,7 +1125,11 @@ mod linux {
             host_active_seconds: clock.used.as_secs_f64(),
             elapsed_seconds: clock.started.elapsed().as_secs_f64(),
             missing_completion: missing,
-            manifest_sha256: MANIFEST_SHA,
+            manifest_sha256: if output_case.is_some() {
+                output_config::MANIFEST_SHA
+            } else {
+                MANIFEST_SHA
+            },
             harness_sha256: guard::HARNESS_SHA,
             font_sha256: &font_sha,
             origin: fixture.as_str(),
@@ -1051,7 +1157,7 @@ mod linux {
         )?;
         println!(
             "BROWSER_CONTROL_EXPECTATION_MET {} active_seconds_total={} elapsed_seconds={}",
-            case.id,
+            case_id,
             clock.used.as_secs_f64(),
             clock.started.elapsed().as_secs_f64()
         );

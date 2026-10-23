@@ -2,8 +2,8 @@
 //! Capture performs no JavaScript, coercion, task admission or checkpoint.
 use super::*;
 use crate::page_session::observer::{
-    HarnessRecord, HarnessStatus, ObserverFault, ObserverInit, ObserverProgress, ObserverRecord,
-    ObserverReply, OptionalUtf16, SubtestStatus, TestRecord, Utf16,
+    HarnessRecord, HarnessStatus, ObserverContract, ObserverFault, ObserverInit, ObserverProgress,
+    ObserverRecord, ObserverReply, OptionalUtf16, SubtestStatus, TestRecord, Utf16,
 };
 use modern::boa_engine::builtins::function::OrdinaryFunction;
 use std::mem::size_of;
@@ -532,16 +532,91 @@ fn completion_callback(_: &JsValue, args: &[JsValue], context: &mut Context) -> 
     callback(args, context, true)
 }
 
-pub(super) fn install(realm: &mut BoaPageRealm, errors: &mut Vec<String>) -> bool {
+fn stop_install(realm: &mut BoaPageRealm, fault: ObserverFault) -> bool {
+    // Preserve the first capture fault. Pending permits and native payload roots
+    // are dropped outside State borrows; this is not rollback of executed JS.
+    discard(&realm.state, fault, true);
+    realm.closed = true;
+    realm.clear_work();
+    let _ = realm.engine.check();
+    false
+}
+
+fn install_ready(realm: &mut BoaPageRealm, errors: &mut Vec<String>) -> bool {
+    if realm.closed || realm.engine.is_fatal() {
+        return stop_install(realm, ObserverFault::RealmTerminated);
+    }
+    if modern::context_dynamic_compilation_seen(realm.engine.context()).is_none()
+        || realm.engine.context().get_data::<Shared>().is_none()
+    {
+        fail(
+            realm.engine.context_mut(),
+            CaptureError::Fatal(ObserverFault::AuthorityUnavailable),
+        );
+        return stop_install(realm, ObserverFault::AuthorityUnavailable);
+    }
+    if let Err(error) = realm.engine.check() {
+        if errors.len() < 64 {
+            errors.push(bounded(&error.to_string(), 512));
+        }
+        return stop_install(realm, ObserverFault::RealmTerminated);
+    }
+    let (fault, installed, invalid_depth, navigation) = {
+        let data = realm.state.borrow();
+        let Some(capture) = data.observer.as_ref() else {
+            drop(data);
+            fail(realm.engine.context_mut(), invariant());
+            return stop_install(realm, ObserverFault::InvariantFailure);
+        };
+        (
+            capture.fault,
+            capture.installed,
+            data.js_depth != 0 || data.checkpointing || data.reporting_error,
+            data.host.navigation.is_some(),
+        )
+    };
+    if let Some(fault) = fault {
+        return stop_install(realm, fault);
+    }
+    if invalid_depth {
+        fail(realm.engine.context_mut(), invariant());
+        return stop_install(realm, ObserverFault::InvariantFailure);
+    }
+    if installed {
+        return stop_install(realm, ObserverFault::InvalidConfiguration);
+    }
+    if navigation {
+        return stop_install(realm, ObserverFault::NavigationProposed);
+    }
+    match rejection_exposure(realm.engine.context()) {
+        Ok(true) => {}
+        Ok(false) => return stop_install(realm, ObserverFault::PrivacyLost),
+        Err(()) => {
+            fail(
+                realm.engine.context_mut(),
+                CaptureError::Fatal(ObserverFault::AuthorityUnavailable),
+            );
+            return stop_install(realm, ObserverFault::AuthorityUnavailable);
+        }
+    }
+    if !errors.is_empty() {
+        return stop_install(realm, ObserverFault::InvalidConfiguration);
+    }
+    true
+}
+
+pub(super) fn install(
+    realm: &mut BoaPageRealm,
+    errors: &mut Vec<String>,
+    contract: ObserverContract,
+) -> bool {
     if realm.state.borrow().observer.is_none() {
         return true;
     }
+    if !install_ready(realm, errors) {
+        return false;
+    }
     let preparation = (|| {
-        match rejection_exposure(realm.engine.context()) {
-            Ok(true) => {}
-            Ok(false) => return Err(CaptureError::Narrow(ObserverFault::PrivacyLost)),
-            Err(()) => return Err(CaptureError::Fatal(ObserverFault::AuthorityUnavailable)),
-        }
         let global = realm.engine.context().global_object();
         let result = own_data(&global, js_string!("add_result_callback").into())?
             .as_object()
@@ -549,17 +624,30 @@ pub(super) fn install(realm: &mut BoaPageRealm, errors: &mut Vec<String>) -> boo
         let complete = own_data(&global, js_string!("add_completion_callback").into())?
             .as_object()
             .ok_or_else(malformed)?;
-        if !result.is::<OrdinaryFunction>() || !complete.is::<OrdinaryFunction>() {
+        // V1 deliberately never reads setup, even if it is a hostile getter.
+        let setup = match contract {
+            ObserverContract::PinnedWindowHarnessV1 => None,
+            ObserverContract::PinnedWindowHarnessOutputDisabledV1 => Some(
+                own_data(&global, js_string!("setup").into())?
+                    .as_object()
+                    .ok_or_else(malformed)?,
+            ),
+        };
+        if !result.is::<OrdinaryFunction>()
+            || !complete.is::<OrdinaryFunction>()
+            || setup
+                .as_ref()
+                .is_some_and(|setup| !setup.is::<OrdinaryFunction>())
+        {
             return Err(malformed());
         }
-        Ok((global, result, complete))
+        Ok((global, result, complete, setup))
     })();
-    let (global, result, complete) = match preparation {
+    let (global, result, complete, setup) = match preparation {
         Ok(values) => values,
         Err(error) => {
             fail(realm.engine.context_mut(), error);
-            realm.closed = true;
-            return false;
+            return stop_install(realm, ObserverFault::InvalidConfiguration);
         }
     };
     let result_native = FunctionObjectBuilder::new(
@@ -567,64 +655,69 @@ pub(super) fn install(realm: &mut BoaPageRealm, errors: &mut Vec<String>) -> boo
         NativeFunction::from_fn_ptr(result_callback),
     )
     .build();
+    if !install_ready(realm, errors) {
+        return false;
+    }
     let complete_native = FunctionObjectBuilder::new(
         realm.engine.context().realm(),
         NativeFunction::from_fn_ptr(completion_callback),
     )
     .build();
+    if !install_ready(realm, errors) {
+        return false;
+    }
     for (registration, native) in [(result, result_native), (complete, complete_native)] {
         if let Err(error) =
             realm.call_function(&registration, &global.clone().into(), &[native.into()])
         {
             realm.execution_failure("Observer registration", error, errors);
-            discard(&realm.state, ObserverFault::InvalidConfiguration, true);
-            realm.closed = true;
+        }
+        if !install_ready(realm, errors) {
             return false;
         }
-        if realm
-            .state
-            .borrow()
-            .observer
-            .as_ref()
-            .is_some_and(|capture| capture.fault.is_some())
+    }
+    if let Some(setup) = setup {
+        // Fresh intrinsic ordinary object; no global Object lookup, setter,
+        // source evaluation or caller-supplied property bag. Actual Boa storage
+        // is admitted by the existing System policy, not a new native pool.
+        let properties = JsObject::with_object_proto(realm.engine.context().intrinsics());
+        if !install_ready(realm, errors) {
+            return false;
+        }
+        let created = properties.create_data_property_or_throw(
+            js_string!("output"),
+            false,
+            realm.engine.context_mut(),
+        );
+        if !created.is_ok_and(|created| created) {
+            fail(realm.engine.context_mut(), invariant());
+            return stop_install(realm, ObserverFault::InvariantFailure);
+        }
+        if !install_ready(realm, errors) {
+            return false;
+        }
+        if let Err(error) =
+            realm.call_function(&setup, &global.clone().into(), &[properties.into()])
         {
-            realm.closed = true;
+            realm.execution_failure("Observer configuration", error, errors);
+        }
+        if !install_ready(realm, errors) {
             return false;
         }
     }
     realm.checkpoint(errors);
-    if realm.closed
-        || realm.engine.is_fatal()
-        || realm.state.borrow().host.navigation.is_some()
-        || !errors.is_empty()
-    {
-        discard(&realm.state, ObserverFault::InvalidConfiguration, true);
-        realm.closed = true;
+    // A queued native capture can fail without throwing. Check the actual
+    // sticky fault AFTER the outer checkpoint, before installed or next source.
+    if !install_ready(realm, errors) {
         return false;
     }
-    match rejection_exposure(realm.engine.context()) {
-        Ok(true) => {
-            realm
-                .state
-                .borrow_mut()
-                .observer
-                .as_mut()
-                .unwrap()
-                .installed = true
-        }
-        Ok(false) => {
-            discard(&realm.state, ObserverFault::PrivacyLost, true);
-            realm.closed = true;
-            return false;
-        }
-        Err(()) => {
-            fail(
-                realm.engine.context_mut(),
-                CaptureError::Fatal(ObserverFault::AuthorityUnavailable),
-            );
-            return false;
-        }
-    }
+    realm
+        .state
+        .borrow_mut()
+        .observer
+        .as_mut()
+        .unwrap()
+        .installed = true;
     true
 }
 
@@ -823,6 +916,9 @@ pub(super) fn commit_reply(realm: &mut BoaPageRealm, prepared: PreparedReply) ->
 pub(super) fn terminal_roots(shared: &Shared) {
     discard(shared, ObserverFault::RealmTerminated, true);
 }
+
+#[cfg(test)]
+mod output_profile_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1416,7 +1512,11 @@ mod tests {
                 .unwrap()
                 .installed = false;
             evaluate(&mut realm, source);
-            assert!(!install(&mut realm, &mut Vec::new()));
+            assert!(!install(
+                &mut realm,
+                &mut Vec::new(),
+                ObserverContract::PinnedWindowHarnessV1,
+            ));
             assert!(realm.closed && fault(&realm).is_some());
             assert_eq!(
                 own_data(
@@ -1442,7 +1542,11 @@ mod tests {
             "globalThis.hits=0;globalThis.late=false;globalThis.add_result_callback=function(cb){hits++;Promise.resolve().then(()=>{late=true})};globalThis.add_completion_callback=function(){hits++;throw new Error('owned partial install')}",
         );
         let mut errors = Vec::new();
-        assert!(!install(&mut realm, &mut errors));
+        assert!(!install(
+            &mut realm,
+            &mut errors,
+            ObserverContract::PinnedWindowHarnessV1,
+        ));
         assert_eq!(fault(&realm), Some(ObserverFault::InvalidConfiguration));
         assert!(!errors.is_empty());
         let mut reply = BoaPageRealm::empty_reply();

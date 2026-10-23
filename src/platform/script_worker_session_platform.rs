@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 6;
+const VERSION: u8 = 7;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -260,7 +260,7 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
         let frame: ReplyFrame =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v6 reply requires non-null lifecycle and observer progress".into());
+            return Err("Modern v7 reply requires non-null lifecycle and observer progress".into());
         }
         Ok(frame)
     }
@@ -274,7 +274,7 @@ fn write_reply_frame(
 ) -> Result<(), String> {
     if !legacy {
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v6 reply requires lifecycle and observer progress".into());
+            return Err("Modern v7 reply requires lifecycle and observer progress".into());
         }
         return write_frame(writer, frame, total);
     }
@@ -2057,7 +2057,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_v6_init_requires_exact_wrapper_and_disabled_tag() {
+    fn observer_v7_init_requires_exact_wrapper_and_disabled_tag() {
         let mut frame = request(0);
         frame.version = VERSION;
         let bytes = encode_request_frame(&frame, false, INPUT_LIMIT).unwrap();
@@ -2072,6 +2072,11 @@ mod tests {
             serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessV1","run_id":1}),
             serde_json::json!({"kind":"WindowHarness","contract":"Unknown","run_id":1,"bootstrap_node":1}),
             serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessV1","run_id":true,"bootstrap_node":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":null,"run_id":1,"bootstrap_node":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":{"PinnedWindowHarnessOutputDisabledV1":null},"run_id":1,"bootstrap_node":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":0,"bootstrap_node":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":1,"bootstrap_node":null}),
+            serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":1,"bootstrap_node":1,"output":false}),
         ] {
             let mut invalid = good.clone();
             invalid["command"]["payload"]["observer"] = malformed;
@@ -2087,6 +2092,8 @@ mod tests {
                 .unwrap()
                 .remove(removed);
             assert!(decode_request_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err());
+            invalid["command"]["payload"][removed] = serde_json::Value::Null;
+            assert!(decode_request_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err());
         }
         assert!(
             decode_request_frame(&encode(&frame, INPUT_LIMIT).unwrap(), false).is_err(),
@@ -2095,48 +2102,186 @@ mod tests {
     }
 
     #[test]
-    fn observer_v6_maximum_metadata_fits_old_reserve_without_new_allowance() {
+    fn observer_v7_both_contracts_bind_exact_init_mode_and_run_without_new_reply_fields() {
+        use mg_sparkle::page_session::observer::{ObserverContract, ObserverProgress};
+        for contract in [
+            ObserverContract::PinnedWindowHarnessV1,
+            ObserverContract::PinnedWindowHarnessOutputDisabledV1,
+        ] {
+            let mut initial = request(0);
+            initial.version = VERSION;
+            let observer = ObserverInit::WindowHarness {
+                contract,
+                run_id: 91,
+                bootstrap_node: 1,
+            };
+            let encoded =
+                encode_request_frame_observed(&initial, false, INPUT_LIMIT, &observer).unwrap();
+            let (decoded, actual) = decode_request_frame(&encoded, false).unwrap();
+            assert_eq!(decoded.version, 7);
+            assert_eq!(actual, observer);
+            assert!(encode_request_frame_observed(&initial, true, INPUT_LIMIT, &observer).is_err());
+            assert!(decode_request_frame(&encoded, true).is_err());
+            let text = String::from_utf8(encoded.clone()).unwrap();
+            for duplicate in [
+                text.replace(
+                    "\"observer\":",
+                    "\"observer\":{\"kind\":\"Disabled\"},\"observer\":",
+                ),
+                text.replace(
+                    "\"page\":",
+                    "\"page\":{\"url\":\"https://example.test/\",\"html\":\"owned\"},\"page\":",
+                ),
+                text.replace(
+                    "\"contract\":",
+                    "\"contract\":\"PinnedWindowHarnessV1\",\"contract\":",
+                ),
+            ] {
+                assert!(decode_request_frame(duplicate.as_bytes(), false).is_err());
+            }
+            let mut raw = serde_json::to_value(&initial).unwrap();
+            raw["command"]["payload"]["observer"] = serde_json::to_value(observer).unwrap();
+            assert!(decode_request_frame(&serde_json::to_vec(&raw).unwrap(), true).is_err());
+
+            let mut frame = modern_response(&initial);
+            frame.reply.observer = Some(ObserverReply::WindowHarness {
+                run_id: 91,
+                first_ordinal: 0,
+                next_ordinal: 0,
+                records: Vec::new(),
+                progress: ObserverProgress::Waiting,
+                execution_failed: false,
+            });
+            validate_reply(&initial, &frame).unwrap();
+            validate_observer_mode(&observer, &frame.reply, false).unwrap();
+            assert!(validate_observer_mode(&ObserverInit::Disabled, &frame.reply, false).is_err());
+            assert!(validate_observer_mode(&observer, &frame.reply, true).is_err());
+            let wrong_run = ObserverInit::WindowHarness {
+                contract,
+                run_id: 92,
+                bootstrap_node: 1,
+            };
+            assert!(validate_observer_mode(&wrong_run, &frame.reply, false).is_err());
+            let encoded_reply = encode(&frame, OUTPUT_LIMIT).unwrap();
+            let decoded_reply = decode_reply_frame(&encoded_reply, false).unwrap();
+            validate_observer_mode(&observer, &decoded_reply.reply, false).unwrap();
+            let mut forbidden = serde_json::to_value(&frame).unwrap();
+            forbidden["reply"]["contract"] = serde_json::to_value(contract).unwrap();
+            assert!(decode_reply_frame(&serde_json::to_vec(&forbidden).unwrap(), false).is_err());
+            for observed in [
+                serde_json::to_value(frame.reply.observer.as_ref().unwrap()).unwrap(),
+                serde_json::json!({
+                    "kind":"ObservationFailed","run_id":91,"prefix_end":0,
+                    "fault":"MalformedCapture","execution_failed":false
+                }),
+            ] {
+                let mut forbidden = serde_json::to_value(&frame).unwrap();
+                forbidden["reply"]["observer"] = observed;
+                assert!(
+                    decode_reply_frame(&serde_json::to_vec(&forbidden).unwrap(), false).is_ok()
+                );
+                forbidden["reply"]["observer"]["contract"] =
+                    serde_json::to_value(contract).unwrap();
+                assert!(
+                    decode_reply_frame(&serde_json::to_vec(&forbidden).unwrap(), false).is_err()
+                );
+            }
+            frame.reply.observer = Some(ObserverReply::Disabled);
+            assert!(validate_observer_mode(&observer, &frame.reply, false).is_err());
+
+            for command in [
+                FrameCommand::Event(SessionInput {
+                    kind: InputKind::Click { target: 1 },
+                    edits: Vec::new(),
+                }),
+                FrameCommand::TaskPump(TaskPump { wake_token: 1 }),
+            ] {
+                let mut later = request(1);
+                later.version = VERSION;
+                later.command = command;
+                let bytes = encode_request_frame(&later, false, MAX_EVENT_BYTES).unwrap();
+                let mut malformed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                malformed["command"]["payload"]["observer"] =
+                    serde_json::to_value(observer).unwrap();
+                assert!(
+                    decode_request_frame(&serde_json::to_vec(&malformed).unwrap(), false).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observer_v7_maximum_metadata_fits_old_reserve_without_new_allowance() {
         use mg_sparkle::page_session::observer::ObserverContract;
-        let mut frame = request(0);
-        frame.version = VERSION;
-        frame.generation = u64::MAX;
-        frame.session_id = u64::MAX;
-        frame.sequence = u64::MAX;
-        frame.expected_revision = u64::MAX;
-        let observer = ObserverInit::WindowHarness {
-            contract: ObserverContract::PinnedWindowHarnessV1,
-            run_id: u64::MAX,
-            bootstrap_node: u32::MAX,
-        };
-        let FrameCommand::Init(page) = &mut frame.command else {
-            unreachable!()
-        };
-        page.url.clear();
-        page.html.clear();
-        let base = encode(page, INPUT_LIMIT).unwrap().len();
-        let metadata = encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer)
-            .unwrap()
-            .len()
-            - base;
+        let mut lengths = Vec::new();
+        for contract in [
+            ObserverContract::PinnedWindowHarnessV1,
+            ObserverContract::PinnedWindowHarnessOutputDisabledV1,
+        ] {
+            let mut frame = request(0);
+            frame.version = VERSION;
+            frame.generation = u64::MAX;
+            frame.session_id = u64::MAX;
+            frame.sequence = u64::MAX;
+            frame.expected_revision = u64::MAX;
+            let observer = ObserverInit::WindowHarness {
+                contract,
+                run_id: u64::MAX,
+                bootstrap_node: u32::MAX,
+            };
+            let FrameCommand::Init(page) = &mut frame.command else {
+                unreachable!()
+            };
+            page.url.clear();
+            page.html.clear();
+            let base = encode(page, INPUT_LIMIT).unwrap().len();
+            let metadata = encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer)
+                .unwrap()
+                .len()
+                - base;
+            lengths.push(metadata);
+            assert!(
+                metadata <= 1024,
+                "metadata uses {metadata} bytes of existing reserve"
+            );
+            let FrameCommand::Init(page) = &mut frame.command else {
+                unreachable!()
+            };
+            page.html = "x".repeat(mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES - base);
+            let full =
+                encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer).unwrap();
+            assert_eq!(
+                full.len(),
+                mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES + metadata
+            );
+            assert!(full.len() <= INPUT_LIMIT);
+            assert_eq!(
+                encode_request_frame_observed(&frame, false, full.len(), &observer).unwrap(),
+                full
+            );
+            assert!(
+                encode_request_frame_observed(&frame, false, full.len() - 1, &observer).is_err()
+            );
+
+            // Serialization-only envelope boundary, not a claim that this
+            // larger page passes the independent typed Request admission.
+            let FrameCommand::Init(page) = &mut frame.command else {
+                unreachable!()
+            };
+            page.html = "x".repeat(INPUT_LIMIT - base - metadata);
+            let exact =
+                encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer).unwrap();
+            assert_eq!(exact.len(), INPUT_LIMIT);
+            let FrameCommand::Init(page) = &mut frame.command else {
+                unreachable!()
+            };
+            page.html.push('x');
+            assert!(encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer).is_err());
+        }
         assert!(
-            metadata <= 1024,
-            "metadata uses {metadata} bytes of existing reserve"
+            lengths[1] > lengths[0],
+            "new longest contract must be measured"
         );
-        let FrameCommand::Init(page) = &mut frame.command else {
-            unreachable!()
-        };
-        page.html = "x".repeat(mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES - base);
-        let full = encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer).unwrap();
-        assert_eq!(
-            full.len(),
-            mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES + metadata
-        );
-        assert!(full.len() <= INPUT_LIMIT);
-        assert_eq!(
-            encode_request_frame_observed(&frame, false, full.len(), &observer).unwrap(),
-            full
-        );
-        assert!(encode_request_frame_observed(&frame, false, full.len() - 1, &observer).is_err());
     }
 
     #[test]
@@ -2347,23 +2492,33 @@ mod tests {
         }
     }
     #[test]
-    fn observer_modern_v6_rejects_v3_v4_v5_before_execution() {
-        assert_eq!(VERSION, 6);
-        for version in [3, 4, 5] {
-            let mut initial = request(0);
-            initial.version = version;
-            let mut input = Vec::new();
-            write_frame(&mut input, &initial, &mut 0).unwrap();
-            let mut output = Vec::new();
-            assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
-            assert!(
-                output.is_empty(),
-                "old modern frames must execute no source"
-            );
+    fn observer_modern_v7_rejects_v1_through_v6_before_execution() {
+        assert_eq!(VERSION, 7);
+        for version in 1..=6 {
+            for wrapped in [false, true] {
+                let mut initial = request(0);
+                initial.version = version;
+                let FrameCommand::Init(page) = &mut initial.command else {
+                    unreachable!()
+                };
+                page.html = "<script>throw 'MUST_NOT_RUN'</script>".into();
+                let mut input = Vec::new();
+                if wrapped {
+                    write_request(&mut input, &initial, false);
+                } else {
+                    write_frame(&mut input, &initial, &mut 0).unwrap();
+                }
+                let mut output = Vec::new();
+                assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
+                assert!(
+                    output.is_empty(),
+                    "old modern frames must execute no source: version={version}, wrapped={wrapped}"
+                );
+            }
         }
     }
     #[test]
-    fn observer_modern_v6_accepts_absent_source_metadata_in_required_wrapper() {
+    fn observer_modern_v7_accepts_absent_source_metadata_in_required_wrapper() {
         let mut initial = request(0);
         initial.version = VERSION;
         let mut input = Vec::new();
@@ -2378,15 +2533,10 @@ mod tests {
         assert_eq!(reply.reply.state, RealmState::Ready);
     }
     #[test]
-    fn observer_modern_v6_rejects_later_v3_v4_v5_events_and_pumps_without_replies() {
-        for (task, old_version) in [
-            (false, 3),
-            (true, 3),
-            (false, 4),
-            (true, 4),
-            (false, 5),
-            (true, 5),
-        ] {
+    fn observer_modern_v7_rejects_later_v1_through_v6_events_and_pumps_without_replies() {
+        for (task, old_version) in
+            (1..=6).flat_map(|version| [false, true].map(|task| (task, version)))
+        {
             let mut initial = request(0);
             initial.version = VERSION;
             let FrameCommand::Init(page) = &mut initial.command else {

@@ -113,3 +113,13 @@
   variable for default installer checks; native/worker opt-outs stay intact.
   Fresh package/public installation passes without changing installer/assertions.
   Curator records the environment distinction in publish-site; keep the failure.
+- 2026-10-22: For the pinned complete Window harness, genuine setup({output:false})
+  cancels and rearms its normal file timer: actual new-profile Init has four
+  lifetime admissions and three pending, versus original V1's three/three in the
+  frozen sibling. Cancellation is not lifetime credit. Optional assert-record
+  tracking is disabled, but the deliberate assertion still produces typed Fail.
+  Derive source nodes from actual documents (10/12/18 in the frozen controls),
+  not the original authored fixtures' node 1. These local controls do not add
+  upstream passes or prove public delivery. Curator preserves the separate
+  original/new suites, exact source/MIME proof and native-before-parent failure
+  requirement in browser-check.

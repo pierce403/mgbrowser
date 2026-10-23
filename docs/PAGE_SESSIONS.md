@@ -18,8 +18,14 @@ The v0.9.12 release adds strict modern v6 with required default-Disabled
 observer configuration and replies. Its trusted test-host mode stages bounded
 typed records alongside the normal arena and publishes them only after one
 successful combined charge. The v5 references below remain release history;
-current modern v6 does not accept v5 frames. Exact local controls, unchanged
+v0.9.12 modern v6 does not accept v5 frames. Exact local controls, unchanged
 limits and separate public receipts are in [WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md).
+
+The in-progress v0.9.13 source uses strict modern v7 for the additional fixed
+trusted output-disabled contract; v6 is intentionally rejected, not translated.
+Its [local implementation and pending acceptance](WPT_HARNESS_OUTPUT_STATUS.md)
+are separate from the published v0.9.12 receipts. The v6 statements below describe
+that historical release; required progress, legacy-v1 and resource policy remain.
 
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit

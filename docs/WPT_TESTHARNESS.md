@@ -26,6 +26,14 @@ attestation or general Window compatibility. Public receipts are in
 The frozen contract and inputs retain their original preimplementation text and
 hashes; that companion records subsequent implementation evidence.
 
+The next bounded contribution is the fixed trusted `setup({output:false})`
+contract, frozen before execution in [WPT_HARNESS_OUTPUT.md](WPT_HARNESS_OUTPUT.md).
+Its v0.9.13 implementation passes both local complete-harness suites and full
+Rust/JSPLAN gates. Fresh complete static scoring remains 317/632/62 of 1,011.
+Packaged/public controls and publication remain
+pending. See [current status](WPT_HARNESS_OUTPUT_STATUS.md).
+Neither its authored controls nor the old sixteen form a scored upstream cohort.
+
 ## Immutable input
 
 The current corpus already retains the complete upstream harness at revision

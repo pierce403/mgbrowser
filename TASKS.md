@@ -108,10 +108,17 @@ following dependency order, updating evidence as each increment ships:
    Final-version local regressions/JSPLAN, fresh complete static scoring,
    packaged installer/updater, all thirteen native helpers and both sixteen-
    control observer paths pass separately from the final public receipts.
-   **Next bounded contribution:** freeze a trusted harness configuration/output
-   protocol before any upstream Window cohort or CSS iteration. Review real
-   setup/default-timer accounting and controls without source injection, hidden
-   allowances or implied approval of a new resource profile. Then select and
+   **Active v0.9.13 contribution:** the trusted harness configuration/output
+   protocol and five authored controls are frozen in
+   [docs/WPT_HARNESS_OUTPUT.md](docs/WPT_HARNESS_OUTPUT.md). Guarded genuine
+   setup({output:false}), strict modern v7 and additive fixed-suite hosts are
+   applied locally; focused debug checks and both original-sixteen/new-five
+   complete-harness suites pass in local worker and real Browser paths.
+   Full local Rust and JSPLAN gates also pass; fresh complete static scoring
+   retains 317/632/62 of 1,011. Packaged installer/updater, all thirteen native
+   helpers and both frozen worker suites pass. Exact-commit CI, release and
+   public installer/old-update/native verification remain required. No source injection,
+   hidden allowance or new resource profile is authorized. Then select and
    freeze a separate scored cohort; never invent passes from these controls or
    change the current 1,011 cases/expectations. F-016/F-026/MVP stay unfinished.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

@@ -1,4 +1,4 @@
-//! Owned modern-v6 process controls; no display, fixture server or parent JS.
+//! Owned modern-v7 process controls; no display, fixture server or parent JS.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use mg_butane::modern::Report;
@@ -55,7 +55,7 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
-        self.send_version(6, sequence, revision, kind, payload);
+        self.send_version(7, sequence, revision, kind, payload);
     }
     fn send_version(
         &mut self,
@@ -65,11 +65,18 @@ impl Peer {
         kind: &str,
         payload: Value,
     ) {
-        let payload = if version == 6 && kind == "Init" {
+        let payload = if matches!(version, 6 | 7) && kind == "Init" {
+            // Version 6 keeps its genuine old wrapper in the rejection control.
             json!({"page":payload,"observer":{"kind":"Disabled"}})
         } else {
             payload
         };
+        self.send_wire(version, sequence, revision, kind, payload);
+    }
+    fn send_observed_init(&mut self, page: Value, observer: Value) {
+        self.send_wire(7, 0, 0, "Init", json!({"page":page,"observer":observer}));
+    }
+    fn send_wire(&mut self, version: u8, sequence: u64, revision: u64, kind: &str, payload: Value) {
         let payload = serde_json::to_vec(&json!({
             "version":version,"generation":31,"session_id":47,"sequence":sequence,
             "expected_revision":revision,"command":{"kind":kind,"payload":payload}
@@ -126,7 +133,7 @@ impl Peer {
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 6),
+            ("version", 7),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -260,6 +267,101 @@ fn no_activation(frame: &Value) {
     assert_eq!(frame["reply"]["default_action"], json!({"kind":"None"}));
     assert!(frame["reply"]["outcome"]["click_canceled"].is_null());
     assert!(frame["reply"]["outcome"]["submit_canceled"].is_null());
+}
+
+#[test]
+fn real_worker_v7_output_configuration_is_init_only_and_keeps_old_contract_off() {
+    use mg_sparkle::page_session::observer::{ObserverContract, ObserverInit};
+    // Synthetic ordinary functions isolate the public process/configuration
+    // seam. This is not a full-harness result or a new startup work golden.
+    let bootstrap = r#"
+        globalThis.setupCalls = 0;
+        globalThis.add_result_callback = function(callback) { globalThis.ownedResult = callback; };
+        globalThis.add_completion_callback = function(callback) { globalThis.ownedCompletion = callback; };
+        globalThis.setup = function(properties) {
+            "use strict";
+            var descriptor = Object.getOwnPropertyDescriptor(properties, "output");
+            if (this !== globalThis || arguments.length !== 1 ||
+                Object.getPrototypeOf(properties) !== Object.prototype ||
+                Reflect.ownKeys(properties).length !== 1 || !descriptor ||
+                descriptor.value !== false || descriptor.get !== undefined ||
+                descriptor.set !== undefined || descriptor.enumerable !== true ||
+                descriptor.writable !== true || descriptor.configurable !== true) {
+                throw Error("invalid trusted output properties");
+            }
+            globalThis.setupCalls++;
+            document.getElementById("o").setAttribute("data-setup-calls",String(globalThis.setupCalls));
+        };
+    "#;
+    let html = "<script src='/bootstrap.js'></script><p id=o></p><script>document.getElementById('o').setAttribute('data-setup-calls',String(globalThis.setupCalls));</script>";
+    let url = "https://example.test/tasks";
+    let document = mg_sparkle::document::parse_with_scripting(html, url, true);
+    let bootstrap_node = document
+        .nodes
+        .iter()
+        .position(|node| node.tag == "script" && node.attr("src") == Some("/bootstrap.js"))
+        .unwrap();
+    for (contract, expected_calls) in [
+        (ObserverContract::PinnedWindowHarnessV1, "0"),
+        (ObserverContract::PinnedWindowHarnessOutputDisabledV1, "1"),
+    ] {
+        let mut peer = Peer::start();
+        let observer = ObserverInit::WindowHarness {
+            contract,
+            run_id: 81,
+            bootstrap_node: u32::try_from(bootstrap_node).unwrap(),
+        };
+        peer.send_observed_init(
+            json!({
+                "url":url,"html":html,
+                "external_scripts":[{
+                    "node":bootstrap_node,"source":bootstrap,
+                    "provenance":{
+                        "response_url":"https://example.test/bootstrap.js",
+                        "error_visibility":"same-origin"
+                    }
+                }]
+            }),
+            serde_json::to_value(observer).unwrap(),
+        );
+        let initial = peer.receive(0, 0);
+        assert_eq!(initial["reply"]["state"], "Ready");
+        assert_eq!(initial["reply"]["errors"], json!([]));
+        assert_eq!(initial["reply"]["scripts_executed"], 2);
+        assert_eq!(
+            attribute(&initial, "data-setup-calls").as_deref(),
+            Some(expected_calls)
+        );
+        assert_eq!(
+            initial["reply"]["observer"],
+            json!({
+                "kind":"WindowHarness","run_id":81,"first_ordinal":0,"next_ordinal":0,
+                "records":[],"progress":"Waiting","execution_failed":false
+            })
+        );
+        assert_eq!(
+            (
+                report(&initial).source_admissions,
+                report(&initial).jobs_admitted,
+                report(&initial).jobs_executed,
+                report(&initial).pending_jobs
+            ),
+            (2, 2, 0, 2),
+            "synchronous configuration is not a source or a separate task allowance"
+        );
+        let loaded = peer.complete_lifecycle(initial);
+        assert_eq!(loaded["reply"]["errors"], json!([]));
+        assert_eq!(
+            attribute(&loaded, "data-setup-calls").as_deref(),
+            Some(expected_calls)
+        );
+        assert_eq!(loaded["reply"]["observer"]["progress"], "Waiting");
+        assert_eq!(loaded["reply"]["observer"]["execution_failed"], false);
+        assert_eq!(report(&loaded).pending_jobs, 0);
+        assert_eq!(report(&loaded).jobs_admitted, 2);
+        assert_eq!(report(&loaded).jobs_executed, 2);
+        peer.finish();
+    }
 }
 
 #[test]
@@ -874,10 +976,9 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
 }
 
 #[test]
-fn real_worker_rejects_v3_v4_v5_init_and_later_commands_without_reply_or_execution() {
-    for (version, kind) in [3, 4, 5]
-        .into_iter()
-        .flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
+fn real_worker_rejects_v1_through_v6_init_and_later_commands_without_reply_or_execution() {
+    for (version, kind) in
+        (1..=6).flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
     {
         let mut peer = Peer::start();
         let (sequence, payload) = match kind {

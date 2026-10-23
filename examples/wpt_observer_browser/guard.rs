@@ -1,5 +1,6 @@
 //! Test-host inventory/navigation policy, not arbitrary-server confinement.
 //! Chassis still performs the actual projection, ledger stage and publication.
+use crate::output_config;
 use mg_chassis::scripts::{ScriptRuntime, ScriptSession, SessionUpdate, SourceWireMode};
 use mg_sparkle::{
     document::{self, Node},
@@ -30,6 +31,7 @@ pub struct Inventory {
     pub html: String,
     pub harness: String,
     pub harness_url: String,
+    pub output: Option<output_config::SourceInventory>,
     pub observer: ObserverInit,
     pub cutoff: Instant,
 }
@@ -38,6 +40,20 @@ impl Inventory {
     pub fn verify(&self, request: &Request) -> Result<()> {
         if request.url != self.url || request.html.as_bytes() != self.html.as_bytes() {
             return Err("Actual document differs from frozen source inventory".into());
+        }
+        if let Some(output) = &self.output {
+            if !matches!(self.observer, ObserverInit::WindowHarness { bootstrap_node, .. }
+                if bootstrap_node as usize == output.plan.harness_node)
+            {
+                return Err("Configured bootstrap differs from actual output plan".into());
+            }
+            return output.verify(
+                request,
+                &self.html,
+                &self.url,
+                &self.harness,
+                &self.harness_url,
+            );
         }
         let sources = request
             .external_scripts
@@ -108,6 +124,8 @@ pub struct ChargedTrace {
     pub next_ordinal: Option<u32>,
     pub diagnostics: usize,
     pub scripts_executed: usize,
+    pub result_callbacks: usize,
+    pub completion_callbacks: usize,
     pub source_admissions: Option<usize>,
     pub jobs_admitted: Option<usize>,
     pub jobs_executed: Option<usize>,
@@ -197,6 +215,29 @@ impl HostState {
             }) => (Some(*progress), Some(*first_ordinal), Some(*next_ordinal)),
             _ => (None, None, None),
         };
+        let (result_callbacks, completion_callbacks) = match &reply.observer {
+            Some(ObserverReply::WindowHarness { records, .. }) => (
+                records
+                    .iter()
+                    .filter(|record| {
+                        matches!(
+                            record,
+                            mg_sparkle::page_session::observer::ObserverRecord::Result { .. }
+                        )
+                    })
+                    .count(),
+                records
+                    .iter()
+                    .filter(|record| {
+                        matches!(
+                            record,
+                            mg_sparkle::page_session::observer::ObserverRecord::Completion { .. }
+                        )
+                    })
+                    .count(),
+            ),
+            _ => (0, 0),
+        };
         state
             .charged_trace
             .try_reserve_exact(1)
@@ -214,6 +255,8 @@ impl HostState {
             next_ordinal: next,
             diagnostics: reply.errors.len(),
             scripts_executed: reply.scripts_executed,
+            result_callbacks,
+            completion_callbacks,
             source_admissions: reply.boa.as_ref().map(|r| r.source_admissions),
             jobs_admitted: reply.boa.as_ref().map(|r| r.jobs_admitted),
             jobs_executed: reply.boa.as_ref().map(|r| r.jobs_executed),
@@ -647,6 +690,7 @@ mod tests {
                     .into(),
             harness: include_str!("../../tools/wpt/upstream/resources/testharness.js").into(),
             harness_url: "http://127.0.0.1:7878/resources/testharness.js".into(),
+            output: None,
             observer: ObserverInit::WindowHarness {
                 contract: ObserverContract::PinnedWindowHarnessV1,
                 run_id: 1,
@@ -845,6 +889,8 @@ mod tests {
 
     #[test]
     fn only_first_nonzero_generation_and_enabled_expectation_are_forwarded() {
+        // The output suite has its own three-source inventory; old inventory
+        // and its node1/two-script assertions above remain unchanged.
         let (host, state) = runtime(reply());
         assert_eq!(
             host.observer_expectation(),
@@ -886,6 +932,76 @@ mod tests {
                 .try_task_pump(TaskPump { wake_token: 1 }, 0)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn output_inventory_checks_all_three_actual_positions_before_any_inner_start() {
+        let manifest = output_config::Manifest::parse(include_bytes!(
+            "../../docs/WPT_HARNESS_OUTPUT_CONTROLS.json"
+        ))
+        .unwrap();
+        let case = &manifest.cases[0];
+        for change in 0..5 {
+            let (mut host, state) = runtime(reply());
+            host.inventory.html = case.html_utf8.clone();
+            host.inventory.url = format!("http://127.0.0.1:7878{}", case.url_path);
+            let plan = case.source_plan(&host.inventory.url).unwrap();
+            host.inventory.observer = ObserverInit::WindowHarness {
+                contract: case.observer_contract,
+                run_id: case.run_id,
+                bootstrap_node: plan.harness_node as u32,
+            };
+            let vendor_url = "http://127.0.0.1:7878/resources/testharnessreport.js".to_string();
+            let vendor =
+                include_str!("../../tools/wpt/upstream/resources/testharnessreport.js").to_string();
+            host.inventory.output = Some(output_config::SourceInventory {
+                plan,
+                body: case.body_source_utf8.clone(),
+                vendor: vendor.clone(),
+                vendor_url: vendor_url.clone(),
+            });
+            let mut actual = Request {
+                url: host.inventory.url.clone(),
+                html: case.html_utf8.clone(),
+                external_scripts: Some(vec![
+                    ExternalScriptSource {
+                        node: plan.harness_node,
+                        source: host.inventory.harness.clone(),
+                        provenance: Some(ClassicSourceProvenance {
+                            response_url: host.inventory.harness_url.clone(),
+                            error_visibility: ClassicErrorVisibility::SameOrigin,
+                        }),
+                    },
+                    ExternalScriptSource {
+                        node: plan.vendor_node,
+                        source: vendor,
+                        provenance: Some(ClassicSourceProvenance {
+                            response_url: vendor_url,
+                            error_visibility: ClassicErrorVisibility::SameOrigin,
+                        }),
+                    },
+                ]),
+            };
+            host.inventory.verify(&actual).unwrap();
+            let sources = actual.external_scripts.as_mut().unwrap();
+            match change {
+                0 => sources[1].source.push(' '),
+                1 => sources[0].node = 1,
+                2 => sources.swap(0, 1),
+                3 => {
+                    sources.pop();
+                }
+                _ => sources[1]
+                    .provenance
+                    .as_mut()
+                    .unwrap()
+                    .response_url
+                    .push_str("?wrong"),
+            }
+            host.set_generation(1).unwrap();
+            assert!(host.start(actual, 1).is_err());
+            assert_eq!(state.lock().unwrap().starts, 0);
+        }
     }
 
     #[test]

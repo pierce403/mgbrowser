@@ -39,9 +39,11 @@ macro_rules! string_enum {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
 pub enum ObserverContract {
     PinnedWindowHarnessV1,
+    PinnedWindowHarnessOutputDisabledV1,
 }
 string_enum!(ObserverContract {
-    PinnedWindowHarnessV1
+    PinnedWindowHarnessV1,
+    PinnedWindowHarnessOutputDisabledV1
 });
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize)]
@@ -1350,6 +1352,50 @@ mod tests {
         assert_eq!(
             ObserverReply::rejected_init(ObserverExpectation::Disabled),
             ObserverReply::Disabled
+        );
+    }
+
+    #[test]
+    fn output_profile_is_one_exact_contract_not_an_arbitrary_setup_property_bag() {
+        for contract in [
+            ObserverContract::PinnedWindowHarnessV1,
+            ObserverContract::PinnedWindowHarnessOutputDisabledV1,
+        ] {
+            let init = ObserverInit::WindowHarness {
+                contract,
+                run_id: 9,
+                bootstrap_node: 4,
+            };
+            let bytes = serde_json::to_vec(&init).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<ObserverInit>(&bytes).unwrap(),
+                init
+            );
+            assert_eq!(init.expectation(), expected());
+            assert!(init.validate().is_ok());
+        }
+        for malformed in [
+            r#"{"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":9,"bootstrap_node":4,"output":false}"#,
+            r#"{"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":9,"bootstrap_node":4,"setup":{"output":false}}"#,
+            r#"{"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","run_id":9,"bootstrap_node":4,"explicit_timeout":true}"#,
+            r#"{"kind":"WindowHarness","contract":{"PinnedWindowHarnessOutputDisabledV1":null},"run_id":9,"bootstrap_node":4}"#,
+            r#"{"kind":"WindowHarness","contract":null,"run_id":9,"bootstrap_node":4}"#,
+            r#"{"kind":"WindowHarness","contract":"PinnedWindowHarnessOutputDisabledV1","contract":"PinnedWindowHarnessV1","run_id":9,"bootstrap_node":4}"#,
+            r#"{"kind":"Disabled","contract":"PinnedWindowHarnessOutputDisabledV1"}"#,
+            r#"{"kind":"Disabled","output":false}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ObserverInit>(malformed).is_err(),
+                "{malformed}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&ObserverContract::PinnedWindowHarnessOutputDisabledV1).unwrap(),
+            r#""PinnedWindowHarnessOutputDisabledV1""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ObserverInit::Disabled).unwrap(),
+            r#"{"kind":"Disabled"}"#
         );
     }
 

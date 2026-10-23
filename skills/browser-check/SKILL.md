@@ -168,7 +168,8 @@ when explicitly migrating their bundled-order premises.
 
 For trusted Window testharness observation, read docs/WPT_OBSERVER.md and
 docs/WPT_OBSERVER_STATUS.md. The frozen sixteen authored controls are not a
-scored upstream selection. Preserve strict modern v6's required Init/reply mode,
+scored upstream selection. Preserve the current strict modern required Init/reply mode
+(v7 for the fixed output-configuration increment; v6 is release history),
 including explicit Disabled in ordinary browsing, and unchanged legacy-v1 and
 one-shot formats. Run boa_observer and private native/shared-ledger/protocol
 controls in debug and release, plus both observer examples' pure tests. Keep
@@ -193,6 +194,29 @@ actual queued error/rejection history at Finished. Verify explicit close/wait_id
 as well as owned groups/direct leaders; unknown cleanup stops new admissions.
 Expected-negative verification is not browser PASS, attestation, a network
 sandbox or a new WPT score. Preserve all older native/CDP/public-release gates.
+
+For fixed trusted output configuration, also read docs/WPT_HARNESS_OUTPUT.md
+and docs/WPT_HARNESS_OUTPUT_STATUS.md. Keep both frozen contract/manifest pairs
+unchanged. Run the original sixteen on V1, not the new contract, and all five
+new controls with the fixed --suite output-config. Capture genuine own-data
+ordinary functions before registration; setup uses one intrinsic ordinary
+output:false properties object, never evaluated glue or a caller property bag.
+Verify post-call/checkpoint guards, first-fault cancellation, no next source,
+actual timer rearm without lifetime refunds and the unchanged work boundaries.
+
+New-suite admission derives all three actual script nodes and the exact framing
+LF plus authored inline body. Verify the full harness and original vendor bytes.
+The real Browser owner requires exactly document+harness+vendor GET200 deliveries
+with actual JavaScript MIME/provenance, while stdio sources remain explicitly
+synthetic. Pin the new shared output_config.rs as a compiled input to both hosts.
+H2 must retain a genuine assertion Fail and bounded Text-kind stack; H4 must use
+the real ten-second timer and final-only Timeout. H5 must already have its native
+failure, one Result prefix and no Completion before parent MissingCompletion;
+parent Deadline cannot supply proof of native failure. Do not replace the old
+matcher, hide negatives or count either suite as upstream passes. Keep the same
+absolute 25-second owner and narrower 23/22-second admission cutoffs. Repeat both
+suites in local Browser and packaged/public stdio lanes, alongside all older
+native, full-regression, scoring and release checks.
 
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 

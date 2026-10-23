@@ -2,13 +2,18 @@
 //!
 //! This test tool accepts an explicit packaged/public binary, not a production
 //! runtime override. It runs no JS in the parent and proves no HTTP/native/CDP
-//! behavior. Full acceptance must enumerate all 16 immutable manifest cases.
+//! behavior. Acceptance enumerates the complete selected fixed suite: old16 by
+//! default, or the five separate output-configuration controls.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "wpt_observer/output_config.rs"]
+mod output_config;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "wpt_observer/transport.rs"]
 mod transport;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux {
+    use super::output_config::{self, Suite};
     use super::transport::{self, Budget, Result, Worker};
     use mg_sparkle::{
         document::{self, Document},
@@ -238,9 +243,10 @@ mod linux {
         previous: Option<&AccountingSnapshot>,
         lifecycle: Option<LifecycleProgress>,
         last_wake: u64,
+        expected_sources: usize,
     ) -> Result<()> {
         ensure(
-            response.version == 6
+            response.version == 7
                 && response.generation == frame.generation
                 && response.session_id == frame.session_id
                 && response.sequence == frame.sequence
@@ -268,7 +274,7 @@ mod linux {
         ensure(
             r.errors.len() <= 64
                 && r.errors.iter().all(|e| e.len() <= 4096)
-                && r.scripts_executed == if initial { 2 } else { 0 },
+                && r.scripts_executed == if initial { expected_sources } else { 0 },
             "Invalid metadata/startup source execution",
         )?;
         ensure(
@@ -289,7 +295,7 @@ mod linux {
                 && report
                     .worker_memory
                     .is_some_and(|m| m.is_valid() && m.allocations > 0 && m.outstanding_bytes > 0)
-                && report.source_admissions == 2,
+                && report.source_admissions == expected_sources,
             "Wrong profile/process/source admission",
         )?;
         if initial {
@@ -558,6 +564,15 @@ mod linux {
 
     #[derive(Serialize)]
     struct Receipt<'a> {
+        suite: &'static str,
+        vendor_sha256: Option<&'static str>,
+        source_metadata_scope: &'static str,
+        source_plan: Option<output_config::SourcePlan>,
+        observer_contract: ObserverContract,
+        control_html_sha256: Option<&'a str>,
+        control_body_sha256: Option<&'a str>,
+        missing_completion: bool,
+        native_execution_failed_before_missing: Option<bool>,
         scope: &'static str,
         case: &'a str,
         expected_negative: bool,
@@ -598,6 +613,7 @@ mod linux {
         let mut expected_sha = None;
         let mut output = None;
         let mut selected = None;
+        let mut suite = None;
         while let Some(key) = args.next() {
             let value = args.next().ok_or("Each argument needs a value")?;
             match key.as_str() {
@@ -605,10 +621,12 @@ mod linux {
                 "--expected-sha" => expected_sha = Some(value),
                 "--output" => output = Some(PathBuf::from(value)),
                 "--case" => selected = Some(value),
+                "--suite" => Suite::select(&mut suite, &value)?,
                 _ => return Err("Unknown argument".into()),
             }
         }
         let binary = binary.ok_or("--binary is required")?;
+        let suite = suite.unwrap_or_default();
         let expected_sha = expected_sha.ok_or("--expected-sha is required")?;
         ensure(
             expected_sha.len() == 64
@@ -642,11 +660,42 @@ mod linux {
             manifest.case_count == 16 && manifest.cases.len() == 16,
             "Frozen full roster differs",
         )?;
-        let case = manifest
-            .cases
-            .iter()
-            .find(|v| v.id == selected)
-            .ok_or("Case not in frozen roster")?;
+        let output_manifest = if suite == Suite::OutputConfig {
+            Some(output_config::Manifest::parse(&body(
+                &root.join(output_config::MANIFEST_PATH),
+                output_config::MANIFEST_BYTES,
+                output_config::MANIFEST_SHA,
+            )?)?)
+        } else {
+            None
+        };
+        let output_case = output_manifest
+            .as_ref()
+            .map(|manifest| manifest.case(&selected))
+            .transpose()?;
+        let case = if output_case.is_some() {
+            &manifest.cases[0]
+        } else {
+            manifest
+                .cases
+                .iter()
+                .find(|v| v.id == selected)
+                .ok_or("Case not in frozen roster")?
+        };
+        let case_id = output_case.map_or(case.id.as_str(), |case| case.id.as_str());
+        let run_id = output_case.map_or(case.run_id, |case| case.run_id);
+        let case_html = output_case.map_or(case.html_utf8.as_str(), |case| case.html_utf8.as_str());
+        let expected_diagnostics = output_case
+            .map_or(case.expected.diagnostics_exact.as_ref(), |case| {
+                Some(&case.expected.diagnostics_exact)
+            });
+        let expected_negative = output_case
+            .map_or(case.expected.verifier_accepts_expected_negative, |case| {
+                case.expected.verifier_expected_negative
+            });
+        let expected_outcome = output_case.map_or(case.expected.browser_outcome.as_str(), |case| {
+            case.expected_outcome()
+        });
         ensure(
             binary_hash(&binary)? == expected_sha,
             "Supplied binary SHA differs",
@@ -660,34 +709,99 @@ mod linux {
             manifest.fixture_url_binding.stdio_source_error_visibility == "same-origin",
             "Wrong synthetic source metadata",
         )?;
-        let url = manifest.fixture_url_binding.stdio_document_origin.clone() + &case.url_path;
-        let expectation = ObserverExpectation::WindowHarness {
-            run_id: case.run_id,
+        let url = if let Some(case) = output_case {
+            format!("{}{}", output_config::STDIO_ORIGIN, case.url_path)
+        } else {
+            manifest.fixture_url_binding.stdio_document_origin.clone() + &case.url_path
         };
+        let source_plan = output_case.map(|case| case.source_plan(&url)).transpose()?;
+        let vendor = if output_case.is_some() {
+            Some(String::from_utf8(body(
+                &root.join("tools/wpt/upstream/resources/testharnessreport.js"),
+                output_config::VENDOR_BYTES,
+                output_config::VENDOR_SHA,
+            )?)?)
+        } else {
+            None
+        };
+        let expected_sources = if output_case.is_some() { 3 } else { 2 };
+        let expectation = ObserverExpectation::WindowHarness { run_id };
         let observer = ObserverInit::WindowHarness {
-            contract: ObserverContract::PinnedWindowHarnessV1,
-            run_id: case.run_id,
-            bootstrap_node: 1,
+            contract: output_case.map_or(ObserverContract::PinnedWindowHarnessV1, |case| {
+                case.observer_contract
+            }),
+            run_id,
+            bootstrap_node: source_plan.map_or(1, |plan| plan.harness_node as u32),
         };
-        let page = Request {
-            url: url.clone(),
-            html: case.html_utf8.clone(),
-            external_scripts: Some(vec![ExternalScriptSource {
-                node: 1,
-                source: harness,
-                provenance: Some(ClassicSourceProvenance {
-                    response_url: manifest
+        let mut sources = vec![ExternalScriptSource {
+            node: source_plan.map_or(1, |plan| plan.harness_node),
+            source: harness,
+            provenance: Some(ClassicSourceProvenance {
+                response_url: if output_case.is_some() {
+                    format!(
+                        "{}{}",
+                        output_config::STDIO_ORIGIN,
+                        output_config::HARNESS_ROUTE
+                    )
+                } else {
+                    manifest
                         .fixture_url_binding
                         .stdio_source_response_url
-                        .clone(),
+                        .clone()
+                },
+                error_visibility: ClassicErrorVisibility::SameOrigin,
+            }),
+        }];
+        if let Some(vendor) = vendor {
+            sources.push(ExternalScriptSource {
+                node: source_plan.unwrap().vendor_node,
+                source: vendor,
+                provenance: Some(ClassicSourceProvenance {
+                    response_url: format!(
+                        "{}{}",
+                        output_config::STDIO_ORIGIN,
+                        output_config::VENDOR_ROUTE
+                    ),
                     error_visibility: ClassicErrorVisibility::SameOrigin,
                 }),
-            }]),
+            });
+        }
+        let page = Request {
+            url: url.clone(),
+            html: case_html.into(),
+            external_scripts: Some(sources),
         };
+        if let Some(case) = output_case {
+            let sources = page
+                .external_scripts
+                .as_ref()
+                .ok_or("Constructed output sources missing")?;
+            let inventory = output_config::SourceInventory {
+                plan: source_plan.unwrap(),
+                body: case.body_source_utf8.clone(),
+                vendor: sources[1].source.clone(),
+                vendor_url: format!(
+                    "{}{}",
+                    output_config::STDIO_ORIGIN,
+                    output_config::VENDOR_ROUTE
+                ),
+            };
+            inventory.verify(
+                &page,
+                &case.html_utf8,
+                &url,
+                &sources[0].source,
+                &format!(
+                    "{}{}",
+                    output_config::STDIO_ORIGIN,
+                    output_config::HARNESS_ROUTE
+                ),
+            )?;
+        }
         let mut frame = Frame {
-            version: 6,
+            version: 7,
             generation: 1,
-            session_id: case.run_id,
+            session_id: run_id,
             sequence: 0,
             expected_revision: 0,
             command: Command::Init(ModernInit { page, observer }),
@@ -707,6 +821,9 @@ mod linux {
         let mut cutoff = "failure";
         let mut parent_failure = ObserverParentFailure::Validation;
         let mut reports = Vec::new();
+        let mut initial_results = 0;
+        let mut initial_completions = 0;
+        let mut native_execution_failed_before_missing = None;
         let mut startup_cleanup_confirmed = true;
         let mut startup_pid = None;
         let outcome: Result<()> = (|| {
@@ -749,13 +866,20 @@ mod linux {
                 parent_failure = ObserverParentFailure::Validation;
                 let mut response: Reply =
                     serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-                metadata(&frame, &response, accounting.as_ref(), lifecycle, last_wake)?;
+                metadata(
+                    &frame,
+                    &response,
+                    accounting.as_ref(),
+                    lifecycle,
+                    last_wake,
+                    expected_sources,
+                )?;
                 response
                     .reply
                     .validate_observer_frame(expectation)
                     .map_err(|e| e.to_string())?;
                 completion_progress(
-                    &case.id,
+                    case_id,
                     response.reply.observer.as_ref().ok_or("Observer missing")?,
                 )?;
                 worker
@@ -779,15 +903,33 @@ mod linux {
                 )?;
                 reports.push(report.clone()); // Bounded scalar accounting only, never DOM/JS history.
                 for error in &response.reply.errors {
-                    diagnostic_match &= case
-                        .expected
-                        .diagnostics_exact
-                        .as_ref()
-                        .and_then(|v| v.get(diagnostics))
-                        == Some(error);
+                    diagnostic_match &=
+                        expected_diagnostics.and_then(|v| v.get(diagnostics)) == Some(error);
                     diagnostics += 1;
                 }
                 let wake = response.reply.task_wake.take();
+                let initial_counts = if frame.sequence == 0 {
+                    match response.reply.observer.as_ref() {
+                        Some(page_session::observer::ObserverReply::WindowHarness {
+                            records,
+                            ..
+                        }) => (
+                            records
+                                .iter()
+                                .filter(|record| matches!(record, ObserverRecord::Result { .. }))
+                                .count(),
+                            records
+                                .iter()
+                                .filter(|record| {
+                                    matches!(record, ObserverRecord::Completion { .. })
+                                })
+                                .count(),
+                        ),
+                        _ => (0, 0),
+                    }
+                } else {
+                    (initial_results, initial_completions)
+                };
                 let next_state = response.reply.state;
                 let next_revision = response.reply.revision;
                 let next_progress = match response.reply.observer.as_ref() {
@@ -808,6 +950,7 @@ mod linux {
                 parent_failure = ObserverParentFailure::ActiveCharge;
                 budget.charge()?;
                 staged.commit();
+                (initial_results, initial_completions) = initial_counts;
                 accounting = Some(next_accounting);
                 lifecycle = next_lifecycle;
                 document = Some(staged_document);
@@ -849,9 +992,9 @@ mod linux {
                 let wake = wake.ok_or("No eligible wake")?;
                 last_wake = wake.token;
                 frame = Frame {
-                    version: 6,
+                    version: 7,
                     generation: 1,
-                    session_id: case.run_id,
+                    session_id: run_id,
                     sequence: frame.sequence.checked_add(1).ok_or("Sequence overflow")?,
                     expected_revision: next_revision,
                     command: Command::TaskPump(TaskPump {
@@ -860,6 +1003,27 @@ mod linux {
                 };
             }
             parent_failure = ObserverParentFailure::Validation;
+            if let Some(case) = output_case {
+                if case.expected.missing_completion {
+                    native_execution_failed_before_missing =
+                        Some(ledger.observation().execution_failed);
+                }
+                return output_config::check(
+                    case,
+                    ledger.observation(),
+                    output_config::Outcome {
+                        lifecycle,
+                        state,
+                        diagnostics,
+                        diagnostics_match: diagnostic_match,
+                        missing,
+                        pending,
+                        initial_results,
+                        initial_completions,
+                        elapsed: started.elapsed(),
+                    },
+                );
+            }
             check(
                 case,
                 ledger.observation(),
@@ -915,15 +1079,31 @@ mod linux {
                     .then(|| "Unexpected worker stderr at teardown".into())
             });
         let receipt = Receipt {
+            suite: suite.as_str(),
+            vendor_sha256: output_case.map(|_| output_config::VENDOR_SHA),
+            source_metadata_scope: "Synthetic same-origin typed sources: no HTTP, MIME or resource-broker proof",
+            source_plan,
+            observer_contract: output_case
+                .map_or(ObserverContract::PinnedWindowHarnessV1, |case| {
+                    case.observer_contract
+                }),
+            control_html_sha256: output_case.map(|case| case.html_sha256()),
+            control_body_sha256: output_case.map(|case| case.body_sha256()),
+            missing_completion: missing,
+            native_execution_failed_before_missing,
             scope: "Owned restricted-worker control, not HTTP/native/CDP or WPT score",
-            case: &case.id,
-            expected_negative: case.expected.verifier_accepts_expected_negative,
-            expected_outcome: &case.expected.browser_outcome,
+            case: case_id,
+            expected_negative,
+            expected_outcome,
             expectation_met: error.is_none(),
             error,
             binary: &binary,
             binary_sha256: &expected_sha,
-            manifest_sha256: MANIFEST_SHA,
+            manifest_sha256: if output_case.is_some() {
+                output_config::MANIFEST_SHA
+            } else {
+                MANIFEST_SHA
+            },
             harness_sha256: HARNESS_SHA,
             cleanup_confirmed,
             pid: worker.as_ref().map(Worker::pid).or(startup_pid),
@@ -960,7 +1140,7 @@ mod linux {
             } else {
                 "CONTROL_FAILED"
             },
-            case.id,
+            case_id,
             budget.used.as_secs_f64(),
             budget.started.elapsed().as_secs_f64()
         );
@@ -1023,27 +1203,27 @@ mod linux {
 
         #[test]
         fn strict_reply_wrapper_rejects_unknown_and_duplicate_identity_fields() {
-            let original = r#"{"version":6,"generation":1,"session_id":1,"sequence":0,"expected_revision":0,"reply":{"revision":0,"snapshot":null,"outcome":{"click_canceled":null,"submit_canceled":null},"default_action":{"kind":"None"},"navigation":null,"errors":[],"scripts_executed":0,"allocations":null,"boa":null,"state":"Closed","acknowledgements":[],"lifecycle":{"phase":"Initializing","initial_failure":true},"observer":{"kind":"ObservationFailed","run_id":1,"prefix_end":0,"fault":"RejectedInit","execution_failed":true}}}"#;
+            let original = r#"{"version":7,"generation":1,"session_id":1,"sequence":0,"expected_revision":0,"reply":{"revision":0,"snapshot":null,"outcome":{"click_canceled":null,"submit_canceled":null},"default_action":{"kind":"None"},"navigation":null,"errors":[],"scripts_executed":0,"allocations":null,"boa":null,"state":"Closed","acknowledgements":[],"lifecycle":{"phase":"Initializing","initial_failure":true},"observer":{"kind":"ObservationFailed","run_id":1,"prefix_end":0,"fault":"RejectedInit","execution_failed":true}}}"#;
             assert!(serde_json::from_str::<Reply>(original).is_ok());
             assert!(
                 serde_json::from_str::<Reply>(&original.replacen(
-                    "\"version\":6",
-                    "\"version\":6,\"unknown\":0",
+                    "\"version\":7",
+                    "\"version\":7,\"unknown\":0",
                     1
                 ))
                 .is_err()
             );
             assert!(
                 serde_json::from_str::<Reply>(&original.replacen(
-                    "\"version\":6",
-                    "\"version\":6,\"version\":6",
+                    "\"version\":7",
+                    "\"version\":7,\"version\":7",
                     1
                 ))
                 .is_err()
             );
             let response: Reply = serde_json::from_str(original).unwrap();
             let frame = Frame {
-                version: 6,
+                version: 7,
                 generation: 1,
                 session_id: 1,
                 sequence: 0,
@@ -1051,7 +1231,7 @@ mod linux {
                 command: Command::TaskPump(TaskPump { wake_token: 1 }),
             };
             assert!(
-                metadata(&frame, &response, None, None, 0).is_err(),
+                metadata(&frame, &response, None, None, 0, 2).is_err(),
                 "Reportless rejection is not a completed positive"
             );
         }

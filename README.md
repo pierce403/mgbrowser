@@ -2,6 +2,20 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
+## v0.9.13 in development
+
+The fixed trusted `setup({output:false})` contributor mode is locally implemented
+without injected JavaScript, changed harness/vendor bytes or larger resource
+allowances. Five new authored controls and all sixteen original controls meet
+their frozen expectations in both normal release-mode worker and separate real
+Browser paths, preserving assertion failures, genuine timeout and native errors.
+They add **zero upstream WPT passes**. Full local Rust and frozen JSPLAN gates
+pass; the fresh complete static score remains 317/632/62 of 1,011. The packaged
+installer/updater, all thirteen native helpers and both frozen worker suites
+also pass. Exact-commit CI and public release/install/update gates remain pending. See
+[implementation and evidence](docs/WPT_HARNESS_OUTPUT_STATUS.md).
+The website installer still selects the latest published release, not this draft.
+
 ## v0.9.12 Experimental Preview
 
 This increment adds bounded, default-off typed Window testharness observation

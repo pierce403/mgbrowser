@@ -1261,7 +1261,7 @@ impl BoaPageRealm {
             page_session::observer::ObserverInit::WindowHarness {
                 bootstrap_node,
                 run_id,
-                ..
+                contract,
             } => {
                 let node = bootstrap_node as usize;
                 if !sources.first().is_some_and(|source| {
@@ -1276,7 +1276,7 @@ impl BoaPageRealm {
                     ));
                     return (None, reply);
                 }
-                Some(node)
+                Some((node, contract))
             }
         };
         let host = BrowserHost {
@@ -1328,7 +1328,9 @@ impl BoaPageRealm {
                 ),
             }
             realm.checkpoint(&mut reply.errors);
-            if bootstrap == Some(source.node) {
+            if let Some((node, contract)) = bootstrap
+                && node == source.node
+            {
                 if realm.closed
                     || realm.engine.is_fatal()
                     || realm.state.borrow().host.navigation.is_some()
@@ -1336,7 +1338,7 @@ impl BoaPageRealm {
                 {
                     observer::bootstrap_failed(&mut realm);
                 } else {
-                    observer::install(&mut realm, &mut reply.errors);
+                    observer::install(&mut realm, &mut reply.errors, contract);
                 }
             }
             if realm.closed

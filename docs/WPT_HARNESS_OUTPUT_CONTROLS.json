@@ -1,0 +1,281 @@
+{
+  "schema": "frozen-output-profile-controls-v1-not-runtime-configuration",
+  "status": "FROZEN_BEFORE_IMPLEMENTATION_NOT_EXECUTED",
+  "case_count": 5,
+  "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea",
+  "scope": "New non-scoring authored readiness inputs; all sixteen existing authored inputs and the 1011 static selection remain immutable",
+  "harness": {
+    "path": "tools/wpt/upstream/resources/testharness.js",
+    "route": "/resources/testharness.js",
+    "bytes": 198291,
+    "sha256": "d2399236c2a09c429804ff2299ad6629e17e2b53f17a74dd341e936adb11ae3e",
+    "body": "exact content-addressed complete original file, never rewritten",
+    "content_type_if_served": "application/javascript; charset=utf-8"
+  },
+  "vendor": {
+    "path": "tools/wpt/upstream/resources/testharnessreport.js",
+    "route": "/resources/testharnessreport.js",
+    "bytes": 1231,
+    "sha256": "3777176fc736b0a78cf7617b9613b220f635daae7536ec7ebb99c61dbb525aae",
+    "body": "exact complete original vendor file, never replaced",
+    "content_type_if_served": "application/javascript; charset=utf-8"
+  },
+  "bootstrap_node_policy": {
+    "kind": "derive-at-admission-not-a-literal-node-id",
+    "parser": "mg_sparkle::document::parse_with_scripting(exact_html, actual_owned_document_url, true)",
+    "basis": "document.rs:464-470; boa.rs:1205-1255,1260-1287",
+    "rule": "Derive the actual arena index of the unique eligible non-inert ordinary external script src=/resources/testharness.js; require it first in the actual execution list, vendor next, exactly one final inline body; no async/defer/module/earlier source. Bind both exact external bodies and real same-origin provenance to their actual indices.",
+    "performed_now": false
+  },
+  "environment": "Real single Window/document; window=self=top=parent, actual null opener; no global replacement, fake opener, source injection, authored setup, error waiver or explicit_timeout",
+  "deadline": {
+    "absolute_whole_seconds": 25,
+    "direct_admission_seconds": 23,
+    "browser_admission_seconds": 22,
+    "browser_process_report_seconds": 22.9,
+    "cleanup_reserve_seconds": 2,
+    "final_fixture_guard_seconds": 0.1,
+    "cleanup_inside_whole_seconds": true,
+    "normal_harness_timer_ms": 10000
+  },
+  "resource_expectations": "All unchanged combined limits apply. Work/opcode/System/host/wire/active counters and timing snapshots are UNKNOWN until an authorized measurement; no guessed numeric resource goldens.",
+  "source_basis": [
+    "testharness.js:170-219,624-701,1502-1537,2841-2892,3145-3161,3583-3592,3726-3810",
+    "testharness.js:3875-3942,4037-4069,4297-4306,4320-4341,4368-4415,4890-4897,5050-5083",
+    "boa.rs:1568-1617,2572-2576; boa/observer.rs:690-777",
+    "boa_engine-0.22.0/src/vm/opcode/call/mod.rs:187-207,vm/mod.rs:802-864,890-946; mg-butane/src/modern.rs:730-766"
+  ],
+  "cases": [
+    {
+      "id": "H1-configured-sync-pass",
+      "run_id": 101,
+      "url_path": "/owned-output-profile/h1",
+      "body_source_utf8": "test(function(){assert_equals(1,1);},'owned sync assertion');\n",
+      "html_utf8": "<!doctype html>\n<html><head>\n<meta charset=\"utf-8\">\n<title>Owned output configuration control</title>\n<script src=\"/resources/testharness.js\"></script>\n<script src=\"/resources/testharnessreport.js\"></script>\n</head><body><p>Owned non-scoring control.</p>\n<script>\ntest(function(){assert_equals(1,1);},'owned sync assertion');\n</script>\n</body></html>\n",
+      "body_bytes": 62,
+      "body_sha256": "46e374f399aa8276eb695cdfae130bed36edb4d28245d7060f9b301d9873fd52",
+      "html_bytes": 351,
+      "html_sha256": "9c2a9668ff914c5672b2a249910bb7ae8e5338333af53f37d6fb8ead9528c018",
+      "expected": {
+        "accepted_progress": "Finished",
+        "accepted_lifecycle": "LoadComplete",
+        "initial_failure": false,
+        "realm": "Ready",
+        "observer_fault": null,
+        "native_execution_failed": false,
+        "diagnostics_exact": [],
+        "result_callbacks": 1,
+        "completion_callbacks": 1,
+        "harness_status": "Ok",
+        "harness_message_kind": "Null",
+        "harness_stack_kind": "Null",
+        "inventory": [
+          {
+            "id": 1,
+            "index": 0,
+            "name": "owned sync assertion",
+            "status": "Pass",
+            "message_kind": "Null",
+            "stack_kind": "Null",
+            "final_only": false
+          }
+        ],
+        "missing_completion": false,
+        "normal_file_timer_still_pending_at_finished": true,
+        "verifier_expected_negative": false
+      },
+      "observer_contract": "PinnedWindowHarnessOutputDisabledV1"
+    },
+    {
+      "id": "H2-configured-assertion-fail",
+      "run_id": 102,
+      "url_path": "/owned-output-profile/h2",
+      "body_source_utf8": "test(function(){assert_equals(1,2);},'owned deliberate assertion failure');\n",
+      "html_utf8": "<!doctype html>\n<html><head>\n<meta charset=\"utf-8\">\n<title>Owned output configuration control</title>\n<script src=\"/resources/testharness.js\"></script>\n<script src=\"/resources/testharnessreport.js\"></script>\n</head><body><p>Owned non-scoring control.</p>\n<script>\ntest(function(){assert_equals(1,2);},'owned deliberate assertion failure');\n</script>\n</body></html>\n",
+      "body_bytes": 76,
+      "body_sha256": "281eb5b2c361d6ab1f4f65b2875fce88e0776a93d16d38aaca9d01e3373aab02",
+      "html_bytes": 365,
+      "html_sha256": "607db9fcdb8d1d43c9b5df586207485978c4a6d2f669c88cbc461dd84738f231",
+      "expected": {
+        "accepted_progress": "Finished",
+        "accepted_lifecycle": "LoadComplete",
+        "initial_failure": false,
+        "realm": "Ready",
+        "observer_fault": null,
+        "native_execution_failed": false,
+        "diagnostics_exact": [],
+        "result_callbacks": 1,
+        "completion_callbacks": 1,
+        "harness_status": "Ok",
+        "harness_message_kind": "Null",
+        "harness_stack_kind": "Null",
+        "inventory": [
+          {
+            "id": 1,
+            "index": 0,
+            "name": "owned deliberate assertion failure",
+            "status": "Fail",
+            "message_exact": "assert_equals: expected 2 but got 1",
+            "stack_kind": "Text",
+            "final_only": false,
+            "stack_text_unmeasured": true
+          }
+        ],
+        "missing_completion": false,
+        "normal_file_timer_still_pending_at_finished": true,
+        "verifier_expected_negative": true
+      },
+      "observer_contract": "PinnedWindowHarnessOutputDisabledV1"
+    },
+    {
+      "id": "H3-configured-async-timer-pass",
+      "run_id": 103,
+      "url_path": "/owned-output-profile/h3",
+      "body_source_utf8": "async_test(function(t){setTimeout(t.step_func_done(function(){assert_equals('later','later');}),40);},'owned async timer assertion');\n",
+      "html_utf8": "<!doctype html>\n<html><head>\n<meta charset=\"utf-8\">\n<title>Owned output configuration control</title>\n<script src=\"/resources/testharness.js\"></script>\n<script src=\"/resources/testharnessreport.js\"></script>\n</head><body><p>Owned non-scoring control.</p>\n<script>\nasync_test(function(t){setTimeout(t.step_func_done(function(){assert_equals('later','later');}),40);},'owned async timer assertion');\n</script>\n</body></html>\n",
+      "body_bytes": 134,
+      "body_sha256": "5ece78c23caefb214176086ecb9987a9ca64f8395ec3155963648b7c9a562f48",
+      "html_bytes": 423,
+      "html_sha256": "1ce4cb693fba1e2912b5a09e0925f4cd71113fc198b29750888bbcc58a98712d",
+      "expected": {
+        "accepted_progress": "Finished",
+        "accepted_lifecycle": "LoadComplete",
+        "initial_failure": false,
+        "realm": "Ready",
+        "observer_fault": null,
+        "native_execution_failed": false,
+        "diagnostics_exact": [],
+        "result_callbacks": 1,
+        "completion_callbacks": 1,
+        "harness_status": "Ok",
+        "harness_message_kind": "Null",
+        "harness_stack_kind": "Null",
+        "inventory": [
+          {
+            "id": 1,
+            "index": 0,
+            "name": "owned async timer assertion",
+            "status": "Pass",
+            "message_kind": "Null",
+            "stack_kind": "Null",
+            "final_only": false
+          }
+        ],
+        "missing_completion": false,
+        "normal_file_timer_still_pending_at_finished": true,
+        "assertion_uses_genuine_later_function_timer": true,
+        "verifier_expected_negative": false
+      },
+      "observer_contract": "PinnedWindowHarnessOutputDisabledV1"
+    },
+    {
+      "id": "H4-configured-genuine-file-timeout",
+      "run_id": 104,
+      "url_path": "/owned-output-profile/h4",
+      "body_source_utf8": "async_test(function(t){},'owned normal file timeout');\n",
+      "html_utf8": "<!doctype html>\n<html><head>\n<meta charset=\"utf-8\">\n<title>Owned output configuration control</title>\n<script src=\"/resources/testharness.js\"></script>\n<script src=\"/resources/testharnessreport.js\"></script>\n</head><body><p>Owned non-scoring control.</p>\n<script>\nasync_test(function(t){},'owned normal file timeout');\n</script>\n</body></html>\n",
+      "body_bytes": 55,
+      "body_sha256": "f22db8d12bb9843a8e8fda36ee271bd4bd6813b551dda6efb7c5ff33741cd0c6",
+      "html_bytes": 344,
+      "html_sha256": "cfa0e92e4d7e249910c3f47928e4e699cbe926d238c9af095116388466684271",
+      "expected": {
+        "accepted_progress": "Finished",
+        "accepted_lifecycle": "LoadComplete",
+        "initial_failure": false,
+        "realm": "Ready",
+        "observer_fault": null,
+        "native_execution_failed": false,
+        "diagnostics_exact": [],
+        "result_callbacks": 0,
+        "completion_callbacks": 1,
+        "harness_status": "Timeout",
+        "harness_message_kind": "Null",
+        "harness_stack_kind": "Null",
+        "inventory": [
+          {
+            "id": 1,
+            "index": 0,
+            "name": "owned normal file timeout",
+            "status": "Timeout",
+            "message_exact": "Test timed out",
+            "stack_kind": "Null",
+            "final_only": true
+          }
+        ],
+        "missing_completion": false,
+        "genuine_timer_duration_ms": 10000,
+        "normal_file_timer_pending_after_delivery": false,
+        "verifier_expected_negative": true
+      },
+      "observer_contract": "PinnedWindowHarnessOutputDisabledV1"
+    },
+    {
+      "id": "H5-original-profile-default-output-failure",
+      "run_id": 105,
+      "url_path": "/owned-output-profile/h5",
+      "body_source_utf8": "test(function(){assert_equals(1,1);},'owned sync assertion');\n",
+      "html_utf8": "<!doctype html>\n<html><head>\n<meta charset=\"utf-8\">\n<title>Owned output configuration control</title>\n<script src=\"/resources/testharness.js\"></script>\n<script src=\"/resources/testharnessreport.js\"></script>\n</head><body><p>Owned non-scoring control.</p>\n<script>\ntest(function(){assert_equals(1,1);},'owned sync assertion');\n</script>\n</body></html>\n",
+      "body_bytes": 62,
+      "body_sha256": "46e374f399aa8276eb695cdfae130bed36edb4d28245d7060f9b301d9873fd52",
+      "html_bytes": 351,
+      "html_sha256": "9c2a9668ff914c5672b2a249910bb7ae8e5338333af53f37d6fb8ead9528c018",
+      "expected": {
+        "accepted_progress": "Waiting",
+        "accepted_lifecycle": "LoadComplete",
+        "initial_failure": false,
+        "realm": "Ready",
+        "observer_fault": null,
+        "native_execution_failed": true,
+        "diagnostics_exact": [
+          "Timer callback: TypeError: not a callable function"
+        ],
+        "result_callbacks": 1,
+        "completion_callbacks": 0,
+        "healthy_prefix_end": 1,
+        "captured_results": [
+          {
+            "id": 1,
+            "index": 0,
+            "name": "owned sync assertion",
+            "status": "Pass",
+            "message_kind": "Null",
+            "stack_kind": "Null"
+          }
+        ],
+        "typed_harness_status": "ABSENT_NO_COMPLETION_MUST_NOT_SYNTHESIZE",
+        "missing_completion": true,
+        "cutoff_policy": "Continue ordinary eligible pumps/validated idle until the unchanged owner admission deadline, preserving already known native failure; no fabricated harness Timeout",
+        "normal_file_timer_pending_after_actual_timer_delivery": false,
+        "verifier_expected_negative": true
+      },
+      "observer_contract": "PinnedWindowHarnessV1"
+    }
+  ],
+  "H5_source_derivation": [
+    "Output test-state/result callbacks precede native callbacks (170-191). During the ordinary body script document.readyState is loading, so resolve_log returns at4335-4336; Result Pass reaches native capture via notify_result3908-3921.",
+    "Default Tests.output is true, so expose_assert1502-1537 records optional assert-output data even with debug=false. Genuine output:false disables this tracking, not assertion execution. H5 has an internal assert record, but completion delivery fails before native capture sees its third argument; do not invent a captured assert payload.",
+    "After accepted LoadComplete, Window environment load-zero timer93-100 calls complete. complete sets phase COMPLETE before notify_complete3927-3942; notify_complete sets internal status Ok then invokes callback array4037-4069.",
+    "First completion callback is Output.show_results. resolve_log sees complete readyState, no #log, and calls missing createElementNS at4338 before native Completion callback. No callback-array try/catch exists (forEach4890-4897).",
+    "Pinned Call.handle_not_callable creates native TypeError not a callable function; VM error propagation retains native error through handle_error/handle_throw. safe_error preserves native kind/message, and Boa timer failure adds Timer callback prefix before Window.error dispatch.",
+    "Window.error handler5050-5083 changes private harness status to Error and calls done/end_wait. complete immediately returns because phase is already COMPLETE, so no retry/native Completion. The original real file timeout later also calls complete and returns; observer remains Waiting, execution_failed sticky true, no observer fault.",
+    "Do not report an observed harness Error: no typed Completion exists. Keep the one healthy Result historical prefix plus actual native failure and parent MissingCompletion. LoadComplete/initial_failure false is already frozen before this later output error."
+  ],
+  "execution_performed": false,
+  "frozen_on": "2026-10-22",
+  "contract": "docs/WPT_HARNESS_OUTPUT.md",
+  "fixture_url_binding": {
+    "stdio_document_origin": "https://observer.example.test",
+    "stdio_harness_response_url": "https://observer.example.test/resources/testharness.js",
+    "stdio_vendor_response_url": "https://observer.example.test/resources/testharnessreport.js",
+    "stdio_source_error_visibility": "same-origin",
+    "metadata_is_synthetic": true,
+    "metadata_is_http_transport_proof": false,
+    "browser_host_binding": "Only an owned immutable ephemeral loopback fixture with identical document/harness/vendor bodies, actual request/MIME/provenance and explicit cleanup evidence."
+  },
+  "interpretation_rules": [
+    "Fixed trusted contract names and strict modern v7 are adopted by the companion; old observer HTML/JS/manifest bytes stay unchanged.",
+    "Only declared semantic constraints are goldens. Unknown resource values/timing and H2 stack bytes are measured later; stack_kind Text is a real bounded-kind constraint, not a literal unknown payload or Null/Undefined wildcard.",
+    "H5 continues ordinary eligible pumps/validated idle until its path-specific admission deadline, retaining its historical Result and sticky native failure; it cannot synthesize harness Error/Timeout or accept early host crash.",
+    "Unexpected source-derived disagreements must be diagnosed and preserved; never automatically bless them by rewriting expectations."
+  ]
+}

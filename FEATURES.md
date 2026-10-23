@@ -80,6 +80,14 @@ and the dated log. The older public v0.9.11 prefix remains
 prefix evidence only. There is no new scored cohort, upstream pass or complete
 Window readiness claim; no criterion above is newly checked.
 
+In-progress v0.9.13 adds fixed trusted output:false configuration under the
+separately frozen docs/WPT_HARNESS_OUTPUT.md contract. Focused local debug checks
+and both frozen complete-harness suites pass in local worker/Browser paths.
+Full local Rust and JSPLAN gates pass; fresh complete static scoring remains
+317/632/62 of 1,011. Packaged installer/updater, all thirteen native helpers
+and both frozen worker suites pass; public release gates remain pending in
+docs/WPT_HARNESS_OUTPUT_STATUS.md. This does not add WPT passes or check a criterion.
+
 ## F-025 : Google News desktop reading
 
 Stability: in-progress
@@ -571,6 +579,9 @@ local restricted workers, real Browser/resource-broker hosts and the public
 executable; finite causal settlement retains errors after captured completion.
 All thirteen existing public-native helpers pass. No broader F-016 criterion
 or WPT testharness cohort is completed by these controls.
+
+The fixed output-disabled v0.9.13 increment is locally implemented but not yet
+released; docs/WPT_HARNESS_OUTPUT_STATUS.md keeps its remaining acceptance open.
 
 ## F-015 : Self-updates and build identity
 
