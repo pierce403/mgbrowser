@@ -14,6 +14,13 @@ at LoadComplete, not arbitrary queue idle. Exact release/public, actual old-upda
 and all 13 packaged/public native receipts are in the dated log. The v4/bundled
 descriptions below record the historical v0.9.10 baseline.
 
+The v0.9.12 candidate adds strict modern v6 with required default-Disabled
+observer configuration and replies. Its trusted test-host mode stages bounded
+typed records alongside the normal arena and publishes them only after one
+successful combined charge. The v5 references below remain release history;
+current modern v6 does not accept v5 frames. Exact local controls, unchanged
+limits and pending public gates are in [WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md).
+
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit
 test baseline, not a production fallback. Real
@@ -194,6 +201,41 @@ targets. The library's generic propagation tests do not claim full DOM hit testi
 Event completions are separate from navigation accounting. An accepted projection
 invalidates CDP node IDs and emits DOM.documentUpdated, not synthetic page-load
 events. No CDP commands are added and Runtime.evaluate remains unsupported.
+
+## Trusted observer publication: v0.9.12 candidate
+
+Modern Init is `ModernInit { page: Request, observer: ObserverInit }`, with both
+fields required and non-null. `ObserverInit::Disabled` is the default; explicit
+WindowHarness configuration carries the pinned contract, nonzero run ID and
+bootstrap node. Every v6 reply requires matching non-null observer metadata.
+Missing, null, extra-field, wrong-mode/run and older-modern frames reject;
+unversioned one-shot and strict legacy-v1 bytes remain isolated and unchanged.
+Page HTML, source comments, URLs and CDP cannot select observer authority.
+
+`page_session::observer::ObserverLedger` validates cumulative ordinals, identities,
+inventory and lossless text. A staged delta borrows the ledger and owns incoming
+records without cloning accepted history. Chassis validates the outer frame,
+resource report, lifecycle and projected arena before one combined active charge;
+only then does infallible commit advance the accepted cursor. Projection/charge
+failure publishes no new records, retains a sticky parent failure and blocks
+later work. `Browser::script_observation` exposes only the accepted ledger.
+
+Waiting has no completion. Settling preserves a captured completion while
+actual pending/frozen/active rejection or handled-notification obligations remain.
+The normal scheduler reaches them under the existing common ordering; no private
+drain, sentinel task or extra work allowance is added. Finished marks the first
+accepted completed checkpoint without those obligations, not generic queue idle
+or future-error absence. Chassis stops further test commands at that cutoff;
+the host explicitly closes the runtime and checks `wait_idle` before acceptance.
+Real remaining timer work is reported, not erased to manufacture idle.
+
+Observer faults and native execution failures are sticky independently of
+`InitialScriptOutcome`, which freezes at load. A genuine reportless rejected Init
+keeps the exact Closed/Initializing exception with RejectedInit/prefix zero;
+reportless later replies remain forbidden. All existing execution, process,
+wire and work bounds stay in force. The narrowing observer caps and distinct
+local direct-worker/Browser receipts are recorded in
+[WPT_OBSERVER_STATUS.md](WPT_OBSERVER_STATUS.md). Public v0.9.12 gates are pending.
 
 ## Independent acceptance
 

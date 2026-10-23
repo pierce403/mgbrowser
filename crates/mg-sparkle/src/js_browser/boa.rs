@@ -10,6 +10,7 @@ use super::events::{Kind, Target};
 use super::{
     BrowserHost, ClassicErrorVisibility, MAX_SOURCE, Request, bounded, inert, text_content,
 };
+use crate::page_session;
 use crate::{document, page_session::*};
 use mg_butane::{
     modern::{self, Engine},
@@ -38,6 +39,7 @@ mod dom_exception;
 #[cfg(test)]
 mod lifecycle_tests;
 mod message_clone;
+mod observer;
 mod window_messages;
 
 static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
@@ -215,6 +217,7 @@ struct State {
     error_exposure_allowed: bool,
     #[unsafe_ignore_trace]
     reporting_error: bool,
+    observer: Option<observer::Capture>,
     #[cfg(test)]
     #[unsafe_ignore_trace]
     test_now: Option<Instant>,
@@ -465,6 +468,13 @@ pub struct BoaPageRealm {
     closed_work_latched: bool,
     lifecycle: LifecycleProgress,
     pending_milestone: Option<LifecyclePhase>,
+}
+
+struct PageSource {
+    node: usize,
+    external: bool,
+    deferred: bool,
+    source: String,
 }
 
 fn failure(message: impl Into<String>) -> JsError {
@@ -1133,7 +1143,23 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
 
 impl BoaPageRealm {
     pub fn start(request: Request) -> (Option<Self>, SessionReply) {
+        Self::start_with_observer(request, page_session::observer::ObserverInit::Disabled)
+    }
+    /// Trusted owned-host configuration, never supplied by page HTML or later input.
+    pub fn start_with_observer(
+        request: Request,
+        observer_init: page_session::observer::ObserverInit,
+    ) -> (Option<Self>, SessionReply) {
         let mut reply = Self::empty_reply();
+        reply.observer = Some(page_session::observer::ObserverReply::rejected_init(
+            observer_init.expectation(),
+        ));
+        if observer_init.validate().is_err() {
+            reply
+                .errors
+                .push("Invalid Window harness observer configuration".into());
+            return (None, reply);
+        }
         if request.html.len() > MAX_SOURCE || request.url.len() > 16_384 {
             reply
                 .errors
@@ -1200,9 +1226,19 @@ impl BoaPageRealm {
             if node.attr("src").is_some() {
                 if let Some(source) = request.external_source(index) {
                     if node.attr("defer").is_some() {
-                        deferred.push((true, source.to_owned()));
+                        deferred.push(PageSource {
+                            node: index,
+                            external: true,
+                            deferred: true,
+                            source: source.to_owned(),
+                        });
                     } else {
-                        sources.push((true, source.to_owned()));
+                        sources.push(PageSource {
+                            node: index,
+                            external: true,
+                            deferred: false,
+                            source: source.to_owned(),
+                        });
                     }
                 } else if request.external_scripts.is_none() {
                     reply
@@ -1211,10 +1247,38 @@ impl BoaPageRealm {
                 }
                 continue;
             }
-            sources.push((false, text_content(&document.nodes, index)));
+            sources.push(PageSource {
+                node: index,
+                external: false,
+                deferred: false,
+                source: text_content(&document.nodes, index),
+            });
         }
         let ordinary_sources = sources.len();
         sources.extend(deferred);
+        let bootstrap = match observer_init {
+            page_session::observer::ObserverInit::Disabled => None,
+            page_session::observer::ObserverInit::WindowHarness {
+                bootstrap_node,
+                run_id,
+                ..
+            } => {
+                let node = bootstrap_node as usize;
+                if !sources.first().is_some_and(|source| {
+                    source.node == node && source.external && !source.deferred
+                }) || sources.iter().filter(|source| source.node == node).count() != 1
+                {
+                    reply
+                        .errors
+                        .push("Invalid Window harness bootstrap source ordering".into());
+                    reply.observer = Some(page_session::observer::ObserverReply::rejected_init(
+                        page_session::observer::ObserverExpectation::WindowHarness { run_id },
+                    ));
+                    return (None, reply);
+                }
+                Some(node)
+            }
+        };
         let host = BrowserHost {
             document,
             url,
@@ -1232,7 +1296,11 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        for (index, (is_external, source)) in sources.iter().enumerate() {
+        observer::enable(&mut realm, observer_init);
+        for (index, source) in sources.iter().enumerate() {
+            if realm.engine.is_fatal() {
+                break;
+            }
             if index == ordinary_sources {
                 realm.set_ready("interactive", &mut reply.errors);
                 if realm.closed
@@ -1242,10 +1310,14 @@ impl BoaPageRealm {
                     break;
                 }
             }
-            let label = if *is_external { "External" } else { "Inline" };
+            let label = if source.external {
+                "External"
+            } else {
+                "Inline"
+            };
             let result = {
                 let _ingress = Ingress::enter(realm.state.clone());
-                realm.engine.evaluate_raw(source)
+                realm.engine.evaluate_raw(&source.source)
             };
             match result {
                 Ok(_) => reply.scripts_executed += 1,
@@ -1256,6 +1328,17 @@ impl BoaPageRealm {
                 ),
             }
             realm.checkpoint(&mut reply.errors);
+            if bootstrap == Some(source.node) {
+                if realm.closed
+                    || realm.engine.is_fatal()
+                    || realm.state.borrow().host.navigation.is_some()
+                    || !reply.errors.is_empty()
+                {
+                    observer::bootstrap_failed(&mut realm);
+                } else {
+                    observer::install(&mut realm, &mut reply.errors);
+                }
+            }
             if realm.closed
                 || realm.engine.is_fatal()
                 || realm.state.borrow().host.navigation.is_some()
@@ -1321,6 +1404,7 @@ impl BoaPageRealm {
             checkpointing: false,
             error_exposure_allowed,
             reporting_error: false,
+            observer: None,
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -1478,6 +1562,7 @@ impl BoaPageRealm {
                 phase: LifecyclePhase::Initializing,
                 initial_failure: true,
             }),
+            observer: Some(page_session::observer::ObserverReply::Disabled),
         }
     }
     fn execution_failure(
@@ -1486,6 +1571,7 @@ impl BoaPageRealm {
         failure: modern::ExecutionFailure,
         errors: &mut Vec<String>,
     ) {
+        observer::mark_execution_failed(&self.state);
         let message = bounded(&failure.diagnostic.to_string(), 512);
         if errors.len() < 64 {
             errors.push(format!("{prefix}: {message}"));
@@ -1670,6 +1756,7 @@ impl BoaPageRealm {
         // In particular, a permit's Drop must not run under the State borrow.
         let discarded = self.state.borrow_mut().take_work();
         drop(discarded);
+        observer::terminal_roots(&self.state);
         // Any work left after all host permits are dropped is Boa's own job
         // queue. A Closed realm must never publish those jobs or run them on a
         // later ingress. Reuse the existing terminal cancellation path without
@@ -1715,10 +1802,11 @@ impl BoaPageRealm {
     }
 
     fn observation_notice(&self, errors: &mut Vec<String>) {
-        if self.state.borrow().rejection_observation_gap
-            && errors.len() < 64
-            && !errors.iter().any(|error| error == REJECTION_GAP)
-        {
+        let gap = self.state.borrow().rejection_observation_gap;
+        if gap {
+            observer::mark_execution_failed(&self.state);
+        }
+        if gap && errors.len() < 64 && !errors.iter().any(|error| error == REJECTION_GAP) {
             errors.push(REJECTION_GAP.into());
         }
     }
@@ -2065,6 +2153,7 @@ impl BoaPageRealm {
                 self.rejection_failure(errors);
                 break;
             };
+            observer::mark_execution_failed(&self.state);
             if errors.len() < 64 {
                 errors.push(UNHANDLED_REJECTION.into());
             }
@@ -2140,6 +2229,7 @@ impl BoaPageRealm {
                 }
             },
             Err(error) => {
+                observer::mark_execution_failed(&self.state);
                 if errors.len() < 64 {
                     errors.push(format!("Event handler: {}", bounded(&error, 512)));
                 }
@@ -2328,12 +2418,57 @@ impl BoaPageRealm {
         }
         drop(data);
         if reply.state != RealmState::Ready || reply.navigation.is_some() {
+            if reply.navigation.is_some() {
+                observer::navigation_proposed(&self.state);
+            }
             self.clear_work();
             reply.task_wake = None;
         }
         self.observation_notice(&mut reply.errors);
+        self.finish_observer(reply);
+    }
+
+    fn finish_observer(&mut self, reply: &mut SessionReply) {
+        let prepared = observer::prepare_reply(self, reply);
+        if self.state.borrow().observer.is_some() {
+            // Native prepare failures happen outside Engine's guarded ingress.
+            // This check executes no JS, preserves the first fatal, and clears
+            // its VM jobs/kept objects before terminal publication.
+            let _ = self.engine.check();
+        }
+        // Observer copying/admission can still latch an existing fatal. Do not
+        // publish a lifecycle milestone before that final admission completes.
+        if self.closed || self.engine.is_fatal() {
+            reply.state = self.realm_state();
+            self.closed = true;
+            reply.default_action = DefaultAction::None;
+            reply.navigation = None;
+            reply.task_wake = None;
+            self.clear_work();
+        }
         reply.boa = Some(self.engine.stats());
+        let previous_lifecycle = self.lifecycle;
         self.publish_lifecycle(reply);
+        reply.observer = Some(observer::commit_reply(self, prepared));
+        if self.state.borrow().observer.is_some() {
+            let _ = self.engine.check();
+        }
+        // Allocation-free commit rechecks the actual terminal/privacy/fault
+        // state. An internal failure there cannot publish a new milestone.
+        if self.closed || self.engine.is_fatal() {
+            reply.state = self.realm_state();
+            self.closed = true;
+            reply.default_action = DefaultAction::None;
+            reply.navigation = None;
+            reply.task_wake = None;
+            self.clear_work();
+            self.lifecycle = previous_lifecycle;
+            if self.lifecycle.phase != LifecyclePhase::LoadComplete {
+                self.lifecycle.initial_failure = true;
+            }
+            reply.lifecycle = Some(self.lifecycle);
+            reply.boa = Some(self.engine.stats());
+        }
     }
 
     fn advertise_wake(&mut self, reply: &mut SessionReply) -> Result<(), String> {
@@ -2411,7 +2546,7 @@ impl BoaPageRealm {
             reply.state = self.realm_state();
             reply.boa = Some(self.engine.stats());
             self.observation_notice(&mut reply.errors);
-            self.publish_lifecycle(&mut reply);
+            self.finish_observer(&mut reply);
             return reply;
         }
         self.revision += 1;
@@ -2732,7 +2867,7 @@ impl BoaPageRealm {
             reply.state = self.realm_state();
             reply.errors.push("Page realm is no longer active".into());
             self.observation_notice(&mut reply.errors);
-            self.publish_lifecycle(&mut reply);
+            self.finish_observer(&mut reply);
             return reply;
         }
         let validation = self.state.borrow().host.validate_input(&input);
@@ -2743,7 +2878,7 @@ impl BoaPageRealm {
             self.clear_work();
             reply.boa = Some(self.engine.stats());
             self.observation_notice(&mut reply.errors);
-            self.publish_lifecycle(&mut reply);
+            self.finish_observer(&mut reply);
             return reply;
         }
         self.revision += 1;

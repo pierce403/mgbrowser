@@ -804,6 +804,7 @@ mod tests {
             acknowledgements: Vec::new(),
             task_wake: None,
             lifecycle: None,
+            observer: None,
         }
     }
     fn guarded(

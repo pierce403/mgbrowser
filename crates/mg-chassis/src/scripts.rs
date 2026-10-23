@@ -29,6 +29,11 @@ pub trait ScriptSession: Send {
 }
 
 pub trait ScriptRuntime: Send + Sync {
+    /// Host-only expectation. Ordinary browser services remain Disabled; a
+    /// configured control host must separately validate its complete sources.
+    fn observer_expectation(&self) -> mg_sparkle::page_session::observer::ObserverExpectation {
+        mg_sparkle::page_session::observer::ObserverExpectation::Disabled
+    }
     /// Trusted host-selected initial source shape. This grants no fetch or
     /// execution authority; it preserves old admission in the explicit legacy
     /// test lane. Page HTML and protocol input cannot select the mode.

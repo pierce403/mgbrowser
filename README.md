@@ -2,7 +2,25 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.11 Experimental Preview
+## v0.9.12 Experimental Preview
+
+This increment adds bounded, default-off typed Window testharness observation
+for contributor test hosts. Results retain raw statuses, weak identities and
+lossless UTF-16; completion waits for actual queued error/rejection settlement.
+Only validated, charged parent records are accepted. Ordinary browsing cannot
+enable the observer through a URL, markup or CDP.
+[Contract](docs/WPT_OBSERVER.md) and [implementation scope](docs/WPT_OBSERVER_STATUS.md).
+
+All sixteen frozen authored controls pass locally through both the normal
+release-mode restricted worker and a separate real Browser/resource-broker host.
+They add **zero upstream WPT passes**. Final-version regressions, fresh full
+scoring, the packaged installer and all thirteen native helpers pass locally.
+Exact-commit CI, tagged publication and public install/update/native acceptance
+remain pending in the [dated log](memory/logs/2026-10-22.md).
+The installer selects the [latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
+See the [v0.9.12 release notes and limitations](docs/RELEASE-v0.9.12.md).
+
+### Previous v0.9.11 increment
 
 This increment queues DOMContentLoaded and Window load as two genuine later
 tasks after pre-parsed/preloaded classic sources. Readiness, event propagation,
@@ -17,7 +35,7 @@ at `ba28b9c5471382bd8b1c254c1add6f4bd8734193`. Full local regressions,
 exact-source CI/site and tagged packaging, public install/reinstall, actual
 v0.9.10 self-upgrade/no-op and all thirteen packaged/public native helpers pass.
 Receipts are in the [dated work log](memory/logs/2026-10-22.md).
-The checksum-verified installer delivers v0.9.11. This is not a
+The v0.9.11 checksum-verified public installer passed. This increment is not a
 streaming parser, general event loop, new upstream pass or full WPT harness.
 See the [release notes and limitations](docs/RELEASE-v0.9.11.md).
 
@@ -194,10 +212,11 @@ incorrect; both failures and unsupported protocols stay visible. Current-source 
 advance beyond an installed release; the report identifies the exact tested commit.
 [Selection and review](docs/WPT_EXPANSION.md). JavaScript testharness integration
 is a [separate planned milestone](docs/WPT_TESTHARNESS.md), not current coverage.
-Its next increment has a [bounded observer design](docs/WPT_OBSERVER.md): trusted
-typed callbacks and owned controls, not console scraping or new scored tests.
-The full-harness public-binary measurement so far proves only a lifecycle/resource
-prefix, not a harness completion or a new WPT pass. The observer is not implemented.
+The [bounded observer](docs/WPT_OBSERVER.md) now has a locally verified
+implementation and sixteen frozen non-scoring controls; see
+[scope and release evidence](docs/WPT_OBSERVER_STATUS.md). It is not a scored
+JavaScript cohort, general WPT product integration or complete Window readiness.
+The historical v0.9.11 public-prefix measurement remains prefix evidence only.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
@@ -237,7 +256,8 @@ See [updater behavior and trust](docs/UPDATES.md).
   v0.9.8 adds conservatively muted Window errors; v0.9.9 adds bounded rejection
   notification. The v0.9.11 release separates DCL/load after pre-parsed/preloaded
   classic sources, not a streaming parser or dynamic-resource load barrier.
-  Cross-context messaging and typed JavaScript testharness results remain unfinished.
+  Cross-context messaging and general JavaScript testharness execution remain
+  unfinished; v0.9.12's trusted bounded observer is a separate contributor facility.
   ES modules (`type="module"`), dynamic script injection, fetch/XHR and a general
   browser event loop remain unsupported. No React/Vue browser-app compatibility
   is claimed.

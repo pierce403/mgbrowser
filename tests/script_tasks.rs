@@ -1,4 +1,4 @@
-//! Owned modern-v5 process controls; no display, fixture server or parent JS.
+//! Owned modern-v6 process controls; no display, fixture server or parent JS.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use mg_butane::modern::Report;
@@ -55,7 +55,7 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
-        self.send_version(5, sequence, revision, kind, payload);
+        self.send_version(6, sequence, revision, kind, payload);
     }
     fn send_version(
         &mut self,
@@ -65,6 +65,11 @@ impl Peer {
         kind: &str,
         payload: Value,
     ) {
+        let payload = if version == 6 && kind == "Init" {
+            json!({"page":payload,"observer":{"kind":"Disabled"}})
+        } else {
+            payload
+        };
         let payload = serde_json::to_vec(&json!({
             "version":version,"generation":31,"session_id":47,"sequence":sequence,
             "expected_revision":revision,"command":{"kind":kind,"payload":payload}
@@ -121,7 +126,7 @@ impl Peer {
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 5),
+            ("version", 6),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -869,8 +874,8 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
 }
 
 #[test]
-fn real_worker_rejects_v3_and_v4_init_and_later_commands_without_reply_or_execution() {
-    for (version, kind) in [3, 4]
+fn real_worker_rejects_v3_v4_v5_init_and_later_commands_without_reply_or_execution() {
+    for (version, kind) in [3, 4, 5]
         .into_iter()
         .flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
     {

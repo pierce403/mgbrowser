@@ -99,3 +99,11 @@
   inference into a proven browser defect or call title equality a paint barrier.
   Together with the prior same-title/old-frame observations, curator records
   this readiness-versus-input-proof distinction in browser-check.
+- 2026-10-22: The typed observer's sixteen frozen authored controls pass through
+  both actual normal release-mode workers and a separate real Browser/resource
+  broker host. A captured harness Ok can precede queued unhandled/Handled errors:
+  cases 13/15 actually publish Settling before Finished with sticky native failure.
+  MissingCompletion and the genuine unchanged 10-second file Timeout remain
+  different outcomes. Curator records the two acceptance paths and same-deadline
+  cleanup reservation in browser-check; none of these authored controls adds
+  upstream passes or proves public/native delivery by itself.

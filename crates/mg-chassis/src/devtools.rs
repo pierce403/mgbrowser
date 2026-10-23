@@ -312,6 +312,7 @@ mod tests {
             acknowledgements: vec![],
             task_wake: None,
             lifecycle: None,
+            observer: None,
         };
         app.script_summary(&reply);
         app.block_session("Session expired");
@@ -566,6 +567,7 @@ mod tests {
             acknowledgements: vec![],
             task_wake: None,
             lifecycle: None,
+            observer: None,
         };
         app.script_summary(&reply);
         assert!(app.performance_profile().worker_allocation_recorded);

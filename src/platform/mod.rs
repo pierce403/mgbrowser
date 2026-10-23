@@ -20,9 +20,24 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct LinuxScripts {
     pool: script_worker::ChildPool,
+    observer: mg_sparkle::page_session::observer::ObserverInit,
+}
+
+impl LinuxScripts {
+    /// Trusted control-host capability, never selected from page contents.
+    /// The caller must verify its entire input inventory before `start`.
+    pub fn with_observer(observer: mg_sparkle::page_session::observer::ObserverInit) -> Self {
+        Self {
+            pool: script_worker::ChildPool::default(),
+            observer,
+        }
+    }
 }
 
 impl ScriptRuntime for LinuxScripts {
+    fn observer_expectation(&self) -> mg_sparkle::page_session::observer::ObserverExpectation {
+        self.observer.expectation()
+    }
     fn source_wire_mode(&self) -> SourceWireMode {
         if script_worker::legacy_test_mode() {
             SourceWireMode::Legacy
@@ -38,8 +53,13 @@ impl ScriptRuntime for LinuxScripts {
         request: Request,
         generation: u64,
     ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
-        script_worker::Session::start(request, generation, self.pool.clone())
-            .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
+        script_worker::Session::start_with_observer(
+            request,
+            generation,
+            self.pool.clone(),
+            self.observer,
+        )
+        .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
     }
     fn close(&self) {
         self.pool.close();

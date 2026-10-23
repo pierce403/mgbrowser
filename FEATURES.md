@@ -68,12 +68,15 @@ The runner's bounded two-lane orchestration preserves all complete one-lane
 case, raw-pixel and per-page-request evidence while reducing measured local
 runtime. It changes test tooling only, not browser behavior or the WPT score.
 See docs/WPT_EXPANSION.md for the separate safety/equivalence and public gates.
-The next non-scoring Window-readiness increment is specified in
-docs/WPT_OBSERVER.md: trusted bounded typed callbacks, distinct raw statuses,
-provisional completion and ordinary error/rejection settlement. The public
-v0.9.11 full-harness prefix measurement is not typed completion, complete
-feasibility or a new upstream pass. The observer and broader acceptance remain
-unimplemented; no criterion above is newly checked.
+The non-scoring Window observer in docs/WPT_OBSERVER.md is implemented for the
+v0.9.12 candidate: default-off trusted callbacks, distinct raw statuses, weak
+identities, lossless UTF-16, provisional completion and ordinary error/rejection
+settlement. All sixteen frozen authored controls pass locally through the normal
+release-mode worker and separate real Browser/resource-broker host. Final-version
+CI, publication and public acceptance remain separate gates; see
+docs/WPT_OBSERVER_STATUS.md and the dated log. The public v0.9.11 prefix remains
+prefix evidence only. There is no new scored cohort, upstream pass or complete
+Window readiness claim; no criterion above is newly checked.
 
 ## F-025 : Google News desktop reading
 
@@ -559,6 +562,13 @@ tagged packaging, public install/reinstall, actual v0.9.10 self-upgrade/no-op an
 all 13 packaged/public native/CDP helpers pass. Static WPT remains 317/632/62 of
 1,011; authored controls add no upstream passes. Do not mark any broader F-016
 or F-026 gate complete from these authored results.
+
+The v0.9.12 candidate adds the separate default-off typed observer described in
+docs/WPT_OBSERVER_STATUS.md. Sixteen frozen authored controls pass locally in
+both normal release-mode restricted workers and real Browser/resource-broker
+hosts; finite causal settlement retains errors after captured completion.
+Public release acceptance remains separate. No broader F-016 criterion or WPT
+testharness cohort is completed by these controls.
 
 ## F-015 : Self-updates and build identity
 

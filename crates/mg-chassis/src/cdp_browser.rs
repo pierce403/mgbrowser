@@ -2239,6 +2239,8 @@ mod tests {
                         phase: LifecyclePhase::Initializing,
                         initial_failure: true,
                     }),
+                    observer: (!legacy)
+                        .then_some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
                 },
             }))
         } else if case == "legacy-worker" {

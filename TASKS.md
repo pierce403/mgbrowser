@@ -95,15 +95,20 @@ following dependency order, updating evidence as each increment ships:
    comparison pass locally. The corrected exact-source/public release gates
    subsequently pass at the immutable v0.9.11 tag source; the failed first-CI
    receipt remains preserved.
-   **Next, not implemented:** [bounded typed Window-harness observation](docs/WPT_OBSERVER.md).
-   Freeze owned source inventories and negative controls, then implement strict
-   modern v6/default-off trusted observation, lossless typed records and finite
-   causal error/rejection settlement. Keep the v1/one-shot lanes and every
-   resource bound unchanged. Public v0.9.11 reaches a genuine post-load task with
-   the complete pinned harness, but that measurement has no typed completion or
-   new WPT pass. Verify candidate Browser acceptance and exact public restricted
-   worker bytes separately, then finish a versioned release before another
-   independently frozen scored selection. The current 1,011 cases are unchanged.
+   **Active release: v0.9.12 bounded typed observer.** The
+   [frozen contract](docs/WPT_OBSERVER.md) now has strict modern v6/default-off
+   trusted observation, lossless typed records and finite causal error/rejection
+   settlement. All sixteen immutable authored controls pass locally through the
+   normal release-mode worker and a separate real Browser/resource-broker host.
+   The v1/one-shot lanes and every resource bound remain unchanged. Finish
+   exact-commit CI/website, versioned release, public install/update and all
+   public native gates before calling
+   this increment shipped. [Scope and evidence](docs/WPT_OBSERVER_STATUS.md).
+   Final-version local regressions/JSPLAN, fresh complete static scoring,
+   packaged installer/updater, all thirteen native helpers and both sixteen-
+   control observer paths pass. These receipts do not establish public delivery.
+   Then freeze the next scored selection separately; do not invent upstream
+   passes from these controls or change the current 1,011 cases/expectations.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.

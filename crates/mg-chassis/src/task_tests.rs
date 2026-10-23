@@ -12,6 +12,7 @@ struct State {
     queued: bool,
     validation_pending: bool,
     canceled: bool,
+    fail_charge: bool,
 }
 struct FakeSession(Arc<Mutex<State>>, u64);
 impl ScriptSession for FakeSession {
@@ -52,7 +53,11 @@ impl ScriptSession for FakeSession {
         }
         state.validation_pending = false;
         state.charges += 1;
-        Ok(())
+        if state.fail_charge {
+            Err("Owned projection charge rejection".into())
+        } else {
+            Ok(())
+        }
     }
 }
 fn fixture() -> (Browser, Arc<Mutex<State>>, usize) {
@@ -65,6 +70,7 @@ fn fixture() -> (Browser, Arc<Mutex<State>>, usize) {
     );
     app.generation = 42;
     app.script_blocked = false;
+    app.observer_ledger = Some(ObserverLedger::new(Default::default()).unwrap());
     // These pre-existing controls exercise later work on an already loaded
     // document, not initialization or its mandatory lifecycle admissions.
     app.lifecycle = Some(LifecycleProgress {
@@ -104,6 +110,7 @@ fn reply(app: &Browser, wake: Option<TaskWake>) -> SessionReply {
         acknowledgements: vec![],
         task_wake: wake,
         lifecycle: app.lifecycle,
+        observer: Some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
     }
 }
 fn complete(app: &Browser, state: &Arc<Mutex<State>>, reply: SessionReply) {
@@ -161,6 +168,128 @@ fn task_due_time_backpressure_and_one_projection_preserve_newer_native_edits() {
         1,
         "No double projection acknowledgement"
     );
+}
+
+#[test]
+fn observer_publication_is_atomic_with_projection_and_one_active_charge() {
+    use mg_sparkle::page_session::observer::*;
+    struct ObserverRuntime;
+    impl scripts::ScriptRuntime for ObserverRuntime {
+        fn observer_expectation(&self) -> ObserverExpectation {
+            ObserverExpectation::WindowHarness { run_id: 1 }
+        }
+        fn set_generation(&self, _: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn start(
+            &self,
+            _: mg_sparkle::js_browser::Request,
+            _: u64,
+        ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+            panic!("This pure parent control must not start a worker")
+        }
+        fn close(&self) {}
+        fn wait_idle(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    for condition in ["accept", "finished", "projection", "charge", "wrong-run"] {
+        let (mut app, state, _) = fixture();
+        app.child_pool = Arc::new(ObserverRuntime);
+        app.observer_ledger =
+            Some(ObserverLedger::new(app.child_pool.observer_expectation()).unwrap());
+        app.poll_task_wake(Instant::now());
+        let mut response = reply(&app, None);
+        response.observer = Some(ObserverReply::WindowHarness {
+            run_id: if condition == "wrong-run" { 2 } else { 1 },
+            first_ordinal: 0,
+            next_ordinal: 1,
+            records: vec![ObserverRecord::Result {
+                test: TestRecord {
+                    id: 1,
+                    index: 0,
+                    name: Utf16::from_units(vec![0x61]).unwrap(),
+                    status: SubtestStatus::Pass,
+                    message: OptionalUtf16::Null,
+                    stack: OptionalUtf16::Null,
+                },
+            }],
+            progress: ObserverProgress::Waiting,
+            execution_failed: false,
+        });
+        if condition == "finished" {
+            let Some(ObserverReply::WindowHarness {
+                records,
+                next_ordinal,
+                progress,
+                ..
+            }) = &mut response.observer
+            else {
+                unreachable!()
+            };
+            records.push(ObserverRecord::Completion {
+                harness: HarnessRecord {
+                    status: HarnessStatus::Ok,
+                    message: OptionalUtf16::Null,
+                    stack: OptionalUtf16::Null,
+                },
+                inventory: vec![TestRecord {
+                    id: 1,
+                    index: 0,
+                    name: Utf16::from_units(vec![0x61]).unwrap(),
+                    status: SubtestStatus::Pass,
+                    message: OptionalUtf16::Null,
+                    stack: OptionalUtf16::Null,
+                }],
+            });
+            *next_ordinal = 2;
+            *progress = ObserverProgress::Finished;
+            response.boa.as_mut().unwrap().jobs_admitted = 1;
+            response.boa.as_mut().unwrap().pending_jobs = 1;
+            response.task_wake = Some(TaskWake {
+                token: 2,
+                delay_ms: 60_000,
+            });
+        }
+        if condition == "projection" {
+            response.snapshot.as_mut().unwrap().nodes[0]
+                .children
+                .push(usize::MAX);
+        }
+        state.lock().unwrap().fail_charge = condition == "charge";
+        complete(&app, &state, response);
+        assert_eq!(app.script_observation().unwrap().observation().cursor, 0);
+        app.poll_page_session();
+        let observation = app.script_observation().unwrap().observation();
+        let accepted = matches!(condition, "accept" | "finished");
+        let records = if condition == "finished" {
+            2
+        } else {
+            usize::from(accepted)
+        };
+        assert_eq!(observation.cursor, records as u32, "{condition}");
+        assert_eq!(observation.records.len(), records, "{condition}");
+        assert_eq!(app.page_revision, u64::from(accepted), "{condition}");
+        assert_eq!(state.lock().unwrap().charges, 1, "{condition}");
+        assert_eq!(
+            state.lock().unwrap().canceled,
+            !accepted || condition == "finished",
+            "{condition}"
+        );
+        assert_eq!(
+            app.script_blocked,
+            !accepted || condition == "finished",
+            "{condition}"
+        );
+        if condition == "finished" {
+            assert!(
+                app.task_wake.is_none(),
+                "do not pump an unrelated future timer after accepted cutoff"
+            );
+            app.poll_task_wake(Instant::now() + Duration::from_secs(100));
+            assert_eq!(state.lock().unwrap().pumps.len(), 1);
+        }
+    }
 }
 
 #[test]

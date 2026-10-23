@@ -166,6 +166,34 @@ ordinary Playwright compatibility, upstream passes or typed harness completion.
 Keep all older diagnostic rejection guards and native/CDP interaction proofs
 when explicitly migrating their bundled-order premises.
 
+For trusted Window testharness observation, read docs/WPT_OBSERVER.md and
+docs/WPT_OBSERVER_STATUS.md. The frozen sixteen authored controls are not a
+scored upstream selection. Preserve strict modern v6's required Init/reply mode,
+including explicit Disabled in ordinary browsing, and unchanged legacy-v1 and
+one-shot formats. Run boa_observer and private native/shared-ledger/protocol
+controls in debug and release, plus both observer examples' pure tests. Keep
+own-data-only extraction, weak identities, lossless UTF-16 and explicit
+Undefined/Null/Text, bounded copied units/capacities, final-only negative rows,
+sticky faults/privacy/execution and first-Completion settlement assertions.
+Test failed projection and failed one-charge acceptance without publishing rows.
+
+Run all sixteen exact frozen inputs against the normal packaged and actual
+public executable through examples/wpt_observer.rs. Its direct stdio driver
+owns one cumulative two-second active allowance, a 23-second admission cutoff
+and cleanup inside 25 seconds; it does not prove Chassis, HTTP or native UI.
+Separately run examples/wpt_observer_browser.rs through an owned immutable
+two-route fixture with exact source/provenance/HTTP receipts and the real Browser
+ledger. Its owner may narrow admission to 22 seconds and process/report to 22.9
+to reserve the original two-second cleanup and 0.1-second final fixture guard
+inside the same 25 seconds. Record that narrower MissingCompletion deadline;
+never shorten the unchanged 10,000 ms harness timer or infer a result from a
+killed host. Accepted Finished cancels further pumping without draining unrelated
+timers. Cases 13 and 15 must first publish Completion as Settling, then retain
+actual queued error/rejection history at Finished. Verify explicit close/wait_idle
+as well as owned groups/direct leaders; unknown cleanup stops new admissions.
+Expected-negative verification is not browser PASS, attestation, a network
+sandbox or a new WPT score. Preserve all older native/CDP/public-release gates.
+
 Read affected FEATURES.md criteria and docs/RUNNING.md. Run cargo test --locked --workspace --features legacy-test-engine --all-targets and the native dependency guard for relevant changes. Keep browser code Rust-only; native display servers and test infrastructure are separate from browser dependencies.
 
 For component or embedding changes, read docs/ARCHITECTURE.md, run python3 tools/check-components.py, and independently run cargo test --locked -p mg-chassis --no-default-features --test embedding. Workspace builds can unify the chrome feature; that independent build is required to verify its absence. Language tests live under crates/mg-butane/tests, web tests under crates/mg-sparkle/tests, and actual process tests at the repository root.

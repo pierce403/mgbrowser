@@ -116,6 +116,10 @@ impl Peer {
             reply["reply"].get("lifecycle").is_none(),
             "legacy wire must omit modern lifecycle entirely"
         );
+        assert!(
+            reply["reply"].get("observer").is_none(),
+            "legacy wire must omit observer even when disabled"
+        );
         reply
     }
     fn wait(&mut self) -> ExitStatus {

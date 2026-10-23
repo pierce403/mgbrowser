@@ -4,6 +4,8 @@ use crate::document::Node;
 use mg_butane::runtime::AllocationReport;
 use serde::{Deserialize, Serialize};
 
+pub mod observer;
+
 pub const MAX_EDITS: usize = 128;
 pub const MAX_EDIT_BYTES: usize = 8191;
 pub const MAX_EVENT_BYTES: usize = 64 * 1024;
@@ -182,9 +184,101 @@ pub struct SessionReply {
     /// The trusted transport must distinguish absence from an explicit null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<LifecycleProgress>,
+    /// Trusted modern v6 observation. Legacy and one-shot lanes cannot opt in;
+    /// the transport requires presence even when modern observation is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observer: Option<observer::ObserverReply>,
 }
 
 impl SessionReply {
+    /// Cross-check observation against its outer transaction before staging.
+    /// This does not accept cumulative identities or publish a result: consumers
+    /// must also use ObserverLedger and commit only after their active charge.
+    pub fn validate_observer_frame(
+        &self,
+        expected: observer::ObserverExpectation,
+    ) -> Result<(), observer::ObserverValidationError> {
+        use observer::{
+            ObserverExpectation as E, ObserverFault as F, ObserverProgress as P,
+            ObserverReply as R, ObserverValidationError as V,
+        };
+        expected.validate()?;
+        self.observer
+            .as_ref()
+            .ok_or(V::Mode)?
+            .validate_expectation(expected)?;
+        #[cfg(feature = "modern")]
+        let fatal_engine = self
+            .boa
+            .as_ref()
+            .is_some_and(|report| report.fatal_reason.is_some());
+        #[cfg(not(feature = "modern"))]
+        let fatal_engine = false;
+        match (expected, self.observer.as_ref()) {
+            (E::Disabled, Some(R::Disabled)) => Ok(()),
+            (
+                E::WindowHarness { run_id },
+                Some(R::WindowHarness {
+                    run_id: got,
+                    progress,
+                    ..
+                }),
+            ) if run_id == *got => {
+                if self.is_rejected_initial()
+                    || self.state != RealmState::Ready
+                    || self.navigation.is_some()
+                    || (*progress == P::Settling && self.task_wake.is_none())
+                {
+                    return Err(V::Frame);
+                }
+                Ok(())
+            }
+            (
+                E::WindowHarness { run_id },
+                Some(R::ObservationFailed {
+                    run_id: got,
+                    prefix_end,
+                    fault,
+                    execution_failed,
+                }),
+            ) if run_id == *got => {
+                if self.is_rejected_initial() {
+                    if *prefix_end != 0 || *fault != F::RejectedInit || !execution_failed {
+                        return Err(V::Frame);
+                    }
+                } else if *fault == F::RejectedInit {
+                    return Err(V::Frame);
+                }
+                if matches!(
+                    fault,
+                    F::StorageAdmission | F::AuthorityUnavailable | F::InvariantFailure
+                ) && (self.state != RealmState::Fatal || !fatal_engine)
+                {
+                    return Err(V::Frame);
+                }
+                if *fault == F::RealmTerminated && self.state == RealmState::Ready {
+                    return Err(V::Frame);
+                }
+                if (self.state != RealmState::Ready
+                    || self.navigation.is_some()
+                    || matches!(
+                        fault,
+                        F::PrivacyLost
+                            | F::AuthorityUnavailable
+                            | F::RealmTerminated
+                            | F::NavigationProposed
+                            | F::InvariantFailure
+                    ))
+                    && !execution_failed
+                {
+                    return Err(V::Frame);
+                }
+                Ok(())
+            }
+            _ => Err(V::Mode),
+        }
+    }
+
     pub fn accounting_snapshot(&self) -> AccountingSnapshot {
         AccountingSnapshot {
             allocations: self.allocations,
@@ -367,6 +461,7 @@ mod lifecycle_tests {
                 phase,
                 initial_failure: false,
             }),
+            observer: Some(observer::ObserverReply::Disabled),
         }
     }
 
@@ -393,6 +488,60 @@ mod lifecycle_tests {
                 .unwrap(),
             progress
         );
+    }
+
+    #[test]
+    fn observer_outer_frame_preserves_fatal_policy_and_reportless_rejection() {
+        use observer::{ObserverExpectation as E, ObserverFault as F, ObserverReply as R};
+        let expected = E::WindowHarness { run_id: 1 };
+        for fault in [
+            F::StorageAdmission,
+            F::AuthorityUnavailable,
+            F::InvariantFailure,
+        ] {
+            let mut frame = reply(LifecyclePhase::LoadComplete);
+            frame.observer = Some(R::ObservationFailed {
+                run_id: 1,
+                prefix_end: 0,
+                fault,
+                execution_failed: true,
+            });
+            assert!(
+                frame.validate_observer_frame(expected).is_err(),
+                "{fault:?} cannot be Ready"
+            );
+            frame.state = RealmState::Fatal;
+            assert!(
+                frame.validate_observer_frame(expected).is_err(),
+                "{fault:?} needs an actual fatal report"
+            );
+            frame.boa.as_mut().unwrap().fatal_reason = Some("Owned fatal policy failure".into());
+            frame.validate_observer_frame(expected).unwrap();
+        }
+        let mut narrow = reply(LifecyclePhase::LoadComplete);
+        narrow.observer = Some(R::ObservationFailed {
+            run_id: 1,
+            prefix_end: 0,
+            fault: F::MalformedCapture,
+            execution_failed: false,
+        });
+        narrow.validate_observer_frame(expected).unwrap();
+        let mut rejected = reply(LifecyclePhase::Initializing);
+        rejected.state = RealmState::Closed;
+        rejected.snapshot = None;
+        rejected.boa = None;
+        rejected.task_wake = None;
+        rejected.lifecycle.as_mut().unwrap().initial_failure = true;
+        rejected.observer = Some(R::rejected_init(expected));
+        assert!(rejected.is_rejected_initial());
+        rejected.validate_observer_frame(expected).unwrap();
+        rejected.observer = Some(R::ObservationFailed {
+            run_id: 1,
+            prefix_end: 0,
+            fault: F::InvalidConfiguration,
+            execution_failed: true,
+        });
+        assert!(rejected.validate_observer_frame(expected).is_err());
     }
 
     #[test]

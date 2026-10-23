@@ -3,6 +3,7 @@ use super::super::linux::{
 };
 use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
+use mg_sparkle::page_session::observer::{ObserverInit, ObserverReply};
 use mg_sparkle::page_session::{
     ArenaSnapshot, ControlAck, DefaultAction, EventOutcome, LifecycleProgress, MAX_EDIT_BYTES,
     MAX_EDITS, MAX_EVENT_BYTES, RealmState, TaskWake,
@@ -21,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 5;
+const VERSION: u8 = 6;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -54,37 +55,107 @@ enum FrameCommand<I = Request, E = SessionInput, T = TaskPump> {
     TaskPump(T),
 }
 
+/// Init-only trusted configuration. Neither shared Request nor later commands
+/// acquire an observation field; strict v1 continues to decode its old shape.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModernInit {
+    page: Request,
+    observer: ObserverInit,
+}
+
+#[derive(Serialize)]
+struct ModernInitView<'a> {
+    page: &'a Request,
+    observer: &'a ObserverInit,
+}
+
 /// The executable's trusted lane chooses the decoder, never a wire field.
 /// A legacy payload keeps its original strict shape, including unknown-field
 /// rejection, while conversion moves strings without a Value tree or reparse.
-fn decode_request_frame(payload: &[u8], legacy: bool) -> Result<RequestFrame, String> {
+fn decode_request_frame(
+    payload: &[u8],
+    legacy: bool,
+) -> Result<(RequestFrame, ObserverInit), String> {
     if legacy {
         let frame: RequestFrame<mg_sparkle::js_browser::LegacyRequest> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
-        Ok(RequestFrame {
-            version: frame.version,
-            generation: frame.generation,
-            session_id: frame.session_id,
-            sequence: frame.sequence,
-            expected_revision: frame.expected_revision,
-            command: match frame.command {
-                FrameCommand::Init(request) => FrameCommand::Init(request.into()),
-                FrameCommand::Event(input) => FrameCommand::Event(input),
-                FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+        Ok((
+            RequestFrame {
+                version: frame.version,
+                generation: frame.generation,
+                session_id: frame.session_id,
+                sequence: frame.sequence,
+                expected_revision: frame.expected_revision,
+                command: match frame.command {
+                    FrameCommand::Init(request) => FrameCommand::Init(request.into()),
+                    FrameCommand::Event(input) => FrameCommand::Event(input),
+                    FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+                },
             },
-        })
+            ObserverInit::Disabled,
+        ))
     } else {
-        serde_json::from_slice(payload).map_err(|error| error.to_string())
+        let frame: RequestFrame<ModernInit> =
+            serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        let mut observer = ObserverInit::Disabled;
+        let command = match frame.command {
+            FrameCommand::Init(init) => {
+                observer = init.observer;
+                FrameCommand::Init(init.page)
+            }
+            FrameCommand::Event(input) => FrameCommand::Event(input),
+            FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+        };
+        Ok((
+            RequestFrame {
+                version: frame.version,
+                generation: frame.generation,
+                session_id: frame.session_id,
+                sequence: frame.sequence,
+                expected_revision: frame.expected_revision,
+                command,
+            },
+            observer,
+        ))
     }
 }
 
+#[cfg(test)]
 fn encode_request_frame(
     frame: &RequestFrame,
     legacy: bool,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
+    encode_request_frame_observed(frame, legacy, limit, &ObserverInit::Disabled)
+}
+
+fn encode_request_frame_observed(
+    frame: &RequestFrame,
+    legacy: bool,
+    limit: usize,
+    observer: &ObserverInit,
+) -> Result<Vec<u8>, String> {
     if !legacy {
-        return encode(frame, limit);
+        let command = match &frame.command {
+            FrameCommand::Init(page) => FrameCommand::Init(ModernInitView { page, observer }),
+            FrameCommand::Event(input) => FrameCommand::Event(input),
+            FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+        };
+        return encode(
+            &RequestFrame {
+                version: frame.version,
+                generation: frame.generation,
+                session_id: frame.session_id,
+                sequence: frame.sequence,
+                expected_revision: frame.expected_revision,
+                command,
+            },
+            limit,
+        );
+    }
+    if !matches!(observer, ObserverInit::Disabled) {
+        return Err("Legacy v1 cannot enable observation".into());
     }
     // Borrow sources, edits and pumps. Counting and transmission use the same
     // view; no modern-only provenance can change old v1 bytes or renew a budget.
@@ -182,13 +253,14 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
                 acknowledgements: old.acknowledgements,
                 task_wake: old.task_wake,
                 lifecycle: None,
+                observer: None,
             },
         })
     } else {
         let frame: ReplyFrame =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
-        if frame.reply.lifecycle.is_none() {
-            return Err("Modern v5 reply requires non-null lifecycle progress".into());
+        if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
+            return Err("Modern v6 reply requires non-null lifecycle and observer progress".into());
         }
         Ok(frame)
     }
@@ -201,14 +273,14 @@ fn write_reply_frame(
     legacy: bool,
 ) -> Result<(), String> {
     if !legacy {
-        if frame.reply.lifecycle.is_none() {
-            return Err("Modern v5 reply requires lifecycle progress".into());
+        if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
+            return Err("Modern v6 reply requires lifecycle and observer progress".into());
         }
         return write_frame(writer, frame, total);
     }
     let reply = &frame.reply;
-    if reply.lifecycle.is_some() {
-        return Err("Legacy v1 reply forbids lifecycle progress".into());
+    if reply.lifecycle.is_some() || reply.observer.is_some() {
+        return Err("Legacy v1 reply forbids lifecycle and observer progress".into());
     }
     write_frame(
         writer,
@@ -347,7 +419,19 @@ impl Session {
         generation: u64,
         pool: ChildPool,
     ) -> Result<(Self, SessionReply), String> {
+        Self::start_with_observer(request, generation, pool, ObserverInit::Disabled)
+    }
+    pub fn start_with_observer(
+        request: Request,
+        generation: u64,
+        pool: ChildPool,
+        observer: ObserverInit,
+    ) -> Result<(Self, SessionReply), String> {
         let started = Instant::now();
+        observer.validate().map_err(|error| error.to_string())?;
+        if super::super::legacy_test_mode() && !matches!(observer, ObserverInit::Disabled) {
+            return Err("Legacy v1 cannot enable observation".into());
+        }
         pool.current(generation)?;
         let id = NEXT_SESSION
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
@@ -362,6 +446,7 @@ impl Session {
             .spawn(move || {
                 manage(
                     request,
+                    observer,
                     generation,
                     id,
                     manager_pool,
@@ -572,9 +657,10 @@ struct Worker {
     last_wake_token: u64,
     last_lifecycle: Option<LifecycleProgress>,
     legacy: bool,
+    observer: ObserverInit,
 }
 impl Worker {
-    fn start(pool: ChildPool, generation: u64) -> Result<Self, String> {
+    fn start(pool: ChildPool, generation: u64, observer: ObserverInit) -> Result<Self, String> {
         // Keep this process and its workers on the same build across an update.
         let mut command = Command::new("/proc/self/exe");
         command
@@ -642,6 +728,7 @@ impl Worker {
             last_wake_token: 0,
             last_lifecycle: None,
             legacy: super::super::legacy_test_mode(),
+            observer,
         })
     }
     fn check(&mut self, shared: &Shared, deadline: Option<Instant>) -> Result<(), String> {
@@ -700,7 +787,7 @@ impl Worker {
         } else {
             MAX_EVENT_BYTES
         };
-        let input = encode_request_frame(request, self.legacy, limit)
+        let input = encode_request_frame_observed(request, self.legacy, limit, &self.observer)
             .map_err(|error| format!("Script-session request rejected: {error}"))?;
         if input.len().saturating_add(4) > WIRE_LIMIT.saturating_sub(self.wire) {
             return Err("Script session exceeded its 32 MiB combined wire limit".into());
@@ -780,6 +867,7 @@ impl Worker {
                 let frame = decode_reply_frame(output, self.legacy)
                     .map_err(|error| format!("Invalid script-session reply: {error}"))?;
                 validate_reply(request, &frame)?;
+                validate_observer_mode(&self.observer, &frame.reply, self.legacy)?;
                 let lifecycle = if matches!(request.command, FrameCommand::Init(_)) {
                     frame.reply.validate_lifecycle_initial()?
                 } else {
@@ -858,6 +946,7 @@ fn update(
 }
 fn manage(
     request: Request,
+    observer: ObserverInit,
     generation: u64,
     id: u64,
     pool: ChildPool,
@@ -866,7 +955,7 @@ fn manage(
     updates: SyncSender<SessionUpdate>,
     started: Instant,
 ) {
-    let mut worker = match Worker::start(pool, generation) {
+    let mut worker = match Worker::start(pool, generation, observer) {
         Ok(worker) => worker,
         Err(error) => {
             let error = shared.close(error);
@@ -1049,8 +1138,10 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     let reply = &frame.reply;
     let initial = matches!(request.command, FrameCommand::Init(_));
-    if (request.version == VERSION) != reply.lifecycle.is_some() {
-        return Err("Script reply changed its trusted lifecycle protocol lane".into());
+    if (request.version == VERSION) != reply.lifecycle.is_some()
+        || (request.version == VERSION) != reply.observer.is_some()
+    {
+        return Err("Script reply changed its trusted lifecycle or observation lane".into());
     }
     if initial {
         reply.validate_lifecycle_initial()?;
@@ -1194,6 +1285,34 @@ fn validate_engine_profile(
     Ok(())
 }
 
+fn validate_observer_mode(
+    expected: &ObserverInit,
+    reply: &SessionReply,
+    legacy: bool,
+) -> Result<(), String> {
+    if legacy {
+        return if matches!(expected, ObserverInit::Disabled) && reply.observer.is_none() {
+            Ok(())
+        } else {
+            Err("Legacy v1 cannot carry observation".into())
+        };
+    }
+    reply
+        .validate_observer_frame(expected.expectation())
+        .map_err(|error| error.to_string())?;
+    match (expected, reply.observer.as_ref()) {
+        (ObserverInit::Disabled, Some(ObserverReply::Disabled)) => Ok(()),
+        (
+            ObserverInit::WindowHarness { run_id, .. },
+            Some(
+                ObserverReply::WindowHarness { run_id: got, .. }
+                | ObserverReply::ObservationFailed { run_id: got, .. },
+            ),
+        ) if *run_id != 0 && run_id == got => Ok(()),
+        _ => Err("Script observation does not match trusted mode/run".into()),
+    }
+}
+
 fn validate_cumulative(
     previous: Option<AllocationReport>,
     next: Option<AllocationReport>,
@@ -1317,14 +1436,19 @@ enum PageEngine {
     Legacy(mg_sparkle::js_browser::PageRealm),
 }
 impl PageEngine {
-    fn start(request: Request, legacy: bool) -> (Option<Self>, SessionReply) {
+    fn start(
+        request: Request,
+        legacy: bool,
+        observer: ObserverInit,
+    ) -> (Option<Self>, SessionReply) {
         #[cfg(feature = "legacy-test-engine")]
         if legacy {
             let (realm, reply) = mg_sparkle::js_browser::PageRealm::start(request);
             return (realm.map(Self::Legacy), reply);
         }
         let _ = legacy;
-        let (realm, reply) = mg_sparkle::js_browser::boa::BoaPageRealm::start(request);
+        let (realm, reply) =
+            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_observer(request, observer);
         (realm.map(Self::Boa), reply)
     }
     fn dispatch(&mut self, input: SessionInput) -> SessionReply {
@@ -1357,7 +1481,7 @@ fn child_loop_for(
     let Some(payload) = read_frame(reader, &mut wire, INPUT_LIMIT)? else {
         return Err("Session initialization missing".into());
     };
-    let request = decode_request_frame(&payload, legacy)?;
+    let (request, observer) = decode_request_frame(&payload, legacy)?;
     if request.version != version
         || request.sequence != 0
         || request.expected_revision != 0
@@ -1368,7 +1492,7 @@ fn child_loop_for(
     let FrameCommand::Init(initial) = request.command else {
         return Err("First session command must be Init".into());
     };
-    let (mut realm, mut reply) = PageEngine::start(initial, legacy);
+    let (mut realm, mut reply) = PageEngine::start(initial, legacy, observer);
     attach_memory(&mut reply);
     let mut revision = reply.revision;
     let mut terminal = reply.state != RealmState::Ready;
@@ -1392,7 +1516,7 @@ fn child_loop_for(
         let Some(payload) = read_frame(reader, &mut wire, MAX_EVENT_BYTES)? else {
             return Ok(());
         };
-        let event = decode_request_frame(&payload, legacy)?;
+        let (event, _) = decode_request_frame(&payload, legacy)?;
         if event.version != version
             || event.generation != request.generation
             || event.session_id != request.session_id
@@ -1893,6 +2017,7 @@ mod tests {
                 acknowledgements: Vec::new(),
                 task_wake: None,
                 lifecycle: None,
+                observer: None,
             },
         }
     }
@@ -1900,6 +2025,7 @@ mod tests {
     fn modern_response(request: &RequestFrame) -> ReplyFrame {
         let mut frame = response(request);
         frame.reply.allocations = None;
+        frame.reply.observer = Some(ObserverReply::Disabled);
         frame.reply.boa = Some(mg_butane::modern::Engine::new().unwrap().report());
         let initial = matches!(request.command, FrameCommand::Init(_));
         frame.reply.lifecycle = Some(LifecycleProgress {
@@ -1922,6 +2048,125 @@ mod tests {
             });
         }
         frame
+    }
+
+    fn write_request(output: &mut Vec<u8>, request: &RequestFrame, legacy: bool) {
+        let payload = encode_request_frame(request, legacy, INPUT_LIMIT).unwrap();
+        output.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        output.extend_from_slice(&payload);
+    }
+
+    #[test]
+    fn observer_v6_init_requires_exact_wrapper_and_disabled_tag() {
+        let mut frame = request(0);
+        frame.version = VERSION;
+        let bytes = encode_request_frame(&frame, false, INPUT_LIMIT).unwrap();
+        let (decoded, observer) = decode_request_frame(&bytes, false).unwrap();
+        assert_eq!(decoded.version, VERSION);
+        assert_eq!(observer, ObserverInit::Disabled);
+        let good: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for malformed in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({"kind":"Disabled","run_id":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessV1","run_id":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":"Unknown","run_id":1,"bootstrap_node":1}),
+            serde_json::json!({"kind":"WindowHarness","contract":"PinnedWindowHarnessV1","run_id":true,"bootstrap_node":1}),
+        ] {
+            let mut invalid = good.clone();
+            invalid["command"]["payload"]["observer"] = malformed;
+            assert!(
+                decode_request_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err(),
+                "accepted malformed Init: {invalid}"
+            );
+        }
+        for removed in ["observer", "page"] {
+            let mut invalid = good.clone();
+            invalid["command"]["payload"]
+                .as_object_mut()
+                .unwrap()
+                .remove(removed);
+            assert!(decode_request_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err());
+        }
+        assert!(
+            decode_request_frame(&encode(&frame, INPUT_LIMIT).unwrap(), false).is_err(),
+            "old unwrapped modern Init must not execute"
+        );
+    }
+
+    #[test]
+    fn observer_v6_maximum_metadata_fits_old_reserve_without_new_allowance() {
+        use mg_sparkle::page_session::observer::ObserverContract;
+        let mut frame = request(0);
+        frame.version = VERSION;
+        frame.generation = u64::MAX;
+        frame.session_id = u64::MAX;
+        frame.sequence = u64::MAX;
+        frame.expected_revision = u64::MAX;
+        let observer = ObserverInit::WindowHarness {
+            contract: ObserverContract::PinnedWindowHarnessV1,
+            run_id: u64::MAX,
+            bootstrap_node: u32::MAX,
+        };
+        let FrameCommand::Init(page) = &mut frame.command else {
+            unreachable!()
+        };
+        page.url.clear();
+        page.html.clear();
+        let base = encode(page, INPUT_LIMIT).unwrap().len();
+        let metadata = encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer)
+            .unwrap()
+            .len()
+            - base;
+        assert!(
+            metadata <= 1024,
+            "metadata uses {metadata} bytes of existing reserve"
+        );
+        let FrameCommand::Init(page) = &mut frame.command else {
+            unreachable!()
+        };
+        page.html = "x".repeat(mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES - base);
+        let full = encode_request_frame_observed(&frame, false, INPUT_LIMIT, &observer).unwrap();
+        assert_eq!(
+            full.len(),
+            mg_sparkle::js_browser::MAX_TYPED_REQUEST_BYTES + metadata
+        );
+        assert!(full.len() <= INPUT_LIMIT);
+        assert_eq!(
+            encode_request_frame_observed(&frame, false, full.len(), &observer).unwrap(),
+            full
+        );
+        assert!(encode_request_frame_observed(&frame, false, full.len() - 1, &observer).is_err());
+    }
+
+    #[test]
+    fn observer_modern_reply_required_and_legacy_presence_forbidden_even_null() {
+        let mut request = request(0);
+        request.version = VERSION;
+        let frame = modern_response(&request);
+        let good = serde_json::to_value(&frame).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"kind":"Disabled","extra":0}),
+        ] {
+            let mut invalid = good.clone();
+            invalid["reply"]["observer"] = value;
+            assert!(decode_reply_frame(&serde_json::to_vec(&invalid).unwrap(), false).is_err());
+        }
+        let mut missing = good;
+        missing["reply"].as_object_mut().unwrap().remove("observer");
+        assert!(decode_reply_frame(&serde_json::to_vec(&missing).unwrap(), false).is_err());
+        request.version = 1;
+        let legacy = serde_json::to_value(response(&request)).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({"kind":"Disabled"}),
+        ] {
+            let mut invalid = legacy.clone();
+            invalid["reply"]["observer"] = value;
+            assert!(decode_reply_frame(&serde_json::to_vec(&invalid).unwrap(), true).is_err());
+        }
     }
 
     #[test]
@@ -2102,9 +2347,9 @@ mod tests {
         }
     }
     #[test]
-    fn lifecycle_modern_v5_rejects_v3_and_v4_before_execution() {
-        assert_eq!(VERSION, 5);
-        for version in [3, 4] {
+    fn observer_modern_v6_rejects_v3_v4_v5_before_execution() {
+        assert_eq!(VERSION, 6);
+        for version in [3, 4, 5] {
             let mut initial = request(0);
             initial.version = version;
             let mut input = Vec::new();
@@ -2118,11 +2363,11 @@ mod tests {
         }
     }
     #[test]
-    fn lifecycle_modern_v5_accepts_old_absent_source_metadata_shape() {
+    fn observer_modern_v6_accepts_absent_source_metadata_in_required_wrapper() {
         let mut initial = request(0);
         initial.version = VERSION;
         let mut input = Vec::new();
-        write_frame(&mut input, &initial, &mut 0).unwrap();
+        write_request(&mut input, &initial, false);
         let mut output = Vec::new();
         child_loop_for(&mut Cursor::new(input), &mut output, false).unwrap();
         let bytes = read_frame(&mut Cursor::new(output), &mut 0, OUTPUT_LIMIT)
@@ -2133,8 +2378,15 @@ mod tests {
         assert_eq!(reply.reply.state, RealmState::Ready);
     }
     #[test]
-    fn lifecycle_modern_v5_rejects_later_v3_v4_events_and_pumps_without_replies() {
-        for (task, old_version) in [(false, 3), (true, 3), (false, 4), (true, 4)] {
+    fn observer_modern_v6_rejects_later_v3_v4_v5_events_and_pumps_without_replies() {
+        for (task, old_version) in [
+            (false, 3),
+            (true, 3),
+            (false, 4),
+            (true, 4),
+            (false, 5),
+            (true, 5),
+        ] {
             let mut initial = request(0);
             initial.version = VERSION;
             let FrameCommand::Init(page) = &mut initial.command else {
@@ -2147,7 +2399,7 @@ mod tests {
                 later.command = FrameCommand::TaskPump(TaskPump { wake_token: 1 });
             }
             let mut input = Vec::new();
-            write_frame(&mut input, &initial, &mut 0).unwrap();
+            write_request(&mut input, &initial, false);
             write_frame(&mut input, &later, &mut 0).unwrap();
             let mut output = Vec::new();
             assert!(child_loop_for(&mut Cursor::new(input), &mut output, false).is_err());
@@ -2229,7 +2481,8 @@ mod tests {
         );
         assert!(encode_request_frame(&frame, true, actual.len() - 1).is_err());
         assert!(encode_request_frame(&frame, false, actual.len()).is_err());
-        let decoded = decode_request_frame(&actual, true).unwrap();
+        let (decoded, observer) = decode_request_frame(&actual, true).unwrap();
+        assert!(matches!(observer, ObserverInit::Disabled));
         let FrameCommand::Init(legacy_request) = decoded.command else {
             unreachable!()
         };

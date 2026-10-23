@@ -110,6 +110,14 @@ pub use platform::{Session, session_entry, session_selftest};
 pub struct Session;
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 impl Session {
+    pub fn start_with_observer(
+        _: Request,
+        _: u64,
+        _: ChildPool,
+        _: mg_sparkle::page_session::observer::ObserverInit,
+    ) -> Result<(Self, SessionReply), String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
     pub fn start(_: Request, _: u64, _: ChildPool) -> Result<(Self, SessionReply), String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }

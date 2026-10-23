@@ -19,6 +19,7 @@ use mg_sparkle::{
     page_session::{
         AccountingSnapshot, ControlEdit, DefaultAction, InputKind, LifecyclePhase,
         LifecycleProgress, RealmState, SessionInput, SessionReply, TaskPump, TaskWake,
+        observer::{ObserverLedger, ObserverParentFailure, ObserverProgress},
     },
     paint::{Canvas, Fonts},
 };
@@ -242,6 +243,7 @@ pub struct Browser {
     last_task_wake_token: u64,
     script_blocked: bool,
     lifecycle: Option<LifecycleProgress>,
+    observer_ledger: Option<ObserverLedger>,
     initial_script: InitialScriptOutcome,
     last_accounting: Option<AccountingSnapshot>,
     edit_versions: HashMap<usize, u64>,
@@ -641,6 +643,7 @@ impl Browser {
             last_task_wake_token: 0,
             script_blocked: false,
             lifecycle: None,
+            observer_ledger: None,
             initial_script: InitialScriptOutcome::new(false),
             last_accounting: None,
             edit_versions: HashMap::new(),
@@ -710,6 +713,18 @@ impl Browser {
         self.loading = true;
         self.fetching = true;
         self.lifecycle = None;
+        self.observer_ledger =
+            if self.child_pool.source_wire_mode() == scripts::SourceWireMode::Modern {
+                match ObserverLedger::new(self.child_pool.observer_expectation()) {
+                    Ok(ledger) => Some(ledger),
+                    Err(error) => {
+                        self.block_session(&error.to_string());
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
         self.last_accounting = None;
         self.initial_script = InitialScriptOutcome::new(self.scripts_enabled);
         if self.cdp_enabled {
@@ -874,10 +889,31 @@ impl Browser {
             // lifecycle. No old-generation task is eligible during a new fetch.
             self.loading = true;
             self.lifecycle = None;
+            self.observer_ledger =
+                if self.child_pool.source_wire_mode() == scripts::SourceWireMode::Modern {
+                    match ObserverLedger::new(self.child_pool.observer_expectation()) {
+                        Ok(ledger) => Some(ledger),
+                        Err(error) => {
+                            self.block_session(&error.to_string());
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
             self.last_accounting = None;
             self.initial_script = InitialScriptOutcome::new(loaded.script.is_some());
             self.initial_script
                 .broker_rejections(loaded.script_fetch_profile.rejected_sources);
+            if loaded.script_fetch_profile.rejected_sources != 0
+                && let Some(ledger) = &mut self.observer_ledger
+                && matches!(
+                    ledger.observation().expectation,
+                    mg_sparkle::page_session::observer::ObserverExpectation::WindowHarness { .. }
+                )
+            {
+                ledger.fail_parent(ObserverParentFailure::BrokerPolicy);
+            }
             self.scroll = 0;
             self.stop_scroll();
             self.values.clear();
@@ -956,13 +992,39 @@ impl Browser {
                                     })
                                 })
                             };
+                            let validation = validation.and_then(|(document, wake, lifecycle)| {
+                                if self.observer_ledger.is_some() {
+                                    startup
+                                        .reply
+                                        .validate_observer_frame(
+                                            self.child_pool.observer_expectation(),
+                                        )
+                                        .map_err(|error| error.to_string())?;
+                                }
+                                let observation = match self.observer_ledger.as_mut() {
+                                    Some(ledger) => Some(
+                                        ledger
+                                            .stage(startup.reply.observer.take().ok_or(
+                                                "Modern reply omitted trusted observation",
+                                            )?)
+                                            .map_err(|error| error.to_string())?,
+                                    ),
+                                    None if startup.reply.observer.is_none() => None,
+                                    None => return Err("Legacy reply carried observation".into()),
+                                };
+                                Ok((document, wake, lifecycle, observation))
+                            });
                             let timed = startup
                                 .session
                                 .as_mut()
                                 .ok_or_else(|| "Missing script session ownership".to_string())
                                 .and_then(|session| session.charge_active(received.elapsed()));
+                            let charge_failed = timed.is_err();
                             match validation.and_then(|document| timed.map(|_| document)) {
-                                Ok((document, wake, lifecycle)) => {
+                                Ok((document, wake, lifecycle, observation)) => {
+                                    if let Some(staged) = observation {
+                                        staged.commit();
+                                    }
                                     projected = document;
                                     scripting = projected.is_some();
                                     self.lifecycle = lifecycle;
@@ -973,6 +1035,12 @@ impl Browser {
                                     self.initial_script.accept(&startup.reply, true);
                                     self.page_revision = startup.reply.revision;
                                     self.script_blocked = startup.reply.state != RealmState::Ready;
+                                    let observer_finished =
+                                        self.observer_ledger.as_ref().is_some_and(|ledger| {
+                                            ledger.observation().progress
+                                                == Some(ObserverProgress::Finished)
+                                        });
+                                    self.script_blocked |= observer_finished;
                                     if !self.script_blocked {
                                         script_navigation = startup.reply.navigation.take();
                                         self.page_session = startup.session.take();
@@ -983,6 +1051,13 @@ impl Browser {
                                     self.script_summary(&startup.reply)
                                 }
                                 Err(error) => {
+                                    if let Some(ledger) = &mut self.observer_ledger {
+                                        ledger.fail_parent(if charge_failed {
+                                            ObserverParentFailure::ActiveCharge
+                                        } else {
+                                            ObserverParentFailure::Validation
+                                        });
+                                    }
                                     if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
@@ -995,6 +1070,9 @@ impl Browser {
                             }
                         }
                         Some(Err(error)) => {
+                            if let Some(ledger) = &mut self.observer_ledger {
+                                ledger.fail_parent(ObserverParentFailure::Transport);
+                            }
                             eprintln!("SCRIPT_ERROR {error:?}");
                             self.devtools.record("JavaScript worker", &error);
                             self.initial_script
@@ -1394,7 +1472,12 @@ impl Browser {
                 self.status = "Running page task".into();
                 self.dirty = true;
             }
-            Err(error) => self.block_session(&error),
+            Err(error) => {
+                if let Some(ledger) = &mut self.observer_ledger {
+                    ledger.fail_parent(ObserverParentFailure::Transport);
+                }
+                self.block_session(&error);
+            }
         }
     }
     // Ok(true) means queued; Ok(false) permits native-only activation. Immediate
@@ -1465,6 +1548,9 @@ impl Browser {
                 self.dirty = true;
             }
             Err(error) => {
+                if let Some(ledger) = &mut self.observer_ledger {
+                    ledger.fail_parent(ObserverParentFailure::Transport);
+                }
                 self.block_session(&error);
                 return Err(error);
             }
@@ -1546,6 +1632,9 @@ impl Browser {
         let mut reply = match update.reply {
             Ok(reply) => reply,
             Err(error) => {
+                if let Some(ledger) = &mut self.observer_ledger {
+                    ledger.fail_parent(ObserverParentFailure::Transport);
+                }
                 self.block_session(&error);
                 return;
             }
@@ -1622,6 +1711,11 @@ impl Browser {
             if let Some(input) = &activation {
                 Self::validate_default(&document, &input.kind, &reply.default_action)?;
             }
+            if self.observer_ledger.is_some() {
+                reply
+                    .validate_observer_frame(self.child_pool.observer_expectation())
+                    .map_err(|error| error.to_string())?;
+            }
             Ok((
                 document,
                 wake,
@@ -1631,6 +1725,37 @@ impl Browser {
                 ack,
             ))
         })();
+        // Stage outside the closure: its exclusive borrow is limited to this
+        // one field, leaving the owned session available for the single charge.
+        let observation = if projection.is_ok() {
+            match self.observer_ledger.as_mut() {
+                Some(ledger) => match reply.observer.take() {
+                    Some(incoming) => ledger
+                        .stage(incoming)
+                        .map(Some)
+                        .map_err(|error| error.to_string()),
+                    None => Err("Modern reply omitted trusted observation".into()),
+                },
+                None if reply.observer.is_none() => Ok(None),
+                None => Err("Legacy reply carried observation".into()),
+            }
+        } else {
+            Ok(None)
+        };
+        let projection =
+            projection.and_then(|(document, wake, lifecycle, identity, activation, ack)| {
+                observation.map(|observation| {
+                    (
+                        document,
+                        wake,
+                        lifecycle,
+                        identity,
+                        activation,
+                        ack,
+                        observation,
+                    )
+                })
+            });
         // Every successful host frame requires exactly one acknowledgment,
         // even if its identity or projection is rejected. Err closures have no
         // accepted projection and never reach this path.
@@ -1639,14 +1764,25 @@ impl Browser {
             .as_mut()
             .unwrap()
             .charge_active(received.elapsed());
-        let (document, wake, lifecycle, identity, activation, ack) =
+        let charge_failed = timed.is_err();
+        let (document, wake, lifecycle, identity, activation, ack, observation) =
             match projection.and_then(|value| timed.map(|_| value)) {
                 Ok(value) => value,
                 Err(error) => {
+                    if let Some(ledger) = &mut self.observer_ledger {
+                        ledger.fail_parent(if charge_failed {
+                            ObserverParentFailure::ActiveCharge
+                        } else {
+                            ObserverParentFailure::Validation
+                        });
+                    }
                     self.block_session(&error);
                     return;
                 }
             };
+        if let Some(staged) = observation {
+            staged.commit();
+        }
         self.initial_script.accept(&reply, false);
         if reply.state != RealmState::Ready {
             // Later failed transactions are atomic from the parent's point of
@@ -1659,6 +1795,17 @@ impl Browser {
         self.acknowledge_projection(document, &ack);
         self.last_accounting = Some(reply.accounting_snapshot());
         self.replace_task_wake(wake);
+        if self
+            .observer_ledger
+            .as_ref()
+            .is_some_and(|ledger| ledger.observation().progress == Some(ObserverProgress::Finished))
+        {
+            self.task_wake = None;
+            self.script_blocked = true;
+            if let Some(session) = &self.page_session {
+                session.cancel();
+            }
+        }
         self.page_revision = reply.revision;
         self.dom_epoch += 1;
         if self.cdp_enabled {
@@ -3240,6 +3387,7 @@ mod tests {
                     boa: None,
                     task_wake: None,
                     lifecycle: None,
+                    observer: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -3264,6 +3412,7 @@ mod tests {
                     boa: None,
                     task_wake: None,
                     lifecycle: None,
+                    observer: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -3350,6 +3499,7 @@ mod tests {
                         boa: None,
                         task_wake: None,
                         lifecycle: None,
+                        observer: None,
                     },
                 })),
                 result: Ok(net::Response {
@@ -3587,6 +3737,12 @@ impl Browser {
     }
     pub fn document_lifecycle(&self) -> Option<LifecycleProgress> {
         self.lifecycle
+    }
+
+    /// Only parent-validated and charged observations, never raw worker frames.
+    /// A configured observer is a cooperative test facility, not attestation.
+    pub fn script_observation(&self) -> Option<&ObserverLedger> {
+        self.observer_ledger.as_ref()
     }
     /// Hosts may explicitly wait for script work under their own finite deadline.
     /// This does not redefine navigation loading or wait for arbitrary timers.

@@ -140,6 +140,37 @@ The one-shot `--script-worker` path returns the initial snapshot, not a task loo
 Headless profiling measures navigation/initial paint, not completion of arbitrary
 delayed tasks. Authored timer controls are not upstream WPT results.
 
+## Default-off typed test observation: v0.9.12 candidate
+
+The candidate implements the frozen [Window observer contract](WPT_OBSERVER.md)
+for trusted contributor test hosts. Normal browsing and `BoaPageRealm::start`
+remain Disabled; only explicit `start_with_observer` / configured `LinuxScripts`
+enable capture after a verified complete harness bootstrap. Strict modern v6
+requires explicit Init configuration and matching reply observation, including
+Disabled. Earlier modern versions reject; one-shot and strict legacy-v1 formats
+stay unchanged. The v5 and bundled-startup sections above are historical.
+
+Native callbacks read bounded own-data descriptors without page getters,
+coercion or recursive checkpoints. Private weak Test-to-scalar identity,
+lossless UTF-16 and distinct Undefined/Null/Text preserve the pinned harness's
+actual records. The pure cumulative ledger stages deltas; Chassis publishes only
+after full frame/lifecycle/projection validation and one combined active charge.
+No rejected projection or failed charge can publish records.
+
+Completion remains provisional through its checkpoint and real pending rejection
+notifications. Accepted Finished is a finite checkpoint cutoff: report actual
+remaining work, stop further test admission and tear down, rather than draining
+unrelated timers or claiming no future error. Faults, privacy loss and native
+execution failures remain sticky. New observer caps narrow existing limits;
+they do not renew work, source, allocation, wire, CPU or parent-time budgets.
+
+All sixteen frozen authored controls meet their expected outcomes locally in
+both the normal restricted executable and a separate real Browser/manager host.
+Expected negatives are not browser passes, and neither run adds WPT passes or
+attests hostile-page callbacks. See [implementation, exact receipts and usage](WPT_OBSERVER_STATUS.md).
+Final-version CI, packaging, public installation/update and native release gates
+are pending; v0.9.12 is not yet a published release.
+
 ## Classic external sources
 
 The parent fetches parser-discovered classic sources before worker startup.
