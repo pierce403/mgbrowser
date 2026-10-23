@@ -26,13 +26,20 @@ attestation or general Window compatibility. Public receipts are in
 The frozen contract and inputs retain their original preimplementation text and
 hashes; that companion records subsequent implementation evidence.
 
-The next bounded contribution is the fixed trusted `setup({output:false})`
+The next bounded contribution was the fixed trusted `setup({output:false})`
 contract, frozen before execution in [WPT_HARNESS_OUTPUT.md](WPT_HARNESS_OUTPUT.md).
 Its v0.9.13 implementation passes both local complete-harness suites and full
 Rust/JSPLAN gates. Fresh complete static scoring remains 317/632/62 of 1,011.
-Packaged/public controls and publication remain
-pending. See [current status](WPT_HARNESS_OUTPUT_STATUS.md).
+Packaged/public controls, exact-source CI/site, release/public installation,
+actual old-version update/no-op and thirteen public-native helpers also pass.
+See [current status](WPT_HARNESS_OUTPUT_STATUS.md).
 Neither its authored controls nor the old sixteen form a scored upstream cohort.
+
+The [first genuine Window cohort](WPT_WINDOW_PARSING.md) is now separately
+source-frozen before execution: all sixteen direct-child declared-value parsing
+files and 79 prospective literal subtests. Its source-only validator is not an
+execution result. Implement the frozen real-Browser report/mapping and complete
+baseline before CSSOM fixes. No Window score or new upstream pass exists yet.
 
 ## Immutable input
 

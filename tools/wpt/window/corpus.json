@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "status": "SOURCE_FROZEN_BEFORE_EXECUTION",
+  "upstream": {"repository": "https://github.com/web-platform-tests/wpt", "revision": "84daed4ae966d9624bed22f43587c79283ad1fea", "local_root": "tools/wpt/upstream", "existing_inventory": "tools/wpt/corpus.json", "existing_inventory_sha256": "d8c4bd6aacd93d964c10302e63b9c42576d785a055848772f9f71b2436f8075d"},
+  "selection": {"id": "css-flexbox-window-declared-value-parsing-v1", "directory": "css/css-flexbox/parsing", "rule": "All direct-child .html basenames ending -valid.html or -invalid.html, sorted by exact relative path; no outcome/capability filter.", "full_direct_html_domain_count": 27, "selected_test_file_count": 16, "full_domain_paths_sha256_newline_terminated_utf8": "12a14d357324d52bc83c4a313185c8bf4ebcd1cf4887f7159d8b4afb96121247", "selected_paths_sha256_newline_terminated_utf8": "1d0958276e9ffddccb10561dc7611ab4d35fab02cc239737ed888ee6aed5581a", "source_valid_call_count": 49, "source_invalid_call_count": 30, "source_declared_call_count": 79, "source_counts_are_not_observed_results": true},
+  "input_file_count": 20,
+  "input_bytes": 222805,
+  "files": [
+    {"path": "LICENSE.md", "bytes": 1500, "sha256": "5fac07febb0e2a97fb0d7b0def149ec08b642e1ba4b9c345283ab1cbd2af6570"},
+    {"path": "css/css-flexbox/parsing/flex-basis-invalid.html", "bytes": 968, "sha256": "88737a191caeb2c79ee1c7c7d60686352933d5845f09bfc953b948d24cdac54e"},
+    {"path": "css/css-flexbox/parsing/flex-basis-valid.html", "bytes": 975, "sha256": "65f306ad53ebf9f7445a72015847aa84d2b15989023767da7ef203ff31598c2a"},
+    {"path": "css/css-flexbox/parsing/flex-direction-invalid.html", "bytes": 761, "sha256": "903879c5d0bb7386cc5e801866485030cfa741bd94ca2fcc57b9a7335c46b63c"},
+    {"path": "css/css-flexbox/parsing/flex-direction-valid.html", "bytes": 847, "sha256": "7e36311e01e8b05c82710ae6382e3df311924d4514f72d1d3de28135945b8be8"},
+    {"path": "css/css-flexbox/parsing/flex-flow-invalid.html", "bytes": 737, "sha256": "e25fcc0408dbedebb60e0fcb1434291c56cfa6e49a637bcfa2a7875c98043ccf"},
+    {"path": "css/css-flexbox/parsing/flex-flow-valid.html", "bytes": 1011, "sha256": "af3df354e79807a419aa61c267db486459fcf0aa0c054765434db9ea5d8554d0"},
+    {"path": "css/css-flexbox/parsing/flex-grow-invalid.html", "bytes": 788, "sha256": "78767371b250c3dba6a5781a75cf38cb8c50b45322f3348625b5acebea0fd3e3"},
+    {"path": "css/css-flexbox/parsing/flex-grow-valid.html", "bytes": 842, "sha256": "2657cdab3d79719107375f502fb152a355c292b2b3b9cc30f770cb142d9afc87"},
+    {"path": "css/css-flexbox/parsing/flex-invalid.html", "bytes": 894, "sha256": "a8435252ba1160cc68745196a545ce664a69bb8d5ab11bd1a109d8502829543e"},
+    {"path": "css/css-flexbox/parsing/flex-shrink-invalid.html", "bytes": 802, "sha256": "b5fdeb7fafd82e7db1a3d8ab046d6722ff02618cf8f8c9f1e87337e7b88c4cf2"},
+    {"path": "css/css-flexbox/parsing/flex-shrink-valid.html", "bytes": 856, "sha256": "80b23e9da6688b46e4939ebd2cacef790e8851d12945e1799850dfbc34bc284c"},
+    {"path": "css/css-flexbox/parsing/flex-valid.html", "bytes": 1961, "sha256": "4ed455373cac980e07161567c4b5319bff7aa2130eb0ec6b6b94496d9ed1993b"},
+    {"path": "css/css-flexbox/parsing/flex-wrap-invalid.html", "bytes": 714, "sha256": "5e58df5228f192c26fb78607b0e996755f06089e726a57dbbeba21557933a15c"},
+    {"path": "css/css-flexbox/parsing/flex-wrap-valid.html", "bytes": 750, "sha256": "2cb703d12112ee6d0de7b32e142ac0f226af8632a0bec54c3dc51b673ac43e56"},
+    {"path": "css/css-flexbox/parsing/order-invalid.html", "bytes": 709, "sha256": "8cf56a42e92e06ec3b894319a9b02eb29d51fb1960089d9914f24cebf138b0f1"},
+    {"path": "css/css-flexbox/parsing/order-valid.html", "bytes": 692, "sha256": "7eb000f1a7309d0e17f311793027e704c50f43d18183e752cac03cf049dd03bf"},
+    {"path": "css/support/parsing-testcommon.js", "bytes": 7476, "sha256": "ac482e1e1908e9b98f8f1c4b2c457ec77ae5ad2baa074205c4b0f7812f4024b5"},
+    {"path": "resources/testharness.js", "bytes": 198291, "sha256": "d2399236c2a09c429804ff2299ad6629e17e2b53f17a74dd341e936adb11ae3e"},
+    {"path": "resources/testharnessreport.js", "bytes": 1231, "sha256": "3777176fc736b0a78cf7617b9613b220f635daae7536ec7ebb99c61dbb525aae"}
+  ],
+  "full_source_domain_roster": [
+    {"path": "css/css-flexbox/parsing/flex-basis-computed.html", "bytes": 1367, "sha256": "5fef40aedb193048807ae54cb6022d1421e4595803af6f935eccf9236f670935", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-basis-invalid.html", "bytes": 968, "sha256": "88737a191caeb2c79ee1c7c7d60686352933d5845f09bfc953b948d24cdac54e", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-basis-valid.html", "bytes": 975, "sha256": "65f306ad53ebf9f7445a72015847aa84d2b15989023767da7ef203ff31598c2a", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-computed.html", "bytes": 1561, "sha256": "b5ab8d2afc28121c493394c8a464a610622dd5d281c6437a562feb0f113747b4", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-direction-computed.html", "bytes": 736, "sha256": "82aa4819fe3948c3063d129b69ab69cbf650a850ad382c6f82024dbe39ebf265", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-direction-invalid.html", "bytes": 761, "sha256": "903879c5d0bb7386cc5e801866485030cfa741bd94ca2fcc57b9a7335c46b63c", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-direction-valid.html", "bytes": 847, "sha256": "7e36311e01e8b05c82710ae6382e3df311924d4514f72d1d3de28135945b8be8", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-flow-computed.html", "bytes": 617, "sha256": "eef8e4f0ed41ff2fc876bb63411548075d6cd834406aa155dd87606fa9a5f993", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-flow-invalid.html", "bytes": 737, "sha256": "e25fcc0408dbedebb60e0fcb1434291c56cfa6e49a637bcfa2a7875c98043ccf", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-flow-shorthand.html", "bytes": 762, "sha256": "bd3e33c5189c192705cdd1117031b3bd9b8e92b7bd5fe1f4de9b671365e37052", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-flow-valid.html", "bytes": 1011, "sha256": "af3df354e79807a419aa61c267db486459fcf0aa0c054765434db9ea5d8554d0", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-grow-computed.html", "bytes": 737, "sha256": "37df485cbf2653cd2c186e96aa3184853ccaa00ff964ef14f11a9d7322ede924", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-grow-invalid.html", "bytes": 788, "sha256": "78767371b250c3dba6a5781a75cf38cb8c50b45322f3348625b5acebea0fd3e3", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-grow-valid.html", "bytes": 842, "sha256": "2657cdab3d79719107375f502fb152a355c292b2b3b9cc30f770cb142d9afc87", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-invalid.html", "bytes": 894, "sha256": "a8435252ba1160cc68745196a545ce664a69bb8d5ab11bd1a109d8502829543e", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-shorthand.html", "bytes": 2448, "sha256": "fba03fe596e5f075cf10c3fdf0db164e8302f2c35d0fbd66d60d87fa29e17614", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-shrink-computed.html", "bytes": 751, "sha256": "706d130c9c5378dcc956fbc8eaadab4ea47f32be7b8d0b4720a1e40737413532", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-shrink-invalid.html", "bytes": 802, "sha256": "b5fdeb7fafd82e7db1a3d8ab046d6722ff02618cf8f8c9f1e87337e7b88c4cf2", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-shrink-valid.html", "bytes": 856, "sha256": "80b23e9da6688b46e4939ebd2cacef790e8851d12945e1799850dfbc34bc284c", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-valid.html", "bytes": 1961, "sha256": "4ed455373cac980e07161567c4b5319bff7aa2130eb0ec6b6b94496d9ed1993b", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-wrap-computed.html", "bytes": 651, "sha256": "2f92dc697522a01addb317509375b7cd2c0f9dbad48ff7481e6569e81ac39a40", "selected": false},
+    {"path": "css/css-flexbox/parsing/flex-wrap-invalid.html", "bytes": 714, "sha256": "5e58df5228f192c26fb78607b0e996755f06089e726a57dbbeba21557933a15c", "selected": true},
+    {"path": "css/css-flexbox/parsing/flex-wrap-valid.html", "bytes": 750, "sha256": "2cb703d12112ee6d0de7b32e142ac0f226af8632a0bec54c3dc51b673ac43e56", "selected": true},
+    {"path": "css/css-flexbox/parsing/order-computed.html", "bytes": 637, "sha256": "0b24256b4f4e54da712c614e6f43889152888fcd235c5792969d070d73a36c3f", "selected": false},
+    {"path": "css/css-flexbox/parsing/order-invalid.html", "bytes": 709, "sha256": "8cf56a42e92e06ec3b894319a9b02eb29d51fb1960089d9914f24cebf138b0f1", "selected": true},
+    {"path": "css/css-flexbox/parsing/order-valid.html", "bytes": 692, "sha256": "7eb000f1a7309d0e17f311793027e704c50f43d18183e752cac03cf049dd03bf", "selected": true},
+    {"path": "css/css-flexbox/parsing/webkit-aliases.html", "bytes": 1126, "sha256": "6bd607088101556c989cb246b7e525890ecaa711ac26e511f81e5fcb7eb7f198", "selected": false}
+  ],
+  "source_protocol": {
+    "external_original_attributes": [
+      [
+        [
+          "src",
+          "/resources/testharness.js"
+        ]
+      ],
+      [
+        [
+          "src",
+          "/resources/testharnessreport.js"
+        ]
+      ],
+      [
+        [
+          "src",
+          "/css/support/parsing-testcommon.js"
+        ]
+      ]
+    ],
+    "inline_original_attributes": [],
+    "all_original_external_text_bodies_empty": true,
+    "source_count_per_test": 4,
+    "mg_node_ids": "Unbound: derive and validate through actual Mg parser/source admission; source ordinals are not node IDs.",
+    "preserve_original_metadata": "All original charset/assert meta and inert author/help links; no original byte removed or rewritten.",
+    "preserve_original_inline_style": "Only flex-valid.html: preserve its exact original style and container/target markup.",
+    "name_derivation": "Original complete parsing-testcommon.js lines17-50, literal property/value arguments and JSON.stringify(value); all selected values are simple ASCII string literals. These expected raw names are source facts, not observed callback delivery.",
+    "complete_helpers_and_license": "All original files in files are retained unmodified. No source/helper/body text is duplicated here.",
+    "observer_contract": "PinnedWindowHarnessOutputDisabledV1",
+    "normal_harness_timer_ms": 10000,
+    "contains_runtime_results": false,
+    "unexpected_resource_or_navigation_policy": "See docs/WPT_WINDOW_PARSING.md; no live-web fallback, authored setup/source injection, output-error waiver or larger resource profile is authorized."
+  },
+  "tests": [
+    {
+      "path": "css/css-flexbox/parsing/flex-basis-invalid.html",
+      "raw_html": {"bytes": 968, "sha256": "88737a191caeb2c79ee1c7c7d60686352933d5845f09bfc953b948d24cdac54e"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 346, "sha256": "5aad30564f6d689a385c5ef768acca5888080045b819cc6ee6c251b66cc2cbbd", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 7,
+      "source_expected_raw_test_names": [
+        "e.style['flex-basis'] = \"none\" should not set the property value",
+        "e.style['flex-basis'] = \"auto content\" should not set the property value",
+        "e.style['flex-basis'] = \"-1px\" should not set the property value",
+        "e.style['flex-basis'] = \"-2%\" should not set the property value",
+        "e.style['flex-basis'] = \"3px 4%\" should not set the property value",
+        "e.style['flex-basis'] = \"anchor-size(--a width)\" should not set the property value",
+        "e.style['flex-basis'] = \"anchor-size(--a width, 10px)\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-basis-valid.html",
+      "raw_html": {"bytes": 975, "sha256": "65f306ad53ebf9f7445a72015847aa84d2b15989023767da7ef203ff31598c2a"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 355, "sha256": "80b23209e375e4e100c7191a8c48cd6e79ce288085329220ff50f901c4ffdad9", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 8,
+      "source_expected_raw_test_names": [
+        "e.style['flex-basis'] = \"1px\" should set the property value",
+        "e.style['flex-basis'] = \"calc(2em + 3ex)\" should set the property value",
+        "e.style['flex-basis'] = \"400%\" should set the property value",
+        "e.style['flex-basis'] = \"auto\" should set the property value",
+        "e.style['flex-basis'] = \"fit-content\" should set the property value",
+        "e.style['flex-basis'] = \"min-content\" should set the property value",
+        "e.style['flex-basis'] = \"max-content\" should set the property value",
+        "e.style['flex-basis'] = \"content\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-direction-invalid.html",
+      "raw_html": {"bytes": 761, "sha256": "903879c5d0bb7386cc5e801866485030cfa741bd94ca2fcc57b9a7335c46b63c"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 107, "sha256": "c909bfbb7e98e24fb59486d066a6e39e7d1cd5c6f5cd4dfae300d9d8dc1634a2", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 2,
+      "source_expected_raw_test_names": [
+        "e.style['flex-direction'] = \"auto\" should not set the property value",
+        "e.style['flex-direction'] = \"column row-reverse\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-direction-valid.html",
+      "raw_html": {"bytes": 847, "sha256": "7e36311e01e8b05c82710ae6382e3df311924d4514f72d1d3de28135945b8be8"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 195, "sha256": "7919cdf2f9b76133824b711864ae56d2175885a83e141380c113a97930dc7f0b", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 4,
+      "source_expected_raw_test_names": [
+        "e.style['flex-direction'] = \"row\" should set the property value",
+        "e.style['flex-direction'] = \"row-reverse\" should set the property value",
+        "e.style['flex-direction'] = \"column\" should set the property value",
+        "e.style['flex-direction'] = \"column-reverse\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-flow-invalid.html",
+      "raw_html": {"bytes": 737, "sha256": "e25fcc0408dbedebb60e0fcb1434291c56cfa6e49a637bcfa2a7875c98043ccf"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 110, "sha256": "88cde79bb764f5ba57b04c48f52be92f1658cdf5e45683cd2bc5439921954394", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 2,
+      "source_expected_raw_test_names": [
+        "e.style['flex-flow'] = \"nowrap row nowrap\" should not set the property value",
+        "e.style['flex-flow'] = \"column wrap column\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-flow-valid.html",
+      "raw_html": {"bytes": 1011, "sha256": "af3df354e79807a419aa61c267db486459fcf0aa0c054765434db9ea5d8554d0"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 386, "sha256": "ea9e043c88ba0ba6a8cb6628c71cf02a30c9941ed12943fc89df79e864388fe0", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 7,
+      "source_expected_raw_test_names": [
+        "e.style['flex-flow'] = \"column nowrap\" should set the property value",
+        "e.style['flex-flow'] = \"nowrap column\" should set the property value",
+        "e.style['flex-flow'] = \"wrap row-reverse\" should set the property value",
+        "e.style['flex-flow'] = \"nowrap\" should set the property value",
+        "e.style['flex-flow'] = \"row nowrap\" should set the property value",
+        "e.style['flex-flow'] = \"wrap\" should set the property value",
+        "e.style['flex-flow'] = \"row wrap\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-grow-invalid.html",
+      "raw_html": {"bytes": 788, "sha256": "78767371b250c3dba6a5781a75cf38cb8c50b45322f3348625b5acebea0fd3e3"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 184, "sha256": "a00a41efa4d2aff60cc418cf50559fad78b6a3318c3fb1de2b727ddd4d0375d1", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 4,
+      "source_expected_raw_test_names": [
+        "e.style['flex-grow'] = \"2e3.4\" should not set the property value",
+        "e.style['flex-grow'] = \"-+5\" should not set the property value",
+        "e.style['flex-grow'] = \"6 7\" should not set the property value",
+        "e.style['flex-grow'] = \"1.\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-grow-valid.html",
+      "raw_html": {"bytes": 842, "sha256": "2657cdab3d79719107375f502fb152a355c292b2b3b9cc30f770cb142d9afc87"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 240, "sha256": "c20b86063defb3d111d1255f25ac505f7ee37d6f4f5a340b5e9109f0c137c221", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 4,
+      "source_expected_raw_test_names": [
+        "e.style['flex-grow'] = \"1\" should set the property value",
+        "e.style['flex-grow'] = \"23.4e5\" should set the property value",
+        "e.style['flex-grow'] = \"+.678E9\" should set the property value",
+        "e.style['flex-grow'] = \".0\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-invalid.html",
+      "raw_html": {"bytes": 894, "sha256": "a8435252ba1160cc68745196a545ce664a69bb8d5ab11bd1a109d8502829543e"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 242, "sha256": "a0ac11dcc06e7b21032f194da3b44e2161397d8ffe58946baaec5317196ad428", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 6,
+      "source_expected_raw_test_names": [
+        "e.style['flex'] = \"none 1\" should not set the property value",
+        "e.style['flex'] = \"2 3 4\" should not set the property value",
+        "e.style['flex'] = \"5px 7%\" should not set the property value",
+        "e.style['flex'] = \"9 none\" should not set the property value",
+        "e.style['flex'] = \"1 2 calc(0)\" should not set the property value",
+        "e.style['flex'] = \"1 2 calc(3 - 3)\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-shrink-invalid.html",
+      "raw_html": {"bytes": 802, "sha256": "b5fdeb7fafd82e7db1a3d8ab046d6722ff02618cf8f8c9f1e87337e7b88c4cf2"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 192, "sha256": "304c9994287e983a59acbcac91b150c2e88defdbfaca49fa3ebd590db604dd18", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 4,
+      "source_expected_raw_test_names": [
+        "e.style['flex-shrink'] = \"2e3.4\" should not set the property value",
+        "e.style['flex-shrink'] = \"-+5\" should not set the property value",
+        "e.style['flex-shrink'] = \"6 7\" should not set the property value",
+        "e.style['flex-shrink'] = \"1.\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-shrink-valid.html",
+      "raw_html": {"bytes": 856, "sha256": "80b23e9da6688b46e4939ebd2cacef790e8851d12945e1799850dfbc34bc284c"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 248, "sha256": "e40b626976c90c9cd4e73920c641e4c59bb2a6122c8be2b6572b12daad24c4a9", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 4,
+      "source_expected_raw_test_names": [
+        "e.style['flex-shrink'] = \"1\" should set the property value",
+        "e.style['flex-shrink'] = \"23.4e5\" should set the property value",
+        "e.style['flex-shrink'] = \"+.678E9\" should set the property value",
+        "e.style['flex-shrink'] = \".0\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-valid.html",
+      "raw_html": {"bytes": 1961, "sha256": "4ed455373cac980e07161567c4b5319bff7aa2130eb0ec6b6b94496d9ed1993b"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 1132, "sha256": "b7b7c47f49a43da60225cdf83f8d10beb784b79f426dd67abb2ced5ba2c46ad3", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 16,
+      "source_expected_raw_test_names": [
+        "e.style['flex'] = \"none\" should set the property value",
+        "e.style['flex'] = \"1\" should set the property value",
+        "e.style['flex'] = \"2 3\" should set the property value",
+        "e.style['flex'] = \"4 5 6px\" should set the property value",
+        "e.style['flex'] = \"6px 4 5\" should set the property value",
+        "e.style['flex'] = \"6px 4\" should set the property value",
+        "e.style['flex'] = \"6px\" should set the property value",
+        "e.style['flex'] = \"7% 8\" should set the property value",
+        "e.style['flex'] = \"8 auto\" should set the property value",
+        "e.style['flex'] = \"1 1 10em\" should set the property value",
+        "e.style['flex'] = \"1 1 calc(10em)\" should set the property value",
+        "e.style['flex'] = \"1 1 calc(-10em)\" should set the property value",
+        "e.style['flex'] = \"calc(10 + (sign(20cqw - 10px) * 5)) calc(10 + (sign(20cqw - 10px) * 5)) 1px\" should set the property value",
+        "e.style['flex'] = \"1 1 calc(10px + (sign(20cqw - 10px) * 5px))\" should set the property value",
+        "e.style['flex'] = \"calc(1) calc(2 + 1) calc(3px)\" should set the property value",
+        "e.style['flex'] = \"calc(-1) calc(-1) 0\" should set the property value"
+      ],
+      "original_inline_style": {"utf8_bytes": 107, "sha256": "39a2bf8324b868550c116c816cc3735ce0507475720bb1228869c92526affd7c", "preserve_container_target_markup": true}
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-wrap-invalid.html",
+      "raw_html": {"bytes": 714, "sha256": "5e58df5228f192c26fb78607b0e996755f06089e726a57dbbeba21557933a15c"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 90, "sha256": "aa831d16c4ce63d67d5800a6961880c05fa509945c925a92b7b245dce607cfce", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 2,
+      "source_expected_raw_test_names": [
+        "e.style['flex-wrap'] = \"auto\" should not set the property value",
+        "e.style['flex-wrap'] = \"nowrap wrap\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/flex-wrap-valid.html",
+      "raw_html": {"bytes": 750, "sha256": "2cb703d12112ee6d0de7b32e142ac0f226af8632a0bec54c3dc51b673ac43e56"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 128, "sha256": "8bbe2fd3eea0f1159d5824227f4e4429fe8e5358480dc836692969ebe70c3232", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 3,
+      "source_expected_raw_test_names": [
+        "e.style['flex-wrap'] = \"nowrap\" should set the property value",
+        "e.style['flex-wrap'] = \"wrap\" should set the property value",
+        "e.style['flex-wrap'] = \"wrap-reverse\" should set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/order-invalid.html",
+      "raw_html": {"bytes": 709, "sha256": "8cf56a42e92e06ec3b894319a9b02eb29d51fb1960089d9914f24cebf138b0f1"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 116, "sha256": "02096f3c3e23da345f014a6cf9c8af884552df5eb8f0bf7cbacceaa997cae3d0", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "invalid",
+      "source_declared_call_count": 3,
+      "source_expected_raw_test_names": [
+        "e.style['order'] = \"auto\" should not set the property value",
+        "e.style['order'] = \"123.45\" should not set the property value",
+        "e.style['order'] = \"123 45\" should not set the property value"
+      ]
+    },
+    {
+      "path": "css/css-flexbox/parsing/order-valid.html",
+      "raw_html": {"bytes": 692, "sha256": "7eb000f1a7309d0e17f311793027e704c50f43d18183e752cac03cf049dd03bf"},
+      "source_href_order": ["/resources/testharness.js", "/resources/testharnessreport.js", "/css/support/parsing-testcommon.js", null],
+      "inline_text": {"utf8_bytes": 101, "sha256": "18f6d756c80cb134ab8d9de550e425278ce59a4bc365c3788c6f738032282b59", "leading_lf_count": 1, "trailing_lf_count": 1},
+      "source_declared_call_kind": "valid",
+      "source_declared_call_count": 3,
+      "source_expected_raw_test_names": [
+        "e.style['order'] = \"0\" should set the property value",
+        "e.style['order'] = \"123\" should set the property value",
+        "e.style['order'] = \"-45\" should set the property value"
+      ]
+    }
+  ]
+}

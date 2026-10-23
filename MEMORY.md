@@ -41,6 +41,13 @@ summary: Compact map of mgbrowser project decisions and evidence.
   `docs/WPT_OBSERVER_STATUS.md`: released v0.9.12 implementation and separate
   local/public receipts at source `9f7b953a`. Full Window readiness and broader
   WPT integration remain open; zero added passes, static corpus/limits unchanged.
+- `docs/WPT_HARNESS_OUTPUT.md` and its STATUS companion: v0.9.13 fixed trusted
+  output:false configuration, separate frozen five-new/sixteen-original controls
+  and completed public release acceptance. Ordinary browsing is unchanged.
+- `docs/WPT_WINDOW_PARSING.md` and `tools/wpt/window/corpus.json`: separate
+  pre-execution freeze of sixteen genuine upstream files / 79 source calls;
+  source-only checker, fixed report/resource policy and future baseline gates.
+  Runner, executed outcomes and a separate Window score are not implemented.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

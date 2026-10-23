@@ -2,16 +2,22 @@
 
 ## Purpose and responsibilities
 
-Completed increment (2026-10-22): bounded default-off typed Window observation
-ships as v0.9.12 at `1d14f8b57e9a6743c32be4fc2aafa3811d121837`.
-Exact-source CI/site/release, public installation, actual v0.9.11 update/no-op,
-all sixteen public-worker controls and all thirteen existing native helpers
-pass. Receipts are in docs/WPT_OBSERVER_STATUS.md and the dated log. Frozen
-contract/inputs, legacy bytes and all limits remain unchanged; zero upstream
-passes are added.
-F-016/F-026/formal MVP remain open. The resumed broader goal continues with a
-separate reviewed harness configuration/output protocol before a new cohort or
-CSS work; do not treat this release as permission to skip that freeze.
+Completed increment (2026-10-22): fixed trusted Window harness configuration
+ships as v0.9.13 at `948e86206c23c0310d17dc286ac5107a15f1f434`.
+Exact-source CI/site/release, public install/reinstall, actual v0.9.12 update/no-op,
+both frozen public-worker suites and all thirteen existing native helpers pass.
+Receipts are in docs/WPT_HARNESS_OUTPUT_STATUS.md and the dated log. Both prior
+contracts/inputs, legacy bytes and all limits remain unchanged; zero upstream
+passes are added. F-016/F-026/formal MVP remain open.
+
+Next separate contribution (2026-10-22): docs/WPT_WINDOW_PARSING.md and
+tools/wpt/window/corpus.json freeze all sixteen pinned direct-child declared-
+value parsing files before execution. The 79 literal source calls are not
+observed rows or passes. Run the fixed source checker and its separate unit
+tests; preserve the unchanged 1,011-case static score and both authored suites.
+Implement the frozen real-Browser runner/mapping and record all sixteen baseline
+outcomes before CSSOM/engine fixes; never widen a resource profile, synthesize
+missing rows or merge the two score lanes. The runner/baseline are still pending.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and

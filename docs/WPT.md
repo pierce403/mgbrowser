@@ -294,10 +294,12 @@ verification policy.
 
 ## Maximize verified coverage
 
-The next genuine JavaScript lane is planned in
-[WPT_TESTHARNESS.md](WPT_TESTHARNESS.md). Its first milestone is non-scoring
-full-harness readiness under unchanged restrictions, not another scored corpus
-or a claim that the current browser already implements it.
+The genuine JavaScript lane follows the separate readiness increments in
+[WPT_TESTHARNESS.md](WPT_TESTHARNESS.md). The first sixteen-file declared-value
+cohort and report/resource policy are now [source-frozen](WPT_WINDOW_PARSING.md)
+before execution. Its 79 literal calls are prospective, not observed rows or
+passes. The Browser runner, baseline and separate Window score remain pending;
+none is merged into this static score or claimed as full testharness support.
 
 1. Establish this truthful frozen baseline and keep website results current.
 2. Diagnose failing supported cases using their original sources, screenshots

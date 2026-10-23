@@ -241,6 +241,12 @@ implementation and sixteen frozen non-scoring controls; see
 JavaScript cohort, general WPT product integration or complete Window readiness.
 The historical v0.9.11 public-prefix measurement remains prefix evidence only.
 
+The [first genuine Window cohort](docs/WPT_WINDOW_PARSING.md) is separately
+source-frozen: sixteen original declared-value parsing files with 79 prospective
+subtests. Its source-only checker verifies selection/bytes/names, not execution.
+The real-Browser runner, complete baseline and separate score are still pending.
+No new upstream pass is claimed; browser fixes follow in separate releases.
+
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
 needed. Requires a DejaVu/Liberation font, or set `MGBROWSER_FONT` to a readable

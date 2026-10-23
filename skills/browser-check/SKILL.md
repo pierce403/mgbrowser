@@ -325,4 +325,13 @@ For script changes, read docs/JAVASCRIPT.md. Keep live execution in the restrict
 
 For retained events, input/default actions or worker lifecycle changes, also read docs/PAGE_SESSIONS.md. Run the page_events, page_projection and script_session tests, then the /script-events fixture with --enable-scripts --smoke-events and the external cdp_journey client. Require both canceled states, the exact handler-created proof/query/submit fields, the handler-updated destination, and zero /event-trap server requests; docs/RUNNING.md and the CI retained-event step provide the commands. Check stale CDP IDs without fabricated page-load events. Keep parent and child lifetime/active-time/aggregate budgets cumulative; navigation and shutdown must reap owned children without replaying scripts. Do not replace these later-interaction checks with a startup-only created-form test.
 
+For the first scored Window lane, follow the pre-execution source/report freeze
+in docs/WPT_WINDOW_PARSING.md. Run its fixed source-only checker and separate
+unit discovery in tools/wpt/window; the existing top-level discovery does not
+recurse into that un-packaged directory. Source calls are not delivered rows.
+Keep its future Browser baseline/score separate from static WPT and both authored
+control suites. No CSSOM fix before all sixteen baseline outcomes; no fabricated
+missing rows, outcome-based exclusions, widened profile or combined headline.
+The source checker alone proves neither execution nor resource feasibility.
+
 Keep live page/query artifacts in ignored tmp/ unless deliberately selected for publication without private data. Preserve deterministic local fixtures and component regressions in tests/. Update feature evidence and the daily log with both success and failure; keep the full goal open if any required live stage remains unverified.

@@ -18,6 +18,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Validate the separate source-only Window cohort freeze
+        run: |
+          python3 -m unittest discover -s tools/wpt/window -p 'test_*.py'
+          python3 tools/wpt/window/check_manifest.py
       - name: Run the pinned WPT selection for this commit
         run: |
           rustup toolchain install 1.91.1 --profile minimal

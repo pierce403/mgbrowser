@@ -89,6 +89,14 @@ existing public-native helpers pass. Public evidence:
 [dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout) and docs/WPT_HARNESS_OUTPUT_STATUS.md.
 Static scoring stays 317/632/62 of 1,011. No WPT pass or criterion is added.
 
+The separate pre-execution freeze in docs/WPT_WINDOW_PARSING.md selects all
+sixteen pinned declared-value parsing files, with twenty original execution/
+license inputs and 79 source-declared calls. The source checker verifies bytes,
+selection and literal names without JavaScript execution. The Browser runner,
+complete baseline and separate Window score are not implemented; no observed
+row, pass or criterion is added. Engine fixes must follow that baseline in
+separate released contributions, preserving the existing static lane.
+
 ## F-025 : Google News desktop reading
 
 Stability: in-progress

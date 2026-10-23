@@ -38,9 +38,10 @@ following dependency order, updating evidence as each increment ships:
    with cold CI validation completed in 7m42s. Production engine, corpus and
    expectations remain unchanged. The earlier denied native-log API stays
    stopped; normal publication succeeded without alternate credentials/settings.
-   **Active:** implement non-scoring complete Window-testharness readiness through the
-   restricted worker, following [docs/WPT_TESTHARNESS.md](docs/WPT_TESTHARNESS.md),
-   before declaring another scored upstream selection (F-026/F-008/F-016).
+   **Active:** build the separately frozen first upstream Window runner/baseline,
+   following [docs/WPT_WINDOW_PARSING.md](docs/WPT_WINDOW_PARSING.md), under the
+   existing restricted-worker envelope. Historical readiness increments below
+   remain distinct from scored upstream coverage (F-026/F-008/F-016).
    **Shipped v0.9.7** at `3afaabdfacb6305d7c8637072fef60bd77d692ee`: bounded
    function timers pass exact-commit CI, release/public installation, actual
    v0.9.6 self-upgrade and public native/CDP acceptance including hidden tabs.
@@ -119,9 +120,15 @@ following dependency order, updating evidence as each increment ships:
    release/public install, actual v0.9.12 update/no-op and all thirteen existing
    public-native helpers pass; dated log: [dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout).
    This closes only that bounded release increment. No source injection,
-   hidden allowance or new resource profile is authorized. Next select and
-   freeze a separate scored cohort; never invent passes from these controls or
-   change the current 1,011 cases/expectations. F-016/F-026/MVP stay unfinished.
+   hidden allowance or new resource profile is authorized. A separate source/
+   runner-policy contribution freezes every direct-child pinned flexbox parsing
+   *-valid.html / *-invalid.html: sixteen files, twenty original execution/license
+   inputs and 79 prospective declarations, including valid shorthand/container-
+   unit cases. The fixed source-only checker validates this manifest, not browser
+   compatibility. **Next:** implement its real-Browser adapter, pure mapping
+   controls and complete sixteen-file baseline before CSSOM/engine changes.
+   No Window outcomes/score are adopted yet. Never invent passes from authored
+   controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
