@@ -157,8 +157,9 @@ flexbox reftests and covers the complete pinned **1,011-case flexbox markup
 reftest selection**, with failures and unsupported cases retained. That separate
 selection reports **317 PASS, 632 FAIL and 62 UNSUPPORTED / 1,011**, with
 no errors, timeouts or crashes. Timer fixtures are authored controls, not new
-upstream or JavaScript testharness passes. All case outcomes, rendered-page RGB
-hashes and per-page request records match the prior static-cohort baseline.
+upstream or JavaScript testharness passes. All case statuses and request
+multisets remain unchanged; common rendered-page RGB/PNG bytes match, while
+three already-failing pages now stop with typed script failures.
 [Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,
@@ -286,7 +287,8 @@ Both full lanes rerun before every commit; CI checks scores and a manual Window
 ratchet before staging either public report. The
 [cold-Cargo measurement and continuous graph](docs/WPT_WINDOW_CI.md) preserve
 all existing deadlines. Coupled CI/public verification is recorded in the log.
-No new upstream pass is claimed. Browser fixes follow in separate releases.
+The historical runner contribution claimed no new upstream passes; browser-
+feature gains are recorded separately above.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
