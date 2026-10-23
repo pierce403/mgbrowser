@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -168,6 +169,51 @@ class ShapeTests(unittest.TestCase):
 
 
 class ReservationTests(unittest.TestCase):
+    def test_evidence_scan_allows_only_vanished_queued_descendants(self):
+        root = Path('/authored-evidence-root')
+        child = root / 'rustc-temporary'
+        class Entries:
+            def __enter__(self):
+                return self
+            def __iter__(self):
+                return iter([SimpleNamespace(path=str(child),
+                    stat=lambda **options: SimpleNamespace(st_mode=owner.stat.S_IFDIR))])
+            def __exit__(self, *args):
+                return False
+        def scan(path):
+            if path == root:
+                return Entries()
+            self.assertEqual(path, child)
+            raise FileNotFoundError(str(child))
+        with patch.object(owner.os, 'scandir', side_effect=scan) as scanned:
+            self.assertEqual(owner.evidence_bytes(root), 0)
+        self.assertEqual(scanned.call_count, 2)
+        for error in (PermissionError('descendant denied'), NotADirectoryError('descendant changed')):
+            with self.subTest(error=type(error)), patch.object(owner.os, 'scandir', side_effect=[Entries(), error]):
+                with self.assertRaises(type(error)):
+                    owner.evidence_bytes(root)
+
+    def test_evidence_scan_missing_root_and_other_errors_still_fail_closed(self):
+        for error in (FileNotFoundError('root'), PermissionError('denied'), NotADirectoryError('changed')):
+            with self.subTest(error=type(error)), patch.object(owner.os, 'scandir', side_effect=error):
+                with self.assertRaises(type(error)):
+                    owner.evidence_bytes(Path('/authored-evidence-root'))
+
+    def test_evidence_scan_keeps_descendant_entries_bytes_and_symlink_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child = root / 'compiler-temp'
+            child.mkdir()
+            (child / 'data').write_bytes(b'12345')
+            self.assertEqual(owner.evidence_bytes(root), 5)
+            with patch.object(owner, 'MAX_EVIDENCE_ENTRIES', 1), self.assertRaises(owner.Invalid):
+                owner.evidence_bytes(root)
+            with patch.object(owner, 'EVIDENCE_LIMIT', 4), self.assertRaises(owner.Invalid):
+                owner.evidence_bytes(root)
+            (root / 'alias').symlink_to(child, target_is_directory=True)
+            with self.assertRaises(owner.Invalid):
+                owner.evidence_bytes(root)
+
     def test_ci_cold_cache_runner_context_is_step_scoped_not_job_scoped(self):
         # A focused regression for GitHub's context availability, not a YAML
         # parser or a substitute for the actual workflow validation/run.

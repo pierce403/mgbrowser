@@ -135,6 +135,11 @@ root, with canonical existing nonsymlink parents and no reuse. The shared
 one 1 MiB log and one 1 MiB HTTP audit, plus separate atomic final-report space.
 The 64 MiB report, 20,000-request and existing input/source limits still apply.
 No raw-wire persistence or screenshots are needed for this semantic lane.
+Evidence polling counts compiler temporary files too. A queued descendant that
+vanishes before it can be scanned retains no bytes and is skipped, like an entry
+that vanishes before stat; a missing output root, other I/O errors, symlinks and
+all byte/entry-limit violations still fail closed. This is polling, not an
+instantaneous filesystem quota or proof of process cleanup.
 
 The font is one more input in the shared 4,096-file / 10 MiB closure, including
 the fingerprint's runtime sources, original files and metadata. Admit its exact

@@ -268,7 +268,17 @@ def evidence_bytes(output):
     pending = [output]
     while pending:
         directory = pending.pop()
-        with os.scandir(directory) as entries:
+        try:
+            entries = os.scandir(directory)
+        except FileNotFoundError:
+            # Cargo/rustc may remove a private temporary directory after its
+            # parent was scanned, just as a file can vanish before entry.stat.
+            # An absent descendant retains no bytes; never ignore a lost root
+            # or another error, and keep counting all entries actually seen.
+            if directory == output:
+                raise
+            continue
+        with entries:
             for entry in entries:
                 count += 1
                 require(count <= MAX_EVIDENCE_ENTRIES, "Evidence entry admission exceeded")
