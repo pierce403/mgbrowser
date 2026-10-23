@@ -38,6 +38,8 @@ jobs:
           test ! -L target
           mkdir -m 700 "$MGBROWSER_COLD_CARGO_HOME"
           printf 'CARGO_HOME=%s\n' "$MGBROWSER_COLD_CARGO_HOME" >> "$GITHUB_ENV"
+          test ! -L tmp
+          mkdir -p tmp
           test -r /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
           test -z "$(git status --porcelain)"
       - name: Measure the complete fixed Window selection

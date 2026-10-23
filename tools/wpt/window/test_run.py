@@ -181,6 +181,8 @@ class ReservationTests(unittest.TestCase):
         self.assertIn('test ! -e "$MGBROWSER_COLD_CARGO_HOME"', preflight)
         self.assertIn('test ! -e target', preflight)
         self.assertIn('>> "$GITHUB_ENV"', preflight)
+        self.assertIn('test ! -L tmp', preflight)
+        self.assertIn('mkdir -p tmp', preflight)
 
     def test_build_policy_is_explicit_default_off_and_never_changes_target_or_features(self):
         default = owner.parse_args(["--output", "tmp/not-created"])
