@@ -1544,3 +1544,287 @@ fn real_worker_fatal_rejection_delivery_exits_with_parent_input_still_open() {
     let mut byte = [0];
     assert_eq!(peer.output.read(&mut byte).unwrap(), 0);
 }
+
+// Additive preservation controls for docs/LINK_DEFAULTS.md. These real v7
+// restricted children prove worker default selection, not parent navigation,
+// HTTP, native input or a new upstream WPT pass. The existing Peer/limits stay
+// unchanged; both mandatory lifecycle tasks complete before the retained click.
+#[test]
+fn real_worker_empty_link_keeps_handler_and_promise_effects_before_default() {
+    for (label, body, expected_work) in [
+        ("direct", "change();", (2, 2, 0)),
+        ("promise", "Promise.resolve().then(change);", (3, 3, 0)),
+    ] {
+        let script = format!(
+            "let count=0;const link=document.getElementById('link');\
+             function change(){{count++;document.getElementById('base').setAttribute('href','/after/');\
+             link.setAttribute('href','chosen?proof={label}');\
+             document.getElementById('o').setAttribute('data-proof','{label}:'+count);}}\
+             link.onclick=function(){{{body}}};"
+        );
+        let mut peer = Peer::start();
+        peer.send(0, 0, "Init", json!({
+            "url":"https://example.test/tasks",
+            "html":format!("<!doctype html><html><head><base id=base href='/before/'></head><body><a id=link href='trap'></a><p id=o></p><script>{script}</script></body></html>")
+        }));
+        let initial = peer.receive(0, 0);
+        assert_eq!(initial["reply"]["state"], "Ready", "{label}");
+        assert_eq!(initial["reply"]["errors"], json!([]), "{label}");
+        assert_eq!(initial["reply"]["scripts_executed"], 1, "{label}");
+        let initial_report = report(&initial);
+        assert_eq!(initial_report.source_admissions, 1, "{label}");
+        assert_eq!(
+            (
+                initial_report.jobs_admitted,
+                initial_report.jobs_executed,
+                initial_report.pending_jobs
+            ),
+            (2, 0, 2),
+            "{label}"
+        );
+        let loaded = peer.complete_lifecycle(initial);
+        assert_eq!(loaded["sequence"], 2, "{label}");
+        assert_eq!(loaded["reply"]["revision"], 2, "{label}");
+        assert!(loaded["reply"]["task_wake"].is_null(), "{label}");
+        let before: mg_sparkle::page_session::SessionReply =
+            serde_json::from_value(loaded["reply"].clone()).unwrap();
+        let document = mg_sparkle::document::project_nodes(
+            before.snapshot.unwrap().nodes,
+            "https://example.test/tasks",
+        )
+        .unwrap();
+        let target = document.query_selector(0, "#link").unwrap().unwrap();
+        assert_eq!(document.base_url, "https://example.test/before/", "{label}");
+        assert_eq!(document.nodes[target].attr("href"), Some("trap"), "{label}");
+        assert!(
+            !document
+                .items
+                .iter()
+                .zip(&document.item_nodes)
+                .any(|(item, id)| *id == target
+                    && matches!(item, mg_sparkle::document::Item::Text { href: Some(_), .. })),
+            "the owned anchor has no text-link projection: {label}"
+        );
+        peer.send(
+            3,
+            2,
+            "Event",
+            json!({"kind":{"kind":"Click","target":target},"edits":[]}),
+        );
+        let clicked = peer.receive(3, 2);
+        assert_eq!(clicked["reply"]["revision"], 3, "{label}");
+        assert_eq!(clicked["reply"]["state"], "Ready", "{label}");
+        assert_eq!(clicked["reply"]["errors"], json!([]), "{label}");
+        assert_eq!(clicked["reply"]["scripts_executed"], 0, "{label}");
+        assert_eq!(clicked["reply"]["acknowledgements"], json!([]), "{label}");
+        assert_eq!(
+            clicked["reply"]["default_action"],
+            json!({"kind":"FollowLink","node":target}),
+            "{label}"
+        );
+        assert_eq!(
+            clicked["reply"]["outcome"]["click_canceled"], false,
+            "{label}"
+        );
+        assert!(
+            clicked["reply"]["outcome"]["submit_canceled"].is_null(),
+            "{label}"
+        );
+        assert!(clicked["reply"]["navigation"].is_null(), "{label}");
+        assert_eq!(
+            clicked["reply"]["lifecycle"], loaded["reply"]["lifecycle"],
+            "{label}"
+        );
+        assert_eq!(
+            attribute(&clicked, "data-proof"),
+            Some(format!("{label}:1")),
+            "{label}"
+        );
+        let after: mg_sparkle::page_session::SessionReply =
+            serde_json::from_value(clicked["reply"].clone()).unwrap();
+        let document = mg_sparkle::document::project_nodes(
+            after.snapshot.unwrap().nodes,
+            "https://example.test/tasks",
+        )
+        .unwrap();
+        assert_eq!(
+            document.query_selector(0, "#link").unwrap(),
+            Some(target),
+            "{label}"
+        );
+        assert_eq!(document.base_url, "https://example.test/after/", "{label}");
+        assert_eq!(
+            document.nodes[target].attr("href"),
+            Some(format!("chosen?proof={label}").as_str()),
+            "{label}"
+        );
+        let current = report(&clicked);
+        current.validate_after(&report(&loaded)).unwrap();
+        assert_eq!(
+            (
+                current.jobs_admitted,
+                current.jobs_executed,
+                current.pending_jobs
+            ),
+            expected_work,
+            "{label}"
+        );
+        assert_eq!(
+            current.source_admissions, initial_report.source_admissions,
+            "{label}"
+        );
+        assert_eq!(current.source_bytes, initial_report.source_bytes, "{label}");
+        assert!(
+            current.opcodes_remaining < report(&loaded).opcodes_remaining,
+            "{label}"
+        );
+        assert!(current.fatal_reason.is_none(), "{label}");
+        assert!(clicked["reply"]["task_wake"].is_null(), "{label}");
+        peer.idle();
+        peer.finish();
+    }
+}
+
+#[test]
+fn real_worker_empty_link_suppression_keeps_valid_handler_effects() {
+    for (label, body, canceled, navigation) in [
+        ("cancel", "event.preventDefault();", true, None),
+        ("false", "return false;", true, None),
+        ("href-removed", "link.removeAttribute('href');", false, None),
+        (
+            "detached",
+            "link.parentNode.removeChild(link);",
+            false,
+            None,
+        ),
+        (
+            "explicit",
+            "location.href='/explicit';",
+            false,
+            Some("https://example.test/explicit"),
+        ),
+    ] {
+        let script = format!(
+            "const link=document.getElementById('link');link.onclick=function(event){{\
+             document.getElementById('o').setAttribute('data-proof','{label}');{body}}};"
+        );
+        let mut peer = Peer::start();
+        peer.send(0, 0, "Init", json!({
+            "url":"https://example.test/tasks",
+            "html":format!("<!doctype html><html><body><a id=link href='/trap'></a><p id=o></p><script>{script}</script></body></html>")
+        }));
+        let initial = peer.receive(0, 0);
+        assert_eq!(initial["reply"]["state"], "Ready", "{label}");
+        assert_eq!(initial["reply"]["errors"], json!([]), "{label}");
+        assert_eq!(initial["reply"]["scripts_executed"], 1, "{label}");
+        let initial_report = report(&initial);
+        assert_eq!(initial_report.source_admissions, 1, "{label}");
+        assert_eq!(
+            (
+                initial_report.jobs_admitted,
+                initial_report.jobs_executed,
+                initial_report.pending_jobs
+            ),
+            (2, 0, 2),
+            "{label}"
+        );
+        let loaded = peer.complete_lifecycle(initial);
+        let previous: mg_sparkle::page_session::SessionReply =
+            serde_json::from_value(loaded["reply"].clone()).unwrap();
+        let document = mg_sparkle::document::project_nodes(
+            previous.snapshot.unwrap().nodes,
+            "https://example.test/tasks",
+        )
+        .unwrap();
+        let target = document.query_selector(0, "#link").unwrap().unwrap();
+        let original_parent = document.nodes[target].parent;
+        peer.send(
+            3,
+            2,
+            "Event",
+            json!({"kind":{"kind":"Click","target":target},"edits":[]}),
+        );
+        let clicked = peer.receive(3, 2);
+        assert_eq!(clicked["reply"]["revision"], 3, "{label}");
+        assert_eq!(clicked["reply"]["state"], "Ready", "{label}");
+        assert_eq!(clicked["reply"]["errors"], json!([]), "{label}");
+        assert_eq!(
+            clicked["reply"]["default_action"],
+            json!({"kind":"None"}),
+            "{label}"
+        );
+        assert_eq!(
+            clicked["reply"]["outcome"]["click_canceled"], canceled,
+            "{label}"
+        );
+        assert!(
+            clicked["reply"]["outcome"]["submit_canceled"].is_null(),
+            "{label}"
+        );
+        assert_eq!(clicked["reply"]["navigation"], json!(navigation), "{label}");
+        assert_eq!(clicked["reply"]["scripts_executed"], 0, "{label}");
+        assert_eq!(clicked["reply"]["acknowledgements"], json!([]), "{label}");
+        assert_eq!(
+            clicked["reply"]["lifecycle"], loaded["reply"]["lifecycle"],
+            "{label}"
+        );
+        assert_eq!(
+            attribute(&clicked, "data-proof").as_deref(),
+            Some(label),
+            "{label}"
+        );
+        let response: mg_sparkle::page_session::SessionReply =
+            serde_json::from_value(clicked["reply"].clone()).unwrap();
+        let document = mg_sparkle::document::project_nodes(
+            response.snapshot.unwrap().nodes,
+            "https://example.test/tasks",
+        )
+        .unwrap();
+        assert_eq!(document.nodes[target].tag, "a", "{label}");
+        if label == "href-removed" {
+            assert_eq!(document.nodes[target].attr("href"), None);
+        } else {
+            assert_eq!(
+                document.nodes[target].attr("href"),
+                Some("/trap"),
+                "{label}"
+            );
+        }
+        if label == "detached" {
+            assert_eq!(document.nodes[target].parent, target);
+            assert!(!document.nodes[original_parent].children.contains(&target));
+            assert_eq!(document.query_selector(0, "#link").unwrap(), None);
+        } else {
+            assert_eq!(document.nodes[target].parent, original_parent, "{label}");
+            assert_eq!(
+                document.query_selector(0, "#link").unwrap(),
+                Some(target),
+                "{label}"
+            );
+        }
+        let current = report(&clicked);
+        current.validate_after(&report(&loaded)).unwrap();
+        assert_eq!(
+            (
+                current.jobs_admitted,
+                current.jobs_executed,
+                current.pending_jobs
+            ),
+            (2, 2, 0),
+            "{label}"
+        );
+        assert_eq!(
+            current.source_admissions, initial_report.source_admissions,
+            "{label}"
+        );
+        assert_eq!(current.source_bytes, initial_report.source_bytes, "{label}");
+        assert!(
+            current.opcodes_remaining < report(&loaded).opcodes_remaining,
+            "{label}"
+        );
+        assert!(current.fatal_reason.is_none(), "{label}");
+        assert!(clicked["reply"]["task_wake"].is_null(), "{label}");
+        peer.idle();
+        peer.finish();
+    }
+}

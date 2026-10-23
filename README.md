@@ -2,7 +2,29 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.17 Experimental Preview
+## v0.9.18 Experimental Preview: release candidate
+
+v0.9.18 corrects scripted activation of painted empty, whitespace-only and
+non-text anchors. Navigation uses the same clicked anchor's own post-handler
+`href` and reconstructed document base, not a rendered text item. A selected
+destination is checked before DOM edits, acknowledgements and observer results
+commit. Cancellation, explicit script-navigation precedence, forms and existing
+worker/resource limits are preserved.
+[Scoped contract](docs/LINK_DEFAULTS.md) and [candidate release notes](docs/RELEASE-v0.9.18.md).
+
+Final-version full Rust and separate JSPLAN regressions pass, preserving all364
+frozen research outcomes. Both complete, independently reviewed WPT selections
+remain unchanged: static338 pass /611 fail /62 unsupported of1,011; Window15/16
+files and77/79 final subtests passing, with no infrastructure failures or weaker
+protections. Normal package/install/update checks, all thirteen existing native
+helpers, six additive native/CDP proofs and both frozen worker suites pass.
+All 28 additive screenshots were inspected. Exact-source CI/site and
+public-release verification must still finish.
+Authored link controls do not add upstream WPT passes or denominators.
+The installer still selects the latest published release, v0.9.17; this candidate
+is not yet public delivery. Full DOM/CSSOM/WPT and the formal MVP remain open.
+
+### Previous v0.9.17 increment
 
 v0.9.17 adds modern `element.style.setProperty`,
 `removeProperty` and `getPropertyPriority` using the existing locked Rust Stylo
@@ -32,8 +54,8 @@ update/no-op, all thirteen existing public native helpers, four separate public
 geometry/method native/CDP proofs and both frozen public-worker suites pass.
 All sixteen additive public screenshots were inspected. See the
 [public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
-The installer delivers v0.9.17. Full CSSOM, empty-anchor activation and
-F-003/F-005/F-016/F-026/MVP remain unfinished.
+That public installer verification delivered v0.9.17. Full CSSOM, empty-anchor
+activation and F-003/F-005/F-016/F-026/MVP remained unfinished in that release.
 
 ### Previous v0.9.16 increment
 
@@ -425,6 +447,10 @@ See [updater behavior and trust](docs/UPDATES.md).
   News still has font/icon/corner differences and destination fallbacks. Mobile
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
+- The v0.9.18 link-default correction is a release candidate, not yet a published
+  fix for v0.9.17. Its scripted activation requires the same connected anchor
+  with a present resolvable href; full download, target, referrer and detached-
+  anchor behavior remain outside this increment. It does not complete DOM or WPT.
 - Boa-backed JavaScript integration runs inline and bounded classic external
   `<script src>` scripts by default (use `--disable-scripts` to opt out). Up to
   16 external sources participate within 32 eligible script elements, with a

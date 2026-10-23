@@ -124,6 +124,17 @@ impl Document {
         self.scripting_enabled
     }
 
+    /// Resolve this exact anchor's own present href against the reconstructed
+    /// document base, independently of its text/paint projection. This is URL
+    /// data only; callers still own connectedness and navigation policy.
+    pub fn anchor_href(&self, node: usize) -> Option<String> {
+        let node = self.nodes.get(node)?;
+        if node.tag != "a" {
+            return None;
+        }
+        resolve(&self.base_url, node.attr("href")?)
+    }
+
     /// Attached, active nodes in tree order. Template contents and scripting-on
     /// noscript contents never gain automatic subresource fetch capabilities.
     pub fn resource_nodes(&self) -> Vec<usize> {

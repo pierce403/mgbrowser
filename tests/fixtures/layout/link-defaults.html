@@ -1,0 +1,125 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Empty anchor defaults fixture</title>
+<base id="base" href="/link-default-before/">
+<style>
+html,body{margin:0;background:#fff}
+*{margin:0;padding:0;border:0;font-size:1px;line-height:0}
+.row{width:200px;height:30px;margin-left:20px}
+.control{display:none;height:20px;text-decoration:none}
+#ready{display:none;width:160px;height:10px;margin-left:20px}
+</style></head><body>
+<!-- Authored empty anchors: no text, whitespace or descendant inside any a. -->
+<div style="height:10px"></div>
+<div class="row"><a id="cancel-link" class="control" href="/link-default-trap"></a></div>
+<div class="row"><a id="native-link" class="control" href="/link-default-trap"></a></div>
+<div class="row"><a id="cdp-link" class="control" href="/link-default-trap"></a></div>
+<div id="ready"></div>
+<script>
+var linkStarts = 1, linkCancels = 0, linkSuccesses = 0;
+function insist(condition) {
+  if (!condition) throw new Error('Authored empty-anchor assertion failed');
+}
+function activationState() {
+  insist(document.readyState === 'complete' && linkStarts === 1 &&
+         linkCancels === 1 && linkSuccesses === 0 &&
+         document.body.getAttribute('data-link-defaults-ready') === 'load-ready' &&
+         document.body.getAttribute('data-link-defaults-canceled') === '1');
+}
+window.addEventListener('load', function () {
+  insist(document.readyState === 'complete' && linkStarts === 1 &&
+         linkCancels === 0 && linkSuccesses === 0);
+  var base = document.getElementById('base');
+  var cancelLink = document.getElementById('cancel-link');
+  var nativeLink = document.getElementById('native-link');
+  var cdpLink = document.getElementById('cdp-link');
+  var ready = document.getElementById('ready');
+  cancelLink.onclick = function (event) {
+    try {
+      insist(this === cancelLink && event.target === cancelLink &&
+             document.readyState === 'complete' && linkStarts === 1 &&
+             linkCancels === 0 && linkSuccesses === 0 &&
+             document.body.getAttribute('data-link-defaults-ready') === 'load-ready' &&
+             document.body.getAttribute('data-link-defaults-canceled') === '0');
+      linkCancels++;
+      ready.style.backgroundColor = '#00aaaa';
+      document.body.setAttribute('data-link-defaults-canceled', '1');
+    } catch (error) {
+      event.preventDefault();
+      throw error;
+    }
+    return false;
+  };
+  nativeLink.onclick = function (event) {
+    try {
+      activationState();
+      insist(this === nativeLink && event.target === nativeLink);
+      base.setAttribute('href', '/link-default-native/');
+      nativeLink.setAttribute('href', 'sync-trap');
+      Promise.resolve().then(function () {
+        try {
+          activationState();
+          insist(document.body.getAttribute('data-link-listener') === 'native-false');
+          insist(base.getAttribute('href') === '/link-default-native/' &&
+                 nativeLink.getAttribute('href') === 'sync-trap');
+          nativeLink.setAttribute('href', 'hit');
+          linkSuccesses++;
+          document.body.setAttribute('data-link-selected', 'native');
+        } catch (error) {
+          event.preventDefault();
+          throw error;
+        }
+      });
+    } catch (error) {
+      event.preventDefault();
+      throw error;
+    }
+  };
+  nativeLink.addEventListener('click', function () {
+    document.body.setAttribute('data-link-listener', 'native-false');
+    return false;
+  }, true);
+  cdpLink.onclick = function (event) {
+    try {
+      activationState();
+      insist(this === cdpLink && event.target === cdpLink &&
+             base.getAttribute('href') === '/link-default-before/');
+      cdpLink.setAttribute('href', 'hit');
+      Promise.resolve().then(function () {
+        try {
+          activationState();
+          insist(document.body.getAttribute('data-link-listener') === 'cdp-false');
+          insist(cdpLink.getAttribute('href') === 'hit' &&
+                 base.getAttribute('href') === '/link-default-before/');
+          base.setAttribute('href', '/link-default-cdp/');
+          linkSuccesses++;
+          document.body.setAttribute('data-link-selected', 'cdp');
+        } catch (error) {
+          event.preventDefault();
+          throw error;
+        }
+      });
+    } catch (error) {
+      event.preventDefault();
+      throw error;
+    }
+  };
+  cdpLink.addEventListener('click', function () {
+    document.body.setAttribute('data-link-listener', 'cdp-false');
+    return false;
+  }, true);
+  cancelLink.style.width = '120px';
+  cancelLink.style.backgroundColor = '#aa0000';
+  nativeLink.style.width = '80px';
+  nativeLink.style.backgroundColor = '#00aa00';
+  cdpLink.style.width = '100px';
+  cdpLink.style.backgroundColor = '#0000aa';
+  ready.style.backgroundColor = '#aa00aa';
+  cancelLink.style.display = 'inline-block';
+  nativeLink.style.display = 'inline-block';
+  cdpLink.style.display = 'inline-block';
+  ready.style.display = 'block';
+  document.body.setAttribute('data-link-defaults-canceled', '0');
+  document.body.setAttribute('data-link-defaults-ready', 'load-ready');
+});
+</script>
+</body></html>

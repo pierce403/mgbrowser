@@ -1096,3 +1096,896 @@ fn generation_admission_failure_and_supersession_stop_each_navigation_once() {
         2
     );
 }
+
+// These additive controls exercise parent receipt handling, not worker dispatch.
+// FakeSession deliberately cannot dispatch clicks: seed the already-owned
+// Activation identity and feed its reply through the normal acceptance path.
+mod link_default_receipts {
+    use super::*;
+    use mg_sparkle::page_session::observer::*;
+
+    const PAGE: &str = "http://127.0.0.1:9/original";
+    const EXPLICIT: &str = "http://127.0.0.1:9/explicit";
+
+    struct ReceiptRuntime(ObserverExpectation);
+    impl scripts::ScriptRuntime for ReceiptRuntime {
+        fn observer_expectation(&self) -> ObserverExpectation {
+            self.0
+        }
+        fn set_generation(&self, _: u64) -> Result<(), String> {
+            panic!("Receipt-only controls must not enter navigation admission")
+        }
+        fn start(
+            &self,
+            _: mg_sparkle::js_browser::Request,
+            _: u64,
+        ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+            panic!("Receipt-only controls must not start a worker")
+        }
+        fn close(&self) {}
+        fn wait_idle(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn activation() -> (Browser, Arc<Mutex<State>>, usize, usize) {
+        let (mut app, state, _) = fixture();
+        app.page_url = PAGE.into();
+        app.address = PAGE.into();
+        app.document = document::parse(
+            "<head><title>Retained</title><base id=base href='/base/'></head>\
+             <body><form><input id=value name=value value=old></form>\
+             <a id=link href='/accepted'>Link</a><a id=other href='/other'>Other</a>\
+             <section id=destination></section></body>",
+            PAGE,
+        );
+        let node = app.document.query_selector(0, "#value").unwrap().unwrap();
+        let link = app.document.query_selector(0, "#link").unwrap().unwrap();
+        assert!(app.input_item(node).is_some());
+        app.values.insert(node, "native edit seven".into());
+        app.edit_versions.insert(node, 7);
+        app.focus = Focus::Input(node);
+        app.select_all = true;
+        app.dom_epoch = 23;
+        app.cdp_enabled = true;
+        app.task_wake = None;
+        app.child_pool = Arc::new(ReceiptRuntime(ObserverExpectation::WindowHarness {
+            run_id: 1,
+        }));
+        app.observer_ledger =
+            Some(ObserverLedger::new(app.child_pool.observer_expectation()).unwrap());
+        app.pending_transaction = Some(PendingTransaction::Activation {
+            identity: TransactionIdentity {
+                generation: 42,
+                session_id: 91,
+                sequence: 1,
+                revision: 0,
+            },
+            input: SessionInput {
+                kind: InputKind::Click { target: link },
+                edits: vec![ControlEdit {
+                    node,
+                    version: 7,
+                    value: "native edit seven".into(),
+                }],
+            },
+        });
+        (app, state, node, link)
+    }
+
+    fn candidate(app: &Browser, control: usize, link: usize) -> SessionReply {
+        let mut response = reply(app, None);
+        let title = app.document.query_selector(0, "title").unwrap().unwrap();
+        let title_text = app.document.nodes[title].children[0];
+        let nodes = &mut response.snapshot.as_mut().unwrap().nodes;
+        nodes[title_text].text = "Candidate".into();
+        nodes[control]
+            .attributes
+            .iter_mut()
+            .find(|(key, _)| key == "value")
+            .unwrap()
+            .1 = "worker edit seven".into();
+        response.acknowledgements = vec![ControlAck {
+            node: control,
+            version: 7,
+        }];
+        response.outcome.click_canceled = Some(false);
+        response.default_action = DefaultAction::FollowLink { node: link };
+        response.observer = Some(ObserverReply::WindowHarness {
+            run_id: 1,
+            first_ordinal: 0,
+            next_ordinal: 1,
+            records: vec![ObserverRecord::Result {
+                test: TestRecord {
+                    id: 1,
+                    index: 0,
+                    name: Utf16::from_units(vec![0x6c, 0x69, 0x6e, 0x6b]).unwrap(),
+                    status: SubtestStatus::Pass,
+                    message: OptionalUtf16::Null,
+                    stack: OptionalUtf16::Null,
+                },
+            }],
+            progress: ObserverProgress::Waiting,
+            execution_failed: false,
+        });
+        assert!(response.accounting_valid());
+        response
+    }
+
+    fn attribute(nodes: &mut [document::Node], node: usize, name: &str, value: &str) {
+        let pair = nodes[node]
+            .attributes
+            .iter_mut()
+            .find(|(key, _)| key == name)
+            .unwrap();
+        pair.1 = value.into();
+    }
+
+    fn detach(nodes: &mut [document::Node], node: usize) {
+        let parent = nodes[node].parent;
+        nodes[parent].children.retain(|child| *child != node);
+        nodes[node].parent = node;
+    }
+
+    fn disabled_observer(app: &mut Browser, response: &mut SessionReply) {
+        // Ordinary browsing allows explicit navigation. Trusted WindowHarness
+        // intentionally rejects it; do not use that incompatible mode here.
+        app.child_pool = Arc::new(ReceiptRuntime(ObserverExpectation::Disabled));
+        app.observer_ledger = Some(ObserverLedger::new(ObserverExpectation::Disabled).unwrap());
+        response.observer = Some(ObserverReply::Disabled);
+    }
+
+    fn retained(
+        app: &mut Browser,
+        state: &Arc<Mutex<State>>,
+        node: usize,
+        before: &[document::Node],
+        failure: ObserverParentFailure,
+        charges: usize,
+        copied_units: usize,
+    ) {
+        assert_eq!(app.document.nodes, before);
+        assert_eq!(app.document.title, "Retained");
+        assert_eq!(app.values[&node], "native edit seven");
+        assert_eq!(app.edit_versions[&node], 7);
+        assert!(app.focus == Focus::Input(node));
+        assert!(app.select_all);
+        assert_eq!(app.page_revision, 0);
+        assert_eq!(app.dom_epoch, 23);
+        assert_eq!(app.page_url, PAGE);
+        assert_eq!(app.address, PAGE);
+        assert_eq!(app.generation, 42);
+        assert_eq!(app.inflight, 0);
+        assert!(!app.loading && !app.fetching);
+        assert!(app.cdp_events.is_empty());
+        let view = app.script_observation().unwrap().observation();
+        assert_eq!(view.cursor, 0);
+        assert!(view.records.is_empty());
+        assert!(view.reconciliations.is_empty());
+        assert_eq!(view.copied_units, copied_units);
+        assert_eq!(view.progress, None);
+        assert_eq!(view.fault, None);
+        assert!(!view.execution_failed);
+        assert_eq!(view.parent_failure, Some(failure));
+        assert!(app.script_blocked);
+        assert!(app.pending_transaction.is_none());
+        assert!(app.task_wake.is_none());
+        assert!(state.lock().unwrap().canceled);
+        assert_eq!(state.lock().unwrap().charges, charges);
+        assert!(!state.lock().unwrap().validation_pending);
+        assert!(state.lock().unwrap().pumps.is_empty());
+        app.poll_page_session();
+        assert_eq!(state.lock().unwrap().charges, charges);
+        assert_eq!(app.document.nodes, before);
+        assert_eq!(app.dom_epoch, 23);
+        assert!(app.cdp_events.is_empty());
+    }
+
+    #[test]
+    fn eligibility_is_independent_of_text_projection() {
+        for body in ["Link", "", " \n\t ", "<span></span>", "<img alt=''>"] {
+            let document =
+                document::parse(&format!("<a id=link href=' /selected '> {body}</a>"), PAGE);
+            let link = document.query_selector(0, "#link").unwrap().unwrap();
+            let has_text = document
+                .items
+                .iter()
+                .zip(&document.item_nodes)
+                .any(|(item, node)| {
+                    *node == link && matches!(item, Item::Text { href: Some(_), .. })
+                });
+            assert_eq!(has_text, body == "Link", "fixture text premise: {body:?}");
+            assert!(
+                Browser::validate_default(
+                    &document,
+                    &InputKind::Click { target: link },
+                    &DefaultAction::FollowLink { node: link },
+                )
+                .is_ok(),
+                "present own href on connected clicked anchor: {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eligibility_uses_the_same_final_connected_anchor_after_handler_changes() {
+        for change in ["text-removed", "hidden", "reparented", "detach-reinsert"] {
+            let (app, _, _, link) = activation();
+            let mut nodes = app.document.nodes.clone();
+            match change {
+                "text-removed" => {
+                    for child in nodes[link].children.clone() {
+                        detach(&mut nodes, child);
+                    }
+                }
+                "hidden" => nodes[link]
+                    .attributes
+                    .push(("hidden".into(), String::new())),
+                "reparented" | "detach-reinsert" => {
+                    let original = nodes[link].parent;
+                    let destination = if change == "reparented" {
+                        app.document
+                            .query_selector(0, "#destination")
+                            .unwrap()
+                            .unwrap()
+                    } else {
+                        original
+                    };
+                    detach(&mut nodes, link);
+                    nodes[destination].children.push(link);
+                    nodes[link].parent = destination;
+                }
+                _ => unreachable!(),
+            }
+            attribute(&mut nodes, link, "href", "");
+            let document = document::project_nodes(nodes, PAGE).unwrap();
+            assert!(Browser::connected(&document, link));
+            assert_eq!(document.nodes[link].attr("href"), Some(""));
+            assert!(
+                Browser::validate_default(
+                    &document,
+                    &InputKind::Click { target: link },
+                    &DefaultAction::FollowLink { node: link },
+                )
+                .is_ok(),
+                "{change}"
+            );
+        }
+    }
+
+    #[test]
+    fn relationship_validation_rejects_unrelated_or_missing_anchor_authority() {
+        for change in [
+            "other-anchor",
+            "text-node",
+            "non-anchor",
+            "detached",
+            "missing-href",
+            "invalid-href",
+            "javascript",
+            "replacement-id",
+            "out-of-range",
+            "submit-input",
+        ] {
+            let (app, _, control, link) = activation();
+            let mut nodes = app.document.nodes.clone();
+            let mut default_node = link;
+            let mut input = InputKind::Click { target: link };
+            match change {
+                "other-anchor" => {
+                    default_node = app.document.query_selector(0, "#other").unwrap().unwrap()
+                }
+                "text-node" => default_node = nodes[link].children[0],
+                "non-anchor" => {
+                    default_node = control;
+                    input = InputKind::Click { target: control };
+                    nodes[control]
+                        .attributes
+                        .push(("href".into(), "/selected".into()));
+                }
+                "detached" => detach(&mut nodes, link),
+                "missing-href" => nodes[link].attributes.retain(|(key, _)| key != "href"),
+                "invalid-href" => attribute(&mut nodes, link, "href", "http://["),
+                "javascript" => attribute(&mut nodes, link, "href", "javascript:trap()"),
+                "replacement-id" => {
+                    let parent = nodes[link].parent;
+                    detach(&mut nodes, link);
+                    default_node = nodes.len();
+                    nodes.push(document::Node {
+                        tag: "a".into(),
+                        attributes: vec![
+                            ("id".into(), "link".into()),
+                            ("href".into(), "/selected".into()),
+                        ],
+                        text: String::new(),
+                        parent,
+                        children: vec![],
+                    });
+                    nodes[parent].children.push(default_node);
+                }
+                "out-of-range" => default_node = nodes.len(),
+                "submit-input" => {
+                    input = InputKind::Submit {
+                        form: app.document.form_nodes[0],
+                        submitter: None,
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let document = document::project_nodes(nodes, PAGE).unwrap();
+            assert!(
+                Browser::validate_default(
+                    &document,
+                    &input,
+                    &DefaultAction::FollowLink { node: default_node }
+                )
+                .is_err(),
+                "{change}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_forbidden_link_is_rejected_before_dom_ack_epoch_or_observer_commit() {
+        for target in [
+            "ftp",
+            "username",
+            "password",
+            "data",
+            "over-limit",
+            "utf8-expansion",
+        ] {
+            let (mut app, state, control, link) = activation();
+            let before = app.document.nodes.clone();
+            let mut response = candidate(&app, control, link);
+            let nodes = &mut response.snapshot.as_mut().unwrap().nodes;
+            let href = match target {
+                "ftp" => "ftp://127.0.0.1/file".into(),
+                "username" => "http://user@127.0.0.1:9/file".into(),
+                "password" => "http://:secret@127.0.0.1:9/file".into(),
+                "data" => "data:text/plain,not-http".into(),
+                "over-limit" => {
+                    let base = app.document.query_selector(0, "#base").unwrap().unwrap();
+                    // Admitted raw base is exactly 16,384 bytes; joining the
+                    // one-byte relative href makes a 16,385-byte selected URL.
+                    let value = format!("http://127.0.0.1:9/{}/", "a".repeat(16_364));
+                    assert_eq!(value.len(), 16_384);
+                    attribute(nodes, base, "href", &value);
+                    "b".into()
+                }
+                "utf8-expansion" => format!("http://127.0.0.1:9/{}", "é".repeat(3_000)),
+                _ => unreachable!(),
+            };
+            assert!(href.len() <= 16_384);
+            attribute(nodes, link, "href", &href);
+            let projected = document::project_nodes(nodes.clone(), PAGE).unwrap();
+            // This text-bearing control is eligible even on old production:
+            // the targeted failure is the selected policy check after commit.
+            assert!(
+                Browser::validate_default(
+                    &projected,
+                    &InputKind::Click { target: link },
+                    &response.default_action
+                )
+                .is_ok()
+            );
+            let resolved = projected
+                .items
+                .iter()
+                .zip(&projected.item_nodes)
+                .find_map(|(item, node)| {
+                    if *node == link {
+                        if let Item::Text {
+                            href: Some(url), ..
+                        } = item
+                        {
+                            return Some(url);
+                        }
+                    }
+                    None
+                })
+                .unwrap();
+            if target == "over-limit" {
+                assert_eq!(resolved.len(), 16_385);
+            }
+            if target == "utf8-expansion" {
+                assert_eq!(resolved.len(), 18_019);
+            }
+            assert!(Browser::checked_navigation(resolved).is_err(), "{target}");
+            complete(&app, &state, response);
+            app.poll_page_session();
+            retained(
+                &mut app,
+                &state,
+                control,
+                &before,
+                ObserverParentFailure::Validation,
+                1,
+                0,
+            );
+        }
+    }
+
+    #[test]
+    fn failed_single_charge_retains_link_projection_and_observer_rows() {
+        for empty in [false, true] {
+            let (mut app, state, control, link) = activation();
+            let before = app.document.nodes.clone();
+            let mut response = candidate(&app, control, link);
+            if empty {
+                let nodes = &mut response.snapshot.as_mut().unwrap().nodes;
+                for child in nodes[link].children.clone() {
+                    detach(nodes, child);
+                }
+            }
+            state.lock().unwrap().fail_charge = true;
+            complete(&app, &state, response);
+            app.poll_page_session();
+            retained(
+                &mut app,
+                &state,
+                control,
+                &before,
+                ObserverParentFailure::ActiveCharge,
+                1,
+                // Staging copies the four UTF-16 name units even when the
+                // charge fails. No cumulative admission is refunded.
+                4,
+            );
+        }
+    }
+
+    #[test]
+    fn ready_none_commits_cancellation_detachment_and_href_removal_without_navigation() {
+        for suppression in ["canceled", "detached", "href-removed"] {
+            for newer_edit in [false, true] {
+                let (mut app, state, control, link) = activation();
+                let mut response = candidate(&app, control, link);
+                response.default_action = DefaultAction::None;
+                match suppression {
+                    "canceled" => response.outcome.click_canceled = Some(true),
+                    "detached" => detach(&mut response.snapshot.as_mut().unwrap().nodes, link),
+                    "href-removed" => response.snapshot.as_mut().unwrap().nodes[link]
+                        .attributes
+                        .retain(|(key, _)| key != "href"),
+                    _ => unreachable!(),
+                }
+                let accepted_nodes = response.snapshot.as_ref().unwrap().nodes.clone();
+                if newer_edit {
+                    app.values.insert(control, "native edit eight".into());
+                    app.edit_versions.insert(control, 8);
+                }
+                complete(&app, &state, response);
+                app.poll_page_session();
+                assert_eq!(app.document.nodes, accepted_nodes);
+                assert_eq!(app.document.title, "Candidate");
+                if newer_edit {
+                    assert_eq!(app.values[&control], "native edit eight");
+                    assert_eq!(app.edit_versions[&control], 8);
+                } else {
+                    assert!(!app.values.contains_key(&control));
+                    assert!(!app.edit_versions.contains_key(&control));
+                }
+                assert_eq!(
+                    app.document.nodes[control].attr("value"),
+                    Some("worker edit seven")
+                );
+                assert!(app.focus == Focus::Input(control));
+                assert!(app.select_all);
+                assert_eq!(app.page_revision, 1);
+                assert_eq!(app.dom_epoch, 24);
+                assert_eq!(app.page_url, PAGE);
+                assert_eq!(app.address, PAGE);
+                assert_eq!(app.generation, 42);
+                assert_eq!(app.inflight, 0);
+                assert!(!app.loading && !app.fetching && !app.script_blocked);
+                assert!(matches!(
+                    app.cdp_events.as_slice(),
+                    [cdp_browser::Event::DocumentUpdated]
+                ));
+                let view = app.script_observation().unwrap().observation();
+                assert_eq!(view.cursor, 1);
+                assert_eq!(view.records.len(), 1);
+                assert_eq!(view.parent_failure, None);
+                assert_eq!(view.progress, Some(ObserverProgress::Waiting));
+                assert_eq!(state.lock().unwrap().charges, 1);
+                assert!(!state.lock().unwrap().canceled);
+                assert!(!state.lock().unwrap().validation_pending);
+                assert!(app.pending_transaction.is_none());
+                app.poll_page_session();
+                assert_eq!(state.lock().unwrap().charges, 1);
+                assert_eq!(app.dom_epoch, 24);
+                assert_eq!(app.cdp_events.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn activation_envelope_rejections_preserve_all_parent_state() {
+        for field in [
+            "generation",
+            "session",
+            "sequence",
+            "revision",
+            "missing-ack",
+            "wrong-ack",
+            "graph",
+            "tag",
+            "arena",
+        ] {
+            let (mut app, state, control, link) = activation();
+            let before = app.document.nodes.clone();
+            let mut response = candidate(&app, control, link);
+            response.default_action = DefaultAction::None;
+            match field {
+                "revision" => response.revision = 2,
+                "missing-ack" => response.acknowledgements.clear(),
+                "wrong-ack" => response.acknowledgements[0].version = 8,
+                "graph" => response.snapshot.as_mut().unwrap().nodes[0]
+                    .children
+                    .push(usize::MAX),
+                "tag" => response.snapshot.as_mut().unwrap().nodes[link].tag = "span".into(),
+                "arena" => {
+                    response.snapshot.as_mut().unwrap().nodes.pop();
+                }
+                _ => {}
+            }
+            let mut update = SessionUpdate {
+                generation: 42,
+                session_id: 91,
+                sequence: Some(1),
+                reply: Ok(response),
+            };
+            match field {
+                "generation" => update.generation = 43,
+                "session" => update.session_id = 92,
+                "sequence" => update.sequence = Some(2),
+                _ => {}
+            }
+            state.lock().unwrap().updates.push_back(update);
+            app.poll_page_session();
+            retained(
+                &mut app,
+                &state,
+                control,
+                &before,
+                ObserverParentFailure::Validation,
+                1,
+                0,
+            );
+        }
+    }
+
+    #[test]
+    fn canceled_or_terminal_follow_link_never_reaches_default_selection() {
+        for condition in ["click-canceled", "submit-canceled", "fatal", "closed"] {
+            let (app, _, control, link) = activation();
+            let mut response = candidate(&app, control, link);
+            match condition {
+                "click-canceled" => response.outcome.click_canceled = Some(true),
+                "submit-canceled" => response.outcome.submit_canceled = Some(true),
+                "fatal" => response.state = RealmState::Fatal,
+                "closed" => response.state = RealmState::Closed,
+                _ => unreachable!(),
+            }
+            assert!(response.accounting_valid());
+            assert!(
+                Browser::project_reply(&mut response, PAGE, Some(&app.document)).is_err(),
+                "{condition}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_navigation_preserves_eligible_suppressed_defaults_and_optional_outcome() {
+        for empty in [false, true] {
+            for canceled in [None, Some(false)] {
+                for target in [
+                    "ftp://127.0.0.1/file".to_string(),
+                    "http://user@127.0.0.1:9/file".into(),
+                    format!("http://127.0.0.1:9/{}", "é".repeat(3_000)),
+                ] {
+                    let (mut app, state, control, link) = activation();
+                    // The existing automatic-hop limit intentionally stops the
+                    // explicit destination before navigate_inner. This proves
+                    // precedence/acceptance, not a successful network request.
+                    app.refresh_count = 4;
+                    let mut response = candidate(&app, control, link);
+                    disabled_observer(&mut app, &mut response);
+                    response.navigation = Some(EXPLICIT.into());
+                    response.outcome.click_canceled = canceled;
+                    let nodes = &mut response.snapshot.as_mut().unwrap().nodes;
+                    attribute(nodes, link, "href", &target);
+                    if empty {
+                        for child in nodes[link].children.clone() {
+                            detach(nodes, child);
+                        }
+                    }
+                    let accepted_nodes = nodes.clone();
+                    complete(&app, &state, response);
+                    app.poll_page_session();
+                    assert_eq!(app.document.nodes, accepted_nodes);
+                    assert_eq!(app.document.title, "Candidate");
+                    assert_eq!(app.page_revision, 1);
+                    assert_eq!(app.dom_epoch, 24);
+                    assert!(!app.edit_versions.contains_key(&control));
+                    assert!(!app.values.contains_key(&control));
+                    assert!(app.focus == Focus::Input(control));
+                    assert_eq!(app.generation, 42);
+                    assert_eq!(app.page_url, PAGE);
+                    assert_eq!(app.address, PAGE);
+                    assert_eq!(app.inflight, 0);
+                    assert!(!app.loading && !app.fetching);
+                    assert_eq!(app.refresh_count, 4);
+                    assert!(app.status.contains("Automatic navigation limit reached"));
+                    assert!(app.script_blocked);
+                    assert!(matches!(
+                        app.cdp_events.as_slice(),
+                        [cdp_browser::Event::DocumentUpdated]
+                    ));
+                    let view = app.script_observation().unwrap().observation();
+                    assert_eq!(view.cursor, 0);
+                    assert!(view.records.is_empty());
+                    assert_eq!(view.copied_units, 0);
+                    assert_eq!(view.progress, None);
+                    assert_eq!(view.parent_failure, None);
+                    assert_eq!(state.lock().unwrap().charges, 1);
+                    assert!(state.lock().unwrap().canceled);
+                    app.poll_page_session();
+                    assert_eq!(state.lock().unwrap().charges, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_navigation_does_not_excuse_forged_defaults_or_invalid_explicit_urls() {
+        for invalid in [
+            "unrelated",
+            "detached",
+            "missing-href",
+            "invalid-href",
+            "javascript",
+            "explicit-ftp",
+            "explicit-credentials",
+        ] {
+            let (mut app, state, control, link) = activation();
+            let before = app.document.nodes.clone();
+            app.refresh_count = 4;
+            let mut response = candidate(&app, control, link);
+            disabled_observer(&mut app, &mut response);
+            response.navigation = Some(EXPLICIT.into());
+            let nodes = &mut response.snapshot.as_mut().unwrap().nodes;
+            match invalid {
+                "unrelated" => {
+                    response.default_action = DefaultAction::FollowLink {
+                        node: app.document.query_selector(0, "#other").unwrap().unwrap(),
+                    }
+                }
+                "detached" => detach(nodes, link),
+                "missing-href" => nodes[link].attributes.retain(|(key, _)| key != "href"),
+                "invalid-href" => attribute(nodes, link, "href", "http://["),
+                "javascript" => attribute(nodes, link, "href", "javascript:trap()"),
+                "explicit-ftp" => response.navigation = Some("ftp://127.0.0.1/file".into()),
+                "explicit-credentials" => {
+                    response.navigation = Some("http://user@127.0.0.1:9/file".into())
+                }
+                _ => unreachable!(),
+            }
+            complete(&app, &state, response);
+            app.poll_page_session();
+            retained(
+                &mut app,
+                &state,
+                control,
+                &before,
+                ObserverParentFailure::Validation,
+                1,
+                0,
+            );
+        }
+    }
+
+    #[test]
+    fn activation_transport_error_has_no_projection_charge_or_commit() {
+        let (mut app, state, control, _) = activation();
+        let before = app.document.nodes.clone();
+        state.lock().unwrap().updates.push_back(SessionUpdate {
+            generation: 42,
+            session_id: 91,
+            sequence: Some(1),
+            reply: Err("Owned activation transport failure".into()),
+        });
+        app.poll_page_session();
+        retained(
+            &mut app,
+            &state,
+            control,
+            &before,
+            ObserverParentFailure::Transport,
+            0,
+            0,
+        );
+    }
+}
+mod staged_link_destination_literals {
+    use super::*;
+
+    const PAGE: &str = "https://links.invalid/root/page";
+    const PREFIX: &str = "http://127.0.0.1:9/";
+
+    fn attr(nodes: &mut [document::Node], id: usize, key: &str, value: &str) {
+        nodes[id]
+            .attributes
+            .iter_mut()
+            .find(|(name, _)| name == key)
+            .unwrap()
+            .1 = value.into();
+    }
+
+    fn page(href: &str, base: Option<&str>) -> (Document, usize) {
+        let mut doc = document::parse(
+            "<head><base id=base href=''></head><body>\
+             <a id=link href=''><span id=child></span></a>\
+             <span id=non-anchor href='/selected'></span></body>",
+            PAGE,
+        );
+        let link = doc.query_selector(0, "#link").unwrap().unwrap();
+        let base_id = doc.query_selector(0, "#base").unwrap().unwrap();
+        attr(&mut doc.nodes, link, "href", href);
+        if let Some(base) = base {
+            attr(&mut doc.nodes, base_id, "href", base);
+        } else {
+            doc.nodes[base_id]
+                .attributes
+                .retain(|(key, _)| key != "href");
+        }
+        (document::project_nodes(doc.nodes, PAGE).unwrap(), link)
+    }
+
+    fn resolved(doc: &Document, link: usize) -> String {
+        let staged = Browser::validate_default(
+            doc,
+            &InputKind::Click { target: link },
+            &DefaultAction::FollowLink { node: link },
+        )
+        .unwrap();
+        match staged {
+            StagedDefault::FollowLink(url) => url,
+            _ => panic!("Expected owned exact-anchor destination"),
+        }
+    }
+
+    #[test]
+    fn exact_own_href_trim_empty_and_identity_literals() {
+        for (href, expected) in [
+            (
+                " \t../next?q=1#frag \r\n",
+                "https://links.invalid/next?q=1#frag",
+            ),
+            ("", PAGE),
+            ("./é x", "https://links.invalid/root/%C3%A9%20x"),
+            (
+                "https://other.invalid/absolute",
+                "https://other.invalid/absolute",
+            ),
+        ] {
+            let (doc, link) = page(href, None);
+            assert_eq!(doc.anchor_href(link).as_deref(), Some(expected));
+            assert_eq!(resolved(&doc, link), expected);
+            assert_eq!(Browser::checked_navigation(expected).unwrap(), expected);
+            for selector in ["#child", "#non-anchor"] {
+                let id = doc.query_selector(0, selector).unwrap().unwrap();
+                assert_eq!(doc.anchor_href(id), None);
+                assert!(
+                    Browser::validate_default(
+                        &doc,
+                        &InputKind::Click { target: id },
+                        &DefaultAction::FollowLink { node: id },
+                    )
+                    .is_err()
+                );
+            }
+            assert_eq!(doc.anchor_href(doc.nodes.len()), None);
+        }
+        let (mut doc, link) = page("", None);
+        doc.nodes[link].attributes.retain(|(key, _)| key != "href");
+        let doc = document::project_nodes(doc.nodes, PAGE).unwrap();
+        assert_eq!(doc.anchor_href(link), None);
+        assert!(
+            Browser::validate_default(
+                &doc,
+                &InputKind::Click { target: link },
+                &DefaultAction::FollowLink { node: link },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exact_destination_uses_reprojected_connected_base_order() {
+        for change in ["original", "reverse", "remove-href", "detach-both"] {
+            let mut doc = document::parse(
+                "<head><base id=first href='/one/'><base id=second href='/two/'></head>\
+                 <body><a id=link href='chosen'></a></body>",
+                PAGE,
+            );
+            let first = doc.query_selector(0, "#first").unwrap().unwrap();
+            let second = doc.query_selector(0, "#second").unwrap().unwrap();
+            let link = doc.query_selector(0, "#link").unwrap().unwrap();
+            let parent = doc.nodes[first].parent;
+            let expected = match change {
+                "original" => "https://links.invalid/one/chosen",
+                "reverse" => {
+                    doc.nodes[parent].children.reverse();
+                    "https://links.invalid/two/chosen"
+                }
+                "remove-href" => {
+                    doc.nodes[first].attributes.retain(|(key, _)| key != "href");
+                    "https://links.invalid/two/chosen"
+                }
+                "detach-both" => {
+                    doc.nodes[parent]
+                        .children
+                        .retain(|id| *id != first && *id != second);
+                    doc.nodes[first].parent = first;
+                    doc.nodes[second].parent = second;
+                    "https://links.invalid/root/chosen"
+                }
+                _ => unreachable!(),
+            };
+            let doc = document::project_nodes(doc.nodes, PAGE).unwrap();
+            assert_eq!(resolved(&doc, link), expected, "{change}");
+        }
+    }
+
+    #[test]
+    fn selected_target_boundary_is_serialized_16384_not_raw_reference_length() {
+        assert_eq!(PREFIX.len(), 19);
+        let exact = format!("{PREFIX}{}", "a".repeat(16_365));
+        assert_eq!(exact.len(), 16_384);
+        let (doc, link) = page(&exact, None);
+        assert_eq!(resolved(&doc, link), exact);
+        assert_eq!(Browser::checked_navigation(&exact).unwrap(), exact);
+
+        let base = format!("{PREFIX}{}/", "a".repeat(16_364));
+        assert_eq!(base.len(), 16_384);
+        let expected = format!("{base}b");
+        assert_eq!(expected.len(), 16_385);
+        let (doc, link) = page("b", Some(&base));
+        assert_eq!(resolved(&doc, link), expected);
+        assert!(Browser::checked_navigation(&expected).is_err());
+    }
+
+    #[test]
+    fn admitted_long_trim_and_expanded_base_do_not_reject_short_destination() {
+        let raw_href = format!("{}/ok", " ".repeat(16_381));
+        assert_eq!(raw_href.len(), 16_384);
+        let (doc, link) = page(&raw_href, Some(PREFIX));
+        let expected = "http://127.0.0.1:9/ok";
+        assert_eq!(resolved(&doc, link), expected);
+        assert_eq!(Browser::checked_navigation(expected).unwrap(), expected);
+
+        let raw_base = format!("{PREFIX}{}/", "é".repeat(3_000));
+        assert_eq!(raw_base.len(), 6_020);
+        let expected_base = format!("{PREFIX}{}/", "%C3%A9".repeat(3_000));
+        assert_eq!(expected_base.len(), 18_020);
+        let expected = "https://other.invalid/ok";
+        let (doc, link) = page(expected, Some(&raw_base));
+        assert_eq!(doc.base_url, expected_base);
+        assert_eq!(resolved(&doc, link), expected);
+        assert_eq!(Browser::checked_navigation(expected).unwrap(), expected);
+    }
+
+    #[test]
+    fn utf8_expansion_is_returned_then_rejected_only_by_selected_url_policy() {
+        let raw = format!("{PREFIX}{}", "é".repeat(3_000));
+        assert_eq!(raw.len(), 6_019);
+        let expected = format!("{PREFIX}{}", "%C3%A9".repeat(3_000));
+        assert_eq!(expected.len(), 18_019);
+        let (doc, link) = page(&raw, None);
+        assert_eq!(doc.anchor_href(link).as_deref(), Some(expected.as_str()));
+        assert_eq!(resolved(&doc, link), expected);
+        assert!(Browser::checked_navigation(&expected).is_err());
+    }
+}

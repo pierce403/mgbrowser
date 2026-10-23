@@ -4,6 +4,19 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/LINK_DEFAULTS.md`: next bounded increment's pre-implementation contract
+  after v0.9.17 and its verified `7fb7d2e` documentation closeout. Resolve exact
+  clicked anchors from the validated post-handler DOM instead of text items;
+  stage selected checked URLs before projection commit. Preserve cancellation,
+  explicit-navigation precedence, typed outcomes and existing limits. The
+  minimal local implementation passes focused debug/release and native/CDP
+  1x/2x controls after actual old-public-binary reproduction. Full final-version
+  regressions, both reviewed score lanes, normal package/install/updater,
+  thirteen existing native helpers, six additive native/CDP proofs and both
+  frozen worker suites pass. All 28 additive screenshots were inspected.
+  Exact-source CI/site, public gates and a new release remain; authored tests
+  add no WPT passes. See the 2026-10-23 log.
+
 - `docs/CSSOM_METHODS.md`: shipped v0.9.17 bounded modern style `setProperty`,
   `removeProperty` and `getPropertyPriority`, using the locked Rust parser and
   unchanged declaration/worker limits. Exact release source is

@@ -937,6 +937,20 @@ TLS uses rustls-rustcrypto explicitly under the research-only policy in docs/DEP
 
 Evidence: 15 transport tests passed for framing, verified TLS/rejection cases, redirects, request/body/time limits and in-memory cookie scope. A real local HTTP form submission/result click completed in the native window. Async navigation ignores stale results and caps requests at two, but lacks a transport cancellation API. Full manual keyboard/history acceptance remains open.
 
+Local candidate, not yet released: the bounded [scripted link-default
+increment](docs/LINK_DEFAULTS.md) uses the exact connected anchor's own final
+href and reconstructed base rather than requiring a text projection. The
+selected checked URL is staged before DOM/observer publication and consumed
+after successful charge/Ready acceptance; forms, cancellation, explicit
+navigation precedence and limits are preserved. Focused debug/release and
+actual native/CDP 1x/2x controls pass after retaining the old public v0.9.17
+failure. All twelve candidate images were inspected. Full final-version0.9.18
+Rust/JSPLAN gates and both fresh, reviewed WPT lanes pass with unchanged results
+and protections. Normal package/install/updater, thirteen existing native
+helpers, six additive native/CDP proofs and both frozen worker suites pass;
+all 28 additive screenshots were inspected. Public repeats and a normal release
+remain. This adds no upstream pass or completed criterion above.
+
 ## F-005 : Styled text and images
 
 Stability: in-progress

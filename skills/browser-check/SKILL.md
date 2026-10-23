@@ -200,6 +200,23 @@ old thirteen helpers and physical/atomic 1x/2x proofs separate. The fixture uses
 ordinary text anchors; it does not establish empty-anchor activation, complete
 rendering diagnostics, full CSSOM, Playwright or new upstream WPT passes.
 
+For scripted link defaults, read docs/LINK_DEFAULTS.md. Run boa_link_defaults,
+private link_default_receipts and staged_link_destination_literals, and the
+real_worker_empty_link_ script_tasks controls in debug/release. Keep exact own
+anchor identity, post-handler base/href resolution, cancellation and explicit
+navigation precedence; selected URL policy must precede observer/DOM publication
+and the existing one charge. Preserve forms and all old tests/resource limits.
+Build link_defaults_server and link_defaults_smoke, then run
+tools/link-defaults-smoke.py separately at --scale 1 and --scale 2 with explicit
+binary/version/commit, client/server and font identities. Use its dedicated
+server, not modified shared journey-server routes that invalidate older pins.
+Require actual empty-anchor DOM snapshots, canceled DOM/paint/no-navigation,
+direct/Promise-selected native and logical-CDP destinations, real lifecycle,
+work/System/HTTP/cleanup receipts and all six images per scale. Repeat with
+packaged and public-installed bytes while retaining all older helpers and both
+frozen worker suites. These are authored controls, not WPT passes or complete
+HTML link activation; native event delivery is not independent physical input.
+
 For trusted Window testharness observation, read docs/WPT_OBSERVER.md and
 docs/WPT_OBSERVER_STATUS.md. The frozen sixteen authored controls are not a
 scored upstream selection. Preserve the current strict modern required Init/reply mode

@@ -112,8 +112,10 @@ following dependency order, updating evidence as each increment ships:
    proofs and both frozen public-worker suites pass. All sixteen additive
    public images were inspected. See
    [the public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
-   Final documentation receives a separate fresh score/CI/site gate before
-   another engine increment. Authored controls add no WPT passes.
+   Final documentation at `7fb7d2e33d9670777966cf4fe5bb4d6a30d28a80`
+   passes its separate fresh two-lane score review, all eight exact-source
+   CI/hosting checks, twelve-path HTTPS/report parity and visual verification.
+   No v0.9.17 closeout gate remains. Authored controls add no WPT passes.
    Do not equate this release with completion of broader feature criteria.
    Container-unit grammar needs a
    separate dependency/renderer review and remains deferred. Preserve the
@@ -122,6 +124,22 @@ following dependency order, updating evidence as each increment ships:
    Empty-anchor scripted activation also needs its own reviewed increment: the
    layout proof exposed the existing text-item default-validation restriction;
    ordinary text-link acceptance must not be reported as an empty-link fix.
+   **Active next increment:** the pre-implementation
+   [scripted link-default contract](docs/LINK_DEFAULTS.md) freezes exact stable
+   anchor identity, post-handler href/base resolution and precommit selected-URL
+   staging, preserving cancellation, script-navigation precedence and all
+   resource/protocol guards. Additive current-API assertions and the actual
+   public v0.9.17 native failure were retained before the minimal implementation.
+   The local candidate now passes focused debug/release controls and separate
+   native/CDP journeys at 1x/2x, including cancellation and final selected URLs.
+   All twelve candidate images were inspected. Final-version0.9.18 full Rust and
+   JSPLAN gates and both complete, reviewed WPT lanes now pass, retaining
+   static338/611/62 and Window15/16 files,77/79 final subtests. See the dated log.
+   Normal package/install/updater, thirteen existing native helpers, six
+   additive native/CDP proofs and both frozen worker suites now pass; all 28
+   additive screenshots were inspected. Public repeats, exact-commit CI/site
+   and the next normal versioned release remain required. This local
+   result is not delivery, a new WPT pass or completion of the broader gates.
    Follow [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The historical first local measurement was 0/16 passing files and

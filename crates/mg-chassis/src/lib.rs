@@ -171,6 +171,18 @@ enum PendingTransaction {
         wake_token: u64,
     },
 }
+/// Owned default selected from the validated candidate, never looked up again
+/// after its projection commits. FollowLink receives final URL policy before
+/// observer staging and the single active-time charge.
+#[derive(Debug, PartialEq, Eq)]
+enum StagedDefault {
+    None,
+    FollowLink(String),
+    SubmitForm {
+        form: usize,
+        submitter: Option<usize>,
+    },
+}
 #[derive(Clone, Copy)]
 struct ScheduledTaskWake {
     token: u64,
@@ -1561,24 +1573,19 @@ impl Browser {
         document: &Document,
         input: &InputKind,
         action: &DefaultAction,
-    ) -> Result<(), String> {
+    ) -> Result<StagedDefault, String> {
         match action {
-            DefaultAction::None => Ok(()),
+            DefaultAction::None => Ok(StagedDefault::None),
             DefaultAction::FollowLink { node } => {
                 if !matches!(input, InputKind::Click { target } if target == node)
                     || !Self::connected(document, *node)
-                    || !document
-                        .items
-                        .iter()
-                        .zip(&document.item_nodes)
-                        .any(|(item, id)| {
-                            id == node && matches!(item, Item::Text { href: Some(_), .. })
-                        })
                 {
-                    Err("Unrelated or stale link default".into())
-                } else {
-                    Ok(())
+                    return Err("Unrelated or stale link default".into());
                 }
+                document
+                    .anchor_href(*node)
+                    .map(StagedDefault::FollowLink)
+                    .ok_or_else(|| "Unrelated or stale link default".into())
             }
             DefaultAction::SubmitForm { form, submitter } => {
                 let Some(index) = document.form_nodes.iter().position(|node| node == form) else {
@@ -1601,14 +1608,22 @@ impl Browser {
                     }
                 }
                 match input {
-                    InputKind::Click { target } if Some(*target) == *submitter => Ok(()),
+                    InputKind::Click { target } if Some(*target) == *submitter => {
+                        Ok(StagedDefault::SubmitForm {
+                            form: *form,
+                            submitter: *submitter,
+                        })
+                    }
                     InputKind::Submit {
                         form: original,
                         submitter: original_button,
                     } if original_button == submitter
                         && (submitter.is_some() || original == form) =>
                     {
-                        Ok(())
+                        Ok(StagedDefault::SubmitForm {
+                            form: *form,
+                            submitter: *submitter,
+                        })
                     }
                     _ => Err("Unrelated form default".into()),
                 }
@@ -1708,9 +1723,24 @@ impl Browser {
                 );
             }
             let document = Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
-            if let Some(input) = &activation {
-                Self::validate_default(&document, &input.kind, &reply.default_action)?;
-            }
+            let default = match &activation {
+                Some(input) => {
+                    Self::validate_default(&document, &input.kind, &reply.default_action)?
+                }
+                None => StagedDefault::None,
+            };
+            // Validate identity even when explicit navigation takes precedence,
+            // but apply final URL policy only to a selected link destination.
+            let default = if reply.navigation.is_some() {
+                StagedDefault::None
+            } else {
+                match default {
+                    StagedDefault::FollowLink(target) => {
+                        StagedDefault::FollowLink(Self::checked_navigation(&target)?)
+                    }
+                    default => default,
+                }
+            };
             if self.observer_ledger.is_some() {
                 reply
                     .validate_observer_frame(self.child_pool.observer_expectation())
@@ -1723,6 +1753,7 @@ impl Browser {
                 identity,
                 activation.is_some(),
                 ack,
+                default,
             ))
         })();
         // Stage outside the closure: its exclusive borrow is limited to this
@@ -1742,8 +1773,8 @@ impl Browser {
         } else {
             Ok(None)
         };
-        let projection =
-            projection.and_then(|(document, wake, lifecycle, identity, activation, ack)| {
+        let projection = projection.and_then(
+            |(document, wake, lifecycle, identity, activation, ack, default)| {
                 observation.map(|observation| {
                     (
                         document,
@@ -1752,10 +1783,12 @@ impl Browser {
                         identity,
                         activation,
                         ack,
+                        default,
                         observation,
                     )
                 })
-            });
+            },
+        );
         // Every successful host frame requires exactly one acknowledgment,
         // even if its identity or projection is rejected. Err closures have no
         // accepted projection and never reach this path.
@@ -1765,7 +1798,7 @@ impl Browser {
             .unwrap()
             .charge_active(received.elapsed());
         let charge_failed = timed.is_err();
-        let (document, wake, lifecycle, identity, activation, ack, observation) =
+        let (document, wake, lifecycle, identity, activation, ack, default, observation) =
             match projection.and_then(|value| timed.map(|_| value)) {
                 Ok(value) => value,
                 Err(error) => {
@@ -1842,36 +1875,10 @@ impl Browser {
             }
             return;
         }
-        match reply.default_action {
-            DefaultAction::None => {}
-            DefaultAction::FollowLink { node } => {
-                let target = self
-                    .document
-                    .items
-                    .iter()
-                    .zip(&self.document.item_nodes)
-                    .find_map(|(item, id)| {
-                        if *id == node {
-                            if let Item::Text {
-                                href: Some(href), ..
-                            } = item
-                            {
-                                Some(href.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    });
-                if let Some(target) = target {
-                    match Self::checked_navigation(&target) {
-                        Ok(target) => self.navigate(target, None, true),
-                        Err(error) => self.block_session(&error),
-                    }
-                }
-            }
-            DefaultAction::SubmitForm { form, submitter } => {
+        match default {
+            StagedDefault::None => {}
+            StagedDefault::FollowLink(target) => self.navigate(target, None, true),
+            StagedDefault::SubmitForm { form, submitter } => {
                 self.submit_default(form, submitter, false)
             }
         }
