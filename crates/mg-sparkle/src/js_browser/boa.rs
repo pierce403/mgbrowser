@@ -654,6 +654,7 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     if let Some(function) = shared.borrow().methods.get(name).cloned() {
         return Ok(function);
     }
+    let (public_name, arity) = cssom::method_metadata(name).unwrap_or((name, 1));
     let function: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
@@ -661,8 +662,8 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
             name.to_string(),
         ),
     )
-    .name(JsString::from(name))
-    .length(1)
+    .name(JsString::from(public_name))
+    .length(arity)
     .build()
     .into();
     shared
@@ -1074,8 +1075,8 @@ fn timer_call(
 
 fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
-    if name == cssom::GET_PROPERTY_VALUE {
-        return cssom::get_property_value(this, args, context);
+    if cssom::method_metadata(name).is_some() {
+        return cssom::call(name, this, args, context);
     }
     if name == "host.window.postMessage" {
         return window_messages::post(this, args, context);
@@ -2971,6 +2972,7 @@ pub fn execute(request: Request) -> super::Reply {
 mod tests {
     use super::*;
     include!("boa/cssom_resource_tests.rs");
+    include!("boa/cssom_methods_resource_tests.rs");
     fn pump_next(realm: &mut BoaPageRealm) -> SessionReply {
         let wake = {
             let mut data = realm.state.borrow_mut();

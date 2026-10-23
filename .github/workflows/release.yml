@@ -26,7 +26,7 @@ jobs:
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
-          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example lifecycle_journey --example physical_justify_smoke --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
+          cargo +1.91.1 build --locked --example journey_server --example chrome_smoke --example cdp_journey --example lifecycle_journey --example physical_justify_smoke --example cssom_methods_smoke --example theme_smoke --example scale_smoke --example inspector_smoke --example tabs_smoke --example workspace_cdp_smoke
           python3 tools/page-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/task-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/error-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -46,6 +46,16 @@ jobs:
             --expected-version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" --expected-commit "$GITHUB_SHA" \
             --client target/debug/examples/physical_justify_smoke \
             --client-sha "$(sha256sum target/debug/examples/physical_justify_smoke | cut -d ' ' -f 1)" \
+            --server target/debug/examples/journey_server \
+            --server-sha "$(sha256sum target/debug/examples/journey_server | cut -d ' ' -f 1)" \
+            --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+            --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
+          python3 tools/cssom-methods-smoke.py \
+            --binary tmp/release/mgbrowser-linux-x86_64/mgbrowser \
+            --expected-sha "$(sha256sum tmp/release/mgbrowser-linux-x86_64/mgbrowser | cut -d ' ' -f 1)" \
+            --expected-version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" --expected-commit "$GITHUB_SHA" \
+            --client target/debug/examples/cssom_methods_smoke \
+            --client-sha "$(sha256sum target/debug/examples/cssom_methods_smoke | cut -d ' ' -f 1)" \
             --server target/debug/examples/journey_server \
             --server-sha "$(sha256sum target/debug/examples/journey_server | cut -d ' ' -f 1)" \
             --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
@@ -71,6 +81,7 @@ jobs:
             tmp/message-services-smoke-*/
             tmp/lifecycle-services-smoke-*/
             tmp/physical-justify-smoke-*/
+            tmp/cssom-methods-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

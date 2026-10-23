@@ -186,6 +186,17 @@ release binaries do not include the legacy selection flags. There is no fallback
 
 ## Repeatable local interaction check
 
+The v0.9.17 source candidate's declaration-method proof is separate from the
+earlier fixtures. Build `journey_server` and `cssom_methods_smoke`, then use
+`python3 tools/cssom-methods-smoke.py --help` for its explicit binary/version/
+commit/SHA, client/server and font pins. It owns a private 1x display/profile
+and emits a new ignored evidence directory. Real `load` and later click handlers
+must use `setProperty`, `removeProperty` and `getPropertyPriority` before literal
+native paint and distinct native/CDP destination requests can pass. It does not
+use Runtime evaluation, add upstream WPT results or prove live-site support.
+Packaged and public repeats remain separate gates. See [the frozen method
+contract](CSSOM_METHODS.md).
+
 In one terminal:
 
 ```sh

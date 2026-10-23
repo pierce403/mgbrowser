@@ -1,0 +1,94 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>CSSOM methods fixture</title>
+<style>
+html,body{margin:0;background:#fff}
+*{margin:0;padding:0;border:0;font-size:1px;line-height:0}
+.row{width:200px;height:30px;margin-left:20px}
+.control{display:none;height:20px;text-decoration:none}
+#ready{display:none;width:160px;height:10px;margin-left:20px}
+</style></head><body>
+<!-- Authored controls, not WPT. Hidden ordinary text links cannot become ready
+     until the actual Window load task has passed every method assertion. -->
+<div style="height:10px"></div>
+<div class="row"><a id="native-link" class="control" href="/cssom-methods">Native CSSOM methods</a></div>
+<div class="row"><a id="cdp-link" class="control" href="/cssom-methods">CDP CSSOM methods</a></div>
+<div id="ready"></div>
+<script>
+var cssomStarts = 1, cssomClicks = 0;
+function insist(condition) {
+  if (!condition) throw new Error('Authored CSSOM method assertion failed');
+}
+function prepare(element, width, color) {
+  var style = element.style;
+  insist(typeof style.setProperty === 'function' &&
+         typeof style.removeProperty === 'function' &&
+         typeof style.getPropertyPriority === 'function');
+  insist(style.setProperty === style.setProperty &&
+         style.removeProperty === style.removeProperty &&
+         style.getPropertyPriority === style.getPropertyPriority);
+  insist(style.setProperty('width', '11px', 'ImPoRtAnT') === undefined);
+  insist(style.getPropertyValue('width') === '11px' &&
+         style.getPropertyPriority('WIDTH') === 'important');
+  insist(style.setProperty('width', width, '') === undefined);
+  insist(style.getPropertyValue('width') === width &&
+         style.getPropertyPriority('width') === '');
+  insist(style.setProperty('padding-left', '8px', 'important') === undefined);
+  insist(style.getPropertyPriority('padding-left') === 'important');
+  insist(style.removeProperty('padding-left') === '8px');
+  insist(style.getPropertyValue('padding-left') === '' &&
+         style.getPropertyPriority('padding-left') === '' &&
+         style.removeProperty('padding-left') === '');
+  insist(style.setProperty('padding-right', '9px', 'important') === undefined);
+  insist(style.setProperty('padding-right', '', 'invalid-priority') === undefined);
+  insist(style.getPropertyValue('padding-right') === '' &&
+         style.getPropertyPriority('padding-right') === '');
+  var raw = element.getAttribute('style');
+  insist(style.setProperty('width', '7px', 'invalid-priority') === undefined);
+  insist(element.getAttribute('style') === raw);
+  insist(style.setProperty('background-color', color, 'important') === undefined);
+  insist(style.getPropertyPriority('background-color') === 'important');
+  insist(style.setProperty('color', color, '') === undefined);
+}
+function activate(element, width, destination, event) {
+  try {
+    insist(document.readyState === 'complete' && cssomStarts === 1 && cssomClicks === 0 &&
+           document.body.getAttribute('data-cssom-ready') === 'load-methods-ready');
+    var style = element.style;
+    insist(style.setProperty('width', width, 'important') === undefined &&
+           style.getPropertyValue('width') === width &&
+           style.getPropertyPriority('width') === 'important');
+    insist(style.setProperty('padding-left', '3px', 'important') === undefined &&
+           style.getPropertyPriority('padding-left') === 'important' &&
+           style.removeProperty('padding-left') === '3px' &&
+           style.getPropertyValue('padding-left') === '' &&
+           style.getPropertyPriority('padding-left') === '');
+    insist(style.setProperty('width', width) === undefined &&
+           style.getPropertyPriority('width') === '');
+    cssomClicks++;
+    element.setAttribute('href', destination);
+  } catch (error) {
+    event.preventDefault();
+    throw error;
+  }
+}
+window.addEventListener('load', function () {
+  insist(document.readyState === 'complete' && cssomStarts === 1 && cssomClicks === 0);
+  var nativeLink = document.getElementById('native-link');
+  var cdpLink = document.getElementById('cdp-link');
+  prepare(nativeLink, '120px', '#aa0000');
+  prepare(cdpLink, '80px', '#00aa00');
+  nativeLink.onclick = function (event) {
+    activate(nativeLink, '120px', '/cssom-methods-native-hit', event);
+  };
+  cdpLink.onclick = function (event) {
+    activate(cdpLink, '80px', '/cssom-methods-cdp-hit', event);
+  };
+  insist(nativeLink.style.setProperty('display', 'inline-block') === undefined &&
+         cdpLink.style.setProperty('display', 'inline-block') === undefined);
+  var ready = document.getElementById('ready').style;
+  insist(ready.setProperty('background-color', '#0000aa') === undefined &&
+         ready.setProperty('display', 'block') === undefined);
+  document.body.setAttribute('data-cssom-ready', 'load-methods-ready');
+});
+</script>
+</body></html>

@@ -452,6 +452,161 @@ fn real_worker_cssom_retains_declarations_across_lifecycle_and_real_click() {
 }
 
 #[test]
+fn real_worker_cssom_methods_retain_identity_priority_and_removal_across_real_click() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        var methodNode=document.getElementById('o'), methodStyle=methodNode.style;
+        var methodSet=methodStyle.setProperty, methodRemove=methodStyle.removeProperty;
+        var methodPriority=methodStyle.getPropertyPriority;
+        if(typeof methodSet!=='function' || typeof methodRemove!=='function' ||
+           typeof methodPriority!=='function') throw 'missing CSSOM editing methods';
+        methodSet.call(methodStyle,'width','12px','IMPORTANT');
+        methodSet.call(methodStyle,'margin','2px 4px','important');
+        if(methodStyle.getPropertyValue('width')!=='12px' ||
+           methodPriority.call(methodStyle,'width')!=='important' ||
+           methodPriority.call(methodStyle,'margin')!=='important') throw 'initial method declarations failed';
+        methodNode.setAttribute('data-method-phase','init');
+        methodNode.onclick=function(event) {
+            event.preventDefault();
+            if(methodNode.style!==methodStyle || methodStyle.setProperty!==methodSet ||
+               methodStyle.removeProperty!==methodRemove ||
+               methodStyle.getPropertyPriority!==methodPriority) throw 'method identity changed';
+            if(methodRemove.call(methodStyle,'width')!=='12px' ||
+               methodStyle.getPropertyValue('width')!=='') throw 'retained width removal failed';
+            methodSet.call(methodStyle,'width','27px','important');
+            methodSet.call(methodStyle,'height','3px',undefined);
+            if(methodRemove.call(methodStyle,'margin')!=='2px 4px' ||
+               methodStyle.getPropertyValue('margin-left')!=='' ||
+               methodStyle.getPropertyValue('width')!=='27px' ||
+               methodPriority.call(methodStyle,'width')!=='important' ||
+               methodPriority.call(methodStyle,'height')!=='') throw 'later declaration methods failed';
+            methodNode.setAttribute('data-method-phase','click');
+        };
+        "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(initial["reply"]["scripts_executed"], 1);
+    assert_eq!(initial["reply"]["revision"], 0);
+    assert_eq!(
+        initial["reply"]["lifecycle"],
+        json!({"phase":"Interactive","initial_failure":false})
+    );
+    // Init really executed its one source; no_activation is a later-task
+    // helper which also requires scripts_executed=0 and is not valid here.
+    assert_eq!(initial["reply"]["acknowledgements"], json!([]));
+    assert_eq!(initial["reply"]["default_action"], json!({"kind":"None"}));
+    assert!(initial["reply"]["outcome"]["click_canceled"].is_null());
+    assert!(initial["reply"]["outcome"]["submit_canceled"].is_null());
+    assert_eq!(
+        attribute(&initial, "data-method-phase").as_deref(),
+        Some("init")
+    );
+    let first = report(&initial);
+    assert_eq!(
+        (first.jobs_admitted, first.jobs_executed, first.pending_jobs),
+        (2, 0, 2)
+    );
+    assert!(first.fatal_reason.is_none());
+    peer.idle();
+
+    let loaded = peer.complete_lifecycle(initial);
+    assert_eq!(loaded["sequence"], 2);
+    assert_eq!(loaded["reply"]["revision"], 2);
+    assert_eq!(loaded["reply"]["errors"], json!([]));
+    assert_eq!(
+        attribute(&loaded, "data-method-phase").as_deref(),
+        Some("init")
+    );
+    assert!(loaded["reply"]["task_wake"].is_null());
+    no_activation(&loaded);
+    let before_click = report(&loaded);
+    before_click.validate_after(&first).unwrap();
+    assert_eq!(
+        (
+            before_click.jobs_admitted,
+            before_click.jobs_executed,
+            before_click.pending_jobs
+        ),
+        (2, 2, 0)
+    );
+    peer.idle();
+
+    let target = loaded["reply"]["snapshot"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|node| {
+            node["attributes"]
+                .as_array()
+                .is_some_and(|attributes| attributes.iter().any(|pair| pair == &json!(["id", "o"])))
+        })
+        .unwrap();
+    peer.send(
+        3,
+        2,
+        "Event",
+        json!({"kind":{"kind":"Click","target":target},"edits":[]}),
+    );
+    let clicked = peer.receive(3, 2);
+    assert_eq!(clicked["reply"]["state"], "Ready");
+    assert_eq!(clicked["reply"]["revision"], 3);
+    assert_eq!(clicked["reply"]["errors"], json!([]));
+    assert_eq!(clicked["reply"]["scripts_executed"], 0);
+    assert_eq!(clicked["reply"]["acknowledgements"], json!([]));
+    assert_eq!(clicked["reply"]["default_action"], json!({"kind":"None"}));
+    assert_eq!(clicked["reply"]["outcome"]["click_canceled"], true);
+    assert!(clicked["reply"]["outcome"]["submit_canceled"].is_null());
+    assert_eq!(clicked["reply"]["lifecycle"], loaded["reply"]["lifecycle"]);
+    assert!(clicked["reply"]["task_wake"].is_null());
+    assert_eq!(
+        attribute(&clicked, "data-method-phase").as_deref(),
+        Some("click")
+    );
+    let style = attribute(&clicked, "style").unwrap();
+    assert!(style.contains("width: 27px !important;"), "{style}");
+    assert!(style.contains("height: 3px;"), "{style}");
+    assert!(!style.contains("margin"), "{style}");
+    let after_click = report(&clicked);
+    after_click.validate_after(&before_click).unwrap();
+    assert!(after_click.fatal_reason.is_none());
+    assert_eq!(
+        (
+            after_click.jobs_admitted,
+            after_click.jobs_executed,
+            after_click.pending_jobs
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(after_click.source_bytes, first.source_bytes);
+    assert_eq!(after_click.source_admissions, first.source_admissions);
+    assert!(after_click.opcodes_remaining < before_click.opcodes_remaining);
+    let initial_memory = first.worker_memory.unwrap();
+    let loaded_memory = before_click.worker_memory.unwrap();
+    let clicked_memory = after_click.worker_memory.unwrap();
+    assert!(loaded_memory.is_valid_after(&initial_memory));
+    assert!(clicked_memory.is_valid_after(&loaded_memory));
+    assert!(clicked_memory.cumulative_bytes > loaded_memory.cumulative_bytes);
+    for memory in [initial_memory, loaded_memory, clicked_memory] {
+        assert_eq!(
+            memory.outstanding_limit_bytes,
+            mg_butane::modern::WORKER_OUTSTANDING_LIMIT
+        );
+        assert_eq!(
+            memory.cumulative_limit_bytes,
+            mg_butane::modern::WORKER_CUMULATIVE_LIMIT
+        );
+    }
+    println!(
+        "BOA_CSSOM_METHODS_RETAINED {}",
+        serde_json::to_string(&[first, before_click, after_click]).unwrap()
+    );
+    peer.idle();
+    peer.finish();
+}
+
+#[test]
 fn real_worker_v7_output_configuration_is_init_only_and_keeps_old_contract_off() {
     use mg_sparkle::page_session::observer::{ObserverContract, ObserverInit};
     // Synthetic ordinary functions isolate the public process/configuration

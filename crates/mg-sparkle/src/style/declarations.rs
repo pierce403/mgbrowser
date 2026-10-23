@@ -28,6 +28,7 @@ pub(crate) enum Part {
     CurrentStyle,
     CssName,
     Value,
+    Priority,
     CssText,
     Output,
 }
@@ -125,12 +126,58 @@ pub(crate) fn declared_value(
     };
     let url = UrlExtraData::from(base.clone());
     let block = parse_current(raw, &url)?;
+    specified_value(&block, &id)
+}
+
+fn specified_value(
+    block: &PropertyDeclarationBlock,
+    id: &PropertyId,
+) -> Result<String, DeclarationError> {
     let mut text = String::new();
     block
-        .property_value_to_css(&id, &mut text)
+        .property_value_to_css(id, &mut text)
         .map_err(|_| DeclarationError::Serialization)?;
     bounded(&text, Part::Output)?;
     Ok(text)
+}
+
+pub(crate) fn declared_priority(
+    raw: &str,
+    css_name: &str,
+    base: &Url,
+) -> Result<String, DeclarationError> {
+    bounded(raw, Part::CurrentStyle)?;
+    let Some(id) = enabled_css_name(css_name)? else {
+        return Ok(String::new());
+    };
+    let url = UrlExtraData::from(base.clone());
+    let block = parse_current(raw, &url)?;
+    Ok(if block.property_priority(&id).important() {
+        "important".into()
+    } else {
+        String::new()
+    })
+}
+
+/// Prepare both the specified return and all constituent removals from the same
+/// block. An empty shorthand return does not imply its longhands are absent.
+pub(crate) fn remove_declared_value(
+    raw: &str,
+    css_name: &str,
+    base: &Url,
+) -> Result<(String, Mutation), DeclarationError> {
+    bounded(raw, Part::CurrentStyle)?;
+    let Some(id) = enabled_css_name(css_name)? else {
+        return Ok((String::new(), Mutation::Unchanged));
+    };
+    let url = UrlExtraData::from(base.clone());
+    let mut block = parse_current(raw, &url)?;
+    let text = specified_value(&block, &id)?;
+    let Some(first) = block.first_declaration_to_remove(&id) else {
+        return Ok((text, Mutation::Unchanged));
+    };
+    block.remove_property(&id, first);
+    Ok((text, replacement(raw, &block)?))
 }
 
 /// A read never rewrites the original raw attribute, including malformed input.
@@ -147,8 +194,19 @@ pub(crate) fn assign_declared_value(
     value: &str,
     base: &Url,
 ) -> Result<Mutation, DeclarationError> {
+    set_declared_value(raw, css_name, value, "", base)
+}
+
+pub(crate) fn set_declared_value(
+    raw: &str,
+    css_name: &str,
+    value: &str,
+    priority: &str,
+    base: &Url,
+) -> Result<Mutation, DeclarationError> {
     bounded(raw, Part::CurrentStyle)?;
     bounded(value, Part::Value)?;
+    bounded(priority, Part::Priority)?;
     let Some(id) = enabled_css_name(css_name)? else {
         return Ok(Mutation::Unchanged);
     };
@@ -166,6 +224,13 @@ pub(crate) fn assign_declared_value(
         block.remove_property(&id, first);
         return replacement(raw, &block);
     }
+    let importance = if priority.is_empty() {
+        Importance::Normal
+    } else if priority.eq_ignore_ascii_case("important") {
+        Importance::Important
+    } else {
+        return Ok(Mutation::Unchanged);
+    };
     let mut parsed = SourcePropertyDeclaration::default();
     if parse_one_declaration_into(
         &mut parsed,
@@ -186,12 +251,12 @@ pub(crate) fn assign_declared_value(
     }
     let mut block = parse_current(raw, &url)?;
     let mut updates = SourcePropertyDeclarationUpdate::default();
-    if !block.prepare_for_update(&parsed, Importance::Normal, &mut updates) {
+    if !block.prepare_for_update(&parsed, importance, &mut updates) {
         return Ok(Mutation::Unchanged);
     }
     // extend/push would implement parser cascade precedence and incorrectly
     // preserve an earlier important declaration. CSSOM assignment replaces it.
-    block.update(parsed.drain(), Importance::Normal, &mut updates);
+    block.update(parsed.drain(), importance, &mut updates);
     replacement(raw, &block)
 }
 

@@ -2,6 +2,32 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
+## v0.9.17 candidate: declaration editing methods
+
+The v0.9.17 source candidate adds modern `element.style.setProperty`,
+`removeProperty` and `getPropertyPriority` using the existing locked Rust Stylo
+grammar and real DOM style attribute. Value/importance replacement, atomic
+shorthand removal, receiver-first conversion and pre-commit resource admission
+retain the existing worker and declaration limits.
+[Frozen contract](docs/CSSOM_METHODS.md) and [candidate release notes](docs/RELEASE-v0.9.17.md).
+
+Focused local checks pass 28 public binding controls, 23 private declaration/
+resource controls, three fresh restricted-child cases and one real retained
+Init/lifecycle/click case. Independent production source review is complete.
+These authored controls add no upstream WPT passes or denominator. Full
+final-version Rust/JSPLAN regressions pass. Both complete, reviewed WPT lanes
+retain static 338 pass / 611 fail / 62 unsupported of1,011 and separate Window
+15/16 files with77/79 final subtests passing, with no infrastructure failures
+or weakened protections. Normal local package/install/updater and all thirteen
+existing native helpers pass. Physical/atomic1x/2x and the separate method-native/
+CDP proofs pass; all sixteen actual screenshots were inspected. Both frozen
+direct-worker suites retain all21 expected outcomes, including genuine failures
+and timeouts, with confirmed owned cleanup. Exact-source CI/site and normal
+release/public acceptance remain open.
+The installer continues to select the latest actually published release,
+v0.9.16 at candidate preparation. Full CSSOM, empty-anchor activation and
+F-003/F-005/F-016/F-026/MVP remain unfinished.
+
 ## v0.9.16 Experimental Preview
 
 v0.9.16 corrects definite-width outer allocation for ordinary inline-blocks

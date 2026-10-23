@@ -683,6 +683,30 @@ indexed/enumerated access, constructors/prototypes, generic expandos,
 computed/rule styles and Element.style PutForwards remain deferred. See
 docs/CSSOM.md; no unchecked criterion above or F-026/MVP gate is completed.
 
+Candidate v0.9.17 implements modern `element.style.setProperty`,
+`removeProperty` and `getPropertyPriority` under the frozen
+[method contract](docs/CSSOM_METHODS.md). The same locked Rust Stylo grammar
+and actual style attribute provide value/importance replacement, atomic
+shorthand removal and priority reads. Receiver/arity/conversion order,
+reentrant effects, ordinary Host admission and existing VM fatals retain their
+prior boundaries; return/mutation capacity admission precedes DOM commit.
+Focused local checks pass 28 public, 23 private, three fresh restricted-child
+and one retained Init/lifecycle/click control, with independent production
+source review complete. These authored controls add no upstream numerator or
+denominator. Full final-version regressions/JSPLAN pass. Both complete reviewed
+score lanes retain static338/611/62 of1,011 and separate Window15/16 files,
+77/79 final subtests, with no infrastructure errors or weakened protections.
+Normal local package/install/updater, all thirteen existing native helpers,
+physical/atomic1x/2x and the separate method-native/CDP proof pass. All16 actual
+additive screenshots were inspected. Both frozen direct-worker suites retain
+all21 expected outcomes, including genuine failures/timeouts, with owned cleanup
+confirmed. Exact-source CI/site and normal release/public acceptance remain open.
+No wider criterion is checked; full CSSOM, indexed/enumerated interfaces,
+constructors/prototypes, generic expandos, computed/rule styles and
+`Element.style` forwarding remain unfinished. See the
+[candidate notes](docs/RELEASE-v0.9.17.md) and dated log. Delivered v0.9.16
+and its prior acceptance receipts remain separate.
+
 ## F-015 : Self-updates and build identity
 
 Stability: stable

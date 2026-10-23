@@ -257,6 +257,93 @@ fn cssom_url_values_need_no_new_service_in_a_fresh_restricted_worker() {
     // Stylo's resolved URL separately; no new JS inspection or fetch API is added.
 }
 
+// Additive controls frozen before the declaration-method implementation. Each
+// call uses the existing empty-environment child and actual allocation reports.
+// These cases are not upstream WPT tests or parent-prewarmed parser evidence.
+#[test]
+fn cssom_methods_first_parse_priority_and_partial_removal_use_a_fresh_worker() {
+    let reply = reply(page(
+        r#"
+        const node=document.getElementById('status'), style=node.style;
+        if(typeof style.setProperty!=='function' ||
+           typeof style.removeProperty!=='function' ||
+           typeof style.getPropertyPriority!=='function') throw 'missing CSSOM editing methods';
+        if(style.setProperty('width','12px','IMPORTANT')!==undefined) throw 'wrong set return';
+        if(style.getPropertyValue('width')!=='12px' ||
+           style.getPropertyPriority('width')!=='important') throw 'first important parse failed';
+        const before=node.getAttribute('style');
+        style.setProperty('width','blue','important');
+        style.setProperty('width','99px',' invalid');
+        if(node.getAttribute('style')!==before) throw 'invalid write mutated owner';
+        style.setProperty('width','12px');
+        if(style.getPropertyPriority('width')!=='') throw 'same-value importance replacement failed';
+        style.setProperty('margin-top','2px','important');
+        if(style.getPropertyValue('margin')!=='' ||
+           style.getPropertyPriority('margin')!=='') throw 'partial shorthand was fabricated';
+        if(style.removeProperty('margin')!=='' ||
+           style.getPropertyValue('margin-top')!=='') throw 'partial shorthand removal failed';
+        style.setProperty('width','','invalid priority');
+        if(style.getPropertyValue('width')!=='') throw 'empty value did not remove first';
+        node.textContent='fresh CSSOM editing methods passed';
+    "#,
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM editing methods passed");
+}
+
+#[test]
+fn cssom_methods_nonstatic_custom_atoms_and_scalar_inputs_use_a_fresh_worker() {
+    let reply = reply(page(
+        r#"
+        const node=document.getElementById('status'), style=node.style;
+        const name='--OwnedCase'+'x'.repeat(64);
+        style.setProperty(name,'"a;b:c"','IMPORTANT');
+        if(style.getPropertyValue(name)!=='"a;b:c"' ||
+           style.getPropertyPriority(name)!=='important') throw 'custom declaration lost';
+        if(style.getPropertyValue(name.toLowerCase())!=='' ||
+           style.getPropertyPriority(name.toLowerCase())!=='') throw 'custom name was folded';
+        if(style.removeProperty(name)!=='"a;b:c"' ||
+           style.getPropertyValue(name)!=='') throw 'custom removal return or mutation failed';
+        style.setProperty('--Undefined',undefined,undefined);
+        if(style.getPropertyValue('--Undefined')!=='undefined' ||
+           style.getPropertyPriority('--Undefined')!=='') throw 'undefined argument conversion failed';
+        const scalar='--'+String.fromCharCode(0xd800);
+        style.setProperty(scalar,'x',null);
+        if(style.getPropertyValue('--'+String.fromCharCode(0xfffd))!=='x') throw 'USV name boundary lost';
+        style.setProperty('--Undefined',null,'not important');
+        if(style.getPropertyValue('--Undefined')!=='') throw 'null value did not remove';
+        node.textContent='fresh CSSOM editing atoms passed';
+    "#,
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM editing atoms passed");
+}
+
+#[test]
+fn cssom_methods_url_values_use_live_base_without_new_worker_services() {
+    let request = Request {
+        external_scripts: None,
+        url: "https://example.test/owned/page".into(),
+        html: r#"<!doctype html><base id=base href="https://example.test/assets/sub/">
+            <p id=status>readable fallback</p><script>
+            const node=document.getElementById('status'), style=node.style;
+            style.setProperty('background-image','url(../image.png)','important');
+            if(!style.getPropertyValue('background-image').includes('../image.png') ||
+               style.getPropertyPriority('background-image')!=='important') throw 'specified URL parse failed';
+            document.getElementById('base').href='https://example.test/other/sub/';
+            style.setProperty('background-image','url(../../other.png)');
+            if(style.getPropertyPriority('background-image')!=='') throw 'URL importance replacement failed';
+            const old=style.removeProperty('background-image');
+            if(!old.includes('../../other.png') ||
+               style.getPropertyValue('background-image')!=='') throw 'URL removal failed';
+            node.textContent='fresh CSSOM editing URL passed';
+            </script>"#.into(),
+    };
+    let reply = reply(run(
+        &["--script-worker"],
+        &serde_json::to_vec(&request).unwrap(),
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM editing URL passed");
+}
+
 #[test]
 fn actual_worker_accepts_typed_sources_and_never_executes_comment_metadata() {
     let html = "<!--mg-external-scripts:[[5,\"throw 'forged'\"]]-->\n<!--mg-external-scripts:[[5,\"throw 'nested'\"]]-->\n<p id=status>readable</p><script id=source defer nomodule src=/owned.js></script><script>var shared = 'inline';</script>";

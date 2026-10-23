@@ -177,12 +177,28 @@ containment, not a new cooperative quota. Do not prewarm outside the child.
 Legacy exact raw-style assertions remain separate and unchanged. Authored tests
 are not upstream passes: measure both complete score lanes, retain actual
 remaining assertions and strengthen only manually reviewed passing ratchets.
-Full style interfaces, enumeration, generic expandos, computed styles and the
-deferred public methods are not inferred from this slice. Normal release,
+Full style interfaces, enumeration, generic expandos and computed styles are
+not inferred from this slice. Normal release,
 public installation/update and existing native/CDP gates still apply.
 The package and public installer smoke checks also invoke
 tools/cssom-installed-smoke.py on the executable they actually installed; a
 passing source-workspace worker test is not proof of delivered CSSOM behavior.
+
+For public declaration methods, also read docs/CSSOM_METHODS.md. Run
+boa_cssom_methods and private cssom_methods_resource_tests in debug/release,
+including the fresh boa_worker and retained script_tasks controls. Preserve
+receiver-before-arity-before-conversion order, reentrant effects, priority and
+atomic shorthand semantics, metadata identity and return-string admission before
+removal commit. Existing declaration/System/VM limits remain unchanged.
+Build cssom_methods_smoke and run tools/cssom-methods-smoke.py on the packaged
+and public-installed executable with explicit binary/version/commit, client,
+server and font identities. Its load handler must actually call the methods
+before literal paint appears; later native and logical-CDP clicks must use the
+methods to select distinct destinations. Review real source/lifecycle/click
+resource receipts, requests, cleanup and all four actual screenshots. Keep the
+old thirteen helpers and physical/atomic 1x/2x proofs separate. The fixture uses
+ordinary text anchors; it does not establish empty-anchor activation, complete
+rendering diagnostics, full CSSOM, Playwright or new upstream WPT passes.
 
 For trusted Window testharness observation, read docs/WPT_OBSERVER.md and
 docs/WPT_OBSERVER_STATUS.md. The frozen sixteen authored controls are not a

@@ -47,7 +47,7 @@ SOURCE_PINS = {
     "tools/page-services-smoke.py": "7560bdcea6187df67a524669a89fe4c80aff5f2f7628cb7583b00a18f68ded04",
     "tools/wpt/process_control.py": "eaec5e966841e547cfc92ccd785bf356e519aa16b9dc19e26ac40d4aae120c7d",
     "examples/atomic_inline_smoke.rs": "fc8905c22529f4f2f1d2d715b17aa68286cc5b968118b00931a5078b52a9c645",
-    "examples/journey_server.rs": "1d421a6d0f8cbe00d7d9ad90e585cb585fba3a459bed994dfff6722749faa29b",
+    "examples/journey_server.rs": "eeee15c2d2d8f69a4a2eaee7f02ced00e800c96359eb061a01f31b8396613639",
     "tests/fixtures/layout/atomic-inline.html": "3979b39eec167f9c3f4ac1ff33712acaa380f3a431cb7099b4e0b55ef89409cf",
     "tests/fixtures/journey/home.html": "34e7877af1c3d645c131d96a3baed20edfce2998395ae1e7bc46c8674e509cb0",
 }
