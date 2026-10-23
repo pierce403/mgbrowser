@@ -5,6 +5,9 @@
 
 pub use crate::document::StylesheetSource;
 
+#[cfg(feature = "modern")]
+pub(crate) mod declarations;
+
 use crate::document::{Document, Node};
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
 use selectors::context::{

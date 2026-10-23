@@ -107,6 +107,18 @@ separately in the log. Neither the historical baseline nor the separate current
 Window report is added to the static score. Engine fixes follow in separate
 released contributions; no acceptance criterion above is newly checked.
 
+v0.9.14 adds a separate parser-backed modern element-style declaration bridge
+under docs/CSSOM.md. Its independently reviewed complete local Window
+measurement reports 15/16 passing files and 77/79 passing actual final subtests,
+with two assertion failures retained in `flex-valid.html`. Full final inventories,
+64 original resource requests, accounting, clocks and cleanup are reviewed.
+The Window ratchet is manually strengthened to protect the fifteen passing
+files, excluding the still-failing flex-valid file. Static ratchets remain
+317 passes/949 runnable cases plus the original 24-case contract. Inputs,
+assertions, scorer and resource limits remain unchanged. Publication and
+package/public/native verification are separate dated-log gates, not inferred
+from this local measurement; no acceptance criterion above is newly checked.
+
 ## F-025 : Google News desktop reading
 
 Stability: in-progress
@@ -606,6 +618,23 @@ outcomes in local worker/Browser and public-worker lanes. Exact-source release,
 public install/update and thirteen public-native helper receipts are recorded
 in [dated log](memory/logs/2026-10-22.md#v0913-public-release-closeout). No larger resource profile, general
 Window readiness, upstream cohort or unchecked F-016/F-026/MVP gate is completed.
+
+v0.9.14 adds modern `element.style` declared-value named
+reads/writes, `cssText` and callable `getPropertyValue` through the existing
+locked Stylo grammar and serializer. The DOM attribute remains authoritative;
+single-value invalid/no-op, empty removal, importance/shorthand replacement,
+receiver-first conversion and ordinary Host/fatal behavior have focused local
+debug evidence: nine declaration, twenty public binding, nine private resource
+and three fresh restricted-worker controls, plus a real retained-worker
+Init/lifecycle/click control. All 364 frozen JSPLAN outcomes remain unchanged.
+Legacy raw serialization, existing limits and third-party features are preserved.
+Full local debug/release all-target regressions, optional-UX embedding and
+existing tooling checks pass. Consult the dated log for separate publication,
+public install/update and native/CDP verification; they are not inferred here.
+Full style interfaces, public setProperty/removeProperty/getPropertyPriority,
+indexed/enumerated access, constructors/prototypes, generic expandos,
+computed/rule styles and Element.style PutForwards remain deferred. See
+docs/CSSOM.md; no unchecked criterion above or F-026/MVP gate is completed.
 
 ## F-015 : Self-updates and build identity
 

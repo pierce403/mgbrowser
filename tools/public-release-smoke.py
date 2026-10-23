@@ -59,6 +59,7 @@ assert reply["boa"]["worker_memory"]["cumulative_bytes"] > 0
 assert "Boa Promise checkpoint: 42" in reply["html"]
 assert '<form' in reply["html"]
 print("PUBLIC_BOA_PAGE_EXECUTION_OK", flush=True)
+subprocess.run([sys.executable, "tools/cssom-installed-smoke.py", str(binary)], check=True, timeout=10)
 assert subprocess.check_output([binary, "--version"], text=True).strip() == f"mgbrowser {expected}"
 data = root / ".local/share"
 desktop = data / "applications/mgbrowser.desktop"

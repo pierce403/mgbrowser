@@ -55,6 +55,15 @@ summary: Compact map of mgbrowser project decisions and evidence.
   fixes are separate releases. `docs/WPT_WINDOW_CI.md`: genuinely cold pilot
   accepted at fec3803, unchanged deadlines and actual critical-path evidence;
   coupled publication requires its own exact-source verification.
+  That coupled gate now passes at cab9375: all eight exact-source checks,
+  separate current reports/public12 parity, retained CI data and visual checks.
+- `docs/CSSOM.md`: active separate modern element-style declared-value bridge,
+  using existing pinned Stylo with no new worker profile/dependencies. Frozen
+  authored API/quota/fresh/retained-worker and full local debug/release checks
+  pass. Reviewed Window coverage improves to15/16 files and77/79 final subtests;
+  two genuine flex-valid assertions remain failing, fifteen pass files are
+  manually protected. v0.9.14 release/public delivery gates remain pending.
+  Full CSSOM and F-016/F-026/MVP remain incomplete.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

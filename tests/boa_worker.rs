@@ -175,6 +175,88 @@ fn modern_page_and_promise_dom_effects_have_real_worker_memory_evidence() {
     );
 }
 
+// Frozen before parser-backed CSSOM: each call starts a fresh restricted child,
+// with no parent Stylo initialization or new worker permission/profile.
+fn cssom_worker_success(reply: &Reply, proof: &str) {
+    assert!(reply.applied);
+    assert!(reply.errors.is_empty(), "{:?}", reply.errors);
+    assert!(reply.navigation.is_none());
+    assert_eq!(reply.scripts_executed, 1);
+    assert!(reply.html.contains(proof));
+    let report = reply.boa.as_ref().unwrap();
+    assert!(report.fatal_reason.is_none());
+    assert_eq!(report.source_admissions, 1);
+    assert_eq!(
+        (
+            report.jobs_admitted,
+            report.jobs_executed,
+            report.pending_jobs
+        ),
+        (2, 0, 2)
+    );
+    let memory = report.worker_memory.unwrap();
+    assert_eq!(memory.outstanding_limit_bytes, 32 * 1024 * 1024);
+    assert_eq!(memory.cumulative_limit_bytes, 64 * 1024 * 1024);
+    println!("BOA_CSSOM_FRESH {}", serde_json::to_string(report).unwrap());
+}
+
+#[test]
+fn cssom_first_declaration_parse_and_invalid_value_run_in_a_fresh_restricted_worker() {
+    let reply = reply(page(
+        r#"
+        const node=document.getElementById('status'), style=node.style;
+        style.width='12px'; style.width='not-a-width';
+        if(style.getPropertyValue('width')!=='12px') throw 'invalid write replaced state';
+        style.margin='2px 4px';
+        if(style.marginLeft!=='4px') throw 'missing shorthand state';
+        node.textContent='fresh CSSOM declarations passed';
+    "#,
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM declarations passed");
+}
+
+#[test]
+fn cssom_nonstatic_custom_atoms_and_strings_run_in_a_fresh_restricted_worker() {
+    let reply = reply(page(
+        r#"
+        const node=document.getElementById('status'), style=node.style;
+        const name='--OwnedCase'+ 'x'.repeat(128);
+        style.cssText=name+':"a;b:c";width:9px';
+        if(style.getPropertyValue(name)!=='"a;b:c"') throw 'lost custom string';
+        if(style.getPropertyValue(name.toLowerCase())!=='') throw 'custom name folded';
+        style.cssText='';
+        if(style.getPropertyValue(name)!=='') throw 'replacement retained old custom value';
+        node.textContent='fresh CSSOM native atoms passed';
+    "#,
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM native atoms passed");
+}
+
+#[test]
+fn cssom_url_values_need_no_new_service_in_a_fresh_restricted_worker() {
+    let request = Request {
+        external_scripts: None,
+        url: "https://example.test/owned/page".into(),
+        html: r#"<!doctype html><base id=base href="https://example.test/assets/sub/">
+            <p id=status>readable fallback</p><script>
+            const node=document.getElementById('status'), style=node.style;
+            style.backgroundImage='url(../image.png)';
+            if(!style.getPropertyValue('background-image').includes('../image.png')) throw 'missing specified URL';
+            document.getElementById('base').href='https://example.test/other/sub/';
+            style.backgroundImage='url(../../other.png)';
+            if(!style.backgroundImage.includes('../../other.png')) throw 'later URL parse failed';
+            node.textContent='fresh CSSOM URL parsing passed';
+            </script>"#.into(),
+    };
+    let reply = reply(run(
+        &["--script-worker"],
+        &serde_json::to_vec(&request).unwrap(),
+    ));
+    cssom_worker_success(&reply, "fresh CSSOM URL parsing passed");
+    // Specified spelling is checked here. The pure declaration controls inspect
+    // Stylo's resolved URL separately; no new JS inspection or fetch API is added.
+}
+
 #[test]
 fn actual_worker_accepts_typed_sources_and_never_executes_comment_metadata() {
     let html = "<!--mg-external-scripts:[[5,\"throw 'forged'\"]]-->\n<!--mg-external-scripts:[[5,\"throw 'nested'\"]]-->\n<p id=status>readable</p><script id=source defer nomodule src=/owned.js></script><script>var shared = 'inline';</script>";

@@ -269,6 +269,188 @@ fn no_activation(frame: &Value) {
     assert!(frame["reply"]["outcome"]["submit_canceled"].is_null());
 }
 
+// Additive retained CSSOM process control, not an upstream WPT result.
+// Reuses that file's exact modern-v7 Peer, five-second whole harness,
+// <8192-byte input-frame guard, attribute/no_activation/report helpers, and
+// owned child cleanup. No display, fixture server, new profile, or API.
+
+#[test]
+fn real_worker_cssom_retains_declarations_across_lifecycle_and_real_click() {
+    let mut peer = Peer::start();
+    let initial = peer.initialize(
+        r#"
+        var ownedNode = document.getElementById('o');
+        var ownedStyle = ownedNode.style;
+        ownedStyle.cssText = 'width: 12px; height: 1px';
+        if (ownedStyle.getPropertyValue('width') !== '12px' ||
+            ownedStyle.height !== '1px') throw 'initial CSSOM parse failed';
+        ownedNode.setAttribute('data-cssom-phase', 'init');
+        ownedNode.setAttribute('data-cssom-value', ownedStyle.width);
+        ownedNode.onclick = function(event) {
+            event.preventDefault();
+            if (ownedStyle.getPropertyValue('width') !== '12px' ||
+                ownedNode.style.getPropertyValue('height') !== '1px')
+                throw 'retained declarations lost';
+            ownedStyle.width = '27px';
+            ownedStyle.height = '3px';
+            if (ownedStyle.getPropertyValue('width') !== '27px' ||
+                ownedNode.style.height !== '3px') throw 'later CSSOM mutation failed';
+            ownedNode.setAttribute('data-cssom-phase', 'click');
+            ownedNode.setAttribute('data-cssom-value', ownedStyle.getPropertyValue('width'));
+        };
+        "#,
+    );
+    assert_eq!(initial["reply"]["state"], "Ready");
+    assert_eq!(initial["reply"]["scripts_executed"], 1);
+    assert_eq!(initial["reply"]["errors"], json!([]));
+    assert_eq!(
+        initial["reply"]["lifecycle"],
+        json!({"phase":"Interactive","initial_failure":false})
+    );
+    assert_eq!(
+        attribute(&initial, "data-cssom-phase").as_deref(),
+        Some("init")
+    );
+    assert_eq!(
+        attribute(&initial, "data-cssom-value").as_deref(),
+        Some("12px")
+    );
+    let initial_report = report(&initial);
+    assert_eq!(
+        (
+            initial_report.jobs_admitted,
+            initial_report.jobs_executed,
+            initial_report.pending_jobs
+        ),
+        (2, 0, 2)
+    );
+    assert!(initial_report.fatal_reason.is_none());
+    peer.idle();
+
+    // This helper pumps only the two distinct required lifecycle milestones;
+    // it validates each phase and each cumulative report before returning.
+    // The authored source creates no timer, Promise job, or message task.
+    let loaded = peer.complete_lifecycle(initial);
+    assert_eq!(loaded["sequence"], 2);
+    assert_eq!(loaded["reply"]["revision"], 2);
+    assert_eq!(loaded["reply"]["errors"], json!([]));
+    assert_eq!(
+        loaded["reply"]["lifecycle"],
+        json!({"phase":"LoadComplete","initial_failure":false})
+    );
+    no_activation(&loaded);
+    assert_eq!(
+        attribute(&loaded, "data-cssom-phase").as_deref(),
+        Some("init")
+    );
+    assert_eq!(
+        attribute(&loaded, "data-cssom-value").as_deref(),
+        Some("12px")
+    );
+    assert!(loaded["reply"]["task_wake"].is_null());
+    let loaded_report = report(&loaded);
+    loaded_report.validate_after(&initial_report).unwrap();
+    assert_eq!(
+        (
+            loaded_report.jobs_admitted,
+            loaded_report.jobs_executed,
+            loaded_report.pending_jobs
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(loaded_report.source_bytes, initial_report.source_bytes);
+    assert_eq!(
+        loaded_report.source_admissions,
+        initial_report.source_admissions
+    );
+    peer.idle();
+
+    // Select the real current projected node, not an assumed parser ordinal.
+    let target = loaded["reply"]["snapshot"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|node| {
+            node["attributes"]
+                .as_array()
+                .is_some_and(|attrs| attrs.iter().any(|pair| pair == &json!(["id", "o"])))
+        })
+        .unwrap();
+    peer.send(
+        3,
+        2,
+        "Event",
+        json!({"kind":{"kind":"Click","target":target},"edits":[]}),
+    );
+    let clicked = peer.receive(3, 2);
+    assert_eq!(clicked["reply"]["revision"], 3);
+    assert_eq!(clicked["reply"]["state"], "Ready");
+    assert_eq!(clicked["reply"]["errors"], json!([]));
+    assert_eq!(clicked["reply"]["scripts_executed"], 0);
+    assert_eq!(clicked["reply"]["acknowledgements"], json!([]));
+    assert_eq!(clicked["reply"]["default_action"], json!({"kind":"None"}));
+    assert_eq!(clicked["reply"]["outcome"]["click_canceled"], true);
+    assert!(clicked["reply"]["outcome"]["submit_canceled"].is_null());
+    assert_eq!(clicked["reply"]["lifecycle"], loaded["reply"]["lifecycle"]);
+    assert_eq!(
+        attribute(&clicked, "data-cssom-phase").as_deref(),
+        Some("click")
+    );
+    assert_eq!(
+        attribute(&clicked, "data-cssom-value").as_deref(),
+        Some("27px")
+    );
+    let current_style = attribute(&clicked, "style").unwrap();
+    assert!(current_style.contains("width: 27px;"));
+    assert!(current_style.contains("height: 3px;"));
+    assert!(clicked["reply"]["task_wake"].is_null());
+
+    let clicked_report = report(&clicked);
+    clicked_report.validate_after(&loaded_report).unwrap();
+    assert!(clicked_report.fatal_reason.is_none());
+    assert_eq!(
+        (
+            clicked_report.jobs_admitted,
+            clicked_report.jobs_executed,
+            clicked_report.pending_jobs
+        ),
+        (2, 2, 0),
+        "synchronous CSSOM must not admit or execute a host task"
+    );
+    assert_eq!(clicked_report.source_bytes, initial_report.source_bytes);
+    assert_eq!(
+        clicked_report.source_admissions,
+        initial_report.source_admissions
+    );
+    assert!(clicked_report.opcodes_remaining < loaded_report.opcodes_remaining);
+    let initial_memory = initial_report.worker_memory.unwrap();
+    let loaded_memory = loaded_report.worker_memory.unwrap();
+    let clicked_memory = clicked_report.worker_memory.unwrap();
+    assert!(loaded_memory.is_valid_after(&initial_memory));
+    assert!(clicked_memory.is_valid_after(&loaded_memory));
+    assert!(clicked_memory.cumulative_bytes > loaded_memory.cumulative_bytes);
+    assert!(clicked_memory.allocations > loaded_memory.allocations);
+    for memory in [initial_memory, loaded_memory, clicked_memory] {
+        assert_eq!(
+            memory.outstanding_limit_bytes,
+            mg_butane::modern::WORKER_OUTSTANDING_LIMIT
+        );
+        assert_eq!(
+            memory.cumulative_limit_bytes,
+            mg_butane::modern::WORKER_CUMULATIVE_LIMIT
+        );
+    }
+    // Outstanding bytes may decrease when native/GC storage is released;
+    // validate_after proves peak/cumulative/allocation counters did not reset.
+    // These are requested System bytes, never GC live heap or RSS claims.
+    println!(
+        "BOA_CSSOM_RETAINED {}",
+        serde_json::to_string(&[&initial_report, &loaded_report, &clicked_report]).unwrap()
+    );
+    peer.idle();
+    peer.finish();
+}
+
 #[test]
 fn real_worker_v7_output_configuration_is_init_only_and_keeps_old_contract_off() {
     use mg_sparkle::page_session::observer::{ObserverContract, ObserverInit};

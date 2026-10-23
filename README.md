@@ -2,7 +2,34 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.13 Experimental Preview
+## v0.9.14 Experimental Preview
+
+v0.9.14 adds parser-backed modern `element.style` named reads/writes,
+`cssText` and callable `getPropertyValue`, using the existing locked Rust Stylo
+grammar and serializer. The DOM style attribute remains authoritative; this is
+declared-value support, not computed style or the full style interface.
+[Scoped contract](docs/CSSOM.md) and [release notes](docs/RELEASE-v0.9.14.md).
+
+Focused local debug checks pass nine declaration, twenty public binding, nine
+private quota/fatal and three fresh restricted-worker controls, plus a real
+retained-worker Init/lifecycle/click control. The separate frozen JSPLAN suite
+retains all 364 outcomes. Full local debug/release all-target regressions,
+optional-UX embedding and existing tooling checks pass. The independently
+reviewed complete local Window measurement reports
+15/16 passing files and 77/79 passing actual final subtests, with two assertion
+failures retained in `flex-valid.html`. The manually strengthened Window ratchet
+protects the fifteen passing files; no assertion, input or resource limit is
+relaxed. Authored controls add no upstream denominator or passes.
+
+Consult the [dated records](memory/logs/2026-10-23.md) for separate publication,
+public install/update and native/CDP verification; local regressions and Window
+results do not establish those delivery gates. The installer selects the
+[latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
+Public style methods beyond `getPropertyValue`, indexed/enumerated interfaces,
+constructors/prototypes, generic expandos, computed/rule styles and
+`Element.style` forwarding remain deferred. F-016/F-026 and MVP remain open.
+
+### Previous v0.9.13 increment
 
 This release ships the fixed trusted `setup({output:false})` contributor mode
 without injected JavaScript, changed harness/vendor bytes or larger resource

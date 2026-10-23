@@ -35,6 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod cssom;
 mod dom_exception;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -756,6 +757,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     {
         return Ok(value);
     }
+    if handle.starts_with("style:") {
+        return cssom::get(&name, args, context);
+    }
     if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
         && matches!(name.as_str(), "forEach" | "values" | "entries" | "keys")
     {
@@ -816,6 +820,9 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     let Some(name) = property_name(&property) else {
         return Err(failure("Symbol DOM properties are not implemented"));
     };
+    if handle.starts_with("style:") {
+        return cssom::set(&name, args, context);
+    }
     if Kind::modern_property(&name).is_some() {
         property_set(property_target(&handle, context)?, &name, &args[2], context)?;
     } else if handle.starts_with("node:") && super::bool_attr_name(&name).is_some() {
@@ -850,6 +857,9 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
     if let Some(name) = property_name(&property) {
+        if handle.starts_with("style:") {
+            return cssom::has(&name, args, context);
+        }
         if error_property(&args[0], &name).is_some()
             || rejection_property(&args[0], &name).is_some()
             || message_property(&args[0], &name).is_some()
@@ -1064,6 +1074,9 @@ fn timer_call(
 
 fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
+    if name == cssom::GET_PROPERTY_VALUE {
+        return cssom::get_property_value(this, args, context);
+    }
     if name == "host.window.postMessage" {
         return window_messages::post(this, args, context);
     }
@@ -2957,6 +2970,7 @@ pub fn execute(request: Request) -> super::Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("boa/cssom_resource_tests.rs");
     fn pump_next(realm: &mut BoaPageRealm) -> SessionReply {
         let wake = {
             let mut data = realm.state.borrow_mut();

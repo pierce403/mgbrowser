@@ -132,3 +132,11 @@
   upstream passes or prove public delivery. Curator preserves the separate
   original/new suites, exact source/MIME proof and native-before-parent failure
   requirement in browser-check.
+- 2026-10-23: Parser-backed modern style controls distinguish specified CSSOM
+  values from raw DOM attribute text. A valid named write must replace existing
+  importance even when the value is equal; cssText replacement must create an
+  explicit empty style attribute on an absent owner. Structural membership must
+  not call the getter or spend its result quota. Fresh restricted children and
+  retained lifecycle/click checks exercise actual first parse, native atoms and
+  cumulative requested-System storage; they do not prove complete cooperative
+  parser budgeting. Curator records these verified distinctions in browser-check.

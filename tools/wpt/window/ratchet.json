@@ -1,6 +1,22 @@
 {
   "manifest_sha256": "5223099747ed3b1669f311faa5007abb2c037bebb90aa7411b67c6470b4518d0",
-  "required_passes": [],
+  "required_passes": [
+    "css/css-flexbox/parsing/flex-basis-invalid.html",
+    "css/css-flexbox/parsing/flex-basis-valid.html",
+    "css/css-flexbox/parsing/flex-direction-invalid.html",
+    "css/css-flexbox/parsing/flex-direction-valid.html",
+    "css/css-flexbox/parsing/flex-flow-invalid.html",
+    "css/css-flexbox/parsing/flex-flow-valid.html",
+    "css/css-flexbox/parsing/flex-grow-invalid.html",
+    "css/css-flexbox/parsing/flex-grow-valid.html",
+    "css/css-flexbox/parsing/flex-invalid.html",
+    "css/css-flexbox/parsing/flex-shrink-invalid.html",
+    "css/css-flexbox/parsing/flex-shrink-valid.html",
+    "css/css-flexbox/parsing/flex-wrap-invalid.html",
+    "css/css-flexbox/parsing/flex-wrap-valid.html",
+    "css/css-flexbox/parsing/order-invalid.html",
+    "css/css-flexbox/parsing/order-valid.html"
+  ],
   "required_runnable": [
     "css/css-flexbox/parsing/flex-basis-invalid.html",
     "css/css-flexbox/parsing/flex-basis-valid.html",

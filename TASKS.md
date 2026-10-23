@@ -44,8 +44,18 @@ following dependency order, updating evidence as each increment ships:
    The separate genuinely cold-Cargo pilot passes at `fec3803991ae623cac4721f8dc012fe16887db84`,
    including all seven exact-source CI/hosting checks and public byte/report
    verification. See docs/WPT_WINDOW_CI.md for measured build/job/critical-path
-   evidence. **Active:** wire the separate deterministic Window score, manual
-   ratchet and parallel CI/public-report gate before the first CSSOM feature fix. Follow
+   evidence. The separate deterministic Window score/manual ratchet and parallel
+   CI/public-report gate are accepted at `cab9375`: eight exact-source checks,
+   twelve public HTTPS paths, full retained Window CI evidence and visual
+   verification pass. Actual cold Window209.822s build/214.191s owner and the
+   coupled publication path fit unchanged limits; no browser behavior changed.
+   **Active:** finish delivery of the separately frozen modern element-style
+   declaration bridge in [docs/CSSOM.md](docs/CSSOM.md). Full local debug/release,
+   fresh/retained-worker and frozen JSPLAN gates pass. Independently reviewed
+   Window coverage is15/16 passing files and77/79 actual final subtests; preserve
+   the two genuine flex-valid failures and the manually protected fifteen files.
+   Complete fresh static scoring and normal feature release,
+   installation/update and native acceptance. Preserve the fixed score lanes. Follow
    [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The first local measurement is 0/16 passing files and 0/79 passing
@@ -139,8 +149,9 @@ following dependency order, updating evidence as each increment ships:
    compatibility. The real-Browser adapter/owner and pure controls now produce
    the reviewed complete local baseline above, with all original inputs and
    limits unchanged. Cold provisioning/build now passes within existing
-   deadlines. **Next:** finish exact-source continuous Window CI/report public
-   verification before browser CSSOM changes. The historical baseline is not a
+   deadlines. Continuous exact-source CI/report/public verification now passes
+   at `cab9375`; parser-backed CSSOM is the next separate browser increment.
+   The historical baseline is not a
    substitute for a current public Window report. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

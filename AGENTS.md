@@ -25,8 +25,17 @@ Completed prerequisite (2026-10-23): the genuinely cold-Cargo Window pilot at
 All seven exact-source checks and public byte/report verification pass. The cold
 owner takes 218.129 seconds including 213.884 seconds of provisioning/build;
 all sixteen files and 79 actual final subtests fail honestly. See the dated log.
-Active separate contribution: continuous Window score/public-report wiring,
-then CSSOM as a separate released browser feature. Never widen a resource
+Completed tooling (2026-10-23): continuous Window score/public reports pass all
+eight exact-source checks at `cab93756337623ed65a5b809401fb977c075c7a1`, twelve
+public HTTPS asset/report checks, separate CI raw-evidence review and visual
+acceptance. Actual coupled publication finishes within the unchanged wait.
+Active separate browser contribution: v0.9.14 parser-backed modern element-style
+declarations under docs/CSSOM.md. Full local debug/release and frozen JSPLAN
+gates pass. Reviewed Window coverage is15/16 files and77/79 final subtests,
+with two genuine flex-valid assertions still failing. The manual ratchet
+protects fifteen files. Finish normal release/install/update and existing
+native gates before calling this increment delivered.
+Never widen a resource
 profile, synthesize missing rows or merge the two score lanes.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web

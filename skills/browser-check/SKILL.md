@@ -166,6 +166,24 @@ ordinary Playwright compatibility, upstream passes or typed harness completion.
 Keep all older diagnostic rejection guards and native/CDP interaction proofs
 when explicitly migrating their bundled-order premises.
 
+For modern element-style changes, read docs/CSSOM.md. Keep specified declarations
+separate from computed layout and raw attribute storage. Run boa_cssom, private
+cssom_resource_controls and declaration tests in debug/release, plus the real
+fresh-child boa_worker and retained script_tasks controls. Preserve receiver/
+coercion order, ordinary catchable Host admission, unmaskable existing VM fatals,
+atomic shorthand/importance mutation and actual serializer/UTF16 capacities.
+Native Stylo parser/atom work still relies on unchanged System/CPU/process
+containment, not a new cooperative quota. Do not prewarm outside the child.
+Legacy exact raw-style assertions remain separate and unchanged. Authored tests
+are not upstream passes: measure both complete score lanes, retain actual
+remaining assertions and strengthen only manually reviewed passing ratchets.
+Full style interfaces, enumeration, generic expandos, computed styles and the
+deferred public methods are not inferred from this slice. Normal release,
+public installation/update and existing native/CDP gates still apply.
+The package and public installer smoke checks also invoke
+tools/cssom-installed-smoke.py on the executable they actually installed; a
+passing source-workspace worker test is not proof of delivered CSSOM behavior.
+
 For trusted Window testharness observation, read docs/WPT_OBSERVER.md and
 docs/WPT_OBSERVER_STATUS.md. The frozen sixteen authored controls are not a
 scored upstream selection. Preserve the current strict modern required Init/reply mode

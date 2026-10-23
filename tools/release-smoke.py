@@ -80,6 +80,7 @@ with tempfile.TemporaryDirectory(prefix="mgbrowser-release-", dir="tmp") as temp
         # Open old processes must restart after replacement; test the new path.
         subprocess.run([binary, "--script-worker-selftest"], env=env, check=True, timeout=20)
         verify_boa_worker(binary)
+        subprocess.run([sys.executable, "tools/cssom-installed-smoke.py", str(binary)], check=True, timeout=10)
         assert subprocess.check_output([binary, "--version"], text=True).strip() == version
         subprocess.run([binary, "--help"], env=dict(env, MGBROWSER_FONT="/missing-font"), check=True)
         data = home / ".local/share"
