@@ -144,7 +144,8 @@ following dependency order, updating evidence as each increment ships:
    See the [public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
    Its documentation closeout at `be71e0c735e64ac5f430fd77a0d1e3f60828ac4e`
    passes all eight exact-source checks, twelve-path public byte/report parity
-   and visual verification. **Active increment:** the frozen
+   and visual verification. **Shipped v0.9.19** at
+   `9179426360904f01ab3b4394f7699c7ba4c70da9`: the frozen
    [auto-width atomic inline height contract](docs/AUTO_INLINE_HEIGHT.md).
    The minimal shared height allocation follows retained unchanged-engine
    assertions and an inspected old-public18 native failure. All153 focused
@@ -157,8 +158,15 @@ following dependency order, updating evidence as each increment ships:
    worsen and another failing reference exceeds the unchanged viewport; keep
    those limitations visible. Package/install/updater, thirteen native helpers,
    eight additive proofs (all36 images inspected) and both frozen worker suites
-   pass. Exact-source CI/site and actual release/public install/update gates
-   remain required. Authored
+   pass. All eight required exact-source checks and normal publication pass.
+   Public install/reinstall, actual18 update/no-op, thirteen existing native
+   helpers, eight additive proofs and both public-worker suites pass; all36
+   public images were inspected. See the dated public closeout. A separate
+   Dependabot build-tool update fails security_update_not_possible for undici;
+   review that unresolved constraint separately, without changing the browser
+   dependency graph or claiming all observed checks green. Resume the broader
+   feature queue after this release closeout under a separately frozen increment.
+   Authored
    controls add no upstream cases or broader completion.
    Follow [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker

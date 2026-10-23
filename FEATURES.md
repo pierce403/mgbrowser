@@ -1014,7 +1014,7 @@ native helpers and separate physical/atomic 1x/2x native/CDP proofs pass.
 See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
 F-003/F-005/F-016/F-026 and the formal MVP are still unfinished.
 
-Current bounded candidate: the frozen
+Shipped v0.9.19 at `9179426360904f01ab3b4394f7699c7ba4c70da9`: the frozen
 [auto-width atomic inline height contract](docs/AUTO_INLINE_HEIGHT.md) addresses
 line measurement versus actual painted layout for ordinary auto-width inline-
 block/flex/grid boxes. It preserves existing width/admission, percentage-height,
@@ -1028,8 +1028,14 @@ runnable cases remain; four already-failing comparisons worsen and one failing
 reference now exceeds the unchanged viewport. See release notes for the actual
 deltas. The new pass is manually protected. Normal package/install/updater,
 thirteen existing native helpers, eight additive proofs (all36 images inspected)
-and both frozen worker suites pass. CI/release/public gates remain open; no stable
-criterion or delivered release follows from authored tests.
+and both frozen worker suites pass. All eight required exact-source CI/hosting
+checks and tagged publication pass. Public install/reinstall, actual v0.9.18
+update/no-op, thirteen existing native helpers, eight additive native/CDP proofs
+and both frozen public-worker suites pass; all36 additive public images were
+inspected. A separate Dependabot build-tool dependency update failed and remains
+unresolved, not a claim that all observed checks passed. See the
+[public closeout](memory/logs/2026-10-23.md#v0919-public-release-closeout).
+No stable criterion or full CSS/MVP completion follows from this bounded release.
 
 ## F-006 : Reproducible autoresearch evaluator
 

@@ -2,13 +2,20 @@
 
 ## Purpose and responsibilities
 
-Current bounded increment (2026-10-23): auto-width atomic inline height parity
-under docs/AUTO_INLINE_HEIGHT.md, after the fully verified v0.9.18 documentation
-closeout at `be71e0c735e64ac5f430fd77a0d1e3f60828ac4e`. Retained pre-change
-private/public debug/release assertions precede the narrow shared allocation
-fix. Focused/full, native/package, both score lanes and next-release/public
-gates remain required. Do not broaden width/baseline/percentage algorithms,
-corpus/runner, dependencies, worker authority or limits to finish this increment.
+Completed bounded increment (2026-10-23): auto-width atomic inline height parity
+ships as v0.9.19 at `9179426360904f01ab3b4394f7699c7ba4c70da9`, under the frozen
+docs/AUTO_INLINE_HEIGHT.md contract. Full local gates, both fresh reviewed score
+lanes, all eight required exact-source CI/hosting checks and normal publication
+pass. Public install/reinstall, actual v0.9.18 update/no-op, thirteen existing
+native helpers, eight additive native/CDP proofs and both frozen public-worker
+suites pass; all36 additive public images were inspected. See the dated public
+closeout. Static339/610/62 of1011 and Window15/16 files,77/79 final subtests remain
+honest; four still-failing pixel comparisons worsen and another failed reference
+exceeds the unchanged viewport. A separate same-source Dependabot build-tool
+update failed security_update_not_possible; keep that unresolved issue visible,
+not an all-observed-checks-green claim. Broader feature work resumes under the
+active goal only after release closeout; preserve all contracts, corpus/runner,
+dependencies, worker authority/limits and immutable tags until separately scoped.
 
 Completed bounded increment (2026-10-23): v0.9.18 scripted empty-anchor defaults
 ship at `0d79fa66ae3e91de7aaf2c868f09589a3f898312` under docs/LINK_DEFAULTS.md.

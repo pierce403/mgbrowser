@@ -2,13 +2,13 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.19 release candidate
+## Latest verified release: v0.9.19
 
 Auto-width inline-block, inline-flex and inline-grid boxes reserve their actual
 allocated height in the surrounding line. Enclosing borders and following blocks
 no longer ignore painted children. Width selection, percentage definiteness,
 baseline behavior and existing limits are unchanged.
-[Frozen scope](docs/AUTO_INLINE_HEIGHT.md) and [candidate notes](docs/RELEASE-v0.9.19.md).
+[Frozen scope](docs/AUTO_INLINE_HEIGHT.md) and [release notes](docs/RELEASE-v0.9.19.md).
 
 Retained pre-change assertions and an inspected public v0.9.18 native failure
 precede the fix. Focused checks pass35 private and118 public groups in both
@@ -21,12 +21,21 @@ comparisons worsen, and another failing case's reference now exceeds the fixed
 viewport. No assertions, selections or limits are relaxed.
 Normal package/install/updater, thirteen existing native helpers, eight additive
 native/CDP proofs and both frozen worker suites pass; all36 additive screenshots
-were inspected. Exact-source CI/site and public release/install/update gates
-remain pending.
-The installer always selects the latest actually published release; v0.9.19
-has not been published. Full CSS/DOM/CSSOM/WPT and the formal MVP remain open.
+were inspected.
 
-## Latest verified release: v0.9.18
+Published as [v0.9.19](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.19)
+at `9179426360904f01ab3b4394f7699c7ba4c70da9`. All eight required exact-source
+CI/hosting checks and the tagged release pass. Checksum-verified public install/
+reinstall, worker/session/Boa/CSSOM/desktop/icons, actual v0.9.18 update/no-op,
+thirteen existing public native helpers, eight additive native/CDP proofs and
+both frozen public-worker suites pass; all36 additive public images were
+inspected. The website command delivers v0.9.19. A separate Dependabot build-tool
+update failed with an unresolved undici dependency constraint; this is not an
+all-observed-checks-green claim. See the
+[public closeout](memory/logs/2026-10-23.md#v0919-public-release-closeout).
+Full CSS/DOM/CSSOM/WPT and the formal MVP remain open.
+
+### Previous v0.9.18 increment
 
 v0.9.18 corrects scripted activation of painted empty, whitespace-only and
 non-text anchors. Navigation uses the same clicked anchor's own post-handler
@@ -51,8 +60,8 @@ checks and the normal tagged release pass. Checksum-verified public install/
 reinstall, worker/session/Boa/CSSOM/desktop/icon checks and an actual v0.9.17
 update followed by a no-op check pass. All thirteen existing public native
 helpers, six additive native/CDP proofs and both frozen public-worker suites
-pass; all 28 additive public screenshots were inspected. The installer delivers
-v0.9.18. See the [public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
+pass; all 28 additive public screenshots were inspected. That installer verification
+delivered v0.9.18. See the [public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
 Full DOM/CSSOM/WPT and the formal MVP remain open.
 
 ### Previous v0.9.17 increment

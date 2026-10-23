@@ -19,8 +19,12 @@ summary: Compact map of mgbrowser project decisions and evidence.
   Four already-failing pixel comparisons worsen; another failed reference
   exceeds the unchanged viewport. Package/install/updater, thirteen native
   helpers, eight additive proofs/all36 inspected images and both worker suites
-  pass. CI/release/public gates remain open;
-  full inline formatting and release completion are not claimed.
+  pass. Shipped v0.9.19 at `9179426360904f01ab3b4394f7699c7ba4c70da9`:
+  all eight required exact-source checks, normal release, public install/reinstall,
+  actual18 update/no-op, old13 native helpers, eight additive native/CDP proofs
+  and both public-worker suites pass; all36 public images were inspected. A
+  separate Dependabot build-tool undici update failed and remains unresolved.
+  See the dated public closeout. Full inline formatting/CSS/WPT/MVP remain open.
 
 - `docs/LINK_DEFAULTS.md`: shipped v0.9.18 at
   `0d79fa66ae3e91de7aaf2c868f09589a3f898312`, following its frozen pre-implementation
