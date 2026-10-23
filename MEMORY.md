@@ -84,6 +84,24 @@ summary: Compact map of mgbrowser project decisions and evidence.
   the separate container-unit dependency/renderer change remains deferred.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
+- `docs/ATOMIC_INLINE.md`: v0.9.16 candidate for definite-width ordinary
+  inline-block and normal-flow inline-flex/grid outer allocation. The original
+  controls and separately adopted addendum were each frozen before actual
+  pre-change failures and their implementation. Shared containing-width
+  percentages, border/outer sizing, signed advance and zero inline auto margins
+  pass all 59 focused debug/release groups (original 40 plus addendum 19) with
+  unchanged expectations. Local gates: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+  Normal local package/install/updater, thirteen existing native helpers,
+  physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
+  Separate full audited scores: 338 PASS / 611 FAIL / 62 UNSUPPORTED of 1,011 (19 new matches, no prior pass or runnable-case loss); Window: 15/16 passing files and 77/79 passing final subtests, unchanged.
+  Exactly nineteen reviewed new matches were manually added: 338 protected
+  static passes and the same 949 runnable cases. Order-box remains FAIL with
+  a real pixel worsening, 40,551 to 41,758; it is not omitted or called improved.
+  No authored result counts as a WPT pass. Exact-source CI/site, tagged release,
+  public install/update and public worker/native/CDP repeats remain required.
+  Auto/intrinsic/table/replaced/button behavior remains regression scope;
+  inner flex/grid formatting and baseline algorithms are unchanged.
+  F-003/F-005/F-016/F-026 and formal MVP are unfinished.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.
 - `docs/HACKER_NEWS.md`: v0.3.0's accepted desktop scope, standalone Rust Stylo,
   bounded resources, visual/live evidence and explicit compatibility exclusions.

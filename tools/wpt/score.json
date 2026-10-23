@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 630,
-    "PASS": 319,
+    "FAIL": 611,
+    "PASS": 338,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -639,7 +639,7 @@
       "test": "css/css-flexbox/cross-axis-scrollbar.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/css-box-justify-content.html"
     },
     {
@@ -1031,7 +1031,7 @@
       "test": "css/css-flexbox/flex-container-line-if-empty-vertical-writing-mode.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-container-margin.html"
     },
     {
@@ -1059,7 +1059,7 @@
       "test": "css/css-flexbox/flex-direction-modify.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-direction-row-reverse.html"
     },
     {
@@ -1655,11 +1655,11 @@
       "test": "css/css-flexbox/flexbox-baseline-multi-line-horiz-002.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-baseline-multi-line-horiz-003.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-baseline-multi-line-horiz-004.html"
     },
     {
@@ -1979,7 +1979,7 @@
       "test": "css/css-flexbox/flexbox-items-as-stacking-contexts-003.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-justify-content-horiz-001a.xhtml"
     },
     {
@@ -2039,7 +2039,7 @@
       "test": "css/css-flexbox/flexbox-justify-content-wmvert-001.xhtml"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-margin-auto-horiz-001.xhtml"
     },
     {
@@ -2271,11 +2271,11 @@
       "test": "css/css-flexbox/flexbox-vert-lr-with-img.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-whitespace-handling-001a.xhtml"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-whitespace-handling-001b.xhtml"
     },
     {
@@ -2655,7 +2655,7 @@
       "test": "css/css-flexbox/flexbox_flex-0-N.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-0-auto.html"
     },
     {
@@ -2875,7 +2875,7 @@
       "test": "css/css-flexbox/flexbox_flex-N-N.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-auto.html"
     },
     {
@@ -2891,11 +2891,11 @@
       "test": "css/css-flexbox/flexbox_flex-formatting-interop.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-initial-2.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-initial.html"
     },
     {
@@ -2915,7 +2915,7 @@
       "test": "css/css-flexbox/flexbox_flex-natural-variable-zero-basis.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-natural.html"
     },
     {
@@ -2923,7 +2923,7 @@
       "test": "css/css-flexbox/flexbox_flex-none-wrappable-content.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_flex-none.html"
     },
     {
@@ -3011,7 +3011,7 @@
       "test": "css/css-flexbox/flexbox_justifycontent-flex-start.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_justifycontent-left-001.html"
     },
     {
@@ -3019,7 +3019,7 @@
       "test": "css/css-flexbox/flexbox_justifycontent-left-002.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_justifycontent-right-001.html"
     },
     {
@@ -3307,7 +3307,7 @@
       "test": "css/css-flexbox/gap-006-lr.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/gap-006-ltr.html"
     },
     {
@@ -3843,7 +3843,7 @@
       "test": "css/css-flexbox/select-element-zero-height-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/select-element-zero-height-002.html"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "26c271f71c13568bf5b870ef4cc1d70672ceb35a6578e8568522af77b215c666",
+  "source_sha256": "db6be13b62e32f907f5514c09e4ddd62c92e0d5f6c1a814f91e785df7b2182fd",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

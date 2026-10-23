@@ -14,6 +14,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = url::Url::parse(&format!("http://127.0.0.1:7878{target}"))?;
         let fields: Vec<_> = url.query_pairs().collect();
         let (status, body) = match url.path() {
+            "/atomic-inline"
+                if request.starts_with("GET ")
+                    && url.query().is_none()
+                    && url.fragment().is_none() =>
+            {
+                (
+                    "200 OK",
+                    include_str!("../tests/fixtures/layout/atomic-inline.html"),
+                )
+            }
+            "/atomic-inline-native-hit"
+                if request.starts_with("GET ")
+                    && url.query().is_none()
+                    && url.fragment().is_none() =>
+            {
+                (
+                    "200 OK",
+                    "<html><head><title>Atomic native hit</title><style>html,body{margin:0}div{width:180px;height:80px;background:#123456}</style></head><body><div></div></body></html>",
+                )
+            }
+            "/atomic-inline-cdp-hit"
+                if request.starts_with("GET ")
+                    && url.query().is_none()
+                    && url.fragment().is_none() =>
+            {
+                (
+                    "200 OK",
+                    "<html><head><title>Atomic CDP hit</title><style>html,body{margin:0}div{width:180px;height:80px;background:#654321}</style></head><body><div></div></body></html>",
+                )
+            }
             "/physical-justify"
                 if request.starts_with("GET ")
                     && url.query().is_none()

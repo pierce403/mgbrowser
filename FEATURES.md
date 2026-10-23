@@ -140,6 +140,23 @@ see [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeou
 both fixed score lanes, diagnostics, all prior passing/runnable ratchets and the
 standing release policy. Full CSSOM and container-unit sizing remain separate.
 
+Local v0.9.16 candidate under [docs/ATOMIC_INLINE.md](docs/ATOMIC_INLINE.md):
+definite-width ordinary inline-block and normal-flow inline-flex/grid outer
+allocation now shares measurement and painting. Inner formatting, intrinsic
+sizing and baseline algorithms are unchanged.
+Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+Normal local package/install/updater, thirteen existing native helpers,
+physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
+Complete separately reviewed current-source scores: 338 PASS / 611 FAIL / 62 UNSUPPORTED of 1,011 (19 new matches, no prior pass or runnable-case loss);
+Window: 15/16 passing files and 77/79 passing final subtests, unchanged. The 59 frozen authored sizing groups (original
+40 plus addendum 19) are not WPT passes. Separate manual review added exactly
+the nineteen new matches to the static ratchet: 338 protected passes, unchanged
+949 runnable cases and all original inputs/limits. The still-failing order-box
+comparison worsens from 40,551 to 41,758 differing pixels; no failure is hidden
+or accepted through a tolerance. Future ratchet changes require manual review.
+Exact-source CI/site and all tagged/public delivery gates remain open.
+No criterion above is newly checked; F-003/F-005/F-016/F-026 and MVP stay open.
+
 ## F-025 : Google News desktop reading
 
 Stability: in-progress
@@ -847,6 +864,11 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 
 Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
 
+The v0.9.16 candidate's [definite-width atomic inline correction](docs/ATOMIC_INLINE.md)
+has bounded local evidence recorded under F-005/F-026. It does not complete the
+versioned rendering corpus or any unchecked criterion above; public delivery
+remains separate from local verification.
+
 ## F-004 : Static web navigation
 
 Stability: in-progress
@@ -910,6 +932,25 @@ Normal packaged/native/CDP and v0.9.15 public delivery checks pass; see
 [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout).
 This changes neither the broader fixture
 criteria nor the existing RTL/writing-mode and Safe/reversed-flex limitations.
+
+The v0.9.16 candidate implements [definite-width atomic inline sizing](docs/ATOMIC_INLINE.md):
+ordinary inline-block and normal-flow inline-flex/grid outer allocation,
+containing-width percentages and signed margin advance agree between measurement
+and paint, with inline auto margins resolving to zero. The original 12 private
+and 28 public groups remain frozen; the separately adopted outer-allocation
+addendum adds nine private and ten public groups. All 59 pass focused
+debug/release with actual pre-change assertion failures retained.
+The first complete static candidate was rejected for two old-pass regressions;
+its evidence remains separate, and Window did not run in that rejected attempt.
+Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+Normal local package/install/updater, thirteen existing native helpers,
+physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
+F-026 records the two separately audited score lanes; no gain is inferred from
+authored tests. Auto/intrinsic, table, replaced and button behavior remain
+regression scope; inner flex/grid formatting and baseline algorithms are
+unchanged. Exact-source CI/site, tagged publication and public installation/
+update/native gates remain open.
+F-003/F-005/F-016/F-026 and the formal MVP are still unfinished.
 
 ## F-006 : Reproducible autoresearch evaluator
 

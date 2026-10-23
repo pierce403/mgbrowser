@@ -74,8 +74,29 @@ following dependency order, updating evidence as each increment ships:
    normal tagged release, public install/reinstall, actual v0.9.14 update/no-op,
    both public-worker suites, thirteen public native helpers and the separate
    public physical proof pass. No v0.9.15 release gate remains; see
-   [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout). **Active:** review the next bounded
-   feature before implementation. Container-unit grammar needs a
+   [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeout).
+   **Active: finish v0.9.16 delivery before another feature.** The adopted
+   [definite-width atomic inline sizing](docs/ATOMIC_INLINE.md) correction shares
+   containing-width percentages, border/outer sizing and signed advance between
+   measurement and painting for ordinary inline-blocks and definite normal-flow
+   inline-flex/grid containers, with zero horizontal inline auto margins.
+   Inner formatting, intrinsic sizing and baseline algorithms are unchanged.
+   Frozen authored pre-change failures remain; all 59 groups (original 40 plus
+   addendum 19) pass focused debug/release.
+   Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+   Normal local package/install/updater, thirteen existing native helpers,
+   physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
+   Separate reviewed full scores: 338 PASS / 611 FAIL / 62 UNSUPPORTED of 1,011 (19 new matches, no prior pass or runnable-case loss); Window: 15/16 passing files and 77/79 passing final subtests, unchanged.
+   These are current-source measurements, not public-release evidence.
+   Remaining: normal package/install/updater, both frozen local worker suites,
+   old thirteen native helpers and separate physical/atomic 1x/2x proofs;
+   then exact-source Rust/JSPLAN/both-score/site checks, immutable v0.9.16
+   tag and normal release, public checksum install/reinstall, actual v0.9.15
+   update/no-op, both frozen public-worker suites, all thirteen existing public
+   native helpers, unchanged physical proof and atomic native/CDP proof at 1x/2x.
+   Inspect real delivered artifacts/screenshots before closeout. Do not start
+   another feature or mark broader criteria complete from local results.
+   Container-unit grammar needs a
    separate dependency/renderer review and remains deferred. Preserve the
    smallest remaining feature increment's acceptance gates;
    full CSSOM/F-016/F-026/MVP remain open. Preserve the fixed score lanes.

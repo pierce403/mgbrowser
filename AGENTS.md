@@ -58,6 +58,26 @@ remains; see [the public closeout](memory/logs/2026-10-23.md#v0915-public-releas
 review the next bounded feature before implementation. Preserve the existing
 resource profile, full CSSOM/F-016/F-026/MVP limitations and both score lanes.
 
+Current bounded increment (2026-10-23): the v0.9.16 candidate implements
+docs/ATOMIC_INLINE.md's definite-width outer allocation for ordinary inline-blocks
+and normal-flow inline-flex/grid containers after retained pre-change assertion
+failures. All 59 frozen authored groups (original 40 plus addendum 19) pass
+focused debug/release. Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+Normal local package/install/updater, thirteen existing native helpers,
+physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
+Separate reviewed current-source WPT: 338 PASS / 611 FAIL / 62 UNSUPPORTED of 1,011 (19 new matches, no prior pass or runnable-case loss);
+Window: 15/16 passing files and 77/79 passing final subtests, unchanged. The manual
+static ratchet protects all 338 passes and the same 949 runnable cases; the
+order-box case remains FAIL with a real 40,551 to 41,758 pixel worsening.
+Preserve all prior static/Window protections,
+original inputs, diagnostics and limits. Auto/intrinsic/table/replaced/button
+behavior remains regression scope; inner flex/grid formatting and baseline
+algorithms are unchanged. Finish exact-source CI/site, the normal
+v0.9.16 release and public install/reinstall, actual v0.9.15 update/no-op,
+both frozen worker suites, old thirteen native helpers and separate physical/
+atomic 1x/2x proofs before another feature. No v0.9.16 public delivery is yet
+claimed; F-003/F-005/F-016/F-026 and the formal MVP remain unfinished.
+
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and
 T-023 / F-026. Keep corpus/runner changes separate from engine changes scored

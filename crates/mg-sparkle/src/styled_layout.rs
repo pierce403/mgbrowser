@@ -1861,6 +1861,29 @@ impl Layout<'_, '_> {
         forced: Option<f32>,
         depth: usize,
     ) -> (f32, f32) {
+        self.block_layout_context::<EMIT>(
+            id,
+            x,
+            y,
+            available,
+            containing_height,
+            forced,
+            depth,
+            false,
+        )
+    }
+
+    fn block_layout_context<const EMIT: bool>(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        available: f32,
+        containing_height: Option<f32>,
+        forced: Option<f32>,
+        depth: usize,
+        inline_auto_margins: bool,
+    ) -> (f32, f32) {
         if !self.spend(depth) || self.styles[id].display == Display::None {
             return (0.0, 0.0);
         }
@@ -1931,7 +1954,11 @@ impl Layout<'_, '_> {
         }
         width = width.max(horizontal).clamp(0.0, MAX_EXTENT);
         let extra = (available - width - margin[1] - margin[3]).max(0.0);
+        // In normal-flow atomic inline layout, auto horizontal margins are
+        // zero, not block free-space distribution. Other callers retain their
+        // existing block context even when the node's display is InlineBlock.
         match (s.margin[3], s.margin[1]) {
+            _ if inline_auto_margins => {}
             (Length::Auto, Length::Auto) => {
                 margin[3] = extra / 2.0;
                 margin[1] = extra / 2.0;
@@ -2549,6 +2576,9 @@ impl Layout<'_, '_> {
         } else if self.is_structured_button(id) {
             self.inline_button::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
+        } else if self.is_definite_atomic_inline(id, width) {
+            self.definite_atomic_inline::<false>(id, 0.0, 0.0, width, containing_height, depth)
+                .0
         } else if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
             && self.styles[id].width == Length::Auto
         {
@@ -2560,6 +2590,30 @@ impl Layout<'_, '_> {
         } else {
             self.intrinsic(id, depth).max.min(width)
         }
+    }
+
+    fn is_definite_atomic_inline(&self, id: usize, width: f32) -> bool {
+        matches!(
+            self.styles[id].display,
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+        ) && self.styles[id].width.resolve(width).is_some()
+            && !self.is_replaced(id)
+            && !self.is_structured_button(id)
+    }
+
+    // Admission, line height and painting share the same definite-width box
+    // allocation. Keep the real containing content width as the percentage
+    // basis; an intrinsic outer advance is never a forced border-box width.
+    fn definite_atomic_inline<const EMIT: bool>(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        width: f32,
+        containing_height: Option<f32>,
+        depth: usize,
+    ) -> (f32, f32) {
+        self.block_layout_context::<EMIT>(id, x, y, width, containing_height, None, depth + 1, true)
     }
 
     // Structured inline buttons shrink-wrap only when width is auto. A definite
@@ -2622,6 +2676,16 @@ impl Layout<'_, '_> {
                         height = height.max(h);
                     } else if self.is_structured_button(*child) {
                         let (_, h) = self.inline_button::<false>(
+                            *child,
+                            0.0,
+                            0.0,
+                            width,
+                            containing_height,
+                            depth + 1,
+                        );
+                        height = height.max(h);
+                    } else if self.is_definite_atomic_inline(*child, width) {
+                        let (_, h) = self.definite_atomic_inline::<false>(
                             *child,
                             0.0,
                             0.0,
@@ -2704,6 +2768,15 @@ impl Layout<'_, '_> {
                         )
                     } else if self.is_structured_button(*child) {
                         self.inline_button::<EMIT>(
+                            *child,
+                            left,
+                            y,
+                            width,
+                            containing_height,
+                            depth + 1,
+                        )
+                    } else if self.is_definite_atomic_inline(*child, width) {
+                        self.definite_atomic_inline::<EMIT>(
                             *child,
                             left,
                             y,
@@ -3101,6 +3174,17 @@ fn allocate_columns(min: &[f32], max: &[f32], available: f32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod atomic_inline_tests {
+        use super::*;
+        include!("styled_layout/atomic_inline_tests.rs");
+
+        mod formatting_inline_tests {
+            use super::*;
+            include!("styled_layout/formatting_inline_tests.rs");
+        }
+    }
+
     #[test]
     fn columns_share_space_without_violating_intrinsic_minimums() {
         assert_eq!(

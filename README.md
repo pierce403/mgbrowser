@@ -2,7 +2,39 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.15 Experimental Preview
+## v0.9.16 Experimental Preview candidate
+
+v0.9.16 corrects definite-width outer allocation for ordinary inline-blocks
+and normal-flow inline-flex/inline-grid containers in the Rust layout engine.
+Measurement and painting share the same allocation: padding/borders
+and signed margins count once, percentages use the containing content width,
+and definite boxes keep their width when they overflow. Horizontal auto margins
+resolve to zero in this normal-flow inline context.
+[Scoped contract](docs/ATOMIC_INLINE.md) and [candidate notes](docs/RELEASE-v0.9.16.md).
+
+Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
+All 59 frozen authored control groups pass focused debug and release checks:
+the original 40 plus 19 separately frozen addendum groups. Actual pre-change
+assertion failures and original expectations are retained.
+Local package/install/updater checks, all thirteen existing native helpers,
+physical and atomic 1x/2x proofs, and both frozen direct/Browser worker suites pass.
+Separately reviewed current-source WPT: 338 PASS / 611 FAIL / 62 UNSUPPORTED of 1,011 (19 new matches, no prior pass or runnable-case loss);
+Window: 15/16 passing files and 77/79 passing final subtests, unchanged. Authored controls are not upstream passes.
+The manually reviewed ratchet now protects 338 static passes and the same 949
+runnable cases. Improvement is not uniform: `flexbox_order-box.html` remains
+FAIL, with differing pixels increasing from 40,551 to 41,758; its auto-width
+parent mismatch remains outside this definite-only change.
+
+This candidate is not a published release. Exact-source CI/site, the tagged
+release, public install/reinstall, actual v0.9.15 update/no-op and public
+worker/native/CDP repeats remain required. The installer follows the
+[latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
+Auto/intrinsic sizing, tables, replaced elements and buttons retain their
+existing scope. Flex/grid inner formatting and baseline algorithms are unchanged.
+Full inline formatting, vertical alignment, bidi, floats,
+CSSOM, empty-anchor activation and F-003/F-005/F-016/F-026/MVP remain unfinished.
+
+### Previous v0.9.15 increment
 
 v0.9.15 adds physical `justify-content:left/right` placement to the
 existing bounded Rust flex/grid adapter. Reversing flex children does not reverse
