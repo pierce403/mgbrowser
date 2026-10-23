@@ -2,14 +2,14 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.17 candidate: declaration editing methods
+## v0.9.17 Experimental Preview
 
-The v0.9.17 source candidate adds modern `element.style.setProperty`,
+v0.9.17 adds modern `element.style.setProperty`,
 `removeProperty` and `getPropertyPriority` using the existing locked Rust Stylo
 grammar and real DOM style attribute. Value/importance replacement, atomic
 shorthand removal, receiver-first conversion and pre-commit resource admission
 retain the existing worker and declaration limits.
-[Frozen contract](docs/CSSOM_METHODS.md) and [candidate release notes](docs/RELEASE-v0.9.17.md).
+[Frozen contract](docs/CSSOM_METHODS.md) and [release notes](docs/RELEASE-v0.9.17.md).
 
 Focused local checks pass 28 public binding controls, 23 private declaration/
 resource controls, three fresh restricted-child cases and one real retained
@@ -22,13 +22,20 @@ or weakened protections. Normal local package/install/updater and all thirteen
 existing native helpers pass. Physical/atomic1x/2x and the separate method-native/
 CDP proofs pass; all sixteen actual screenshots were inspected. Both frozen
 direct-worker suites retain all21 expected outcomes, including genuine failures
-and timeouts, with confirmed owned cleanup. Exact-source CI/site and normal
-release/public acceptance remain open.
-The installer continues to select the latest actually published release,
-v0.9.16 at candidate preparation. Full CSSOM, empty-anchor activation and
+and timeouts, with confirmed owned cleanup.
+
+Published as [v0.9.17](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.17)
+at `6b3c36f37aaa33bc2941d7a5bfa1eed2d48cc73b`. All eight exact-source CI/hosting
+checks and the normal tagged release pass. Checksum-verified public install/
+reinstall, worker/session/Boa/CSSOM and desktop/icon checks, actual v0.9.16
+update/no-op, all thirteen existing public native helpers, four separate public
+geometry/method native/CDP proofs and both frozen public-worker suites pass.
+All sixteen additive public screenshots were inspected. See the
+[public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
+The installer delivers v0.9.17. Full CSSOM, empty-anchor activation and
 F-003/F-005/F-016/F-026/MVP remain unfinished.
 
-## v0.9.16 Experimental Preview
+### Previous v0.9.16 increment
 
 v0.9.16 corrects definite-width outer allocation for ordinary inline-blocks
 and normal-flow inline-flex/inline-grid containers in the Rust layout engine.

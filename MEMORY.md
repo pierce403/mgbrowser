@@ -4,6 +4,15 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/CSSOM_METHODS.md`: shipped v0.9.17 bounded modern style `setProperty`,
+  `removeProperty` and `getPropertyPriority`, using the locked Rust parser and
+  unchanged declaration/worker limits. Exact release source is
+  `6b3c36f37aaa33bc2941d7a5bfa1eed2d48cc73b`; public install/update and separate
+  native/CDP/worker receipts are in the 2026-10-23 log. Complete current-source
+  static338/611/62 of1,011 and separate Window15/16 files,77/79 final subtests
+  are unchanged. Full CSSOM, empty-anchor activation and broader feature/MVP
+  gates remain open; authored controls are not upstream WPT passes.
+
 - `docs/WPT.md` and `docs/WPT_EXPANSION.md`: complete pinned 1,011-case flexbox
   reftest selection, immutable original 24-case ratchet, source-linked score,
   diagnostic-free pass prerequisites and every-commit website measurement policy. Broader WPT

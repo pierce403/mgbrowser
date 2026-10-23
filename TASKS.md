@@ -94,8 +94,8 @@ following dependency order, updating evidence as each increment ships:
    CDP proof at 1x/2x pass. All twelve actual layout screenshots were inspected.
    See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
    The documentation closeout at `e0341d81bf67767c4013b64a1f467a9994598b07`
-   passes its exact-source CI/site/public verification. **Active v0.9.17
-   candidate:** modern style `setProperty`, `removeProperty` and
+   passes its exact-source CI/site/public verification. **Shipped v0.9.17** at
+   `6b3c36f37aaa33bc2941d7a5bfa1eed2d48cc73b`: modern style `setProperty`, `removeProperty` and
    `getPropertyPriority` under the frozen [method contract](docs/CSSOM_METHODS.md).
    Focused local checks pass 28 public, 23 private, three fresh restricted-child
    and one retained lifecycle/click control; independent production source
@@ -105,9 +105,15 @@ following dependency order, updating evidence as each increment ships:
    Normal local package/install/updater and all thirteen existing native helpers
    pass, alongside physical/atomic1x/2x and the separate method-native/CDP proof;
    all16 actual screenshots were inspected. Both frozen direct-worker suites
-   retain all21 expected outcomes with owned cleanup. Exact-source CI/site and
-   all release/public repeats remain open. No delivered release is inferred from authored
-   controls. v0.9.16 remains the delivered binary at candidate preparation.
+   retain all21 expected outcomes with owned cleanup. All eight exact-source
+   CI/hosting checks and normal tagged publication pass. Public checksum install/
+   reinstall, worker/session/Boa/CSSOM/desktop/icons, actual v0.9.16 update/no-op,
+   all thirteen existing native helpers, all four geometry/method native/CDP
+   proofs and both frozen public-worker suites pass. All sixteen additive
+   public images were inspected. See
+   [the public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
+   Final documentation receives a separate fresh score/CI/site gate before
+   another engine increment. Authored controls add no WPT passes.
    Do not equate this release with completion of broader feature criteria.
    Container-unit grammar needs a
    separate dependency/renderer review and remains deferred. Preserve the

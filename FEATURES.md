@@ -162,6 +162,12 @@ atomic 1x/2x proofs pass, with all twelve layout images inspected. See
 [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
 No criterion above is newly checked; F-003/F-005/F-016/F-026 and MVP stay open.
 
+Shipped v0.9.17 declaration editing methods retain the complete static338/611/62
+of1,011 and separate Window15/16 files,77/79 final subtests. They add no WPT
+passes or denominator changes. Manual338-pass/949-runnable and fifteen-file
+protections remain unchanged; see the separate
+[public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
+
 ## F-025 : Google News desktop reading
 
 Stability: in-progress
@@ -678,12 +684,12 @@ desktop/icon checks, actual v0.9.13 update/no-op, both frozen public-worker suit
 and all thirteen public native/CDP helpers pass at
 `dfddb067b92bc56a06e721a99b183f56225f6177`; see the
 [dated log](memory/logs/2026-10-23.md). No v0.9.14 release gate remains.
-Full style interfaces, public setProperty/removeProperty/getPropertyPriority,
+At v0.9.14, full style interfaces, public setProperty/removeProperty/getPropertyPriority,
 indexed/enumerated access, constructors/prototypes, generic expandos,
 computed/rule styles and Element.style PutForwards remain deferred. See
 docs/CSSOM.md; no unchecked criterion above or F-026/MVP gate is completed.
 
-Candidate v0.9.17 implements modern `element.style.setProperty`,
+Shipped v0.9.17 implements modern `element.style.setProperty`,
 `removeProperty` and `getPropertyPriority` under the frozen
 [method contract](docs/CSSOM_METHODS.md). The same locked Rust Stylo grammar
 and actual style attribute provide value/importance replacement, atomic
@@ -700,11 +706,16 @@ Normal local package/install/updater, all thirteen existing native helpers,
 physical/atomic1x/2x and the separate method-native/CDP proof pass. All16 actual
 additive screenshots were inspected. Both frozen direct-worker suites retain
 all21 expected outcomes, including genuine failures/timeouts, with owned cleanup
-confirmed. Exact-source CI/site and normal release/public acceptance remain open.
+confirmed. All eight exact-source CI/hosting checks and normal tagged publication
+pass at `6b3c36f37aaa33bc2941d7a5bfa1eed2d48cc73b`. Public install/reinstall,
+worker/session/Boa/CSSOM/desktop/icons, actual v0.9.16 update/no-op, all thirteen
+existing native helpers, all four geometry/method native/CDP proofs and both
+frozen public-worker suites pass. All sixteen additive public images were
+inspected. See [the public closeout](memory/logs/2026-10-23.md#v0917-public-release-closeout).
 No wider criterion is checked; full CSSOM, indexed/enumerated interfaces,
 constructors/prototypes, generic expandos, computed/rule styles and
 `Element.style` forwarding remain unfinished. See the
-[candidate notes](docs/RELEASE-v0.9.17.md) and dated log. Delivered v0.9.16
+[release notes](docs/RELEASE-v0.9.17.md) and dated log. Delivered v0.9.16
 and its prior acceptance receipts remain separate.
 
 ## F-015 : Self-updates and build identity
