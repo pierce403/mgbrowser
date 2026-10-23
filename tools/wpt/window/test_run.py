@@ -168,6 +168,206 @@ class ShapeTests(unittest.TestCase):
 
 
 class ReservationTests(unittest.TestCase):
+    def test_build_policy_is_explicit_default_off_and_never_changes_target_or_features(self):
+        default = owner.parse_args(["--output", "tmp/not-created"])
+        enabled = owner.parse_args(["--output", "tmp/not-created", "--allow-locked-build-network"])
+        self.assertFalse(default.allow_locked_build_network)
+        self.assertTrue(enabled.allow_locked_build_network)
+        offline = owner.build_command()
+        networked = owner.build_command(True)
+        self.assertEqual(networked, [arg for arg in offline if arg != "--offline"])
+        self.assertEqual(networked, ["cargo", "build", "--locked", "--release", "--example", "wpt_window", "--message-format=json"])
+        with self.assertRaises(owner.Invalid):
+            owner.build_command(1)
+
+    def test_build_window_is_one_inclusive_clock_and_whole_run_can_only_narrow(self):
+        start = 1_000_000_000_000
+        self.assertEqual(owner.build_window(start, 2500), (start + 1_200_000_000_000,
+                         start + 1_200_000_000_000 - owner.BUILD_POSTPROCESS_RESERVE_NS))
+        self.assertEqual(owner.build_window(start, 1010), (1_007_000_000_000,
+                         1_007_000_000_000 - owner.BUILD_POSTPROCESS_RESERVE_NS))
+        with self.assertRaises(owner.Invalid):
+            owner.build_window(start, 1005)
+
+    def build_fixture(self, late_stage=None, cleanup=True, prelaunch=False, handoff_error=False):
+        # Fake commands/artifacts/clock only. No Cargo, executable, Browser,
+        # worker, socket, dependency access or other child is launched.
+        class Clock:
+            now = 1_000_000_000_000
+
+        clock = Clock()
+        result = {"status": "OK", "reason": "", "returncode": 0, "elapsed_ms": 1,
+                  "output_bytes": 0, "completed": True, "cleanup_succeeded": cleanup}
+        class Control:
+            calls = 0
+            reads = 0
+            def run_bounded(self, command, **options):
+                self.calls += 1
+                self.command, self.options = command, options
+                if handoff_error:
+                    raise OSError("mock ownership handoff failure")
+                if late_stage == "cargo_cleanup":
+                    clock.now += 1_200_000_000_001
+                return result
+            def read_artifact(self, *_args, **_options):
+                self.reads += 1
+                if late_stage == "read":
+                    clock.now += 1_200_000_000_001
+                return b"mock Cargo record"
+        class Budget:
+            deadline = 2500
+            output = Path("/tmp/never-created")
+            held = 0
+            def reserve(self, amount):
+                self.held += amount
+                if prelaunch:
+                    clock.now += 1_200_000_000_000
+            def release(self, amount, confirmed):
+                if confirmed:
+                    self.held -= amount
+                if late_stage == "release":
+                    clock.now += 1_200_000_000_001
+            def report(self, _report):
+                if late_stage == "evidence":
+                    clock.now += 1_200_000_000_001
+        control, budget, report = Control(), Budget(), {"build": {}}
+        def identify(_raw, *, deadline_ns=None):
+            if late_stage == "json":
+                clock.now += 1_200_000_000_001
+            return Path("/tmp/never-executed")
+        def binary(_path, _limit, *, deadline_ns=None):
+            if late_stage == "hash":
+                clock.now += 1_200_000_000_001
+            return b"mock", {"bytes": 4, "sha256": "a" * 64}
+        with (patch.object(owner.time, "monotonic_ns", side_effect=lambda: clock.now),
+              patch.object(owner, "write_new"), patch.object(owner, "cargo_executable", side_effect=identify),
+              patch.object(owner, "read_regular", side_effect=binary), patch.object(owner.os, "access", return_value=True)):
+            failure = None
+            try:
+                outcome = owner.build(control, budget, {}, report, allow_locked_build_network=True)
+            except (owner.Invalid, OSError) as caught:
+                failure, outcome = caught, None
+        return control, budget, report, failure, outcome
+
+    def test_build_includes_cleanup_json_hash_release_and_evidence_without_renewal(self):
+        control, budget, report, failure, outcome = self.build_fixture()
+        self.assertIsNone(failure)
+        self.assertIsNotNone(outcome)
+        self.assertEqual(budget.held, 0)
+        self.assertTrue(report["build"]["completed_within_deadline"])
+        self.assertEqual(control.options["global_deadline"], 2196.9)
+        self.assertEqual(control.options["timeout"], 1196.9)
+        for stage in ("cargo_cleanup", "read", "json", "hash", "release", "evidence"):
+            with self.subTest(stage=stage):
+                control, budget, report, failure, outcome = self.build_fixture(stage)
+                self.assertIsInstance(failure, owner.Invalid)
+                self.assertIsNone(outcome)
+                self.assertFalse(report["build"]["completed_within_deadline"])
+                self.assertEqual(budget.held, 0)
+
+    def test_build_prelaunch_deadline_and_unknown_cleanup_never_read_producer_artifacts(self):
+        control, budget, report, failure, outcome = self.build_fixture(prelaunch=True)
+        self.assertIsInstance(failure, owner.Invalid)
+        self.assertEqual(control.calls, 0)
+        self.assertEqual(control.reads, 0)
+        self.assertEqual(budget.held, 0)
+        control, budget, report, failure, outcome = self.build_fixture(cleanup=False)
+        self.assertIsInstance(failure, owner.Invalid)
+        self.assertEqual(control.reads, 0)
+        self.assertEqual(budget.held, owner.BUILD_RESERVE)
+        self.assertFalse(report["build"]["process_cleanup_confirmed"])
+
+    def test_build_handoff_exception_quarantines_without_producer_reads(self):
+        control, budget, report, failure, outcome = self.build_fixture(handoff_error=True)
+        self.assertIsInstance(failure, OSError)
+        self.assertIsNone(outcome)
+        self.assertEqual(control.reads, 0)
+        self.assertEqual(budget.held, owner.BUILD_RESERVE)
+        self.assertFalse(report["build"]["process_cleanup_confirmed"])
+
+    def test_build_completion_does_not_inherit_a_callers_handled_exception(self):
+        try:
+            raise ValueError("caller handled exception")
+        except ValueError:
+            _, _, report, failure, outcome = self.build_fixture()
+        self.assertIsNone(failure)
+        self.assertIsNotNone(outcome)
+        self.assertTrue(report["build"]["completed_within_deadline"])
+
+    def test_cargo_expiry_mid_record_stops_before_another_json_record(self):
+        event = {"reason": "compiler-artifact", "target": {"name": "wpt_window", "kind": ["example"]},
+                 "features": [], "executable": "/tmp/never-executed"}
+        clock = [1]
+        def decode(_raw, _limit):
+            clock[0] = 10
+            return event
+        with (patch.object(owner.time, "monotonic_ns", side_effect=lambda: clock[0]),
+              patch.object(owner, "strict_json", side_effect=decode) as decode_mock):
+            with self.assertRaises(owner.Invalid):
+                owner.cargo_executable(b"first\nsecond", deadline_ns=10)
+        self.assertEqual(decode_mock.call_count, 1)
+
+    def test_regular_file_deadline_stops_mid_chunk_or_after_hash(self):
+        # Test-owned ordinary bytes only; no executable or product source read.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input"
+            path.write_bytes(b"x" * 65537)
+            clock = [1]
+            actual_read, actual_sha = owner.os.read, owner.sha
+            def chunk(descriptor, count):
+                value = actual_read(descriptor, count)
+                clock[0] = 10
+                return value
+            with (patch.object(owner.time, "monotonic_ns", side_effect=lambda: clock[0]),
+                  patch.object(owner.os, "read", side_effect=chunk) as reads,
+                  patch.object(owner, "sha") as hashes):
+                with self.assertRaises(owner.Invalid):
+                    owner.read_regular(path, 65537, deadline_ns=10)
+            self.assertEqual(reads.call_count, 1)
+            hashes.assert_not_called()
+            clock[0] = 1
+            def hashing(value):
+                result = actual_sha(value)
+                clock[0] = 10
+                return result
+            with (patch.object(owner.time, "monotonic_ns", side_effect=lambda: clock[0]),
+                  patch.object(owner, "sha", side_effect=hashing) as hashes):
+                with self.assertRaises(owner.Invalid):
+                    owner.read_regular(path, 65537, deadline_ns=10)
+            self.assertEqual(hashes.call_count, 1)
+
+    def test_run_build_failure_keeps_every_case_pending_and_calls_no_case_owner(self):
+        # Orchestrate only the failure branch with mocks. No product helper,
+        # Cargo, Browser, worker, JS, network or child executes.
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            document = {"tests": [{"path": path, "source_declared_call_count": 1} for path in owner.CASE_PATHS]}
+            checker = type("Checker", (), {"check": lambda _self, _root: {}})()
+            pin = {"bytes": 1, "sha256": "a" * 64}
+            def tool(_control, _budget, _command, name, _environment):
+                return {"rustc": "rustc 1.91.1 mock", "cargo": "cargo mock", "git-head": "a" * 40, "git-status": ""}[name]
+            args = owner.parse_args(["--output", str(output)])
+            with (patch.object(owner, "fresh_directory", return_value=output),
+                  patch.object(owner, "load_definitions", return_value=checker),
+                  patch.object(owner, "read_regular", return_value=(json.dumps(document).encode(), pin)),
+                  patch.object(owner, "fingerprint", return_value={"sha256": "a" * 64}),
+                  patch.object(owner, "admit_font", return_value={"bytes": 1}),
+                  patch.object(owner, "read_font", return_value=(b"x", pin)),
+                  patch.object(owner, "private_env", return_value={}), patch.object(owner, "tool", side_effect=tool),
+                  patch.object(owner.signal, "signal"), patch("builtins.print"),
+                  patch.object(owner, "build", side_effect=owner.Invalid("mock build failure")) as build_stage,
+                  patch.object(owner, "run_case") as case_owner):
+                code = owner.run(args, time.monotonic())
+            report = json.loads((output / "report.json").read_bytes())
+            self.assertEqual(code, 1)
+            build_stage.assert_called_once()
+            case_owner.assert_not_called()
+            self.assertEqual(report["infrastructure_errors"], ["mock build failure"])
+            self.assertEqual(len(report["results"]), 16)
+            self.assertTrue(all(row["status"] == "PENDING" for row in report["results"]))
+            self.assertFalse(report["complete"])
+            self.assertFalse(report["baseline_review_eligible"])
+
     def test_unknown_outer_cleanup_reads_no_producer_artifact_and_keeps_denominator(self):
         class FakeControl:
             reads = 0

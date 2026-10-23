@@ -10,14 +10,21 @@ Receipts are in docs/WPT_HARNESS_OUTPUT_STATUS.md and the dated log. Both prior
 contracts/inputs, legacy bytes and all limits remain unchanged; zero upstream
 passes are added. F-016/F-026/formal MVP remain open.
 
-Next separate contribution (2026-10-22): docs/WPT_WINDOW_PARSING.md and
-tools/wpt/window/corpus.json freeze all sixteen pinned direct-child declared-
-value parsing files before execution. The 79 literal source calls are not
-observed rows or passes. Run the fixed source checker and its separate unit
-tests; preserve the unchanged 1,011-case static score and both authored suites.
-Implement the frozen real-Browser runner/mapping and record all sixteen baseline
-outcomes before CSSOM/engine fixes; never widen a resource profile, synthesize
-missing rows or merge the two score lanes. The runner/baseline are still pending.
+Completed tooling increment (2026-10-22): the fixed real-Browser Window runner
+and reviewed historical first baseline are published at
+`32da1ab929f24cdb2a2081af44358878046dfd06`, with all six exact-source CI/hosting
+checks and public byte/report verification passing. All sixteen original files
+run: 0/16 files and 0/79 actual final subtests pass, with no infrastructure or
+PENDING outcomes. Every subtest reports a caught exception at missing
+style.getPropertyValue(), before CSS comparisons. See docs/WPT_WINDOW_RUNNER.md.
+Preserve the unchanged pre-execution contract, original inputs, static score
+and authored suites.
+
+Next separate contribution (2026-10-23): measure a cold-Cargo Window CI pilot
+inside the existing build/run limits before mandatory continuous score/public-
+report wiring, then implement CSSOM as a separate released browser feature.
+The historical baseline is not a current-commit Window score. Never widen a
+resource profile, synthesize missing rows or merge the two score lanes.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and

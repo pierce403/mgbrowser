@@ -38,9 +38,11 @@ following dependency order, updating evidence as each increment ships:
    with cold CI validation completed in 7m42s. Production engine, corpus and
    expectations remain unchanged. The earlier denied native-log API stays
    stopped; normal publication succeeded without alternate credentials/settings.
-   **Active:** publish/verify the separately frozen first upstream Window runner
-   and reviewed local baseline, then wire its separate continuous CI/public
-   score before the first CSSOM feature fix. Follow
+   **Active:** the separately frozen first upstream Window runner and reviewed
+   local baseline are published/verified at `32da1ab929f24cdb2a2081af44358878046dfd06`
+   (six exact-source checks, public bytes/report and visual acceptance pass).
+   Measure the separate cold-Cargo CI pilot in docs/WPT_WINDOW_CI.md, then wire
+   its continuous CI/public score before the first CSSOM feature fix. Follow
    [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The first local measurement is 0/16 passing files and 0/79 passing
@@ -133,8 +135,9 @@ following dependency order, updating evidence as each increment ships:
    unit cases. The fixed source-only checker validates this manifest, not browser
    compatibility. The real-Browser adapter/owner and pure controls now produce
    the reviewed complete local baseline above, with all original inputs and
-   limits unchanged. **Next:** finish exact-source publication, then separately
-   wire/review the continuous Window gate/report before browser CSSOM changes.
+   limits unchanged. **Next:** measure cold provisioning/build within existing
+   deadlines, then separately wire/review the continuous Window gate/report
+   before browser CSSOM changes. Exact first-runner source publication is verified.
    The historical baseline is not yet a current public Window score. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM

@@ -339,6 +339,11 @@ No executable override, filtering, retry or automatic score rewrite is offered.
 The first local historical baseline is 0/16 files and 0/79 final subtests passing;
 all fail through caught getPropertyValue test-body exceptions, not proven CSS
 comparison mismatches. Continuous Window CI/publication is a separate next gate.
+The cold-Cargo pilot in docs/WPT_WINDOW_CI.md uses explicit locked-build network
+permission; default local runs stay offline. Never provision dependencies outside
+the same 1,200-second build / 1,500-second owner or infer cold feasibility from a
+warm build. Inspect the actual cold CI evidence and publication critical path
+before making the Window report a mandatory public artifact.
 Keep the Browser baseline/score separate from static WPT and both authored
 control suites. No CSSOM fix before all sixteen baseline outcomes; no fabricated
 missing rows, outcome-based exclusions, widened profile or combined headline.

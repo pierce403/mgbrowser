@@ -13,6 +13,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Measure cold dependency provisioning before making Window results a
+  # canonical-publication prerequisite. No cache restore or Cargo prebuild.
+  window-cold-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.91.1
+      PYTHONDONTWRITEBYTECODE: "1"
+      MGBROWSER_COLD_CARGO_HOME: ${{ runner.temp }}/mgbrowser-window-cold-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain prerequisite
+        run: rustup toolchain install 1.91.1 --profile minimal
+      - name: Require a cold Cargo cache and target
+        run: |
+          set -eu
+          test ! -e "$MGBROWSER_COLD_CARGO_HOME"
+          test ! -L "$MGBROWSER_COLD_CARGO_HOME"
+          test ! -e target
+          test ! -L target
+          mkdir -m 700 "$MGBROWSER_COLD_CARGO_HOME"
+          printf 'CARGO_HOME=%s\n' "$MGBROWSER_COLD_CARGO_HOME" >> "$GITHUB_ENV"
+          test -r /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+          test -z "$(git status --porcelain)"
+      - name: Measure the complete fixed Window selection
+        run: python3 -B tools/wpt/window/run.py --allow-locked-build-network --output tmp/wpt-window-cold-pilot
+      - name: Retain only bounded runner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-window-cold-pilot
+          path: |
+            tmp/wpt-window-cold-pilot/report.json
+            tmp/wpt-window-cold-pilot/*-process.json
+            tmp/wpt-window-cold-pilot/*.log
+            tmp/wpt-window-cold-pilot/*.jsonl
+            tmp/wpt-window-cold-pilot/case-*/accepted.json
+            tmp/wpt-window-cold-pilot/case-*/receipt.json
+            tmp/wpt-window-cold-pilot/case-*/http-audit.json
+          if-no-files-found: warn
+          retention-days: 7
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30

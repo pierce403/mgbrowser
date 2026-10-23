@@ -19,7 +19,12 @@ RUSTUP_TOOLCHAIN=1.91.1 python3 -B tools/wpt/window/run.py --output tmp/wpt-wind
 
 Choose a new output name for each run. The owner builds the normal release-mode
 example itself, with `--locked --offline`; there is no binary override, selected-
-file filter, retry or score-update mode. `--font` can select a readable regular
+file filter, retry or score-update mode. Explicit `--allow-locked-build-network`
+permits the same locked Cargo build to provision its existing dependencies;
+downloads, compilation, cleanup and verification share the same absolute build
+deadline. Default local runs remain offline. See the separate
+[cold-Cargo CI pilot](WPT_WINDOW_CI.md), not a current published Window score.
+`--font` can select a readable regular
 font; its exact size and SHA enter the shared input admission. The tool needs
 Linux x86_64, normal restricted-worker support and a local loopback socket, not
 an X11 window or a live website. A controlled-work run is bounded to 25 minutes.
@@ -50,6 +55,11 @@ continuous gate before claiming a current published Window score; subsequent
 browser fixes remain separate released contributions.
 
 ## Concrete ownership
+
+Owner report schema 2 adds an explicit build-network policy and separate
+inclusive build-phase clock, rather than calling Cargo's subprocess elapsed
+time the complete build. Historical schema-1 evidence remains unchanged. This
+does not change worker wire formats, host receipts, semantic verdicts or limits.
 
 The new example composes the normal toolbar-free Browser, LinuxScripts and the
 fixed source-admission guard. It dispatches the existing restricted worker modes

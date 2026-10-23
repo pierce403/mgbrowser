@@ -100,7 +100,9 @@ style.getPropertyValue, not proven CSS comparison failures. Exact source/body,
 resource/clock and cleanup evidence is retained. This tooling adds no browser
 behavior, upstream pass or checked criterion. A continuous Window gate/public
 report remains pending; its historical baseline is separate from the static
-score. Engine fixes follow in separate released contributions.
+score. A separate cold-Cargo CI pilot in docs/WPT_WINDOW_CI.md measures build
+feasibility before mandatory publication wiring; it is not a current Window
+score or additional pass. Engine fixes follow in separate released contributions.
 
 ## F-025 : Google News desktop reading
 

@@ -303,7 +303,9 @@ final subtests, without infrastructure errors, timeouts, crashes or PENDING.
 Every test body fails at the missing style.getPropertyValue call, not a proven
 CSS grammar mismatch. Its historical source-bound snapshot remains distinct
 from a future continuous Window score/public report. No denominator is merged
-into this static score and full testharness support is not claimed.
+into this static score and full testharness support is not claimed. A separate
+[cold-Cargo CI pilot](WPT_WINDOW_CI.md) measures provisioning/build feasibility
+before continuous Window publication becomes mandatory.
 
 1. Establish this truthful frozen baseline and keep website results current.
 2. Diagnose failing supported cases using their original sources, screenshots

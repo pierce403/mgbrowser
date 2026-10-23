@@ -42,6 +42,9 @@ STATUSES = ("PASS", "FAIL", "TIMEOUT", "PRECONDITION_FAILED", "UNSUPPORTED", "ER
 SUBTEST_STATUSES = ("Pass", "Fail", "Timeout", "NotRun", "PreconditionFailed")
 RUN_SECONDS = 25 * 60
 BUILD_SECONDS = 1200
+# Inside, not additional to, the inclusive build allowance: original2s group
+# cleanup,1s JSON/hash/evidence allowance and0.1s final owner guard.
+BUILD_POSTPROCESS_RESERVE_NS = 3_100_000_000
 RUN_FINAL_RESERVE = 3.0
 CASE_NS = 25_000_000_000
 ADMISSION_RESERVE_NS = 3_000_000_000
@@ -153,7 +156,14 @@ def stamp(value):
             value.st_mtime_ns, value.st_ctime_ns)
 
 
-def read_regular(path, limit, *, expected=None):
+def check_deadline(deadline_ns, where):
+    if deadline_ns is not None:
+        integer(deadline_ns, U64, where + " deadline")
+        require(time.monotonic_ns() < deadline_ns, where + " exceeded inclusive deadline")
+
+
+def read_regular(path, limit, *, expected=None, deadline_ns=None):
+    check_deadline(deadline_ns, "Regular-file admission")
     path = safe_path(path)
     before = path.lstat()
     require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= limit,
@@ -164,16 +174,22 @@ def read_regular(path, limit, *, expected=None):
         require(stamp(opened) == stamp(before), "Input replaced before read")
         pieces, received = [], 0
         while received <= before.st_size:
+            check_deadline(deadline_ns, "Regular-file chunk read")
             piece = os.read(descriptor, min(65536, before.st_size + 1 - received))
+            check_deadline(deadline_ns, "Regular-file chunk read")
             if not piece:
                 break
             pieces.append(piece)
             received += len(piece)
         require(received == before.st_size and stamp(os.fstat(descriptor)) == stamp(opened),
                 "Input changed during bounded read")
+        check_deadline(deadline_ns, "Regular-file join")
         data = b"".join(pieces)
-        require(expected is None or sha(data) == expected, "Pinned input SHA differs")
-        return data, {"bytes": len(data), "sha256": sha(data), "identity": list(stamp(opened))}
+        check_deadline(deadline_ns, "Regular-file join")
+        digest_ = sha(data)
+        check_deadline(deadline_ns, "Regular-file hash")
+        require(expected is None or digest_ == expected, "Pinned input SHA differs")
+        return data, {"bytes": len(data), "sha256": digest_, "identity": list(stamp(opened))}
     finally:
         os.close(descriptor)
 
@@ -375,7 +391,8 @@ def private_env(root, *, build=False):
         environment[variable] = str(directory)
     if build:
         # Read existing toolchain/dependency caches, never a real browser profile
-        # or caller RUSTFLAGS/features. --offline/--locked prevent dependency drift.
+        # or caller RUSTFLAGS/features. --locked remains mandatory; only the
+        # explicit owner flag may permit Cargo's normal dependency network.
         original_home = os.environ.get("HOME")
         require(original_home is not None, "Configured Rust cache root is unavailable")
         environment.update(RUSTUP_TOOLCHAIN="1.91.1",
@@ -385,7 +402,7 @@ def private_env(root, *, build=False):
 
 
 def source_paths():
-    fixed = {"Cargo.toml", "Cargo.lock", "build.rs", "docs/cdp-protocol.json",
+    fixed = {"Cargo.toml", "Cargo.lock", "build.rs", "docs/cdp-protocol.json", ".github/workflows/pages.yml",
              "assets/mgbrowser-32.png", "examples/wpt_window.rs", CONTROL_PATH,
              "docs/WPT_WINDOW_PARSING.md", "docs/WPT_WINDOW_RUNNER.md",
              "docs/WPT_OBSERVER.md", "docs/WPT_HARNESS_OUTPUT.md",
@@ -465,11 +482,14 @@ def tool(control, budget, command, name, environment, timeout=20.0, limit=LOG_LI
         budget.release(limit + 4096, result.get("cleanup_succeeded") is True)
 
 
-def cargo_executable(raw):
+def cargo_executable(raw, *, deadline_ns=None):
     require(len(raw) <= BUILD_OUTPUT_LIMIT, "Cargo output admission")
+    check_deadline(deadline_ns, "Cargo JSON admission")
     candidates = []
     for line in raw.splitlines():
+        check_deadline(deadline_ns, "Cargo JSON record")
         event = strict_json(line, BUILD_OUTPUT_LIMIT)
+        check_deadline(deadline_ns, "Cargo JSON record")
         require(type(event) is dict, "Malformed Cargo record")
         target = event.get("target", {})
         require(type(target) is dict, "Malformed Cargo target")
@@ -479,25 +499,97 @@ def cargo_executable(raw):
             if executable is not None:
                 require(type(executable) is str, "Malformed Cargo executable")
                 candidates.append(safe_path(executable))
+        check_deadline(deadline_ns, "Cargo artifact record validation")
+    check_deadline(deadline_ns, "Cargo artifact selection")
     require(len(candidates) == 1, "Build did not identify one wpt_window executable")
     return candidates[0]
 
 
-def build(control, budget, environment):
-    budget.reserve(BUILD_RESERVE)
-    result = {"cleanup_succeeded": False}
+def build_command(allow_locked_build_network=False):
+    boolean(allow_locked_build_network, "Locked build network opt-in")
+    return (["cargo", "build", "--locked"]
+            + ([] if allow_locked_build_network else ["--offline"])
+            + ["--release", "--example", "wpt_window", "--message-format=json"])
+
+
+def build_window(started_ns, run_deadline):
+    integer(started_ns, U64, "Build start clock")
+    require(math.isfinite(run_deadline), "Invalid whole-run build deadline")
+    deadline_ns = min(started_ns + BUILD_SECONDS * 1_000_000_000,
+                      int((run_deadline - RUN_FINAL_RESERVE) * 1_000_000_000))
+    process_deadline_ns = deadline_ns - BUILD_POSTPROCESS_RESERVE_NS
+    require(process_deadline_ns > started_ns, "No inclusive build/cleanup/evidence allowance remains")
+    return deadline_ns, process_deadline_ns
+
+
+def build(control, budget, environment, report, *, allow_locked_build_network=False):
+    # Start BEFORE reservation/admission. This is the complete phase clock,
+    # not run_bounded's Cargo-only elapsed_ms or a renewed verification timer.
+    started_ns = time.monotonic_ns()
+    deadline_ns, process_deadline_ns = build_window(started_ns, budget.deadline)
+    command = build_command(allow_locked_build_network)
+    record = report["build"]
+    record.update(status="RUNNING", allow_locked_build_network=allow_locked_build_network,
+                  started_monotonic_ns=started_ns,
+                  deadline_monotonic_ns=deadline_ns, process_deadline_monotonic_ns=process_deadline_ns,
+                  postprocess_reserve_ns=BUILD_POSTPROCESS_RESERVE_NS,
+                  process_cleanup_confirmed=True, binary_verified=False,
+                  finished_monotonic_ns=None, elapsed_ns=None, completed_within_deadline=False)
+    result, outcome, reserved, body_complete = {"cleanup_succeeded": True}, None, False, False
     try:
-        result = control.run_bounded(["cargo", "build", "--locked", "--offline", "--release",
-                                     "--example", "wpt_window", "--message-format=json"],
-                                    cwd=ROOT, env=environment, log_path=budget.output / "build.log",
-                                    stdout_path=budget.output / "build.jsonl", timeout=BUILD_SECONDS,
-                                    global_deadline=budget.deadline - RUN_FINAL_RESERVE,
-                                    max_output_bytes=BUILD_OUTPUT_LIMIT, cancel_event=budget)
+        budget.reserve(BUILD_RESERVE)
+        reserved = True
+        now_ns = time.monotonic_ns()
+        require(now_ns < process_deadline_ns, "Inclusive build deadline expired before launch")
+        # Any exception after entering the process utility is conservatively
+        # unknown ownership until its returned cleanup proof says otherwise.
+        result = {"cleanup_succeeded": False}
+        result = control.run_bounded(command, cwd=ROOT, env=environment,
+                                     log_path=budget.output / "build.log",
+                                     stdout_path=budget.output / "build.jsonl",
+                                     timeout=(process_deadline_ns - now_ns) / 1_000_000_000,
+                                     global_deadline=process_deadline_ns / 1_000_000_000,
+                                     max_output_bytes=BUILD_OUTPUT_LIMIT, cancel_event=budget)
         write_new(budget.output / "build-process.json", encoded(result, 4096), 4096)
         require(ordinary(result), "Normal fixed Window host build failed")
-        return cargo_executable(control.read_artifact(budget.output / "build.jsonl", limit=BUILD_OUTPUT_LIMIT))
+        require(time.monotonic_ns() < deadline_ns, "Inclusive build deadline exceeded after Cargo/cleanup")
+        raw = control.read_artifact(budget.output / "build.jsonl", limit=BUILD_OUTPUT_LIMIT)
+        require(time.monotonic_ns() < deadline_ns, "Inclusive build deadline exceeded during Cargo evidence read")
+        binary = cargo_executable(raw, deadline_ns=deadline_ns)
+        require(time.monotonic_ns() < deadline_ns, "Inclusive build deadline exceeded during Cargo JSON validation")
+        _, binary_pin = read_regular(binary, BINARY_LIMIT, deadline_ns=deadline_ns)
+        require(os.access(binary, os.X_OK), "Built host is not executable")
+        require(time.monotonic_ns() < deadline_ns, "Inclusive build deadline exceeded during executable verification")
+        record["binary_verified"] = True
+        outcome = binary, binary_pin
+        body_complete = True
     finally:
-        budget.release(BUILD_RESERVE, result.get("cleanup_succeeded") is True)
+        unwinding = not body_complete
+        record["process_cleanup_confirmed"] = result.get("cleanup_succeeded") is True
+        try:
+            if reserved:
+                budget.release(BUILD_RESERVE, record["process_cleanup_confirmed"])
+            finished_ns = time.monotonic_ns()
+            require(finished_ns >= started_ns, "Build clock moved backwards")
+            record.update(status="ERROR", finished_monotonic_ns=finished_ns,
+                          elapsed_ns=finished_ns - started_ns)
+            require(finished_ns < deadline_ns, "Inclusive build deadline exceeded during reservation/release")
+            # Retain raw process proof and a distinct full-phase clock even on
+            # failure. This interim report is not a completed build claim.
+            budget.report(report)
+            finished_ns = time.monotonic_ns()
+            require(finished_ns >= started_ns, "Build clock moved backwards")
+            record.update(finished_monotonic_ns=finished_ns, elapsed_ns=finished_ns - started_ns)
+            require(finished_ns < deadline_ns, "Inclusive build deadline exceeded during release/evidence")
+            if not unwinding:
+                require(outcome is not None and record["process_cleanup_confirmed"], "Incomplete owned build")
+                record.update(status="COMPLETE", completed_within_deadline=True)
+        except (Exception, KeyboardInterrupt) as failure:
+            record.update(status="ERROR", completed_within_deadline=False,
+                          evidence_error=str(failure)[:1024])
+            if not unwinding:
+                raise
+    return outcome
 
 
 def verify_process(result, *, semantic_error=False):
@@ -1242,11 +1334,14 @@ def run(args, began):
     deadline = began + RUN_SECONDS
     output = fresh_directory(args.output)
     budget = Budget(output, deadline)
-    report = {"schema_version": 1, "status": "RUNNING", "scope": SCOPE,
+    report = {"schema_version": 2, "status": "RUNNING", "scope": SCOPE,
               "started_utc": datetime.now(timezone.utc).isoformat(), "complete": False,
               "baseline_review_eligible": False, "score_written": False, "expectations_written": False,
               "selection": "css-flexbox-window-declared-value-parsing-v1",
               "manifest_sha256": MANIFEST_SHA, "observer_contract": CONTRACT,
+              "build": {"status": "NOT_STARTED",
+                        "allow_locked_build_network": args.allow_locked_build_network,
+                        "scope": "Inclusive normal locked Cargo dependency/build/cleanup/evidence/executable phase; not page network"},
               "results": pending_results(), "infrastructure_errors": [],
               "limits": {"whole_run_seconds": RUN_SECONDS, "build_seconds": BUILD_SECONDS,
                          "whole_case_ns": CASE_NS, "admission_ns": CASE_NS - ADMISSION_RESERVE_NS,
@@ -1295,9 +1390,8 @@ def run(args, began):
         report["git_commit"] = tool(control, budget, ["git", "rev-parse", "HEAD"], "git-head", build_environment).strip()
         report["git_dirty"] = bool(tool(control, budget, ["git", "status", "--porcelain"], "git-status", build_environment))
         require(re.fullmatch(r"[0-9a-f]{40}", report["git_commit"]), "Invalid tested Git identity")
-        binary = build(control, budget, build_environment)
-        _, binary_pin = read_regular(binary, BINARY_LIMIT)
-        require(os.access(binary, os.X_OK), "Built host is not executable")
+        binary, binary_pin = build(control, budget, build_environment, report,
+                                   allow_locked_build_network=args.allow_locked_build_network)
         report["binary"] = {"path": str(binary), **binary_pin}
         ports = set()
         for index, test in enumerate(document["tests"]):
@@ -1345,14 +1439,19 @@ def run(args, began):
     return 0 if report["baseline_review_eligible"] else 1
 
 
-def main(argv=None):
-    # No source checker, Rust, child, profile or file is touched by module import.
-    began = time.monotonic()
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--font", type=Path, default=Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-    args = parser.parse_args(argv)
-    return run(args, began)
+    parser.add_argument("--allow-locked-build-network", action="store_true",
+                        help="Explicitly allow normal locked Cargo dependency access inside the inclusive build clock; default offline")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    # No source checker, Rust, child, profile or file is touched by module import.
+    began = time.monotonic()
+    return run(parse_args(argv), began)
 
 
 if __name__ == "__main__":

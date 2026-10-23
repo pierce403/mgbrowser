@@ -253,8 +253,9 @@ the missing `style.getPropertyValue()` method, before CSS comparisons. The
 [historical snapshot](tools/wpt/window/first-baseline.json) retains the exact
 measured source and its pre-commit dirty status. Continuous Window CI/public
 scoring remains pending; these numbers are not the static score or an installed-
-binary measurement. No new upstream pass is claimed. Browser fixes follow in
-separate releases.
+binary measurement. The [cold-Cargo CI pilot](docs/WPT_WINDOW_CI.md) measures
+dependency provisioning before mandatory continuous publication is wired.
+No new upstream pass is claimed. Browser fixes follow in separate releases.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
