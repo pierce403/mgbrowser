@@ -335,15 +335,20 @@ the normal locked/offline release example, retains all sixteen slots, original
 helpers, exact source/font/binary pins and the existing shared limits. Review
 accepted records, raw resource/diagnostic evidence, original-body HTTP audit,
 clock accounting and separate internal/outer cleanup before adopting a result.
-No executable override, filtering, retry or automatic score rewrite is offered.
+No executable override, filtering, retry or automatic ratchet rewrite is offered.
 The first local historical baseline is 0/16 files and 0/79 final subtests passing;
 all fail through caught getPropertyValue test-body exceptions, not proven CSS
-comparison mismatches. Continuous Window CI/publication is a separate next gate.
+comparison mismatches. Explicit --update-score and --check-score project only
+complete owner-accepted evidence; gate failures never relabel browser outcomes.
+Run both complete lanes before each commit and keep the generated Window score
+separate from its manual runnable/pass ratchet. CI checks both clean exact-source
+reports before one dependent staging job publishes the two separate reports.
 The cold-Cargo pilot in docs/WPT_WINDOW_CI.md uses explicit locked-build network
 permission; default local runs stay offline. Never provision dependencies outside
 the same 1,200-second build / 1,500-second owner or infer cold feasibility from a
 warm build. Inspect the actual cold CI evidence and publication critical path
-before making the Window report a mandatory public artifact.
+and the coupled graph before accepting the Window public artifact. An accepted
+cold pilot proves that run only, not future build/queue performance.
 Keep the Browser baseline/score separate from static WPT and both authored
 control suites. No CSSOM fix before all sixteen baseline outcomes; no fabricated
 missing rows, outcome-based exclusions, widened profile or combined headline.

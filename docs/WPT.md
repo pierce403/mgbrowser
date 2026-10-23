@@ -302,10 +302,13 @@ has a reviewed first local baseline: 0/16 passing files and 0/79 passing actual
 final subtests, without infrastructure errors, timeouts, crashes or PENDING.
 Every test body fails at the missing style.getPropertyValue call, not a proven
 CSS grammar mismatch. Its historical source-bound snapshot remains distinct
-from a future continuous Window score/public report. No denominator is merged
+from the separate continuous Window score/public report. No denominator is merged
 into this static score and full testharness support is not claimed. A separate
-[cold-Cargo CI pilot](WPT_WINDOW_CI.md) measures provisioning/build feasibility
-before continuous Window publication becomes mandatory.
+[cold-Cargo CI measurement](WPT_WINDOW_CI.md) now proves one complete build inside
+the unchanged limits. Both independent CI lanes must pass on the exact clean
+commit before the dependent staging job publishes either bounded report.
+Window --update-score/--check-score uses its own generated current-score.json
+and manual ratchet.json; the static lane and expectations remain unchanged.
 
 1. Establish this truthful frozen baseline and keep website results current.
 2. Diagnose failing supported cases using their original sources, screenshots

@@ -218,11 +218,11 @@ class ReservationTests(unittest.TestCase):
         # A focused regression for GitHub's context availability, not a YAML
         # parser or a substitute for the actual workflow validation/run.
         workflow = (owner.ROOT / ".github/workflows/pages.yml").read_text()
-        pilot = workflow.split("  window-cold-pilot:\n", 1)[1].split("  validate:\n", 1)[0]
+        pilot = workflow.split("  window-validate:\n", 1)[1].split("  validate:\n", 1)[0]
         job_header = pilot.split("    steps:\n", 1)[0]
         self.assertNotIn("${{ runner.", job_header)
         preflight = pilot.split("      - name: Require a cold Cargo cache and target\n", 1)[1]
-        preflight = preflight.split("      - name: Measure the complete fixed Window selection\n", 1)[0]
+        preflight = preflight.split("      - name: Check the complete fixed Window selection\n", 1)[0]
         self.assertIn("        env:\n          MGBROWSER_COLD_CARGO_HOME: ${{ runner.temp }}/", preflight)
         self.assertIn('test ! -e "$MGBROWSER_COLD_CARGO_HOME"', preflight)
         self.assertIn('test ! -e target', preflight)

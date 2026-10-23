@@ -38,7 +38,20 @@ writes in website validation and ignore only the specific generated cache paths.
 Require a clean CI checkout before WPT scoring; never ignore real source edits or
 accept a dirty public report merely because its counts and workflow are green.
 
-Do not publish the repository root as the artifact: the workflow stages only index.html, CNAME, .nojekyll, install.sh and the explicitly listed identity assets. Never include logs, tmp or test artifacts. The public target is the apex domain only. Recheck live hosting before any authorized DNS changes. If certificate issuance is pending, report that state and retry within a bounded verification session rather than claiming success. Do not change nameservers or unrelated DNS records to fix a deployment.
+Keep static reftests and Window declared-value parsing as separate score lanes.
+Before every commit, run both complete selections with --update-score into new
+ignored outputs, inspect full outcomes/resources/cleanup, then run tmp/site.
+The Window owner projects only accepted evidence and never edits its manual
+ratchet. Check mode must pass in CI on the exact clean source; only then may a
+dependent staging job assemble both bounded reports into the public artifact.
+Verify wpt-window-results.json separately from wpt-results.json, including its
+check-score gate, exact SHA, source fingerprint and full tracked score parity.
+Do not add denominators or call authored controls upstream passes. Unknown
+partial inventories stay unknown; valid semantic Window timeouts stay non-PASS.
+Measure the actual coupled CI critical path against the unchanged native wait,
+not merely the maximum allowed build duration or a warm local cache.
+
+Do not publish the repository root as the artifact: the workflow stages only index.html, CNAME, .nojekyll, install.sh, both validated WPT reports and the explicitly listed identity assets. Never include logs, tmp or raw test artifacts. The public target is the apex domain only. Recheck live hosting before any authorized DNS changes. If certificate issuance is pending, report that state and retry within a bounded verification session rather than claiming success. Do not change nameservers or unrelated DNS records to fix a deployment.
 
 For a preview release, verify Rust CI and Pages on the exact main commit before
 tagging. The v* workflow packages the locked Rust 1.91.1 binary and tests installation

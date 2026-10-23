@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Report-only owner for the fixed upstream Window parsing cohort.
+"""Default report-only owner for the fixed upstream Window parsing cohort.
 
-This is separate from tools/wpt/run.py, both authored observer suites and every
-tracked score/expectation. The Rust host owns its Browser, immutable fixture and
+This is separate from tools/wpt/run.py and both authored observer suites.
+Explicit score modes project accepted Window evidence only; the Rust host owns
+its Browser, immutable fixture and
 final typed mapper. Python verifies ownership/bindings; it does not reinterpret
 callbacks, native messages, host signals or expected-negative controls.
 
 Import is definition-only. Execution requires the separately reviewed host and
-owner; no executable override, selection filter, retry or score-adoption mode.
+owner; no executable override, selection filter, retry or automatic ratchet.
 """
 import argparse
 from datetime import datetime, timezone
@@ -31,12 +32,15 @@ MANIFEST_PATH = "tools/wpt/window/corpus.json"
 MANIFEST_SHA = "5223099747ed3b1669f311faa5007abb2c037bebb90aa7411b67c6470b4518d0"
 CHECKER_PATH = "tools/wpt/window/check_manifest.py"
 CONTROL_PATH = "tools/wpt/process_control.py"
+SCORE_HELPER_PATH = "tools/wpt/window/score.py"
+CURRENT_SCORE_PATH = "tools/wpt/window/current-score.json"
+RATCHET_PATH = "tools/wpt/window/ratchet.json"
 PREFIX = "css/css-flexbox/parsing/"
 CASE_PATHS = tuple(sorted(PREFIX + prop + suffix + ".html"
                           for prop in ("flex", "flex-basis", "flex-direction", "flex-flow",
                                        "flex-grow", "flex-shrink", "flex-wrap", "order")
                           for suffix in ("-valid", "-invalid")))
-SCOPE = "Local real-Browser upstream Window parsing report; not static WPT, native UI or a published score"
+SCOPE = "Real-Browser upstream Window parsing report; current source, not static WPT, native UI or installed release"
 CONTRACT = "PinnedWindowHarnessOutputDisabledV1"
 STATUSES = ("PASS", "FAIL", "TIMEOUT", "PRECONDITION_FAILED", "UNSUPPORTED", "ERROR", "CRASH", "PENDING")
 SUBTEST_STATUSES = ("Pass", "Fail", "Timeout", "NotRun", "PreconditionFailed")
@@ -225,15 +229,16 @@ def read_font(path, admission, expected=None):
     return data, pin
 
 
-def load_definitions(path, name):
-    """Only the two fixed reviewed definition-only runtime helpers are loaded."""
-    require(path in (CHECKER_PATH, CONTROL_PATH), "Unreviewed helper import")
-    before, pin = read_regular(ROOT / path, METADATA_LIMIT)
+def load_definitions(path, name, *, expected=None, limit=METADATA_LIMIT, deadline_ns=None):
+    """Only the three fixed reviewed definition-only helpers are loaded."""
+    require(path in (CHECKER_PATH, CONTROL_PATH, SCORE_HELPER_PATH), "Unreviewed helper import")
+    integer(limit, METADATA_LIMIT, "Definition helper pre-read limit")
+    before, pin = read_regular(ROOT / path, limit, expected=expected, deadline_ns=deadline_ns)
     specification = importlib.util.spec_from_file_location(name, ROOT / path)
     require(specification is not None and specification.loader is not None, "Helper loader unavailable")
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
-    after, current = read_regular(ROOT / path, METADATA_LIMIT)
+    after, current = read_regular(ROOT / path, limit, expected=expected, deadline_ns=deadline_ns)
     require(before == after and pin == current, "Helper changed while loading definitions")
     return module
 
@@ -414,6 +419,7 @@ def private_env(root, *, build=False):
 def source_paths():
     fixed = {"Cargo.toml", "Cargo.lock", "build.rs", "docs/cdp-protocol.json", ".github/workflows/pages.yml",
              "assets/mgbrowser-32.png", "examples/wpt_window.rs", CONTROL_PATH,
+             "tools/wpt/run.py", "tools/wpt/import_corpus.py", "tools/wpt/parallel.py",
              "docs/WPT_WINDOW_PARSING.md", "docs/WPT_WINDOW_RUNNER.md",
              "docs/WPT_OBSERVER.md", "docs/WPT_HARNESS_OUTPUT.md",
              "docs/BOA.md", "docs/PAGE_SESSIONS.md", "docs/DOCUMENT_LIFECYCLE.md"}
@@ -433,7 +439,9 @@ def source_paths():
                     elif (entry.name.endswith((".rs", ".py", ".json"))
                           or entry.name in ("Cargo.toml", "Cargo.lock")):
                         require(stat.S_ISREG(value.st_mode), "Fingerprint nonregular source")
-                        fixed.add(str(Path(entry.path).relative_to(ROOT)))
+                        name = str(Path(entry.path).relative_to(ROOT))
+                        if name != CURRENT_SCORE_PATH:
+                            fixed.add(name)
                     require(len(fixed) <= MAX_INPUT_FILES, "Fingerprint file-count admission")
     return sorted(fixed)
 
@@ -456,7 +464,7 @@ def fingerprint(checker, document, deadline):
         for name in sorted(names):
             require(time.monotonic() < deadline, "Run deadline during source fingerprint")
             expected = original.get(name.removeprefix("tools/wpt/upstream/")) if name.startswith("tools/wpt/upstream/") else None
-            metadata = name in (MANIFEST_PATH, "tools/wpt/corpus.json")
+            metadata = name in (MANIFEST_PATH, "tools/wpt/corpus.json", RATCHET_PATH)
             raw = reader.read(name, MANIFEST_LIMIT if name == MANIFEST_PATH else METADATA_LIMIT if metadata else INPUT_LIMIT,
                               expected_size=expected["bytes"] if expected else None,
                               expected_sha=expected["sha256"] if expected else None,
@@ -1340,6 +1348,97 @@ def run_case(control, budget, report, index, test, binary, binary_pin, font, fon
     return row.get("evidence_validated", False) and "owner_failure" not in row
 
 
+def score_input_admission(report, length):
+    """The generated score is excluded from hashing, not shared input limits."""
+    integer(length, METADATA_LIMIT, "Current score metadata bytes", 1)
+    files = report["input_admission"]["combined_unique_files"] + 1
+    used = report["input_admission"]["combined_unique_bytes"] + length
+    metadata = report["source_fingerprint"]["metadata_bytes"] + length
+    require(files <= MAX_INPUT_FILES and used <= INPUT_LIMIT and metadata <= METADATA_LIMIT,
+            "Current score exceeds shared pre-read input/metadata admission")
+    return {"path": CURRENT_SCORE_PATH, "bytes": length, "combined_unique_files": files,
+            "combined_unique_bytes": used, "metadata_bytes": metadata}
+
+
+def run_score_gate(args, report, budget):
+    """After retained complete evidence; gate failure never changes file verdicts."""
+    gate = report["score_gate"]
+    if not report["baseline_review_eligible"]:
+        gate["status"] = "NOT_ELIGIBLE"
+        return
+    deadline_ns = int(budget.deadline * 1_000_000_000)
+    try:
+        check_deadline(deadline_ns, "Window score gate")
+        require(budget.interruption is None and budget.cleanup_confirmed
+                and budget.reserved == 0, "Score gate after interruption/uncertain cleanup")
+        source = report["source_fingerprint"]
+        inputs = {row["path"]: row for row in source["files"]}
+        require(SCORE_HELPER_PATH in inputs and RATCHET_PATH in inputs,
+                "Score helper/ratchet missing from evaluated source fingerprint")
+        helper_pin = inputs[SCORE_HELPER_PATH]
+        helper = load_definitions(SCORE_HELPER_PATH, "mg_window_score",
+                                  expected=helper_pin["sha256"], limit=helper_pin["bytes"], deadline_ns=deadline_ns)
+        check_deadline(deadline_ns, "Window score helper load")
+        ratchet_pin = inputs[RATCHET_PATH]
+        ratchet_raw, pin = read_regular(ROOT / RATCHET_PATH, ratchet_pin["bytes"],
+                                       expected=ratchet_pin["sha256"], deadline_ns=deadline_ns)
+        require(pin["bytes"] == ratchet_pin["bytes"], "Evaluated ratchet length differs")
+        ratchet = strict_json(ratchet_raw, METADATA_LIMIT)
+        check_deadline(deadline_ns, "Window ratchet decode")
+        candidate = helper.score_from(report)
+        helper.check_ratchet(candidate, ratchet)
+        check_deadline(deadline_ns, "Window score/ratchet validation")
+        payload = encoded(candidate, METADATA_LIMIT)
+        gate.update(candidate_sha256=sha(payload), candidate_bytes=len(payload))
+        if args.check_score:
+            path = safe_path(ROOT / CURRENT_SCORE_PATH)
+            value = path.lstat()
+            require(stat.S_ISREG(value.st_mode), "Current score is not a regular file")
+            gate["current_score_input"] = score_input_admission(report, value.st_size)
+            raw, current_pin = read_regular(path, value.st_size, deadline_ns=deadline_ns)
+            require(current_pin["bytes"] == value.st_size
+                    and current_pin["identity"] == list(stamp(value)), "Current score changed after admission")
+            gate["current_score_input"]["sha256"] = current_pin["sha256"]
+            recorded = strict_json(raw, METADATA_LIMIT)
+            check_deadline(deadline_ns, "Current score decode")
+            helper.validate_score(recorded)
+            require(recorded == candidate, "Window score is stale: review --update-score and regenerate the site")
+        else:
+            # The score is metadata, never an unbounded second report. Reserve
+            # it plus the existing atomic report allowance inside512MiB.
+            gate["generated_score_admission"] = score_input_admission(report, len(payload))
+            budget.reserve(len(payload))
+            try:
+                temporary = budget.output / "current-score.next"
+                write_new(temporary, payload, METADATA_LIMIT)
+                require(time.monotonic() < budget.deadline - RUN_FINAL_RESERVE,
+                        "Insufficient existing final guard for score commit")
+                require(budget.interruption is None and not budget.cancel.is_set()
+                        and budget.cleanup_confirmed, "Score commit after stopped admission")
+                path = safe_path(ROOT / CURRENT_SCORE_PATH)
+                if path.exists():
+                    require(stat.S_ISREG(path.lstat().st_mode), "Score target is not a regular generated file")
+                os.replace(temporary, path)
+                report["score_written"] = True
+            finally:
+                # No new producer exists; failed temporary files remain bounded
+                # evidence, while the prior tracked score is not touched early.
+                budget.release(len(payload), True)
+        check_deadline(deadline_ns, "Window score gate completion")
+        require(budget.interruption is None and not budget.cancel.is_set(), "Score gate interrupted")
+        gate["status"] = "PASSED"
+    except (Exception, KeyboardInterrupt) as error:
+        gate.update(status="FAILED", error=str(error)[:1024])
+
+
+def final_publication_guard(budget, deadline):
+    """A precomputed successful score cannot waive a later stopped owner."""
+    require(time.monotonic() < deadline, "Final output exceeded whole-run deadline")
+    require(budget.interruption is None and not budget.cancel.is_set()
+            and budget.cleanup_confirmed and budget.reserved == 0
+            and budget.failure is None, "Final publication after interruption or unresolved owner state")
+
+
 def run(args, began):
     deadline = began + RUN_SECONDS
     output = fresh_directory(args.output)
@@ -1347,6 +1446,9 @@ def run(args, began):
     report = {"schema_version": 2, "status": "RUNNING", "scope": SCOPE,
               "started_utc": datetime.now(timezone.utc).isoformat(), "complete": False,
               "baseline_review_eligible": False, "score_written": False, "expectations_written": False,
+              "score_gate": {"mode": "update" if args.update_score else "check" if args.check_score else "report-only",
+                             "status": "PENDING" if args.update_score or args.check_score else "NOT_REQUESTED",
+                             "error": None},
               "selection": "css-flexbox-window-declared-value-parsing-v1",
               "manifest_sha256": MANIFEST_SHA, "observer_contract": CONTRACT,
               "build": {"status": "NOT_STARTED",
@@ -1437,16 +1539,42 @@ def run(args, began):
         try:
             require(time.monotonic() < deadline, "Whole25-minute owner deadline exceeded")
             budget.report(report)
+            # Complete measured evidence is retained BEFORE score decisions.
+            # A stale score/ratchet is a gate failure, not a browser ERROR row.
+            if args.update_score or args.check_score:
+                run_score_gate(args, report, budget)
+                budget.report(report)
+            if report["baseline_review_eligible"]:
+                final_publication_guard(budget, deadline)
             # Final serialization and stdout do not grant any renewed deadline.
             require(time.monotonic() <= deadline, "Final report exceeded whole-run deadline")
             print(json.dumps({"status": report["status"], "complete": report["complete"],
                               "baseline_review_eligible": report["baseline_review_eligible"],
+                              "score_gate": report["score_gate"],
                               "distributions": report["distributions"], "report": str(output / "report.json")}, sort_keys=True))
             require(time.monotonic() <= deadline, "Final output exceeded whole-run deadline")
+            if report["baseline_review_eligible"]:
+                final_publication_guard(budget, deadline)
+        except (Exception, KeyboardInterrupt) as error:
+            budget.stop(error)
+            refresh(report, budget, began)
+            report["baseline_review_eligible"] = False
+            report["status"] = "COMPLETE_NONADOPTABLE" if report["complete"] else "ERROR"
+            report["infrastructure_errors"].append(str(error)[:1024])
+            if args.update_score or args.check_score:
+                report["score_gate"].update(status="FAILED", error=str(error)[:1024])
+            # Failure evidence gets no renewed deadline. A failed final write
+            # may leave the preceding report; the nonzero process is decisive.
+            if time.monotonic() < deadline:
+                budget.report(report)
         finally:
             for signum, prior in previous_signals.items():
                 signal.signal(signum, prior)
-    return 0 if report["baseline_review_eligible"] else 1
+    return 0 if (report["baseline_review_eligible"]
+                 and budget.interruption is None and not budget.cancel.is_set()
+                 and budget.cleanup_confirmed and budget.reserved == 0
+                 and budget.failure is None and time.monotonic() < deadline
+                 and report["score_gate"]["status"] in ("NOT_REQUESTED", "PASSED")) else 1
 
 
 def parse_args(argv=None):
@@ -1455,6 +1583,11 @@ def parse_args(argv=None):
     parser.add_argument("--font", type=Path, default=Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
     parser.add_argument("--allow-locked-build-network", action="store_true",
                         help="Explicitly allow normal locked Cargo dependency access inside the inclusive build clock; default offline")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--update-score", action="store_true",
+                         help="Write only the generated Window score after full eligible measurement and manual ratchet checks")
+    actions.add_argument("--check-score", action="store_true",
+                         help="Check fresh eligible Window results against the tracked score; never rewrite the ratchet")
     return parser.parse_args(argv)
 
 

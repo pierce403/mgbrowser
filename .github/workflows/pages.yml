@@ -13,9 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Measure cold dependency provisioning before making Window results a
-  # canonical-publication prerequisite. No cache restore or Cargo prebuild.
-  window-cold-pilot:
+  # Independent cold Window check; no cache restore or Cargo prebuild.
+  window-validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -42,21 +41,33 @@ jobs:
           mkdir -p tmp
           test -r /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
           test -z "$(git status --porcelain)"
-      - name: Measure the complete fixed Window selection
-        run: python3 -B tools/wpt/window/run.py --allow-locked-build-network --output tmp/wpt-window-cold-pilot
-      - name: Retain only bounded runner evidence
+      - name: Check the complete fixed Window selection
+        run: python3 -B tools/wpt/window/run.py --allow-locked-build-network --check-score --output tmp/wpt-window
+      - name: Bound the separate Window public report
+        run: |
+          test -f tmp/wpt-window/report.json
+          test ! -L tmp/wpt-window/report.json
+          test "$(stat -c %s tmp/wpt-window/report.json)" -le 26214400
+      - name: Upload only the Window report
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-window-report
+          path: tmp/wpt-window/report.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain only bounded Window execution evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: wpt-window-cold-pilot
+          name: wpt-window-evidence
           path: |
-            tmp/wpt-window-cold-pilot/report.json
-            tmp/wpt-window-cold-pilot/*-process.json
-            tmp/wpt-window-cold-pilot/*.log
-            tmp/wpt-window-cold-pilot/*.jsonl
-            tmp/wpt-window-cold-pilot/case-*/accepted.json
-            tmp/wpt-window-cold-pilot/case-*/receipt.json
-            tmp/wpt-window-cold-pilot/case-*/http-audit.json
+            tmp/wpt-window/report.json
+            tmp/wpt-window/*-process.json
+            tmp/wpt-window/*.log
+            tmp/wpt-window/*.jsonl
+            tmp/wpt-window/case-*/accepted.json
+            tmp/wpt-window/case-*/receipt.json
+            tmp/wpt-window/case-*/http-audit.json
           if-no-files-found: warn
           retention-days: 7
   validate:
@@ -95,21 +106,48 @@ jobs:
           rustc +1.91.1 --edition=2024 tools/site.rs -o tmp/site
           tmp/site --check
           git diff --check
-      - name: Stage public files only
+      - name: Upload only the static report
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-static-report
+          path: tmp/wpt-pages/report.json
+          if-no-files-found: error
+          retention-days: 7
+  stage:
+    needs: [validate, window-validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require exact clean staging checkout
         run: |
-          mkdir -p tmp/public
-          cp index.html CNAME .nojekyll install.sh tmp/public/
-          cp tmp/wpt-pages/report.json tmp/public/wpt-results.json
-          mkdir -p tmp/public/assets
-          cp assets/mgbrowser.svg tmp/public/assets/
-          cp assets/mgbrowser-32.png assets/mgbrowser-256.png tmp/public/assets/
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wpt-static-report
+          path: tmp/static-report
+      - uses: actions/download-artifact@v4
+        with:
+          name: wpt-window-report
+          path: tmp/window-report
+      - name: Validate both source-bound reports and stage public files only
+        run: python3 -B tools/wpt/window/stage.py --commit "$GITHUB_SHA"
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
         with:
           path: tmp/public
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: validate
+    needs: stage
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -123,7 +161,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
   cloudflare-publication:
-    needs: validate
+    needs: stage
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

@@ -91,6 +91,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !wpt.status()?.success() {
         return Err("website WPT score validation failed".into());
     }
+    let mut window = process::Command::new("python3");
+    window.arg("-B").arg("tools/wpt/window/site_sync.py");
+    if !args.is_empty() {
+        window.arg("--check");
+    }
+    if !window.status()?.success() {
+        return Err("website Window WPT score validation failed".into());
+    }
     Ok(())
 }
 

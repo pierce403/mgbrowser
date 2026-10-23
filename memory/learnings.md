@@ -1,5 +1,14 @@
 # Candidate learnings
 
+- 2026-10-23: The fixed Window host sampled a raw asynchronous Init after a
+  Browser poll but before main-thread charge/ledger publication. A fresh
+  check-score run retained a Correlation error and unknown initial quiescence;
+  it was not adopted. The test-host correction defers only that unacknowledged
+  loading/initial state without consuming a cursor, preserving strict checks
+  after acknowledgement and all cleanup/deadline limits. Two deterministic
+  pure families cover both interleavings and acknowledged negatives. This is a
+  host sampling lesson, not permission to trust raw callbacks or waive failures.
+
 - 2026-10-22: Authored Window-error and Promise-rejection native/CDP fixtures
   intentionally retain execution diagnostics after cancellation. Dedicated
   checkers require the exact expected diagnostic and partial transaction while

@@ -779,6 +779,30 @@ fn raw_integrity(trace: &RawTrace) -> Option<Infrastructure> {
     }
 }
 impl Acceptance {
+    fn observe_polled(
+        &mut self,
+        is_loading: bool,
+        view: Option<ObservationView<'_>>,
+        life: Option<LifecycleProgress>,
+        raw: &HostSnapshot,
+    ) -> Result<()> {
+        // Init runs on the navigation producer. Its raw trace can appear after
+        // poll returned but before Loaded reaches Browser's one-charge/commit
+        // path. Do not consume or publish that still-unacknowledged Init.
+        if is_loading
+            && self.seen_raw == 0
+            && raw.first_failure.is_none()
+            && let [initial] = raw.raw_trace.as_slice()
+            && initial.sequence.is_none()
+            && initial.revision == 0
+            && initial.manager_charge_ns.is_none()
+            && !initial.manager_charge_succeeded
+        {
+            return Ok(());
+        }
+        self.observe(view, life, raw)
+    }
+
     fn observe(
         &mut self,
         view: Option<ObservationView<'_>>,
@@ -1250,7 +1274,8 @@ pub fn run() -> Result<bool> {
                 let snapshot = evidence
                     .snapshot()
                     .map_err(|e| error(ErrorKind::Runtime, e))?;
-                acceptance.observe(
+                acceptance.observe_polled(
+                    page.is_loading(),
                     page.script_observation().map(|l| l.observation()),
                     page.document_lifecycle(),
                     &snapshot,
@@ -1801,6 +1826,111 @@ mod tests {
         assert_eq!(published.cursor, 2);
         assert_eq!(accepted.published.len(), 1);
         assert_eq!(accepted.first_failure, None);
+    }
+    #[test]
+    fn pending_initial_raw_trace_waits_for_browser_publication_exactly_once() {
+        let mut ledger = ledger();
+        let interactive = LifecycleProgress {
+            phase: LifecyclePhase::Interactive,
+            initial_failure: false,
+        };
+        let mut initial = trace();
+        initial.lifecycle = Some(interactive);
+        initial.observer = ObserverTrace::WindowHarness {
+            run_id: RUN,
+            first_ordinal: 0,
+            next_ordinal: 1,
+            progress: ObserverProgress::Waiting,
+            execution_failed: false,
+            result_callbacks: 1,
+            completion_callbacks: 0,
+            final_inventory_rows: 0,
+        };
+        initial.manager_charge_ns = None;
+        initial.manager_charge_succeeded = false;
+        let mut raw = snapshot(initial);
+        let mut accepted = Acceptance::default();
+        for _ in 0..2 {
+            accepted
+                .observe_polled(true, Some(ledger.observation()), None, &raw)
+                .unwrap();
+            assert_eq!(accepted.seen_raw, 0);
+            assert!(accepted.last.is_none());
+            assert!(accepted.published.is_empty());
+            assert_eq!(accepted.first_failure, None);
+            assert_eq!(ledger.observation().cursor, 0);
+        }
+        // The normal Browser poll performs the one charge and commits the real
+        // shared ledger. The earlier raw trace did not publish either fact.
+        ledger
+            .stage(ObserverReply::WindowHarness {
+                run_id: RUN,
+                first_ordinal: 0,
+                next_ordinal: 1,
+                records: vec![ObserverRecord::Result { test: row() }],
+                progress: ObserverProgress::Waiting,
+                execution_failed: false,
+            })
+            .unwrap()
+            .commit();
+        raw.raw_trace[0].manager_charge_ns = Some(2);
+        raw.raw_trace[0].manager_charge_succeeded = true;
+        for _ in 0..2 {
+            accepted
+                .observe_polled(true, Some(ledger.observation()), Some(interactive), &raw)
+                .unwrap();
+        }
+        assert_eq!(accepted.seen_raw, 1);
+        assert_eq!(accepted.last.unwrap().cursor, 1);
+        assert_eq!(accepted.published.len(), 1);
+        assert_eq!(accepted.published[0].raw_trace_index, 0);
+    }
+    #[test]
+    fn polled_loading_does_not_waive_acknowledged_mismatch_or_quiescent_charge() {
+        let mut ledger = ledger();
+        finish(&mut ledger, false);
+        let mut wrong_cursor = trace();
+        if let ObserverTrace::WindowHarness { next_ordinal, .. } = &mut wrong_cursor.observer {
+            *next_ordinal = 1;
+        }
+        let mut failed_charge = trace();
+        failed_charge.manager_charge_succeeded = false;
+        let mut uncharged = trace();
+        uncharged.manager_charge_ns = None;
+        uncharged.manager_charge_succeeded = false;
+        let mut noninitial_sequence = uncharged.clone();
+        noninitial_sequence.sequence = Some(1);
+        let mut noninitial_revision = uncharged.clone();
+        noninitial_revision.revision = 1;
+        for (loading, candidate) in [
+            (true, wrong_cursor),
+            (true, failed_charge),
+            (false, uncharged),
+            (true, noninitial_sequence),
+            (true, noninitial_revision),
+        ] {
+            let mut accepted = Acceptance::default();
+            assert!(
+                accepted
+                    .observe_polled(
+                        loading,
+                        Some(ledger.observation()),
+                        Some(life()),
+                        &snapshot(candidate)
+                    )
+                    .is_err()
+            );
+            assert!(accepted.published.is_empty());
+        }
+        let mut gap = snapshot(trace());
+        gap.raw_trace.push(trace());
+        let mut accepted = Acceptance::default();
+        assert!(
+            accepted
+                .observe_polled(true, Some(ledger.observation()), Some(life()), &gap)
+                .is_err()
+        );
+        assert!(accepted.published.is_empty());
     }
     #[test]
     fn charge_alone_cannot_publish_missing_or_parent_rejected_ledger() {

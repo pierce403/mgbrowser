@@ -6,6 +6,7 @@
   "requiredFiles": [
     "index.html",
     "install.sh",
-    "wpt-results.json"
+    "wpt-results.json",
+    "wpt-window-results.json"
   ]
 }

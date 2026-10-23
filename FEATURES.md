@@ -98,11 +98,14 @@ baseline: 0/16 passing files and 0/79 passing actual final subtests, with no
 ERROR/TIMEOUT/CRASH/PENDING. All failures are caught test-body exceptions at
 style.getPropertyValue, not proven CSS comparison failures. Exact source/body,
 resource/clock and cleanup evidence is retained. This tooling adds no browser
-behavior, upstream pass or checked criterion. A continuous Window gate/public
-report remains pending; its historical baseline is separate from the static
-score. A separate cold-Cargo CI pilot in docs/WPT_WINDOW_CI.md measures build
-feasibility before mandatory publication wiring; it is not a current Window
-score or additional pass. Engine fixes follow in separate released contributions.
+behavior, upstream pass or checked criterion. The genuinely cold-Cargo pilot
+passes at `fec3803`, with complete exact-source CI/public verification and
+unchanged resource limits. The separate deterministic Window score/manual
+ratchet and parallel CI/public report gate now require both complete lanes
+before staging. Coupled exact-source publication verification is recorded
+separately in the log. Neither the historical baseline nor the separate current
+Window report is added to the static score. Engine fixes follow in separate
+released contributions; no acceptance criterion above is newly checked.
 
 ## F-025 : Google News desktop reading
 

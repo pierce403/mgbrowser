@@ -50,9 +50,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
   `docs/WPT_WINDOW_RUNNER.md` and first-baseline.json record the reviewed first
   local real-Browser run: 0/16 passing files, 0/79 actual final subtests passing,
   all test-body getPropertyValue failures, zero infrastructure/PENDING outcomes.
-  Continuous Window CI/public scoring remains pending; engine fixes are separate.
-  `docs/WPT_WINDOW_CI.md`: separate cold-Cargo pilot and unchanged deadlines,
-  before mandatory current-score/report publication wiring.
+  Separate current-score.json/manual ratchet and parallel CI/public-report
+  staging keep the 16-file Window lane distinct from static scoring. Engine
+  fixes are separate releases. `docs/WPT_WINDOW_CI.md`: genuinely cold pilot
+  accepted at fec3803, unchanged deadlines and actual critical-path evidence;
+  coupled publication requires its own exact-source verification.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

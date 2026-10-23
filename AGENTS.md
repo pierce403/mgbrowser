@@ -20,11 +20,14 @@ style.getPropertyValue(), before CSS comparisons. See docs/WPT_WINDOW_RUNNER.md.
 Preserve the unchanged pre-execution contract, original inputs, static score
 and authored suites.
 
-Next separate contribution (2026-10-23): measure a cold-Cargo Window CI pilot
-inside the existing build/run limits before mandatory continuous score/public-
-report wiring, then implement CSSOM as a separate released browser feature.
-The historical baseline is not a current-commit Window score. Never widen a
-resource profile, synthesize missing rows or merge the two score lanes.
+Completed prerequisite (2026-10-23): the genuinely cold-Cargo Window pilot at
+`fec3803991ae623cac4721f8dc012fe16887db84` passes inside the existing limits.
+All seven exact-source checks and public byte/report verification pass. The cold
+owner takes 218.129 seconds including 213.884 seconds of provisioning/build;
+all sixteen files and 79 actual final subtests fail honestly. See the dated log.
+Active separate contribution: continuous Window score/public-report wiring,
+then CSSOM as a separate released browser feature. Never widen a resource
+profile, synthesize missing rows or merge the two score lanes.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and
@@ -40,6 +43,15 @@ and generated page. Pages rebuilds and reruns the selection with --check-score
 on every push/PR, then publishes that exact commit's report as wpt-results.json.
 Unchanged counts on a documentation commit are valid only after that fresh gate.
 Do not automatically rewrite expectations.json to accept regressions.
+
+The separate fixed Window lane uses `tools/wpt/window/run.py --update-score`
+in a new ignored directory, followed by full evidence review and `tmp/site`.
+Its `current-score.json` is generated; `ratchet.json` is manually reviewed and
+never auto-strengthened or weakened. CI runs both full lanes independently with
+--check-score; staging requires both clean exact-source reports before publishing
+the separate wpt-results.json and wpt-window-results.json. Clean semantic Window
+timeouts remain non-PASS under the frozen contract; they do not waive the static
+lane's zero-timeout rule. No ERROR/CRASH/PENDING or uncertain cleanup is adoptable.
 
 Prior authorized request (2026-09-17): native right-click element inspection
 and useful CSS/resource/JavaScript diagnostics; live detachable tabs and left/right

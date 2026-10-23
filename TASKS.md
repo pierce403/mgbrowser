@@ -41,8 +41,11 @@ following dependency order, updating evidence as each increment ships:
    **Active:** the separately frozen first upstream Window runner and reviewed
    local baseline are published/verified at `32da1ab929f24cdb2a2081af44358878046dfd06`
    (six exact-source checks, public bytes/report and visual acceptance pass).
-   Measure the separate cold-Cargo CI pilot in docs/WPT_WINDOW_CI.md, then wire
-   its continuous CI/public score before the first CSSOM feature fix. Follow
+   The separate genuinely cold-Cargo pilot passes at `fec3803991ae623cac4721f8dc012fe16887db84`,
+   including all seven exact-source CI/hosting checks and public byte/report
+   verification. See docs/WPT_WINDOW_CI.md for measured build/job/critical-path
+   evidence. **Active:** wire the separate deterministic Window score, manual
+   ratchet and parallel CI/public-report gate before the first CSSOM feature fix. Follow
    [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The first local measurement is 0/16 passing files and 0/79 passing
@@ -135,10 +138,10 @@ following dependency order, updating evidence as each increment ships:
    unit cases. The fixed source-only checker validates this manifest, not browser
    compatibility. The real-Browser adapter/owner and pure controls now produce
    the reviewed complete local baseline above, with all original inputs and
-   limits unchanged. **Next:** measure cold provisioning/build within existing
-   deadlines, then separately wire/review the continuous Window gate/report
-   before browser CSSOM changes. Exact first-runner source publication is verified.
-   The historical baseline is not yet a current public Window score. Never invent passes from authored
+   limits unchanged. Cold provisioning/build now passes within existing
+   deadlines. **Next:** finish exact-source continuous Window CI/report public
+   verification before browser CSSOM changes. The historical baseline is not a
+   substitute for a current public Window report. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey

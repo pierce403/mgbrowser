@@ -234,9 +234,8 @@ Conservative prerequisite failures are not proof that every such image is
 incorrect; both failures and unsupported protocols stay visible. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
 [Selection and review](docs/WPT_EXPANSION.md). General JavaScript testharness
-integration and continuous Window scoring remain a
-[separate milestone](docs/WPT_TESTHARNESS.md); the first local measurement below
-does not complete them.
+integration remains a [separate milestone](docs/WPT_TESTHARNESS.md); the fixed
+Window score lane below does not complete it.
 The [bounded observer](docs/WPT_OBSERVER.md) now has a locally verified
 implementation and sixteen frozen non-scoring controls; see
 [scope and release evidence](docs/WPT_OBSERVER_STATUS.md). It is not a scored
@@ -251,10 +250,15 @@ local baseline: **0/16 files passing; 0/79 actual final subtests passing**,
 without infrastructure errors, timeouts, crashes or pending files. All fail on
 the missing `style.getPropertyValue()` method, before CSS comparisons. The
 [historical snapshot](tools/wpt/window/first-baseline.json) retains the exact
-measured source and its pre-commit dirty status. Continuous Window CI/public
-scoring remains pending; these numbers are not the static score or an installed-
-binary measurement. The [cold-Cargo CI pilot](docs/WPT_WINDOW_CI.md) measures
-dependency provisioning before mandatory continuous publication is wired.
+measured source and its pre-commit dirty status. The separate
+[current Window score](tools/wpt/window/current-score.json) and
+[exact-commit report](https://mgbrowser.org/wpt-window-results.json) retain the
+16-file outcomes, actual final inventories and unknown partial totals separately
+from 79 source-declared calls. They are not the static or installed-binary score.
+Both full lanes rerun before every commit; CI checks scores and a manual Window
+ratchet before staging either public report. The
+[cold-Cargo measurement and continuous graph](docs/WPT_WINDOW_CI.md) preserve
+all existing deadlines. Coupled CI/public verification is recorded in the log.
 No new upstream pass is claimed. Browser fixes follow in separate releases.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds

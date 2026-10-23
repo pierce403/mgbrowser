@@ -1,4 +1,4 @@
-# Window cold-Cargo CI pilot
+# Window cold-Cargo CI and continuous publication
 
 2026-10-23: tooling only, before mandatory continuous Window scoring. The
 reviewed first local baseline and runner were published at
@@ -34,7 +34,31 @@ audits are uploaded as a seven-day GitHub artifact. Profiles, Cargo caches,
 target output and repository contents are not uploaded or publicly staged.
 An eligible all-failing measurement is a valid baseline, not a passing browser.
 
-## Acceptance still required
+## Accepted cold prerequisite
+
+The genuinely cold pilot passes at clean source
+`fec3803991ae623cac4721f8dc012fe16887db84`, website run39922557433,
+job120311021542, attempt1. Artifact12488460763 retains the actual bounded
+76-file evidence closure. Its complete report SHA-256 is
+`d83c0d5a7d1d1a8076d62380864b8725db32106e335a3d08ec330c9471f23ffc`.
+All sixteen files are FAIL/Assertions; all 79 actual final subtests Fail.
+All 64 original-body GETs, resource/clock and internal/outer cleanup proofs pass;
+no infrastructure/PENDING outcome or producer reservation remains.
+
+Toolchain installation takes 8 seconds, cold preflight 1 second, inclusive build
+213.884 seconds, whole owner 218.129 seconds and complete pilot job 234 seconds.
+All 443 compiler artifacts report fresh:false. Dependency downloads occur inside
+the measured build, not a preceding fetch. Actual CI binary/font hashes differ
+from the local measurement and are retained, not normalized. All seven exact-
+source checks and public byte/report verification pass; the dated log records
+independent artifact/resource review and immutable public receipts.
+
+Static validation takes 741 seconds. Actual push-to-native completion is
+776 seconds, leaving 304 seconds against the unchanged 1,080-second native wait.
+Window is not the critical path in this run. This is a measured prerequisite,
+not a guarantee about queue/network/build variance in the new coupled graph.
+
+## Continuous graph and acceptance
 
 Inspect the exact-commit CI artifact, all sixteen outcomes, actual resource and
 cleanup evidence. Record toolchain/setup/job/build/run timings separately.
@@ -43,15 +67,21 @@ the 1,200-second build ceiling alone cannot prove a future mandatory gate fits.
 Measure the complete cold critical path with headroom; do not lengthen a timeout
 or assume a cache hit to claim feasibility.
 
-The pilot is deliberately not a dependency of static validation, staging or
-canonical publication. A subsequent reviewed increment must wire both lanes
-into staging, add deterministic current Window metadata and a manual ratchet,
-and publish/verify the exact separate `/wpt-window-results.json` report. That
-endpoint and current Window score do not exist yet. Never merge the static
+The independent `window-validate` and static `validate` jobs each run their full
+--check-score measurement. A new `stage` job needs both, downloads only their
+separate single-report artifacts and verifies clean exact-SHA/source/score
+binding before staging. Only stage uploads the Pages artifact; recovery Pages
+and canonical mirroring depend on it. Raw case/build evidence remains a separate
+seven-day artifact, never part of the public output. Each public report stays
+under the existing 25 MiB hosting ceiling; no pruning or larger limit is used.
+The exact separate `/wpt-window-results.json` endpoint and generated Window card
+must be verified on the actual contribution. Never merge the static
 1,011-file and Window 16-file denominators. Safely classified genuine Window
 timeouts are not automatically infrastructure failures; preserve the original
 [disposition contract](WPT_WINDOW_PARSING.md).
 
-Only after those gates may CSSOM changes be scored against the frozen cohort.
+Measure the new coupled critical path and public immutable byte/report parity;
+do not infer acceptance from the preceding independent pilot. Only after those
+gates may CSSOM changes be scored against the frozen cohort.
 Browser changes still require ordinary release, installer/update and native
 acceptance. F-016, F-026 and the formal MVP remain open.
