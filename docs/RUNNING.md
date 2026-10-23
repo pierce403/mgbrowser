@@ -100,6 +100,33 @@ memory-only. HTML zero-delay refreshes are bounded. The script worker has a
 restricted process boundary, but the browser's renderer/network do not. There is
 no credential store, HTTP/2, proxy configuration or persistent browsing profile.
 
+## Auto-width atomic height acceptance
+
+The bounded correction in [AUTO_INLINE_HEIGHT.md](AUTO_INLINE_HEIGHT.md) keeps
+the existing auto-width choice and makes line-height measurement use the same
+allocation as painting. It does not implement general shrink-to-fit or baselines.
+Private real-Stylo/Scene controls and public geometry/pixel/hit tests live in
+the two `auto_inline_height` test files. Preserve every existing sizing test.
+
+Build the separate `auto_inline_height_server` and `auto_inline_height_smoke`
+examples with the normal locked toolchain. `tools/auto-inline-height-smoke.py`
+accepts a supplied packaged/public executable and explicit SHA/version/commit,
+client/server SHA and font SHA; run it separately with `--scale 1` and `--scale 2`.
+Its six fixed authored panels expose line borders and following-link placement,
+including flex row/column, grid, vertical edges and a signed-margin strut control.
+It owns its display/profile/server, checks native pixels before secondary CDP
+boxes, follows two distinct links, and retains four actual PNGs per scale.
+Those secondary CDP boxes are descendant-inclusive flow unions, not CSS border
+rectangles. The signed panel's own border/advance is24px; its descendant extends
+1px below it, so the documented CDP union is25px. Independent native pixels and
+CSS unit assertions retain the24px boundary. See the dated log for the original
+failed secondary oracle and the diagnostic confirmation before correction.
+Exact HTTP/lifecycle/resource and cleanup assertions remain required; the old
+thirteen helpers and six additive proofs still run separately. Retain and inspect
+the old-public-binary failure, then the candidate/package/public images. Native
+events exercise application handlers, not independent physical input; this is
+not live-site, Playwright, full inline formatting or upstream WPT evidence.
+
 ## Experimental scripting
 
 Boa scripting is enabled by default since v0.9.4. On Linux x86_64, it can also

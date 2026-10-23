@@ -142,9 +142,24 @@ following dependency order, updating evidence as each increment ships:
    thirteen existing native helpers, six additive native/CDP proofs and both
    frozen public-worker suites pass; all 28 additive public images were inspected.
    See the [public closeout](memory/logs/2026-10-23.md#v0918-public-release-closeout).
-   **Next:** verify this documentation closeout's exact-source CI/site, then
-   review the smallest remaining feature increment before implementation.
-   This fix adds no WPT pass or completion of the broader gates.
+   Its documentation closeout at `be71e0c735e64ac5f430fd77a0d1e3f60828ac4e`
+   passes all eight exact-source checks, twelve-path public byte/report parity
+   and visual verification. **Active increment:** the frozen
+   [auto-width atomic inline height contract](docs/AUTO_INLINE_HEIGHT.md).
+   The minimal shared height allocation follows retained unchanged-engine
+   assertions and an inspected old-public18 native failure. All153 focused
+   private/public groups pass debug/release, including27 new groups, preserving
+   current width, percentage-height, baseline and resource boundaries. Version
+   0.9.19 passes all15 full Rust and8 frozen JSPLAN gates. Both complete reviewed
+   score lanes retain339/610/62 of1,011 and Window15/16 files,77/79 subtests.
+   The new negative-margins match is manually protected; previous338 passes,
+   949 runnable cases and original24 remain. Four still-failing comparisons
+   worsen and another failing reference exceeds the unchanged viewport; keep
+   those limitations visible. Package/install/updater, thirteen native helpers,
+   eight additive proofs (all36 images inspected) and both frozen worker suites
+   pass. Exact-source CI/site and actual release/public install/update gates
+   remain required. Authored
+   controls add no upstream cases or broader completion.
    Follow [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The historical first local measurement was 0/16 passing files and

@@ -2,7 +2,31 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.18 Experimental Preview
+## v0.9.19 release candidate
+
+Auto-width inline-block, inline-flex and inline-grid boxes reserve their actual
+allocated height in the surrounding line. Enclosing borders and following blocks
+no longer ignore painted children. Width selection, percentage definiteness,
+baseline behavior and existing limits are unchanged.
+[Frozen scope](docs/AUTO_INLINE_HEIGHT.md) and [candidate notes](docs/RELEASE-v0.9.19.md).
+
+Retained pre-change assertions and an inspected public v0.9.18 native failure
+precede the fix. Focused checks pass35 private and118 public groups in both
+profiles, including27 new authored groups. Full final-version Rust/JSPLAN pass,
+preserving all364 research outcomes. Complete, reviewed WPT measurements retain
+339 pass /610 fail /62 unsupported of1,011, one new negative-margins match with
+all338 prior passes and949 runnable cases preserved. Window remains15/16 files
+and77/79 final subtests. This is not uniform improvement: four already-failing
+comparisons worsen, and another failing case's reference now exceeds the fixed
+viewport. No assertions, selections or limits are relaxed.
+Normal package/install/updater, thirteen existing native helpers, eight additive
+native/CDP proofs and both frozen worker suites pass; all36 additive screenshots
+were inspected. Exact-source CI/site and public release/install/update gates
+remain pending.
+The installer always selects the latest actually published release; v0.9.19
+has not been published. Full CSS/DOM/CSSOM/WPT and the formal MVP remain open.
+
+## Latest verified release: v0.9.18
 
 v0.9.18 corrects scripted activation of painted empty, whitespace-only and
 non-text anchors. Navigation uses the same clicked anchor's own post-handler
@@ -455,6 +479,9 @@ See [updater behavior and trust](docs/UPDATES.md).
   News still has font/icon/corner differences and destination fallbacks. Mobile
   layouts, interactive News and account actions are not acceptance claims.
 - Modern-web compatibility is poor. Google search → first result is not working.
+- The auto-width inline height correction preserves the existing width choice
+  and strut/bottom alignment; full shrink-to-fit, baselines, vertical alignment,
+  bidi and float formatting remain incomplete.
 - The v0.9.18 link-default correction requires the same connected anchor
   with a present resolvable href; full download, target, referrer and detached-
   anchor behavior remain outside this increment. It does not complete DOM or WPT.

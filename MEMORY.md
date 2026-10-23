@@ -4,6 +4,24 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/AUTO_INLINE_HEIGHT.md`: pre-implementation contract after the verified
+  v0.9.18/be71e0c closeout. Ordinary auto-width inline-block/flex/grid line metrics
+  must measure the same actual layout used for painting, not replaced-control
+  height. Keep chosen-width/admission, percentage-height definiteness and
+  baseline behavior; exclude fit/max-content/table/replaced/button routes.
+  Real shared work is2,000,000 steps; MAX_OPS200,000 is a separate scene cap.
+  Retained debug/release RED and actual inspected public18 native failure
+  precede the minimal allocation helper. All153 focused groups pass both modes,
+  including27 new groups; final-version0.9.19 passes all15 Rust/8 JSPLAN gates,
+  preserving all364 research outcomes. Complete reviewed WPT retains339/610/62
+  of1,011 and Window15/16 files,77/79 subtests. The real negative-margins match
+  is manually protected without losing prior338/949/original24 protections.
+  Four already-failing pixel comparisons worsen; another failed reference
+  exceeds the unchanged viewport. Package/install/updater, thirteen native
+  helpers, eight additive proofs/all36 inspected images and both worker suites
+  pass. CI/release/public gates remain open;
+  full inline formatting and release completion are not claimed.
+
 - `docs/LINK_DEFAULTS.md`: shipped v0.9.18 at
   `0d79fa66ae3e91de7aaf2c868f09589a3f898312`, following its frozen pre-implementation
   contract and retained old-public v0.9.17 failure. Resolve exact

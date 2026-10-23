@@ -2,6 +2,14 @@
 
 ## Purpose and responsibilities
 
+Current bounded increment (2026-10-23): auto-width atomic inline height parity
+under docs/AUTO_INLINE_HEIGHT.md, after the fully verified v0.9.18 documentation
+closeout at `be71e0c735e64ac5f430fd77a0d1e3f60828ac4e`. Retained pre-change
+private/public debug/release assertions precede the narrow shared allocation
+fix. Focused/full, native/package, both score lanes and next-release/public
+gates remain required. Do not broaden width/baseline/percentage algorithms,
+corpus/runner, dependencies, worker authority or limits to finish this increment.
+
 Completed bounded increment (2026-10-23): v0.9.18 scripted empty-anchor defaults
 ship at `0d79fa66ae3e91de7aaf2c868f09589a3f898312` under docs/LINK_DEFAULTS.md.
 Full local Rust/JSPLAN, both fresh reviewed score lanes, all eight exact-source
@@ -11,9 +19,10 @@ existing native helpers, six additive native/CDP proofs and both frozen public-
 worker suites pass; all 28 additive public images were inspected. See the dated
 public closeout. Static338/611/62 of1,011 and separate Window15/16 files,77/79
 final subtests remain unchanged. No new upstream pass or completed formal
-criterion follows. The broader goal remains active: verify the documentation
-closeout's exact-source CI/site, then review the next bounded increment before
-implementation. Preserve both score lanes, all limits and immutable old tags.
+criterion follows. The final documentation closeout passes its separate fresh
+score review, all eight exact-source checks, twelve-path public verification
+and visual inspection. The broader goal remains active. Preserve both score
+lanes, all limits and immutable old tags.
 
 Completed increment (2026-10-22): fixed trusted Window harness configuration
 ships as v0.9.13 at `948e86206c23c0310d17dc286ac5107a15f1f434`.

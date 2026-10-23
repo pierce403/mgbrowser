@@ -2601,6 +2601,34 @@ impl Layout<'_, '_> {
             && !self.is_structured_button(id)
     }
 
+    fn is_auto_atomic_inline(&self, id: usize) -> bool {
+        matches!(
+            self.styles[id].display,
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+        ) && self.styles[id].width == Length::Auto
+            && !self.styles[id].layout.width_fit_content
+            && !self.styles[id].layout.width_max_content
+            && !self.is_replaced(id)
+            && !self.is_structured_button(id)
+    }
+
+    // Preserve the existing auto-width emission allocation, including its
+    // chosen-width percentage basis. Only the height measurement is new;
+    // inline_box_width still owns wrapping admission. Depth is the line's
+    // depth, so both intrinsic and block layout retain their old L+1 calls.
+    fn auto_atomic_inline<const EMIT: bool>(
+        &mut self,
+        id: usize,
+        x: f32,
+        y: f32,
+        width: f32,
+        containing_height: Option<f32>,
+        depth: usize,
+    ) -> (f32, f32) {
+        let w = self.intrinsic(id, depth + 1).max.min(width);
+        self.block_layout::<EMIT>(id, x, y, w, containing_height, Some(w), depth + 1)
+    }
+
     // Admission, line height and painting share the same definite-width box
     // allocation. Keep the real containing content width as the percentage
     // basis; an intrinsic outer advance is never a forced border-box width.
@@ -2694,6 +2722,16 @@ impl Layout<'_, '_> {
                             depth + 1,
                         );
                         height = height.max(h);
+                    } else if self.is_auto_atomic_inline(*child) {
+                        let (_, h) = self.auto_atomic_inline::<false>(
+                            *child,
+                            0.0,
+                            0.0,
+                            width,
+                            containing_height,
+                            depth,
+                        );
+                        height = height.max(h.max(0.0));
                     } else {
                         let (_, h) = self.replaced_size(*child, width, containing_height);
                         let (m, p) = self.edges(*child, width);
@@ -2783,6 +2821,15 @@ impl Layout<'_, '_> {
                             width,
                             containing_height,
                             depth + 1,
+                        )
+                    } else if self.is_auto_atomic_inline(*child) {
+                        self.auto_atomic_inline::<EMIT>(
+                            *child,
+                            left,
+                            y,
+                            width,
+                            containing_height,
+                            depth,
                         )
                     } else {
                         let w = self.intrinsic(*child, depth + 1).max.min(width);
@@ -3182,6 +3229,11 @@ mod tests {
         mod formatting_inline_tests {
             use super::*;
             include!("styled_layout/formatting_inline_tests.rs");
+        }
+
+        mod auto_inline_height_tests {
+            use super::*;
+            include!("styled_layout/auto_inline_height_tests.rs");
         }
     }
 

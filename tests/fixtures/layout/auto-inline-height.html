@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Auto inline height fixture</title>
+<style>
+html,body{margin:0;background:#fff}
+*{margin:0;padding:0;border:0;font-size:1px;line-height:0}
+a{text-decoration:none}
+.panel{width:204px;height:26px;margin-left:20px}
+.line{width:200px;border:2px solid #000}
+.atom{display:inline-block;background:#aa0000}
+.child{display:block;width:30px;height:12px;flex:none;background:#00aa00;color:#00aa00}
+.after{display:block;width:10px;height:3px;margin-left:50px;background:#123456;color:#123456}
+.edges{padding-top:2px;padding-bottom:4px;border-top:1px solid #000;border-bottom:1px solid #000;margin-top:3px;margin-bottom:5px}
+</style></head><body>
+<div style="height:10px"></div>
+<!-- Independent panel tops10/36/62/88/114/155 are fixed before rendering.
+     Auto-height LINE and its following text link remain normal block flow.
+     No whitespace occurs inside LINE or between LINE and AFTER. -->
+<div class="panel"><div id="block-line" class="line"><span id="block-a" class="atom"><a id="block-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="block-after" class="after" href="/auto-inline-height-native-hit">N</a></div>
+<div class="panel"><div id="row-line" class="line"><span id="row-a" class="atom" style="display:inline-flex;flex-direction:row"><a id="row-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="row-after" class="after" href="/auto-inline-height-unexpected-hit">N</a></div>
+<div class="panel"><div id="column-line" class="line"><span id="column-a" class="atom" style="display:inline-flex;flex-direction:column"><a id="column-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="column-after" class="after" href="/auto-inline-height-unexpected-hit">N</a></div>
+<div class="panel"><div id="grid-line" class="line"><span id="grid-a" class="atom" style="display:inline-grid"><a id="grid-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="grid-after" class="after" href="/auto-inline-height-cdp-hit">N</a></div>
+<div class="panel" style="height:41px"><div id="edges-line" class="line"><span id="edges-a" class="atom edges" style="display:inline-flex;flex-direction:column"><a id="edges-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="edges-after" class="after" href="/auto-inline-height-unexpected-hit">N</a></div>
+<div class="panel" style="height:35px"><div id="signed-line" class="line" style="line-height:20px"><span id="signed-a" class="atom" style="display:inline-grid;margin-top:-9px;margin-bottom:-8px"><a id="signed-child" class="child" href="/auto-inline-height-unexpected-hit">C</a></span></div><a id="signed-after" class="after" href="/auto-inline-height-unexpected-hit">N</a></div>
+</body></html>

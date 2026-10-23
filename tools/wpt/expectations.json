@@ -1352,7 +1352,8 @@
     "css/css-flexbox/table-as-item-narrow-content-2.html",
     "css/css-flexbox/table-as-item-specified-height.html",
     "css/css-flexbox/table-as-item-specified-width.html",
-    "css/css-flexbox/whitespace-in-flexitem-001.html"
+    "css/css-flexbox/whitespace-in-flexitem-001.html",
+    "css/css-flexbox/negative-margins-001.html"
   ],
   "required_supported": [
     "css/css-flexbox/abspos/abspos-autopos-htb-ltr.html",

@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 611,
-    "PASS": 338,
+    "FAIL": 610,
+    "PASS": 339,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -3603,7 +3603,7 @@
       "test": "css/css-flexbox/multiline-shrink-to-fit.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/negative-margins-001.html"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "af1e097f5d9dd7bf8bae6958a0ab079dfb92d0ac32417521f008e1ad1b06fd72",
+  "source_sha256": "ebe2feace00b97f4e869281088e3c98eb1e3aa925ec0ef0558ac1d099ef6fd64",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

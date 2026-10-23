@@ -331,6 +331,23 @@ CDP input remains logical. Use only private XDG sizing preferences. The client
 does not exhaustively observe hidden rendering diagnostics; successful authored
 controls prove neither full inline/baseline/intrinsic formatting nor WPT passes.
 
+For auto-width atomic inline heights, follow docs/AUTO_INLINE_HEIGHT.md. Keep
+the old definite-width/physical/link proofs unchanged. Build the separate
+auto_inline_height_server and auto_inline_height_smoke examples and run
+tools/auto-inline-height-smoke.py at both explicit scales1/2 with pinned supplied
+binary/version/commit, client/server and font identities. Its six authored
+panels check parent borders/flow advance before secondary BoxModels, ordinary
+native/CDP after-link destinations, exact five GETs, fourteen real worker
+reports/eight lifecycle tasks/two click acknowledgments, and owned cleanup.
+Use docs/CDP.md's descendant-inclusive flow union for secondary boxes; do not
+mistake it for a CSS border rectangle or derive native pixel expectations from it.
+Retain a genuine old-public-binary pixel mismatch before candidate acceptance;
+startup/timeout alone is not a pixel-regression verdict. Inspect all actual
+images and repeat against packaged and public-installed bytes. The dedicated
+server leaves old fixture source pins intact. This adds no WPT cases, whole-
+browser sandbox or independent hardware-input claim, and does not complete
+general auto-width, percentage-height, baseline or diagnostic coverage.
+
 For toolbar/bookmark changes, the scale smoke also tests packaged native
 Back/Forward/Refresh, loaded-versus-edited URL selection, local save/open/remove,
 restart and Ctrl+D. Preserve those assertions when changing toolbar coordinates.

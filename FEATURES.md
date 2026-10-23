@@ -1014,6 +1014,23 @@ native helpers and separate physical/atomic 1x/2x native/CDP proofs pass.
 See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
 F-003/F-005/F-016/F-026 and the formal MVP are still unfinished.
 
+Current bounded candidate: the frozen
+[auto-width atomic inline height contract](docs/AUTO_INLINE_HEIGHT.md) addresses
+line measurement versus actual painted layout for ordinary auto-width inline-
+block/flex/grid boxes. It preserves existing width/admission, percentage-height,
+baseline and resource boundaries. Retained old-engine/public-binary failures
+precede the minimal implementation; all153 focused private/public groups pass
+debug/release, including27 new groups. Version0.9.19 passes all15 Rust/8 frozen
+JSPLAN gates. Both complete reviewed score lanes retain339 static passes
+(one new genuine negative-margins match),610 fail/62 unsupported of1,011 and
+unchanged Window15/16 files,77/79 final subtests. All338 previous passes and949
+runnable cases remain; four already-failing comparisons worsen and one failing
+reference now exceeds the unchanged viewport. See release notes for the actual
+deltas. The new pass is manually protected. Normal package/install/updater,
+thirteen existing native helpers, eight additive proofs (all36 images inspected)
+and both frozen worker suites pass. CI/release/public gates remain open; no stable
+criterion or delivered release follows from authored tests.
+
 ## F-006 : Reproducible autoresearch evaluator
 
 Stability: planned

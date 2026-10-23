@@ -35,7 +35,7 @@ jobs:
           python3 tools/test_chrome_update_smoke.py
           python3 -B -m unittest discover -s tools -p test_lifecycle_baseline.py
       - name: Check layout geometry and diagnostics in release mode
-        run: cargo +1.91.1 test --locked --release -p mg-sparkle --test percentage_heights --test style_diagnostics --test style_layout --test formatting_contexts --test physical_justify --test atomic_inline --test formatting_inline --test layout_boundaries --test positioned_layout --test viewport_overflow --test stacking_layout --test svg_styles --test inline_svg_render --test gradient_styles --test gradient_render --test fit_content_width --test max_content_width --test column_baseline --test anonymous_table_layout
+        run: cargo +1.91.1 test --locked --release -p mg-sparkle --test percentage_heights --test style_diagnostics --test style_layout --test formatting_contexts --test physical_justify --test atomic_inline --test formatting_inline --test auto_inline_height --test layout_boundaries --test positioned_layout --test viewport_overflow --test stacking_layout --test svg_styles --test inline_svg_render --test gradient_styles --test gradient_render --test fit_content_width --test max_content_width --test column_baseline --test anonymous_table_layout
       - name: Build browser and local fixture server
         run: |
           cargo +1.91.1 build --locked --workspace --features legacy-test-engine --bins --examples
@@ -54,7 +54,7 @@ jobs:
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
-          cargo +1.91.1 build --locked --example journey_server --example cdp_journey --example lifecycle_journey --example physical_justify_smoke --example atomic_inline_smoke --example cssom_methods_smoke --example link_defaults_server --example link_defaults_smoke
+          cargo +1.91.1 build --locked --example journey_server --example cdp_journey --example lifecycle_journey --example physical_justify_smoke --example atomic_inline_smoke --example cssom_methods_smoke --example link_defaults_server --example link_defaults_smoke --example auto_inline_height_server --example auto_inline_height_smoke
           python3 tools/page-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/task-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
           python3 tools/error-services-smoke.py tmp/release/mgbrowser-linux-x86_64/mgbrowser
@@ -113,6 +113,20 @@ jobs:
               --client-sha "$(sha256sum target/debug/examples/link_defaults_smoke | cut -d ' ' -f 1)" \
               --server target/debug/examples/link_defaults_server \
               --server-sha "$(sha256sum target/debug/examples/link_defaults_server | cut -d ' ' -f 1)" \
+              --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+              --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
+          done
+      - name: Check packaged auto-width atomic inline heights at 1x and 2x
+        run: |
+          for height_scale in 1 2; do
+            python3 tools/auto-inline-height-smoke.py --scale "$height_scale" \
+              --binary tmp/release/mgbrowser-linux-x86_64/mgbrowser \
+              --expected-sha "$(sha256sum tmp/release/mgbrowser-linux-x86_64/mgbrowser | cut -d ' ' -f 1)" \
+              --expected-version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" --expected-commit "$GITHUB_SHA" \
+              --client target/debug/examples/auto_inline_height_smoke \
+              --client-sha "$(sha256sum target/debug/examples/auto_inline_height_smoke | cut -d ' ' -f 1)" \
+              --server target/debug/examples/auto_inline_height_server \
+              --server-sha "$(sha256sum target/debug/examples/auto_inline_height_server | cut -d ' ' -f 1)" \
               --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
               --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
           done
