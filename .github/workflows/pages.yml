@@ -21,7 +21,6 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.91.1
       PYTHONDONTWRITEBYTECODE: "1"
-      MGBROWSER_COLD_CARGO_HOME: ${{ runner.temp }}/mgbrowser-window-cold-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +28,8 @@ jobs:
       - name: Install the pinned toolchain prerequisite
         run: rustup toolchain install 1.91.1 --profile minimal
       - name: Require a cold Cargo cache and target
+        env:
+          MGBROWSER_COLD_CARGO_HOME: ${{ runner.temp }}/mgbrowser-window-cold-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -eu
           test ! -e "$MGBROWSER_COLD_CARGO_HOME"

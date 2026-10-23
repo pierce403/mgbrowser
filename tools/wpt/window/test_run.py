@@ -168,6 +168,20 @@ class ShapeTests(unittest.TestCase):
 
 
 class ReservationTests(unittest.TestCase):
+    def test_ci_cold_cache_runner_context_is_step_scoped_not_job_scoped(self):
+        # A focused regression for GitHub's context availability, not a YAML
+        # parser or a substitute for the actual workflow validation/run.
+        workflow = (owner.ROOT / ".github/workflows/pages.yml").read_text()
+        pilot = workflow.split("  window-cold-pilot:\n", 1)[1].split("  validate:\n", 1)[0]
+        job_header = pilot.split("    steps:\n", 1)[0]
+        self.assertNotIn("${{ runner.", job_header)
+        preflight = pilot.split("      - name: Require a cold Cargo cache and target\n", 1)[1]
+        preflight = preflight.split("      - name: Measure the complete fixed Window selection\n", 1)[0]
+        self.assertIn("        env:\n          MGBROWSER_COLD_CARGO_HOME: ${{ runner.temp }}/", preflight)
+        self.assertIn('test ! -e "$MGBROWSER_COLD_CARGO_HOME"', preflight)
+        self.assertIn('test ! -e target', preflight)
+        self.assertIn('>> "$GITHUB_ENV"', preflight)
+
     def test_build_policy_is_explicit_default_off_and_never_changes_target_or_features(self):
         default = owner.parse_args(["--output", "tmp/not-created"])
         enabled = owner.parse_args(["--output", "tmp/not-created", "--allow-locked-build-network"])
