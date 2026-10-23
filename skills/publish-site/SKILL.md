@@ -33,6 +33,11 @@ compare its HTML against index.html and verify wpt-results.json identifies the
 intended source commit. HTTP success alone does not establish visual quality;
 inspect in a browser when available and state any QA limit.
 
+Keep validation-generated Python bytecode out of source identity: suppress cache
+writes in website validation and ignore only the specific generated cache paths.
+Require a clean CI checkout before WPT scoring; never ignore real source edits or
+accept a dirty public report merely because its counts and workflow are green.
+
 Do not publish the repository root as the artifact: the workflow stages only index.html, CNAME, .nojekyll, install.sh and the explicitly listed identity assets. Never include logs, tmp or test artifacts. The public target is the apex domain only. Recheck live hosting before any authorized DNS changes. If certificate issuance is pending, report that state and retry within a bounded verification session rather than claiming success. Do not change nameservers or unrelated DNS records to fix a deployment.
 
 For a preview release, verify Rust CI and Pages on the exact main commit before

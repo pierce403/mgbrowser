@@ -16,6 +16,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Validate the separate source-only Window cohort freeze
@@ -27,6 +29,11 @@ jobs:
           rustup toolchain install 1.91.1 --profile minimal
           cargo +1.91.1 build --locked --example wpt_render
           python3 -m unittest discover -s tools/wpt -p 'test_*.py'
+          wpt_checkout_status=$(git status --porcelain)
+          if [ -n "$wpt_checkout_status" ]; then
+            printf 'WPT CI requires a clean checkout:\n%s\n' "$wpt_checkout_status"
+            exit 1
+          fi
           python3 tools/wpt/run.py --check-score --output tmp/wpt-pages
       - name: Retain WPT failure evidence
         if: failure()

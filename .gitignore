@@ -4,6 +4,7 @@
 /.codex/
 /.agents/
 /tools/wpt/__pycache__/
+/tools/wpt/window/__pycache__/
 
 # Isolated native static publishing
 /cloudflare/node_modules/
