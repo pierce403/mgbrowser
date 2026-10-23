@@ -122,9 +122,17 @@ public-worker suites and all thirteen public native helpers pass; see the
 [dated log](memory/logs/2026-10-23.md). No v0.9.14 release gate remains, and no
 acceptance criterion above is newly checked by this bounded increment.
 
-Next planned browser increment: context-aware physical `justify-content:left/right`
-under [docs/PHYSICAL_JUSTIFY.md](docs/PHYSICAL_JUSTIFY.md). Existing upstream
-failures motivate it, but no new pass or implementation is claimed. Preserve
+Next browser increment in preparation: context-aware physical `justify-content:left/right`
+under [docs/PHYSICAL_JUSTIFY.md](docs/PHYSICAL_JUSTIFY.md). Authored pre-feature
+assertion failures are recorded; the minimal adapter and frozen fourteen private/
+nineteen public controls pass focused debug/release checks. Full final-version
+debug/release, embedding/dependency/tooling and frozen364-outcome JSPLAN checks
+pass. Independently reviewed fresh static scoring is319/630/62 of1011, protecting
+the two genuine newly passing column cases without changing input bytes or
+limits. Separate Window scoring remains15/16 files and77/79 final subtests.
+Normal package/install/updater, thirteen existing native helpers, the separate
+physical native/CDP proof and both frozen worker-control suites pass locally.
+Exact-source CI/public release gates remain pending; no delivery is inferred. Preserve
 both fixed score lanes, diagnostics, all prior passing/runnable ratchets and the
 standing release policy. Full CSSOM and container-unit sizing remain separate.
 
@@ -891,6 +899,12 @@ Taffy flex/grid adapter, positioned/clipped painting, inline SVG, two-stop linea
 backgrounds and JPEG/credential-free foreign HTTPS images for F-025. Focused
 tests do not satisfy the full planned fixture corpus or general CSS compatibility.
 F-005 remains in progress; F-025 records the separate reading/release gates.
+The separately frozen physical content-justification increment is implemented
+with focused local controls under [docs/PHYSICAL_JUSTIFY.md](docs/PHYSICAL_JUSTIFY.md).
+Its full local regressions and reviewed two-pass static WPT gain are recorded;
+Normal packaged/native/CDP checks pass; v0.9.15 public delivery gates are pending.
+This changes neither the broader fixture
+criteria nor the existing RTL/writing-mode and Safe/reversed-flex limitations.
 
 ## F-006 : Reproducible autoresearch evaluator
 

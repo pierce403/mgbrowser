@@ -112,9 +112,8 @@ impl<'a> StyleView<'a> {
         {
             return Err("non-finite or negative flex factor");
         }
-        for value in [l.align_content, l.justify_content] {
-            content_alignment(value)?;
-        }
+        content_alignment(l.align_content)?;
+        self.content_justification()?;
         for value in [l.align_items, l.justify_items, l.align_self, l.justify_self] {
             item_alignment(value)?;
         }
@@ -209,6 +208,43 @@ impl<'a> StyleView<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Physical justification follows the actual formatting axis, not flex
+    /// item order or an irrelevant flex-direction declaration on a grid.
+    fn content_justification(self) -> Result<Option<JustifyContent>, &'static str> {
+        use mg::AlignKeyword as K;
+        let mut value = self.style.layout.justify_content;
+        if !matches!(value.keyword, K::Left | K::Right) || value.legacy {
+            return content_alignment(value);
+        }
+        let column = match self.style.display {
+            mg::Display::Flex | mg::Display::InlineFlex => {
+                let direction = self.style.layout.flex_direction;
+                if value.safety == mg::AlignSafety::Safe
+                    && matches!(
+                        direction,
+                        mg::FlexDirection::RowReverse | mg::FlexDirection::ColumnReverse
+                    )
+                {
+                    // Taffy's safe overflow fallback is logical Start, not
+                    // placement-start. Refuse this new combination explicitly.
+                    return Err("safe physical justification in reverse flex is not implemented");
+                }
+                matches!(
+                    direction,
+                    mg::FlexDirection::Column | mg::FlexDirection::ColumnReverse
+                )
+            }
+            mg::Display::Grid | mg::Display::InlineGrid => false,
+            _ => return Ok(None), // Inert; this does not create a formatting context.
+        };
+        value.keyword = if !column && value.keyword == K::Right {
+            K::End
+        } else {
+            K::Start
+        };
+        content_alignment(value)
     }
 
     fn grid(self) -> Option<&'a mg::GridStyle> {
@@ -600,9 +636,7 @@ impl FlexboxContainerStyle for StyleView<'_> {
     }
     fn justify_content(&self) -> Option<JustifyContent> {
         if self.formatting() {
-            content_alignment(self.style.layout.justify_content)
-                .ok()
-                .flatten()
+            self.content_justification().ok().flatten()
         } else {
             None
         }
@@ -865,6 +899,10 @@ impl GridItemStyle for StyleView<'_> {
 }
 
 #[cfg(test)]
+#[path = "physical_justify_tests.rs"]
+mod physical_justify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1016,7 +1054,6 @@ mod tests {
         for css in [
             "position:fixed",
             "position:sticky",
-            "justify-content:left",
             "align-items:last baseline",
             "width:calc(50% + 10px)",
         ] {
@@ -1025,6 +1062,12 @@ mod tests {
                 "{css}"
             );
         }
+        // Migrate the old Left refusal to its actual inert block behavior;
+        // all unrelated unsupported cases above retain their assertions.
+        let inert = computed("justify-content:left");
+        let view = StyleView::item(&inert, None);
+        assert!(view.validate().is_ok());
+        assert_eq!(FlexboxContainerStyle::justify_content(&view), None);
         let mut s = computed("display:flex");
         s.layout.flex_grow = f32::NAN;
         assert!(StyleView::item(&s, None).validate().is_err());

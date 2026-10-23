@@ -58,15 +58,26 @@ following dependency order, updating evidence as each increment ships:
    public native helpers pass. No v0.9.14 release gate remains. Independently
    reviewed current-source scores remain static 317/632/62 of 1,011 and
    Window 15/16 passing files, 77/79 actual final subtests; preserve the two genuine
-   flex-valid failures and the manually protected fifteen files. **Next:** the
-   pre-implementation [physical justify-content contract](docs/PHYSICAL_JUSTIFY.md)
+   flex-valid failures and the manually protected fifteen files. **Active:** the
+   frozen [physical justify-content contract](docs/PHYSICAL_JUSTIFY.md)
    targets context-aware left/right alignment using the existing Rust layout
-   adapter. Record authored pre-feature failures before changing behavior;
-   no new pass or implementation is inferred. Container-unit grammar needs a
+   adapter. Actual pre-feature assertion failures are retained; the minimal
+   implementation and fourteen private/nineteen public controls pass focused
+   debug/release checks. Full final-version regressions, embedding/dependency/
+   tooling and all364 frozen JSPLAN outcomes pass. Independently reviewed full
+   static scoring is319PASS/630FAIL/62UNSUPPORTED of1011; only two column cases
+   gain real reference equality and are manually protected. Separate Window
+   scoring remains15/16 files and77/79 final rows. Normal package/install/updater,
+   all thirteen existing native helpers, the separate physical native/CDP proof
+   and both frozen worker-control suites pass locally. Finish exact-source CI
+   and public v0.9.15 acceptance before claiming delivery. Container-unit grammar needs a
    separate dependency/renderer review and remains deferred. Preserve the
    smallest remaining feature increment's acceptance gates;
-   full CSSOM/F-016/F-026/MVP remain open. Preserve the fixed score lanes. Follow
-   [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
+   full CSSOM/F-016/F-026/MVP remain open. Preserve the fixed score lanes.
+   Empty-anchor scripted activation also needs its own reviewed increment: the
+   layout proof exposed the existing text-item default-validation restriction;
+   ordinary text-link acceptance must not be reported as an empty-link fix.
+   Follow [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
    envelope. The historical first local measurement was 0/16 passing files and
    0/79 passing actual final subtests, with zero infrastructure/PENDING outcomes. All failed at

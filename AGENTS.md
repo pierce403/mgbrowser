@@ -44,6 +44,15 @@ active: review the next bounded feature before implementation, preserving its
 acceptance and release gates. Never widen a resource profile, synthesize missing
 rows or merge the two score lanes.
 
+Current bounded increment (2026-10-23): physical content justification under
+docs/PHYSICAL_JUSTIFY.md is implemented for v0.9.15 preparation. Full local
+regressions/JSPLAN pass; independently reviewed static319/630/62 of1011 protects
+two additional original column passes, with separate Window15/16 and77/79
+unchanged. Normal package/install/updater, existing native gates and separate
+physical native/CDP proof pass, as do both frozen worker-control suites.
+Exact-source CI/public release gates remain pending.
+Do not begin another engine increment before this release finishes.
+
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and
 T-023 / F-026. Keep corpus/runner changes separate from engine changes scored

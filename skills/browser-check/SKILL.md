@@ -272,6 +272,17 @@ binary after release. Screen-global X11 DPI is not per-monitor Wayland scaling.
 
 For input/navigation changes, build the binary/examples, start the loopback journey_server, and run the browser with its local URL, --smoke-search, --exit-after-smoke and an ignored tmp/ evidence directory. Inspect rendered frames, actual requested URLs and final exit status. Stop only the fixture service you started. CI uses Xvfb to reproduce this path.
 
+For physical content justification, also build the normal journey_server and
+physical_justify_smoke examples and run tools/physical-justify-smoke.py with
+explicit binary SHA/version/commit, client/server SHAs and font SHA. It owns a
+private Xvfb/profile and checks literal native/CDP pixels, secondary boxes, two
+actual link destinations, exact requests and script-free lifecycle accounting.
+Run it after the existing thirteen helpers, not in place of them, and repeat
+against the actual public-installed release. Its fixture uses ordinary text
+links; it does not establish empty-anchor activation or exhaustive hidden
+rendering diagnostics. Preserve failed attempts and inspect actual images and
+cleanup before adoption. Authored controls never enter either WPT denominator.
+
 For toolbar/bookmark changes, the scale smoke also tests packaged native
 Back/Forward/Refresh, loaded-versus-edited URL selection, local save/open/remove,
 restart and Ctrl+D. Preserve those assertions when changing toolbar coordinates.

@@ -1,8 +1,33 @@
 # Physical content justification: next bounded increment
 
-2026-10-23: pre-implementation contract. This is planned behavior, not a shipped
-feature or a measured WPT gain. v0.9.14 delivery is complete; retain that release,
-both fixed score lanes and every existing resource/security assertion.
+2026-10-23: the contract below was frozen before authored controls and the
+implementation. The minimal adapter is now implemented for v0.9.15 preparation,
+not yet released. Fourteen private controls and nineteen public geometry/pixel/
+hit controls pass in both debug and release profiles, with the selected existing
+layout regressions. Before implementation, the same frozen controls recorded
+five PASS/nine FAIL and four PASS/fifteen FAIL respectively; those were real
+assertion failures, not build errors. Full final-version debug/release regressions,
+embedding/dependency/tool checks and all364 frozen JSPLAN outcomes pass. The
+separately reviewed complete static measurement is319PASS/630FAIL/62UNSUPPORTED
+of1011: only original left/right-002 column cases gain genuine reference matches.
+All old passes/runnable cases remain, and the manual ratchet now protects319
+passes/949 runnable cases. The other initially targeted five cases still have
+real pixel mismatches; viewport and diagnostic exclusions are not relaxed.
+The separate Window lane remains15/16 passing files and77/79 final subtests.
+Normal package/installer/updater and all thirteen existing native helpers pass.
+The separate installed physical proof passes literal native/CDP pixels, boxes,
+link hits and destination paints, with exact request/lifecycle/cleanup evidence.
+Both frozen worker-control suites also pass through direct workers and the real
+Browser/HTTP host. Exact-source CI and public delivery remain pending. No WPT
+gain is inferred from authored controls. v0.9.14 remains the public
+release; retain both fixed score lanes and every resource/security assertion.
+
+The initial installed fixture used empty anchors: its initial pixels/boxes
+passed, but existing default-action validation rejected their activation.
+That failed receipt is retained. The final authored fixture uses ordinary A/B
+text links, with same-color 1px text and unchanged geometry/pixel/hit assertions;
+fresh old-public failure and candidate success were measured separately.
+Empty-anchor scripted activation remains a known limitation, not a layout fix.
 
 ## Existing failure and source evidence
 

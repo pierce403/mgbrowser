@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Physical justification fixture</title>
+<style>
+html,body{margin:0;background:#fff}
+*{margin:0;padding:0;border:0}
+.row{width:100px;margin-left:20px;align-items:flex-start}
+.a{display:block;width:20px;height:20px;flex-shrink:0;background:#aa0000;color:#aa0000;font-size:1px}
+.b{display:block;width:30px;height:30px;flex-shrink:0;background:#00aa00;color:#00aa00;font-size:1px}
+.short{display:flex;height:40px}
+.column{display:flex;height:100px;flex-direction:column-reverse}
+.grid{display:grid;height:40px;grid-template-columns:20px 30px;grid-template-rows:30px;align-items:start;flex-direction:column-reverse}
+</style></head><body>
+<div style="height:20px"></div>
+<!-- Text-bearing links use the existing validated navigation path. Empty
+     anchor activation is a separate known limitation, not fixed by layout. -->
+<div class="row short" style="justify-content:left"><a id="row-left-a" class="a" href="/physical-justify-native-hit">A</a><a id="row-left-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div class="row short" style="justify-content:right"><a id="row-right-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="row-right-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div class="row short" style="flex-direction:row-reverse;justify-content:left"><a id="reverse-left-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="reverse-left-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div class="row short" style="flex-direction:row-reverse;justify-content:right"><a id="reverse-right-a" class="a" href="/physical-justify-cdp-hit">A</a><a id="reverse-right-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div class="row column" style="justify-content:left"><a id="column-left-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="column-left-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div style="height:20px"></div>
+<div class="row column" style="justify-content:right"><a id="column-right-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="column-right-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div style="height:20px"></div>
+<div class="row grid" style="justify-content:left"><a id="grid-left-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="grid-left-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div class="row grid" style="justify-content:right"><a id="grid-right-a" class="a" href="/physical-justify-unexpected-hit">A</a><a id="grid-right-b" class="b" href="/physical-justify-unexpected-hit">B</a></div>
+<div style="height:20px"></div>
+</body></html>

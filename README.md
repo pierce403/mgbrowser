@@ -2,7 +2,38 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.14 Experimental Preview
+## v0.9.15 Experimental Preview: release verification
+
+Current source adds physical `justify-content:left/right` placement to the
+existing bounded Rust flex/grid adapter. Reversing flex children does not reverse
+the physical edge; columns pack at the top and grid ignores irrelevant flex
+direction. Safe physical alignment in reversed flex containers is explicitly
+unsupported until its overflow fallback can be represented correctly. RTL,
+vertical writing and full CSS Box Alignment remain unfinished.
+[Scoped contract](docs/PHYSICAL_JUSTIFY.md) and [release notes](docs/RELEASE-v0.9.15.md).
+
+Full local debug/release workspace regressions, optional-chrome embedding,
+dependency/tool checks and all 364 frozen JSPLAN outcomes pass. Fourteen private
+and nineteen public geometry/pixel/hit controls retain their authored pre-feature
+failure evidence. The independently reviewed complete static selection improves
+from 317 to **319 PASS / 630 FAIL / 62 UNSUPPORTED of 1,011**, preserving every
+old pass and runnable case. Only two original column reftests gain a zero-pixel
+match; five other initially targeted cases still fail. The manual ratchet now
+protects those two additional passes. Corpus, scorer and resource limits are
+unchanged. The separate Window lane remains 15/16 passing files and 77/79 final
+subtests, with its two genuine failures retained.
+
+The normal package, fixture installer/updater, all thirteen existing native
+helpers and the separate physical-layout native/CDP proof pass. Both frozen
+worker-control suites pass through direct workers and the real Browser/HTTP host.
+Exact-source CI and public release/install/update verification remain pending.
+v0.9.14 remains the latest verified published binary during
+preparation; the installer selects the
+[latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
+See the [dated log](memory/logs/2026-10-23.md) for separate delivery receipts.
+These local results do not complete F-005/F-016/F-026 or the formal MVP.
+
+### Previous v0.9.14 increment
 
 v0.9.14 adds parser-backed modern `element.style` named reads/writes,
 `cssText` and callable `getPropertyValue`, using the existing locked Rust Stylo
@@ -160,11 +191,12 @@ Pure-Rust Boa ECMAScript execution runs inline and classic external scripts by d
 links. The freshly measured WPT selection retains all 24 original passing
 flexbox reftests and covers the complete pinned **1,011-case flexbox markup
 reftest selection**, with failures and unsupported cases retained. That separate
-selection reports **317 PASS, 632 FAIL and 62 UNSUPPORTED / 1,011**, with
-no errors, timeouts or crashes. Timer fixtures are authored controls, not new
-upstream or JavaScript testharness passes. All case statuses and request
-multisets remain unchanged; common rendered-page RGB/PNG bytes match, while
-three already-failing pages now stop with typed script failures.
+selection reports **319 PASS, 630 FAIL and 62 UNSUPPORTED / 1,011**, with
+no errors, timeouts or crashes. Physical column justification adds two genuine
+reference matches; all prior passes and runnable cases remain protected.
+Timer and installed-layout fixtures are authored controls, not additional
+upstream or JavaScript testharness passes. The separate Window selection reports
+15/16 passing files and 77/79 passing final subtests.
 [Scope and remaining gaps](docs/WPT.md).
 
 Google News reading is substantially improved: bounded flex/grid layout,

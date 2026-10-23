@@ -68,10 +68,15 @@ summary: Compact map of mgbrowser project decisions and evidence.
   public native helpers pass; no v0.9.14 release gate remains. Separate static
   scoring stays 317/632/62 of 1,011. Full CSSOM and F-016/F-026/MVP remain incomplete;
   the active broader goal next requires a separately reviewed feature increment.
-- `docs/PHYSICAL_JUSTIFY.md`: next pre-implementation layout contract for
+- `docs/PHYSICAL_JUSTIFY.md`: frozen next-increment layout contract for
   physical left/right content justification. Existing static failures motivate
   axis-aware flex/grid mapping, with explicit reversed-flex Safe refusal until
-  correct overflow fallback exists. No new implementation or passes yet;
+  correct overflow fallback exists. Authored old-behavior failures and focused
+  debug/release controls and full final-version regressions/JSPLAN pass after
+  the minimal adapter implementation. Reviewed static coverage is319/630/62
+  of1011, with two genuine column reftest passes manually protected; the Window
+  lane remains15/16 files and77/79 final rows. Normal package/native/CDP and frozen
+  worker-control checks pass; exact-source CI/public v0.9.15 delivery is pending;
   the separate container-unit dependency/renderer change remains deferred.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.

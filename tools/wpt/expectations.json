@@ -1272,6 +1272,8 @@
     "css/css-flexbox/flexbox_justifycontent-end.html",
     "css/css-flexbox/flexbox_justifycontent-flex-end.html",
     "css/css-flexbox/flexbox_justifycontent-flex-start.html",
+    "css/css-flexbox/flexbox_justifycontent-left-002.html",
+    "css/css-flexbox/flexbox_justifycontent-right-002.html",
     "css/css-flexbox/flexbox_justifycontent-spacearound-negative.html",
     "css/css-flexbox/flexbox_justifycontent-spacearound-only.html",
     "css/css-flexbox/flexbox_justifycontent-spacearound.html",

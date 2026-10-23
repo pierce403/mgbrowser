@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 632,
-    "PASS": 317,
+    "FAIL": 630,
+    "PASS": 319,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -3015,7 +3015,7 @@
       "test": "css/css-flexbox/flexbox_justifycontent-left-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_justifycontent-left-002.html"
     },
     {
@@ -3023,7 +3023,7 @@
       "test": "css/css-flexbox/flexbox_justifycontent-right-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox_justifycontent-right-002.html"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "ab2202e022377351a04509395508a33f6dc24da44d073327ed7ad5e6d233391b",
+  "source_sha256": "26c271f71c13568bf5b870ef4cc1d70672ceb35a6578e8568522af77b215c666",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }
