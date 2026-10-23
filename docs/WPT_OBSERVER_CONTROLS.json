@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "status": "FROZEN_AUTHORED_CONTROLS_NOT_EXECUTED",
+  "scope": "Owned non-scoring complete-Window-harness controls only; not upstream tests or a new scored selection",
+  "execution_performed": false,
+  "case_count": 16,
+  "hard_case_cap": 16,
+  "contract": "docs/WPT_OBSERVER.md",
+  "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea",
+  "common_bootstrap": {
+    "path": "tools/wpt/upstream/resources/testharness.js",
+    "body_bytes": 198291,
+    "sha256": "d2399236c2a09c429804ff2299ad6629e17e2b53f17a74dd341e936adb11ae3e",
+    "body_rule": "Read exact complete tracked bytes; reject missing, changed or non-UTF8 bytes; do not prune, patch or regenerate",
+    "html_src_attribute": "/resources/testharness.js",
+    "bootstrap_node": 1,
+    "bootstrap_node_basis": "Current document.rs build_tree starts #document at 0 and assigns first script 1; empty external raw text adds no text node; later implicit body does not renumber nodes",
+    "ordinary_external_script_position": 0,
+    "async": false,
+    "defer": false,
+    "module": false,
+    "integrity": null,
+    "content_type_if_served": "application/javascript; charset=utf-8"
+  },
+  "unchanged_vendor_report_reference": {
+    "path": "tools/wpt/upstream/resources/testharnessreport.js",
+    "body_bytes": 1231,
+    "sha256": "3777176fc736b0a78cf7617b9613b220f635daae7536ec7ebb99c61dbb525aae",
+    "execute_in_this_inventory": false,
+    "reason": "Original file documents vendor callbacks but does not implement Mg reporting; no opener configuration is fabricated"
+  },
+  "fixture_url_binding": {
+    "stdio_document_origin": "https://observer.example.test",
+    "stdio_source_response_url": "https://observer.example.test/resources/testharness.js",
+    "stdio_source_error_visibility": "same-origin",
+    "metadata_is_synthetic": true,
+    "metadata_is_http_transport_proof": false,
+    "browser_host_binding": "Only an owned ephemeral loopback origin with the same paths and unchanged HTML/source bytes; record actual origin, requests and transport provenance separately",
+    "network_or_display_required_for_direct_stdio": false
+  },
+  "common_expectations": {
+    "observer_mode": "WindowHarness",
+    "observer_contract": "PinnedWindowHarnessV1",
+    "native_callbacks_installed_before_inline_source": true,
+    "normal_browser_default_observation": "Disabled",
+    "source_admission_and_body_immutability_required": true,
+    "positive_requires": ["Ready", "LoadComplete", "initial_failure false", "exactly one reconciled Finished completion", "harness Ok", "all declared subtests Pass", "execution_failed false", "no observer, broker, privacy or infrastructure failure", "confirmed owned cleanup"],
+    "completed_case_default_lifecycle": "LoadComplete",
+    "completed_case_default_observer_fault": null,
+    "no_unexpected_diagnostics": true,
+    "unmeasured_resource_fields": {
+      "exact_jobs_admitted": null,
+      "exact_jobs_executed": null,
+      "exact_pending_jobs": null,
+      "exact_opcodes_remaining": null,
+      "exact_system_peak_bytes": null,
+      "exact_system_cumulative_bytes": null,
+      "reason": "No proposed inputs were executed; exact resource golden values are not guessed. Existing numeric maxima and monotonic/no-refund assertions still apply."
+    },
+    "existing_caps_unchanged": {"pending_work": 256, "lifetime_work": 2048, "listeners": 32, "event_records": 256, "host_bytes": 4194304, "system_outstanding_bytes": 33554432, "system_cumulative_bytes": 67108864, "opcodes": 1000000, "cpu_seconds": 1, "active_seconds_total": 2, "transactions_total": 64, "wire_bytes_total": 33554432},
+    "parent_case_deadline_seconds": 25,
+    "cleanup_seconds": 2,
+    "all_cases_fresh_realms": true,
+    "result_name_encoding": "ASCII names below mean exact corresponding UTF16 units; exceptional names declare units explicitly",
+    "message_stack_policy": "Preserve actual bounded units, own Null and own Undefined distinctly under OptionalUtf16. Only fields explicitly constrained below are semantic goldens; no guessed stack text or source location."
+  },
+  "cases": [
+    {
+      "id": "01-sync-pass", "run_id": 1, "url_path": "/owned/01-sync-pass.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\ntest(function(){assert_equals(1,1);},'sync pass');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false,
+        "browser_outcome": "owned positive",
+        "result_order_indices": [0],
+        "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "sync pass", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Early Result is captured before Init returns; completion only after real Window load-created task and checkpoint"
+      },
+      "source_basis": ["testharness.js:624-652", "93-100", "3875-3880", "4037-4068"]
+    },
+    {
+      "id": "02-assertion-fail", "run_id": 2, "url_path": "/owned/02-assertion-fail.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\ntest(function(){assert_equals(1,2,'owned assertion mismatch');},'assertion fails');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true,
+        "browser_outcome": "genuine subtest failure, not harness error or native uncaught error",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "assertion fails", "status": "Fail", "message_contains": "owned assertion mismatch", "stack_exact": null, "stack_exact_unmeasured": true}],
+        "native_execution_failed": false, "diagnostic_count": 0
+      },
+      "source_basis": ["testharness.js:624-652", "2837-2880", "4037-4068"]
+    },
+    {
+      "id": "03-promise-pass-and-caught", "run_id": 3, "url_path": "/owned/03-promise-pass-and-caught.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\npromise_test(function(){return Promise.resolve().then(function(){assert_equals(2+2,4);});},'promise resolves');\npromise_test(function(){return Promise.reject('owned caught').catch(function(reason){assert_equals(reason,'owned caught');});},'caught rejection is handled');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false, "browser_outcome": "owned positive",
+        "result_order_indices": [0,1], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "promise resolves", "status": "Pass", "message": null, "stack": null}, {"index": 1, "id": 2, "result_present": true, "name": "caught rejection is handled", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Ordinary Promise jobs drain; immediate catch cancels unhandled candidate before notification; no unhandled or handled notification is manufactured"
+      },
+      "source_basis": ["testharness.js:722-771", "3193-3213", "3270-3285", "boa.rs:309-438,1639-1667"]
+    },
+    {
+      "id": "04-promise-fail", "run_id": 4, "url_path": "/owned/04-promise-fail.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\npromise_test(function(){return Promise.resolve().then(function(){assert_equals(1,2,'owned promise mismatch');});},'promise assertion fails');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "genuine Promise subtest failure caught by original harness",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "promise assertion fails", "status": "Fail", "message_contains": "owned promise mismatch", "stack_exact": null, "stack_exact_unmeasured": true}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Framework catch is registered before rejection settlement; a Promise test Fail is not a native unhandled notification"
+      },
+      "source_basis": ["testharness.js:736-769", "2837-2880", "3306-3334"]
+    },
+    {
+      "id": "05-async-lifecycle-microtasks", "run_id": 5, "url_path": "/owned/05-async-lifecycle-microtasks.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\nvar lifecycleTest=async_test('lifecycle microtasks before later timer');\nvar lifecycleOrder=['source'];\nPromise.resolve().then(function(){lifecycleOrder.push('source-microtask');});\ndocument.addEventListener('DOMContentLoaded',function(){lifecycleOrder.push('dcl');Promise.resolve().then(function(){lifecycleOrder.push('dcl-microtask');});});\nwindow.addEventListener('load',function(){lifecycleOrder.push('load');Promise.resolve().then(function(){lifecycleOrder.push('load-microtask');});setTimeout(function(){lifecycleTest.step(function(){assert_array_equals(lifecycleOrder,['source','source-microtask','dcl','dcl-microtask','load','load-microtask']);});lifecycleTest.done();},0);});</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false, "browser_outcome": "owned positive",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "lifecycle microtasks before later timer", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Owned later timer finishes the async test only after load listeners and their real microtasks; no Promise alias for the task"
+      },
+      "source_basis": ["testharness.js:666-706", "93-100", "3875-3880", "boa.rs:2152-2218,2430-2478,2543-2546"]
+    },
+    {
+      "id": "06-window-error", "run_id": 6, "url_path": "/owned/06-window-error.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true,explicit_done:true});\ntest(function(){assert_equals(1,1);},'completed before window error');\nsetTimeout(function(){throw new Error('owned window error');},0);</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "genuine harness Error plus retained native uncaught error",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Error", "harness_message": "ThrownValue: JavaScript threw a value (not coerced by the host)", "harness_stack_exact": null, "harness_stack_exact_unmeasured": true,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "completed before window error", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": true, "diagnostics_exact": ["Timer callback: ThrownValue: JavaScript threw a value (not coerced by the host)"],
+        "settlement": "explicit_done keeps the completed subtest from completing the file; original error handler sets harness Error and calls done"
+      },
+      "source_basis": ["testharness.js:3744-3747", "3846-3851", "5048-5083", "boa.rs:1483-1522,2431-2442"]
+    },
+    {
+      "id": "07-unhandled-rejection", "run_id": 7, "url_path": "/owned/07-unhandled-rejection.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true,explicit_done:true});\ntest(function(){assert_equals(1,1);},'completed before unhandled rejection');\nPromise.reject('owned unhandled rejection');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "genuine harness Error plus actual queued unhandled notification",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Error", "harness_message": "Unhandled rejection", "harness_stack_kind": "Undefined",
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "completed before unhandled rejection", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": true, "diagnostics_exact": ["Unhandled Promise rejection"],
+        "settlement": "Real candidate/batch notification, not synchronous fake rejection or Window error; original handler calls done"
+      },
+      "source_basis": ["testharness.js:5048-5071,5085-5097", "boa.rs:1789-1825,2019-2108"]
+    },
+    {
+      "id": "08-missing-completion", "run_id": 8, "url_path": "/owned/08-missing-completion.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\nasync_test('never completed');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "MissingCompletion at parent deadline, not fabricated harness Timeout",
+        "result_order_indices": [], "completion_count": 0, "harness_status": null,
+        "declared_but_not_reported": [{"index": 0, "name": "never completed", "source_internal_initial_status": "NotRun"}],
+        "final_inventory": "absent, not synthesized", "observer_progress_before_deadline": "Waiting", "lifecycle_before_deadline": "LoadComplete",
+        "native_execution_failed_before_parent_deadline": false, "diagnostic_count_before_parent_deadline": 0,
+        "settlement": "LoadComplete, an idle worker or zero pending jobs cannot substitute for the absent completion; parent ends the run once without renewed counters"
+      },
+      "source_basis": ["testharness.js:666-706", "2729-2746", "3748-3753", "3875-3880"]
+    },
+    {
+      "id": "09-default-file-timer-retained", "run_id": 9, "url_path": "/owned/09-default-file-timer-retained.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false});\ntest(function(){assert_equals(1,1);},'default timer completion');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false, "browser_outcome": "owned positive despite explicitly reported unrelated retained file timer",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "default timer completion", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "work_constraint": "The still-scheduled default file timer must remain represented in real pending work/wake at cutoff; do not drain it or rewrite pending to zero",
+        "settlement": "Finish after complete callback/checkpoint and no notification obligations, then EOF/cancel/cleanup before unrelated file timer fires"
+      },
+      "source_basis": ["testharness.js:9-16", "3801-3809", "3922-3957", "4037-4068", "3203-3205"]
+    },
+    {
+      "id": "10-genuine-harness-timeout", "run_id": 10, "url_path": "/owned/10-genuine-harness-timeout.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false});\nasync_test(function(){assert_true(true);},'started async never done');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "actual original harness Timeout callback, not parent timeout",
+        "result_order_indices": [], "completion_count": 1, "harness_status": "Timeout", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": false, "name": "started async never done", "status": "Timeout", "message": "Test timed out", "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "timing_constraint": "Original normal 10000ms file timeout must run as a real parent-scheduled task within the 25s observation bound; never shorten timeout or fabricate a result",
+        "settlement": "Whole-file timeout sets phases COMPLETE without emitting Result, so final-only Timeout is genuine non-Ok inventory"
+      },
+      "source_basis": ["testharness.js:9-16", "666-706", "2846-2848", "3813-3843", "3922-3942"]
+    },
+    {
+      "id": "11-cleanup-error", "run_id": 11, "url_path": "/owned/11-cleanup-error.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\ntest(function(t){t.add_cleanup(function(){throw new Error('owned cleanup error');});assert_true(true);},'cleanup throws');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "genuine cleanup harness Error, not native uncaught error",
+        "result_order_indices": [0], "completion_count": 1, "harness_status": "Error", "harness_message": "Test named 'cleanup throws' specified 1 'cleanup' function, and 1 failed.", "harness_stack_exact": null, "harness_stack_exact_unmeasured": true,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "cleanup throws", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Original cleanup catch/abort and cleanup_done retain test Pass while setting harness Error; it is not an observer mutation or native Window error"
+      },
+      "source_basis": ["testharness.js:624-652", "3140-3143", "3193-3213", "3231-3257", "3306-3334"]
+    },
+    {
+      "id": "12-completion-then-error", "run_id": 12, "url_path": "/owned/12-completion-then-error.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\nadd_completion_callback(function(){throw new Error('owned error after completion');});\ntest(function(){assert_equals(1,1);},'before completion callback error');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "captured harness Ok cannot erase later error in the same completion task",
+        "result_order_indices": [0], "completion_count": 1, "harness_status_at_native_callback": "Ok", "harness_message_at_native_callback": null, "harness_stack_at_native_callback": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "before completion callback error", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": true, "diagnostics_exact": ["Timer callback: ThrownValue: JavaScript threw a value (not coerced by the host)"],
+        "settlement": "Native observer was installed before authored completion callback; completion is provisional until later callback throws and real error/checkpoint processing finishes; no second completion is fabricated"
+      },
+      "source_basis": ["testharness.js:4249-4251", "3922-3929", "4064-4067", "5048-5083", "boa.rs:1483-1522,2431-2442"]
+    },
+    {
+      "id": "13-completion-then-rejection", "run_id": 13, "url_path": "/owned/13-completion-then-rejection.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\nadd_completion_callback(function(){Promise.reject('owned rejection after completion');});\ntest(function(){assert_equals(1,1);},'before completion callback rejection');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "captured harness Ok cannot erase later actual queued unhandled notification",
+        "result_order_indices": [0], "completion_count": 1, "harness_status_at_native_callback": "Ok", "harness_message_at_native_callback": null, "harness_stack_at_native_callback": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "before completion callback rejection", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed_after_settlement": true, "diagnostics_exact": ["Unhandled Promise rejection"],
+        "observer_progress_constraint": "First Completion frame is Settling, not Finished; a later ordinary pump delivers the candidate and only then reaches Finished with sticky execution failure",
+        "settlement": "No sentinel, recursive drain or invented completion; original later harness status mutation does not rewrite the already captured Ok record"
+      },
+      "source_basis": ["testharness.js:4064-4067", "5085-5097", "boa.rs:1639-1667,1789-1825,2019-2108"]
+    },
+    {
+      "id": "14-surrogate-name-collision", "run_id": 14, "url_path": "/owned/14-surrogate-name-collision.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\ntest(function(){assert_equals(1,1);},'\\uD800');\ntest(function(){assert_equals(2,2);},'U+d800');</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false, "browser_outcome": "owned positive with legal final-name collision and distinct identities",
+        "result_order_indices": [0,1], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "result_name_units": [55296], "final_name_units": [85,43,100,56,48,48], "name_reconciliation": "pinned sanitizer", "status": "Pass", "message": null, "stack": null}, {"index": 1, "id": 2, "result_present": true, "result_name_units": [85,43,100,56,48,48], "final_name_units": [85,43,100,56,48,48], "name_reconciliation": "unchanged", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Duplicate raw-name check precedes sanitizer, so same final name is legal and cannot merge IDs"
+      },
+      "source_basis": ["testharness.js:3987-4060", "2721-2746", "3862-3864"]
+    },
+    {
+      "id": "15-queued-handled-callback-error", "run_id": 15, "url_path": "/owned/15-queued-handled-callback-error.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true,explicit_done:true});\ntest(function(){assert_equals(1,1);},'before queued handled callback');\nvar latePromise=Promise.reject('owned late handled');\nwindow.addEventListener('unhandledrejection',function(event){if(event.promise!==latePromise){throw new Error('owned unexpected promise identity');}setTimeout(function(){latePromise.catch(function(){});done();},0);});\nwindow.addEventListener('rejectionhandled',function(){throw new Error('owned rejectionhandled callback error');});</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": true, "browser_outcome": "original unhandled harness Error plus required later Handled callback failure",
+        "result_order_indices": [0], "completion_count": 1, "harness_status_at_native_callback": "Error", "harness_message_at_native_callback": "Unhandled rejection", "harness_stack_kind_at_native_callback": "Undefined",
+        "inventory": [{"index": 0, "id": 1, "result_present": true, "name": "before queued handled callback", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": true, "diagnostics_exact": ["Unhandled Promise rejection", "Event handler: ThrownValue: JavaScript threw a value (not coerced by the host)"],
+        "observer_progress_constraint": "At Completion the late Handle task already exists, so first Completion frame is Settling; Finished cannot occur until its actual callback/error checkpoint has run",
+        "settlement": "Common deadline/handle order puts source rejection before DCL/load, user UR-created timer after already queued lifecycle, and that timer before harness load-created timer. It schedules Handle after harness load timer, so completion observes a pending Handled obligation. No special priority is assumed."
+      },
+      "source_basis": ["testharness.js:93-100", "5048-5097", "boa.rs:1789-1825,2019-2108,2152-2193,2481-2498"]
+    },
+    {
+      "id": "16-out-of-order-results", "run_id": 16, "url_path": "/owned/16-out-of-order-results.html",
+      "html_utf8": "<script src=\"/resources/testharness.js\"></script><script>setup({output:false,explicit_timeout:true});\nvar firstAsync=async_test('created first completes last');\nvar secondAsync=async_test('created second completes first');\nsetTimeout(function(){secondAsync.step(function(){assert_equals(2,2);});secondAsync.done();},0);\nsetTimeout(function(){firstAsync.step(function(){assert_equals(1,1);});firstAsync.done();},20);</script>",
+      "expected": {
+        "verifier_accepts_expected_negative": false, "browser_outcome": "owned positive with result arrival order different from dense final creation order",
+        "result_order_indices": [1,0], "completion_count": 1, "harness_status": "Ok", "harness_message": null, "harness_stack": null,
+        "inventory": [{"index": 0, "id": 2, "result_present": true, "name": "created first completes last", "status": "Pass", "message": null, "stack": null}, {"index": 1, "id": 1, "result_present": true, "name": "created second completes first", "status": "Pass", "message": null, "stack": null}],
+        "native_execution_failed": false, "diagnostic_count": 0,
+        "settlement": "Native IDs follow first callback encounter, not index+1; two real timers preserve result order without changing final dense creation indices"
+      },
+      "source_basis": ["testharness.js:666-706", "3854-3864", "3908-3915", "boa.rs:2339-2374,2431-2442"]
+    }
+  ],
+  "uncertainty_and_review_rules": [
+    "No exact resource counters, opcode counts, requested-System values, stack bytes or source locations are adopted from a guess. Preserve raw measured values later without blessing them as passing evidence.",
+    "Expected statuses, test names/counts, callback ordering and native-failure booleans are source-derived assertions for review, not observed current behavior. Any failure requires diagnosis, not automatic expectation rewriting. JS throw diagnostics use modern.safe_error's constant ThrownValue data, never the thrown object's message label.",
+    "The unhandled-rejection harness handler passes an own undefined stack for primitive reasons with no stack. Cases 07 and 15 require actual OptionalUtf16 Undefined under root's reviewed contract correction, never normalization to Null or missing-descriptor acceptance.",
+    "Terminal/resource/observer faults, infrastructure, missing completion and failed cleanup cannot be accepted as one of the intended semantic outcomes merely because the control is negative.",
+    "Full-harness timeout/cleanup stall variants, malformed callback/UTF16/caps/GC/privacy and wire faults also need focused native/shared-ledger tests; they are not an excuse to expand this fixed first-control inventory after execution."
+  ]
+}

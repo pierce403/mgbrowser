@@ -15,6 +15,13 @@ baseline used v4 and bundled startup. Static renderer
 readiness integration stays independent of interpreting score gains: no arbitrary
 timer wait, typed observer or new scored selection is added.
 
+The next increment follows the separately reviewed
+[bounded typed observer contract](WPT_OBSERVER.md). It keeps observation off in
+normal browsing, preserves distinct harness/subtest results and uses owned
+non-scoring controls before any new selection. A fresh public-v0.9.11 prefix
+measurement reaches a real post-load task without a diagnostic, but has no typed
+completion and is not a test pass or complete runtime-feasibility result.
+
 ## Immutable input
 
 The current corpus already retains the complete upstream harness at revision

@@ -37,6 +37,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
   v0.9.10 baseline. Exact release/public receipts are in the dated log; full
   Window readiness, trusted typed observation and broader WPT integration remain
   open.
+- `docs/WPT_OBSERVER.md`: next non-scoring bounded typed Window-harness observer
+  design, strict modern v6/default-off host authority, weak identities/lossless
+  UTF-16, provisional completion and finite causal settlement. Public v0.9.11
+  prefix evidence is not typed completion; implementation and acceptance remain
+  future work. The static corpus/score and all worker limits remain unchanged.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

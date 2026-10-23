@@ -68,6 +68,12 @@ The runner's bounded two-lane orchestration preserves all complete one-lane
 case, raw-pixel and per-page-request evidence while reducing measured local
 runtime. It changes test tooling only, not browser behavior or the WPT score.
 See docs/WPT_EXPANSION.md for the separate safety/equivalence and public gates.
+The next non-scoring Window-readiness increment is specified in
+docs/WPT_OBSERVER.md: trusted bounded typed callbacks, distinct raw statuses,
+provisional completion and ordinary error/rejection settlement. The public
+v0.9.11 full-harness prefix measurement is not typed completion, complete
+feasibility or a new upstream pass. The observer and broader acceptance remain
+unimplemented; no criterion above is newly checked.
 
 ## F-025 : Google News desktop reading
 

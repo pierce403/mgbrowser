@@ -194,6 +194,10 @@ incorrect; both failures and unsupported protocols stay visible. Current-source 
 advance beyond an installed release; the report identifies the exact tested commit.
 [Selection and review](docs/WPT_EXPANSION.md). JavaScript testharness integration
 is a [separate planned milestone](docs/WPT_TESTHARNESS.md), not current coverage.
+Its next increment has a [bounded observer design](docs/WPT_OBSERVER.md): trusted
+typed callbacks and owned controls, not console scraping or new scored tests.
+The full-harness public-binary measurement so far proves only a lifecycle/resource
+prefix, not a harness completion or a new WPT pass. The observer is not implemented.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if
