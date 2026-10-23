@@ -2,7 +2,7 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.16 Experimental Preview candidate
+## v0.9.16 Experimental Preview
 
 v0.9.16 corrects definite-width outer allocation for ordinary inline-blocks
 and normal-flow inline-flex/inline-grid containers in the Rust layout engine.
@@ -10,7 +10,7 @@ Measurement and painting share the same allocation: padding/borders
 and signed margins count once, percentages use the containing content width,
 and definite boxes keep their width when they overflow. Horizontal auto margins
 resolve to zero in this normal-flow inline context.
-[Scoped contract](docs/ATOMIC_INLINE.md) and [candidate notes](docs/RELEASE-v0.9.16.md).
+[Scoped contract](docs/ATOMIC_INLINE.md) and [release notes](docs/RELEASE-v0.9.16.md).
 
 Local verification: all 14 full Rust B gates and all 8 JSPLAN B gates pass, retaining all 364 frozen research outcomes (not 364 passes).
 All 59 frozen authored control groups pass focused debug and release checks:
@@ -25,9 +25,14 @@ runnable cases. Improvement is not uniform: `flexbox_order-box.html` remains
 FAIL, with differing pixels increasing from 40,551 to 41,758; its auto-width
 parent mismatch remains outside this definite-only change.
 
-This candidate is not a published release. Exact-source CI/site, the tagged
-release, public install/reinstall, actual v0.9.15 update/no-op and public
-worker/native/CDP repeats remain required. The installer follows the
+Published as [v0.9.16](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.16)
+at `8ce13a3786501b376dbd594b07cacfddf3d604f6`. All eight exact-source CI/hosting
+checks and the normal tagged release pass. Checksum-verified public install/
+reinstall, worker/session/CSSOM and desktop/icon checks, actual v0.9.15 update/
+no-op, both frozen public-worker suites, thirteen existing public native helpers
+and the separate public physical/atomic 1x/2x native/CDP proofs pass. All twelve
+layout screenshots were inspected. See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
+The installer follows the
 [latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
 Auto/intrinsic sizing, tables, replaced elements and buttons retain their
 existing scope. Flex/grid inner formatting and baseline algorithms are unchanged.

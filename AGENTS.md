@@ -58,7 +58,8 @@ remains; see [the public closeout](memory/logs/2026-10-23.md#v0915-public-releas
 review the next bounded feature before implementation. Preserve the existing
 resource profile, full CSSOM/F-016/F-026/MVP limitations and both score lanes.
 
-Current bounded increment (2026-10-23): the v0.9.16 candidate implements
+Completed bounded increment (2026-10-23): v0.9.16 ships at
+`8ce13a3786501b376dbd594b07cacfddf3d604f6` and implements
 docs/ATOMIC_INLINE.md's definite-width outer allocation for ordinary inline-blocks
 and normal-flow inline-flex/grid containers after retained pre-change assertion
 failures. All 59 frozen authored groups (original 40 plus addendum 19) pass
@@ -72,11 +73,15 @@ order-box case remains FAIL with a real 40,551 to 41,758 pixel worsening.
 Preserve all prior static/Window protections,
 original inputs, diagnostics and limits. Auto/intrinsic/table/replaced/button
 behavior remains regression scope; inner flex/grid formatting and baseline
-algorithms are unchanged. Finish exact-source CI/site, the normal
-v0.9.16 release and public install/reinstall, actual v0.9.15 update/no-op,
-both frozen worker suites, old thirteen native helpers and separate physical/
-atomic 1x/2x proofs before another feature. No v0.9.16 public delivery is yet
-claimed; F-003/F-005/F-016/F-026 and the formal MVP remain unfinished.
+algorithms are unchanged. All eight exact-source CI/hosting checks, normal
+tagged release, checksum-verified public install/reinstall, worker/session/CSSOM/
+desktop/icon checks, actual v0.9.15 update/no-op, both frozen public-worker
+suites, thirteen existing public native helpers and separate physical/atomic
+1x/2x public native/CDP proofs pass, with all twelve layout images inspected.
+See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
+The broader goal remains active: review the next bounded feature only after
+this documentation closeout passes exact-source CI/site verification.
+F-003/F-005/F-016/F-026 and the formal MVP remain unfinished.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and

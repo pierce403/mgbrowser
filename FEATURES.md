@@ -140,7 +140,7 @@ see [the public closeout](memory/logs/2026-10-23.md#v0915-public-release-closeou
 both fixed score lanes, diagnostics, all prior passing/runnable ratchets and the
 standing release policy. Full CSSOM and container-unit sizing remain separate.
 
-Local v0.9.16 candidate under [docs/ATOMIC_INLINE.md](docs/ATOMIC_INLINE.md):
+Shipped v0.9.16 under [docs/ATOMIC_INLINE.md](docs/ATOMIC_INLINE.md):
 definite-width ordinary inline-block and normal-flow inline-flex/grid outer
 allocation now shares measurement and painting. Inner formatting, intrinsic
 sizing and baseline algorithms are unchanged.
@@ -154,7 +154,12 @@ the nineteen new matches to the static ratchet: 338 protected passes, unchanged
 949 runnable cases and all original inputs/limits. The still-failing order-box
 comparison worsens from 40,551 to 41,758 differing pixels; no failure is hidden
 or accepted through a tolerance. Future ratchet changes require manual review.
-Exact-source CI/site and all tagged/public delivery gates remain open.
+All eight exact-source CI/hosting checks and normal tagged publication pass at
+`8ce13a3786501b376dbd594b07cacfddf3d604f6`. Public install/reinstall, actual
+v0.9.15 update/no-op, worker/session/CSSOM/desktop/icon checks, both frozen
+public-worker suites, thirteen public native helpers and the separate physical/
+atomic 1x/2x proofs pass, with all twelve layout images inspected. See
+[the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
 No criterion above is newly checked; F-003/F-005/F-016/F-026 and MVP stay open.
 
 ## F-025 : Google News desktop reading
@@ -864,10 +869,10 @@ Our Rust HTML/DOM/style/layout/paint pipeline draws a local heading, paragraph, 
 
 Evidence: 2026-09-07 native X11 window displayed the local journey and Google homepage using own HTML flow and Rust text paint. Screenshot frames were inspected. Broader DOM/layout snapshots and resize acceptance remain open.
 
-The v0.9.16 candidate's [definite-width atomic inline correction](docs/ATOMIC_INLINE.md)
-has bounded local evidence recorded under F-005/F-026. It does not complete the
-versioned rendering corpus or any unchecked criterion above; public delivery
-remains separate from local verification.
+The shipped v0.9.16 [definite-width atomic inline correction](docs/ATOMIC_INLINE.md)
+has separate local and public delivery evidence recorded under F-005/F-026.
+It does not complete the versioned rendering corpus or any unchecked criterion
+above.
 
 ## F-004 : Static web navigation
 
@@ -933,7 +938,7 @@ Normal packaged/native/CDP and v0.9.15 public delivery checks pass; see
 This changes neither the broader fixture
 criteria nor the existing RTL/writing-mode and Safe/reversed-flex limitations.
 
-The v0.9.16 candidate implements [definite-width atomic inline sizing](docs/ATOMIC_INLINE.md):
+The shipped v0.9.16 implements [definite-width atomic inline sizing](docs/ATOMIC_INLINE.md):
 ordinary inline-block and normal-flow inline-flex/grid outer allocation,
 containing-width percentages and signed margin advance agree between measurement
 and paint, with inline auto margins resolving to zero. The original 12 private
@@ -948,8 +953,11 @@ physical/atomic 1x/2x and frozen direct/Browser worker suites pass.
 F-026 records the two separately audited score lanes; no gain is inferred from
 authored tests. Auto/intrinsic, table, replaced and button behavior remain
 regression scope; inner flex/grid formatting and baseline algorithms are
-unchanged. Exact-source CI/site, tagged publication and public installation/
-update/native gates remain open.
+unchanged. Exact-source CI/site and normal tagged publication pass at
+`8ce13a3786501b376dbd594b07cacfddf3d604f6`. Public installation/reinstall,
+actual v0.9.15 update/no-op, both frozen public-worker suites, thirteen existing
+native helpers and separate physical/atomic 1x/2x native/CDP proofs pass.
+See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
 F-003/F-005/F-016/F-026 and the formal MVP are still unfinished.
 
 ## F-006 : Reproducible autoresearch evaluator

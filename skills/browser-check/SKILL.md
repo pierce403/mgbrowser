@@ -283,6 +283,21 @@ links; it does not establish empty-anchor activation or exhaustive hidden
 rendering diagnostics. Preserve failed attempts and inspect actual images and
 cleanup before adoption. Authored controls never enter either WPT denominator.
 
+For definite atomic inline outer allocation, read docs/ATOMIC_INLINE.md and
+also build the normal atomic_inline_smoke example. Run
+tools/atomic-inline-smoke.py separately with --scale 1 and --scale 2, supplying
+explicit binary SHA/version/commit, client/server SHAs and font SHA. Keep the
+thirteen existing helpers and physical-justification proof; repeat all three
+additive proofs with the actual public-installed executable. Check literal
+native paint before secondary BoxModel geometry: real containing-width
+percentages, padding/borders once, signed overlap/negative advance and definite
+overflow must agree. Verify actual native and logical-CDP link destinations,
+lifecycle acknowledgments, requests, resource frames and owned cleanup; inspect
+all twelve additive screenshots. At 2x, physical native pixels/input scale but
+CDP input remains logical. Use only private XDG sizing preferences. The client
+does not exhaustively observe hidden rendering diagnostics; successful authored
+controls prove neither full inline/baseline/intrinsic formatting nor WPT passes.
+
 For toolbar/bookmark changes, the scale smoke also tests packaged native
 Back/Forward/Refresh, loaded-versus-edited URL selection, local save/open/remove,
 restart and Ctrl+D. Preserve those assertions when changing toolbar coordinates.

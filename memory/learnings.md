@@ -148,3 +148,11 @@
   older37-page subgroup. The corrected pure-data review passes with unchanged
   producer/assertions/score. Do not infer an empty runtime from absent render
   metadata or substitute old pixels for a current typed failure.
+- 2026-10-23: The definite atomic-inline proof now passes in normal local
+  packaging, tagged-release CI and actual public-installed lanes at 1x and 2x,
+  alongside the unchanged physical proof and thirteen existing helpers. Literal
+  native pixels precede secondary BoxModel checks; real input, lifecycle,
+  requests and System receipts remain separate acceptance. CDP input remains
+  logical at 2x. Curator adds this verified procedure to browser-check; full
+  inline/baseline/intrinsic support and hidden diagnostics are not inferred.
+  See docs/ATOMIC_INLINE.md and the 2026-10-23 public closeout.

@@ -84,7 +84,8 @@ summary: Compact map of mgbrowser project decisions and evidence.
   the separate container-unit dependency/renderer change remains deferred.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
-- `docs/ATOMIC_INLINE.md`: v0.9.16 candidate for definite-width ordinary
+- `docs/ATOMIC_INLINE.md`: shipped v0.9.16 at
+  `8ce13a3786501b376dbd594b07cacfddf3d604f6` for definite-width ordinary
   inline-block and normal-flow inline-flex/grid outer allocation. The original
   controls and separately adopted addendum were each frozen before actual
   pre-change failures and their implementation. Shared containing-width
@@ -97,8 +98,11 @@ summary: Compact map of mgbrowser project decisions and evidence.
   Exactly nineteen reviewed new matches were manually added: 338 protected
   static passes and the same 949 runnable cases. Order-box remains FAIL with
   a real pixel worsening, 40,551 to 41,758; it is not omitted or called improved.
-  No authored result counts as a WPT pass. Exact-source CI/site, tagged release,
-  public install/update and public worker/native/CDP repeats remain required.
+  No authored result counts as a WPT pass. All eight exact-source CI/hosting
+  checks, tagged release, public install/reinstall, actual v0.9.15 update/no-op,
+  both frozen public-worker suites, thirteen public native helpers and separate
+  physical/atomic 1x/2x proofs pass; all twelve layout images were inspected.
+  See [the public closeout](memory/logs/2026-10-23.md#v0916-public-release-closeout).
   Auto/intrinsic/table/replaced/button behavior remains regression scope;
   inner flex/grid formatting and baseline algorithms are unchanged.
   F-003/F-005/F-016/F-026 and formal MVP are unfinished.
