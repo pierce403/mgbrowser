@@ -47,7 +47,10 @@ summary: Compact map of mgbrowser project decisions and evidence.
 - `docs/WPT_WINDOW_PARSING.md` and `tools/wpt/window/corpus.json`: separate
   pre-execution freeze of sixteen genuine upstream files / 79 source calls;
   source-only checker, fixed report/resource policy and future baseline gates.
-  Runner, executed outcomes and a separate Window score are not implemented.
+  `docs/WPT_WINDOW_RUNNER.md` and first-baseline.json record the reviewed first
+  local real-Browser run: 0/16 passing files, 0/79 actual final subtests passing,
+  all test-body getPropertyValue failures, zero infrastructure/PENDING outcomes.
+  Continuous Window CI/public scoring remains pending; engine fixes are separate.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

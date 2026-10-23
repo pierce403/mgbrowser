@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "status": "REVIEWED_FIRST_LOCAL_BASELINE",
+  "scope": "Historical local upstream Window baseline; not the static score, an installed-binary score, a current-commit CI result or an automatic expectation update",
+  "local_date": "2026-10-22",
+  "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea",
+  "engine_source_sha256": "25886fd9af81713fcd542c0625da1d4b1cecc4e61340d8fd690d18a67d9e315c",
+  "measurement": {
+    "started_utc": "2026-10-23T06:30:34.269855+00:00",
+    "git_commit": "3adc1d8eec7bbd16b8212c67100d00dd9efeda0b",
+    "git_dirty": true,
+    "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+    "observer_contract": "PinnedWindowHarnessOutputDisabledV1",
+    "source_fingerprint": "50c87405676a7fa1b1b1eeca21d01476e9f3cebbfafbabd2364d9260f512560a",
+    "manifest_sha256": "5223099747ed3b1669f311faa5007abb2c037bebb90aa7411b67c6470b4518d0",
+    "binary": {
+      "bytes": 15054080,
+      "sha256": "591d34c0e8327baafac184f167b01b9450cc908d23854be0413cb4c3df2d67ad"
+    },
+    "font": {
+      "bytes": 759720,
+      "sha256": "b4c632e3cdf9acc7f28758fb5a323c8524d7fc6660d46904d9b6cbe2809c419c"
+    },
+    "distributions": {
+      "actual_final_subtests": {
+        "Fail": 79,
+        "NotRun": 0,
+        "Pass": 0,
+        "PreconditionFailed": 0,
+        "Timeout": 0
+      },
+      "attempted_partial_files": 0,
+      "files": {
+        "CRASH": 0,
+        "ERROR": 0,
+        "FAIL": 16,
+        "PASS": 0,
+        "PENDING": 0,
+        "PRECONDITION_FAILED": 0,
+        "TIMEOUT": 0,
+        "UNSUPPORTED": 0
+      },
+      "files_with_final_inventory": 16,
+      "partial_unobserved_subtests": "unknown",
+      "source_prospective_calls": 79
+    },
+    "results": [
+      {
+        "test": "css/css-flexbox/parsing/flex-basis-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 7,
+        "final_counts": {
+          "fail": 7,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 7
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-basis-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 8,
+        "final_counts": {
+          "fail": 8,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 8
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-direction-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 2,
+        "final_counts": {
+          "fail": 2,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 2
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-direction-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 4,
+        "final_counts": {
+          "fail": 4,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 4
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-flow-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 2,
+        "final_counts": {
+          "fail": 2,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 2
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-flow-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 7,
+        "final_counts": {
+          "fail": 7,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 7
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-grow-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 4,
+        "final_counts": {
+          "fail": 4,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 4
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-grow-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 4,
+        "final_counts": {
+          "fail": 4,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 4
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 6,
+        "final_counts": {
+          "fail": 6,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 6
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-shrink-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 4,
+        "final_counts": {
+          "fail": 4,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 4
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-shrink-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 4,
+        "final_counts": {
+          "fail": 4,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 4
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 16,
+        "final_counts": {
+          "fail": 16,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 16
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-wrap-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 2,
+        "final_counts": {
+          "fail": 2,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 2
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/flex-wrap-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 3,
+        "final_counts": {
+          "fail": 3,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 3
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/order-invalid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 3,
+        "final_counts": {
+          "fail": 3,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 3
+        }
+      },
+      {
+        "test": "css/css-flexbox/parsing/order-valid.html",
+        "status": "FAIL",
+        "basis": "Assertions",
+        "raw_harness_status": "Ok",
+        "declared_calls": 3,
+        "final_counts": {
+          "fail": 3,
+          "final_only": 0,
+          "not_run": 0,
+          "pass": 0,
+          "precondition_failed": 0,
+          "timeout": 0,
+          "total": 3
+        }
+      }
+    ]
+  },
+  "evidence": {
+    "report_sha256": "2f1e9751cc58432aaecf67099e0e8aacb67d9cd4c2917639e9ebf57d1ba537ef",
+    "process_sha256": "de5b1b19d3977f20b7d5afc8414a0907b3ddc6345ae58694a68937ce46e198db",
+    "independent_data_audit_sha256": "bbade0d1757942d89f47fd6019bdfff0f5cff39b7c36a410a8317fff449664c8",
+    "cleanup_confirmed": true,
+    "http_get_200": 64,
+    "distinct_origins": 16,
+    "remaining_reserved_bytes": 0
+  },
+  "diagnosis": {
+    "actual_message": "not a callable function",
+    "message_count": 79,
+    "valid_call_site": "css/support/parsing-testcommon.js:27:51",
+    "invalid_call_site": "css/support/parsing-testcommon.js:49:49",
+    "missing_api": "element.style.getPropertyValue",
+    "meaning": "Caught test-body exceptions with genuine harness Ok and Fail rows; not demonstrated CSS grammar comparison failures"
+  },
+  "limitations": [
+    "Measured with uncommitted new tooling, honestly retaining git_dirty:true and its complete pre-commit source fingerprint; later documentation and this historical record are not retroactively part of that snapshot.",
+    "Original 16-file/79-call inputs, all original helpers, existing resource limits and the production engine are unchanged.",
+    "No Window score ratchet, every-commit Window execution gate or public Window report endpoint is installed by this record.",
+    "Keep the static 1011-case score and both authored control suites separate. Browser fixes require a new feature release and public installer verification."
+  ]
+}

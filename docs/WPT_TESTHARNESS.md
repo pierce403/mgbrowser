@@ -2,7 +2,7 @@
 
 Original plan: 2026-10-21. The 1,011-case flexbox reftest corpus remains separate.
 The timer and bounded Window-error increments are shipped; see the receipts below.
-No JavaScript testharness result or complete Window readiness is claimed here.
+No complete Window readiness or continuous public Window score is claimed here.
 Remaining browser services require separate feature contributions and versioned
 releases after the published expanded static baseline.
 
@@ -38,8 +38,12 @@ Neither its authored controls nor the old sixteen form a scored upstream cohort.
 The [first genuine Window cohort](WPT_WINDOW_PARSING.md) is now separately
 source-frozen before execution: all sixteen direct-child declared-value parsing
 files and 79 prospective literal subtests. Its source-only validator is not an
-execution result. Implement the frozen real-Browser report/mapping and complete
-baseline before CSSOM fixes. No Window score or new upstream pass exists yet.
+execution result. The [real-Browser runner](WPT_WINDOW_RUNNER.md) now preserves
+a reviewed first local 0/16-file, 0/79-final-subtest baseline. All genuine test
+bodies fail at style.getPropertyValue; there are no infrastructure errors,
+timeouts, crashes or PENDING files. Continuous Window scoring/publication is
+still pending and no new upstream pass exists. The baseline precedes CSSOM
+fixes, which remain separate released browser contributions.
 
 ## Immutable input
 

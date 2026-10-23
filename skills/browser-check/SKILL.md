@@ -329,7 +329,17 @@ For the first scored Window lane, follow the pre-execution source/report freeze
 in docs/WPT_WINDOW_PARSING.md. Run its fixed source-only checker and separate
 unit discovery in tools/wpt/window; the existing top-level discovery does not
 recurse into that un-packaged directory. Source calls are not delivered rows.
-Keep its future Browser baseline/score separate from static WPT and both authored
+Use docs/WPT_WINDOW_RUNNER.md and the fixed tools/wpt/window/run.py owner to
+reproduce its real-Browser run into a new ignored output directory. It builds
+the normal locked/offline release example, retains all sixteen slots, original
+helpers, exact source/font/binary pins and the existing shared limits. Review
+accepted records, raw resource/diagnostic evidence, original-body HTTP audit,
+clock accounting and separate internal/outer cleanup before adopting a result.
+No executable override, filtering, retry or automatic score rewrite is offered.
+The first local historical baseline is 0/16 files and 0/79 final subtests passing;
+all fail through caught getPropertyValue test-body exceptions, not proven CSS
+comparison mismatches. Continuous Window CI/publication is a separate next gate.
+Keep the Browser baseline/score separate from static WPT and both authored
 control suites. No CSSOM fix before all sixteen baseline outcomes; no fabricated
 missing rows, outcome-based exclusions, widened profile or combined headline.
 The source checker alone proves neither execution nor resource feasibility.

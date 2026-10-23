@@ -92,10 +92,15 @@ Static scoring stays 317/632/62 of 1,011. No WPT pass or criterion is added.
 The separate pre-execution freeze in docs/WPT_WINDOW_PARSING.md selects all
 sixteen pinned declared-value parsing files, with twenty original execution/
 license inputs and 79 source-declared calls. The source checker verifies bytes,
-selection and literal names without JavaScript execution. The Browser runner,
-complete baseline and separate Window score are not implemented; no observed
-row, pass or criterion is added. Engine fixes must follow that baseline in
-separate released contributions, preserving the existing static lane.
+selection and literal names without JavaScript execution. The separate
+docs/WPT_WINDOW_RUNNER.md real-Browser owner now records a reviewed first local
+baseline: 0/16 passing files and 0/79 passing actual final subtests, with no
+ERROR/TIMEOUT/CRASH/PENDING. All failures are caught test-body exceptions at
+style.getPropertyValue, not proven CSS comparison failures. Exact source/body,
+resource/clock and cleanup evidence is retained. This tooling adds no browser
+behavior, upstream pass or checked criterion. A continuous Window gate/public
+report remains pending; its historical baseline is separate from the static
+score. Engine fixes follow in separate released contributions.
 
 ## F-025 : Google News desktop reading
 

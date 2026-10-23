@@ -233,8 +233,10 @@ requires diagnostic-free real Browser painting and exact pixel relations.
 Conservative prerequisite failures are not proof that every such image is
 incorrect; both failures and unsupported protocols stay visible. Current-source website scores may
 advance beyond an installed release; the report identifies the exact tested commit.
-[Selection and review](docs/WPT_EXPANSION.md). JavaScript testharness integration
-is a [separate planned milestone](docs/WPT_TESTHARNESS.md), not current coverage.
+[Selection and review](docs/WPT_EXPANSION.md). General JavaScript testharness
+integration and continuous Window scoring remain a
+[separate milestone](docs/WPT_TESTHARNESS.md); the first local measurement below
+does not complete them.
 The [bounded observer](docs/WPT_OBSERVER.md) now has a locally verified
 implementation and sixteen frozen non-scoring controls; see
 [scope and release evidence](docs/WPT_OBSERVER_STATUS.md). It is not a scored
@@ -244,8 +246,15 @@ The historical v0.9.11 public-prefix measurement remains prefix evidence only.
 The [first genuine Window cohort](docs/WPT_WINDOW_PARSING.md) is separately
 source-frozen: sixteen original declared-value parsing files with 79 prospective
 subtests. Its source-only checker verifies selection/bytes/names, not execution.
-The real-Browser runner, complete baseline and separate score are still pending.
-No new upstream pass is claimed; browser fixes follow in separate releases.
+Its [real-Browser runner](docs/WPT_WINDOW_RUNNER.md) now has a reviewed first
+local baseline: **0/16 files passing; 0/79 actual final subtests passing**,
+without infrastructure errors, timeouts, crashes or pending files. All fail on
+the missing `style.getPropertyValue()` method, before CSS comparisons. The
+[historical snapshot](tools/wpt/window/first-baseline.json) retains the exact
+measured source and its pre-commit dirty status. Continuous Window CI/public
+scoring remains pending; these numbers are not the static score or an installed-
+binary measurement. No new upstream pass is claimed. Browser fixes follow in
+separate releases.
 
 The installer uses `~/.local/bin` (override with `MGBROWSER_INSTALL_DIR`) and adds
 a user-level application launcher and Mg icon. Follow its PATH instruction if

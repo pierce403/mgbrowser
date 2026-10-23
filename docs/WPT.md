@@ -297,9 +297,13 @@ verification policy.
 The genuine JavaScript lane follows the separate readiness increments in
 [WPT_TESTHARNESS.md](WPT_TESTHARNESS.md). The first sixteen-file declared-value
 cohort and report/resource policy are now [source-frozen](WPT_WINDOW_PARSING.md)
-before execution. Its 79 literal calls are prospective, not observed rows or
-passes. The Browser runner, baseline and separate Window score remain pending;
-none is merged into this static score or claimed as full testharness support.
+before execution. The [separate real-Browser runner](WPT_WINDOW_RUNNER.md) now
+has a reviewed first local baseline: 0/16 passing files and 0/79 passing actual
+final subtests, without infrastructure errors, timeouts, crashes or PENDING.
+Every test body fails at the missing style.getPropertyValue call, not a proven
+CSS grammar mismatch. Its historical source-bound snapshot remains distinct
+from a future continuous Window score/public report. No denominator is merged
+into this static score and full testharness support is not claimed.
 
 1. Establish this truthful frozen baseline and keep website results current.
 2. Diagnose failing supported cases using their original sources, screenshots

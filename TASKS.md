@@ -38,9 +38,15 @@ following dependency order, updating evidence as each increment ships:
    with cold CI validation completed in 7m42s. Production engine, corpus and
    expectations remain unchanged. The earlier denied native-log API stays
    stopped; normal publication succeeded without alternate credentials/settings.
-   **Active:** build the separately frozen first upstream Window runner/baseline,
-   following [docs/WPT_WINDOW_PARSING.md](docs/WPT_WINDOW_PARSING.md), under the
-   existing restricted-worker envelope. Historical readiness increments below
+   **Active:** publish/verify the separately frozen first upstream Window runner
+   and reviewed local baseline, then wire its separate continuous CI/public
+   score before the first CSSOM feature fix. Follow
+   [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
+   [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
+   envelope. The first local measurement is 0/16 passing files and 0/79 passing
+   actual final subtests, with zero infrastructure/PENDING outcomes. All fail at
+   the missing style.getPropertyValue call; no CSS grammar outcome is inferred.
+   Historical readiness increments below
    remain distinct from scored upstream coverage (F-026/F-008/F-016).
    **Shipped v0.9.7** at `3afaabdfacb6305d7c8637072fef60bd77d692ee`: bounded
    function timers pass exact-commit CI, release/public installation, actual
@@ -125,9 +131,11 @@ following dependency order, updating evidence as each increment ships:
    *-valid.html / *-invalid.html: sixteen files, twenty original execution/license
    inputs and 79 prospective declarations, including valid shorthand/container-
    unit cases. The fixed source-only checker validates this manifest, not browser
-   compatibility. **Next:** implement its real-Browser adapter, pure mapping
-   controls and complete sixteen-file baseline before CSSOM/engine changes.
-   No Window outcomes/score are adopted yet. Never invent passes from authored
+   compatibility. The real-Browser adapter/owner and pure controls now produce
+   the reviewed complete local baseline above, with all original inputs and
+   limits unchanged. **Next:** finish exact-source publication, then separately
+   wire/review the continuous Window gate/report before browser CSSOM changes.
+   The historical baseline is not yet a current public Window score. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey

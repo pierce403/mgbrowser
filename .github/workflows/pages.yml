@@ -20,7 +20,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Validate the separate source-only Window cohort freeze
+      - name: Validate Window source and pure runner controls
         run: |
           python3 -m unittest discover -s tools/wpt/window -p 'test_*.py'
           python3 tools/wpt/window/check_manifest.py
