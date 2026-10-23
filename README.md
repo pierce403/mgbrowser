@@ -21,9 +21,14 @@ failures retained in `flex-valid.html`. The manually strengthened Window ratchet
 protects the fifteen passing files; no assertion, input or resource limit is
 relaxed. Authored controls add no upstream denominator or passes.
 
-Consult the [dated records](memory/logs/2026-10-23.md) for separate publication,
-public install/update and native/CDP verification; local regressions and Window
-results do not establish those delivery gates. The installer selects the
+Published as [v0.9.14](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.14)
+at `dfddb067b92bc56a06e721a99b183f56225f6177`. Exact-source Rust, JSPLAN,
+both website score lanes and publication checks pass. The normal release,
+checksum-verified public install/reinstall, delivered CSSOM/worker/session and
+desktop/icon checks, actual v0.9.13 update/no-op, both frozen public-worker
+suites and all thirteen existing native/CDP helpers pass. See the
+[public closeout](memory/logs/2026-10-23.md#v0914-public-release-closeout)
+for separate delivery evidence. The installer selects the
 [latest actually published release](https://github.com/pierce403/mgbrowser/releases/latest).
 Public style methods beyond `getPropertyValue`, indexed/enumerated interfaces,
 constructors/prototypes, generic expandos, computed/rule styles and

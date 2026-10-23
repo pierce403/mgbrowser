@@ -140,3 +140,11 @@
   retained lifecycle/click checks exercise actual first parse, native atoms and
   cumulative requested-System storage; they do not prove complete cooperative
   parser budgeting. Curator records these verified distinctions in browser-check.
+- 2026-10-23: In the complete static cohort, failed script pages can lack render
+  metadata while still retaining actual worker logs. A data reviewer derived
+  from metadata alone missed fifteen longstanding typed failures and three
+  newly typed balance failures. Source-derived membership plus actual log
+  inventory covers52 scripted pages/156 phase reports per run, retaining the
+  older37-page subgroup. The corrected pure-data review passes with unchanged
+  producer/assertions/score. Do not infer an empty runtime from absent render
+  metadata or substitute old pixels for a current typed failure.

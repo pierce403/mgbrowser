@@ -29,14 +29,20 @@ Completed tooling (2026-10-23): continuous Window score/public reports pass all
 eight exact-source checks at `cab93756337623ed65a5b809401fb977c075c7a1`, twelve
 public HTTPS asset/report checks, separate CI raw-evidence review and visual
 acceptance. Actual coupled publication finishes within the unchanged wait.
-Active separate browser contribution: v0.9.14 parser-backed modern element-style
-declarations under docs/CSSOM.md. Full local debug/release and frozen JSPLAN
-gates pass. Reviewed Window coverage is15/16 files and77/79 final subtests,
-with two genuine flex-valid assertions still failing. The manual ratchet
-protects fifteen files. Finish normal release/install/update and existing
-native gates before calling this increment delivered.
-Never widen a resource
-profile, synthesize missing rows or merge the two score lanes.
+Completed browser increment (2026-10-23): v0.9.14 parser-backed modern
+element-style declarations ship at `dfddb067b92bc56a06e721a99b183f56225f6177`
+under docs/CSSOM.md. Full local debug/release, frozen JSPLAN, all eight
+exact-source CI/hosting checks and normal tagged release pass. Public
+install/reinstall/CSSOM/worker/session/desktop/icon checks, actual v0.9.13
+update/no-op, both frozen public-worker suites and all thirteen public native
+helpers pass. No v0.9.14 release gate remains. Separate current-source scores
+are static 317 PASS / 632 FAIL / 62 UNSUPPORTED of 1,011 and Window 15/16 files,
+77/79 final subtests; two genuine flex-valid assertions still fail and the manual
+ratchet protects fifteen files. Full CSSOM/F-016/F-026/formal MVP remain open.
+The broader goal remains
+active: review the next bounded feature before implementation, preserving its
+acceptance and release gates. Never widen a resource profile, synthesize missing
+rows or merge the two score lanes.
 
 Current authorized request (2026-09-23): integrate genuine pinned upstream Web
 Platform Tests and maximize honest passing coverage. Follow docs/WPT.md and

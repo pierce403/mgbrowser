@@ -57,13 +57,22 @@ summary: Compact map of mgbrowser project decisions and evidence.
   coupled publication requires its own exact-source verification.
   That coupled gate now passes at cab9375: all eight exact-source checks,
   separate current reports/public12 parity, retained CI data and visual checks.
-- `docs/CSSOM.md`: active separate modern element-style declared-value bridge,
+- `docs/CSSOM.md`: shipped v0.9.14 modern element-style declared-value bridge at
+  `dfddb067b92bc56a06e721a99b183f56225f6177`,
   using existing pinned Stylo with no new worker profile/dependencies. Frozen
   authored API/quota/fresh/retained-worker and full local debug/release checks
-  pass. Reviewed Window coverage improves to15/16 files and77/79 final subtests;
+  pass. Reviewed Window coverage improves to 15/16 files and 77/79 final subtests;
   two genuine flex-valid assertions remain failing, fifteen pass files are
-  manually protected. v0.9.14 release/public delivery gates remain pending.
-  Full CSSOM and F-016/F-026/MVP remain incomplete.
+  manually protected. Exact-source CI/site/release, public install/reinstall,
+  actual v0.9.13 update/no-op, both frozen public-worker suites and all thirteen
+  public native helpers pass; no v0.9.14 release gate remains. Separate static
+  scoring stays 317/632/62 of 1,011. Full CSSOM and F-016/F-026/MVP remain incomplete;
+  the active broader goal next requires a separately reviewed feature increment.
+- `docs/PHYSICAL_JUSTIFY.md`: next pre-implementation layout contract for
+  physical left/right content justification. Existing static failures motivate
+  axis-aware flex/grid mapping, with explicit reversed-flex Safe refusal until
+  correct overflow fallback exists. No new implementation or passes yet;
+  the separate container-unit dependency/renderer change remains deferred.
 
 - `docs/MVP.md`: proposed product boundary, architecture and release gates.
 - `docs/DEPENDENCIES.md`: adopted Rust-only TLS/font/image policy and initial Cargo configuration.

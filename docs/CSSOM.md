@@ -1,19 +1,21 @@
 # Modern element-style declarations
 
-2026-10-23: in-progress browser increment, after cab9375 continuous Window
+2026-10-23: shipped as v0.9.14 at
+`dfddb067b92bc56a06e721a99b183f56225f6177`, after cab9375 continuous Window
 scoring passed exact-source CI, public-report parity and visual verification.
-The behavior and authored controls below are frozen before implementation.
+The behavior and authored controls below were frozen before implementation.
 The implementation passes full local debug/release regressions and the frozen
-JSPLAN comparison. The unchanged upstream Window selection improves from0/16
-files and0/79 final subtests to15/16 files and77/79 final subtests; two real
+JSPLAN comparison. The unchanged upstream Window selection improves from 0/16
+files and 0/79 final subtests to 15/16 files and 77/79 final subtests; two real
 flex-valid sign()/container-unit calc assertions remain failing. Full raw-data,
-resource, HTTP, clock and cleanup review supports a manual15-file pass ratchet.
-Exact-source publication and installed-release acceptance are separate gates
-recorded in the dated log, not implied by those local results.
+resource, HTTP, clock and cleanup review supports a manual 15-file pass ratchet.
+Separate exact-source publication and installed-release acceptance now pass;
+they are recorded in the [dated log](../memory/logs/2026-10-23.md), not inferred
+from those local results. No v0.9.14 release gate remains.
 
 ## Behavior and implementation boundary
 
-The scoped browser increment is to provide parser-backed modern `element.style`
+The scoped browser increment provides parser-backed modern `element.style`
 named property reads/writes, `cssText` and callable `getPropertyValue`.
 Reuse the exact locked Rust Stylo declaration grammar and serializer already
 used by Sparkle, not an eight-property parser, expected-result table, computed
@@ -140,6 +142,18 @@ frozen364-outcome JSPLAN gates pass separately. One earlier existing fatal-
 rejection control hit EOF; the unchanged isolated and fresh full runs pass.
 Its first failure remains recorded without claiming a proven cause or raising
 limits. Authored results add no WPT passes.
+
+Completed delivery: all eight exact-source CI/hosting checks and the tagged
+release workflow pass. The 8,098,810-byte public archive fits the unchanged
+8 MiB ceiling, with verified SHA-256
+`72044de1e34ab3bcd41a4669bdbcc02bdc7351e5efb8428a72ff35672cf45c42`.
+The exact public curl install/reinstall, installed CSSOM behavior, version/About,
+worker/session selftests, desktop/icons, actual v0.9.13 update/no-op, both frozen
+public-worker suites and all thirteen public native/CDP helpers pass. Separate
+current-source static scoring remains 317/632/62 of 1,011; Window scoring remains
+15/16 files and 77/79 actual final subtests. These are not installed-binary or
+full-WPT scores. Full CSSOM and F-016/F-026/MVP remain open; the next feature
+requires separate review before implementation.
 
 Primary review: CSSOM draft 2026-10-13 sections3/6.6.1/7.1,
 https://drafts.csswg.org/cssom/ ; WebIDL living standard 2026-10-19 sections

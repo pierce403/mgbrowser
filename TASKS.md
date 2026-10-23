@@ -49,17 +49,27 @@ following dependency order, updating evidence as each increment ships:
    twelve public HTTPS paths, full retained Window CI evidence and visual
    verification pass. Actual cold Window209.822s build/214.191s owner and the
    coupled publication path fit unchanged limits; no browser behavior changed.
-   **Active:** finish delivery of the separately frozen modern element-style
-   declaration bridge in [docs/CSSOM.md](docs/CSSOM.md). Full local debug/release,
-   fresh/retained-worker and frozen JSPLAN gates pass. Independently reviewed
-   Window coverage is15/16 passing files and77/79 actual final subtests; preserve
-   the two genuine flex-valid failures and the manually protected fifteen files.
-   Complete fresh static scoring and normal feature release,
-   installation/update and native acceptance. Preserve the fixed score lanes. Follow
+   **Shipped v0.9.14** at `dfddb067b92bc56a06e721a99b183f56225f6177`: the
+   separately frozen modern element-style declaration bridge in
+   [docs/CSSOM.md](docs/CSSOM.md). Full local debug/release, fresh/retained-worker,
+   frozen JSPLAN and all eight exact-source CI/hosting checks pass. Normal tagged
+   release, public install/reinstall/CSSOM/worker/session/desktop/icon checks,
+   actual v0.9.13 update/no-op, both frozen public-worker suites and all thirteen
+   public native helpers pass. No v0.9.14 release gate remains. Independently
+   reviewed current-source scores remain static 317/632/62 of 1,011 and
+   Window 15/16 passing files, 77/79 actual final subtests; preserve the two genuine
+   flex-valid failures and the manually protected fifteen files. **Next:** the
+   pre-implementation [physical justify-content contract](docs/PHYSICAL_JUSTIFY.md)
+   targets context-aware left/right alignment using the existing Rust layout
+   adapter. Record authored pre-feature failures before changing behavior;
+   no new pass or implementation is inferred. Container-unit grammar needs a
+   separate dependency/renderer review and remains deferred. Preserve the
+   smallest remaining feature increment's acceptance gates;
+   full CSSOM/F-016/F-026/MVP remain open. Preserve the fixed score lanes. Follow
    [docs/WPT_WINDOW_RUNNER.md](docs/WPT_WINDOW_RUNNER.md) and the unchanged
    [contract](docs/WPT_WINDOW_PARSING.md), under the existing restricted-worker
-   envelope. The first local measurement is 0/16 passing files and 0/79 passing
-   actual final subtests, with zero infrastructure/PENDING outcomes. All fail at
+   envelope. The historical first local measurement was 0/16 passing files and
+   0/79 passing actual final subtests, with zero infrastructure/PENDING outcomes. All failed at
    the missing style.getPropertyValue call; no CSS grammar outcome is inferred.
    Historical readiness increments below
    remain distinct from scored upstream coverage (F-026/F-008/F-016).
@@ -150,7 +160,9 @@ following dependency order, updating evidence as each increment ships:
    the reviewed complete local baseline above, with all original inputs and
    limits unchanged. Cold provisioning/build now passes within existing
    deadlines. Continuous exact-source CI/report/public verification now passes
-   at `cab9375`; parser-backed CSSOM is the next separate browser increment.
+   at `cab9375`; the separately reviewed parser-backed CSSOM increment has since
+   shipped as v0.9.14 above. Further browser work requires its own feature review,
+   frozen evidence and public release acceptance, not an inferred implementation.
    The historical baseline is not a
    substitute for a current public Window report. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
