@@ -360,6 +360,10 @@ and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
 **Ordinary Playwright compatibility remains unfinished.**
 Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
+Fresh public v0.9.19 still fails target auto-attachment/download initialization,
+before title or locators. The probe now explicitly disables page scripts rather
+than assuming a default. Worker-backed Runtime is the next bounded increment;
+no evaluation or client compatibility is claimed yet.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
 [signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 

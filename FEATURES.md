@@ -215,9 +215,11 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
 The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. Public v0.9.0 passes discovery but still fails auto-attachment
+tools/playwright. Fresh public v0.9.19 passes discovery but still fails auto-attachment
 and download-policy initialization, before title or locators. See
-docs/PLAYWRIGHT.md. A passing custom CDP client is not a substitute for this gate.
+docs/PLAYWRIGHT.md for the corrected explicit scripts-disabled baseline and the
+next worker-backed Runtime contract. No acceptance checkbox changes. A passing
+custom CDP client is not a substitute for this gate.
 
 ## F-023 : Detachable tabs and left/right page groups
 

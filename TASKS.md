@@ -271,6 +271,15 @@ following dependency order, updating evidence as each increment ships:
 3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
+   Fresh public v0.9.19 with explicit `--disable-scripts` still fails attachment
+   and download-policy initialization, before title/locators. First implement
+   the [main-world Runtime foundation contract](docs/PLAYWRIGHT.md#first-runtime-increment-implementation-acceptance-contract),
+   after freezing its typed values/admissions and negative controls. Respect
+   effective script permission, real restricted-worker execution and the parent
+   publication/charge boundary. Promise awaiting, utility worlds and the stock
+   locator's conflicts with the 64 KiB worker/256 KiB CDP limits require separate review;
+   no stubs or unreviewed limit changes. This tooling correction
+   adds no browser capability or completed feature gate.
 4. Finish the versioned renderer/navigation/image corpus and missing transport
    cancellation (F-003/F-004/F-005), then signed-out News fidelity and the actual
    Google result/destination journey (F-025/F-010).

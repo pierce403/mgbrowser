@@ -12,6 +12,11 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.91.1
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - name: Check explicit Playwright probe configuration without a browser
+        run: node tools/playwright/configuration.test.mjs
       - name: Install pinned toolchain
         run: rustup toolchain install 1.91.1 --profile minimal --component rustfmt
       - name: Check formatting and dependency boundary

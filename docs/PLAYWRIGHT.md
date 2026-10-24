@@ -10,6 +10,7 @@ Use Linux, Node.js 20 or newer, Xvfb and an actual packaged/installed mgbrowser:
 
 ```sh
 npm --prefix tools/playwright ci --ignore-scripts --no-audit --no-fund
+node tools/playwright/configuration.test.mjs
 node tools/playwright/acceptance.mjs /absolute/path/to/mgbrowser
 ```
 
@@ -19,6 +20,9 @@ The checked-in client source is unmodified. The harness starts only the supplied
 mgbrowser binary, an owned Xvfb, a temporary HOME/XDG profile and a loopback HTTP
 fixture on an ephemeral port. It does not use port 7878 or an existing desktop
 session. Automatic updates and page scripting are disabled.
+The launch configuration passes `--disable-scripts` explicitly: production
+scripting has defaulted on since v0.9.4. The summary records the actual arguments
+from that same configuration; a remembered default is not evidence of permission.
 
 Each run prints its ignored `tmp/playwright-acceptance-*` directory. It retains
 native startup logs, HTTP and WebSocket client results, `pw:protocol` traffic,
@@ -47,6 +51,39 @@ execution contexts exist. A 404 is a delivered HTTP response, not necessarily a
 The command exits nonzero when any required step fails. There are no `xfail`
 rules, accepted unsupported-method responses or client patches that turn this
 baseline green. It is intentionally not added to the currently passing CI suite.
+The pure configuration regression runs separately in CI; it
+neither launches a browser nor changes the failing compatibility assertions.
+
+## Observed public v0.9.19 baseline: 2026-10-23
+
+The fresh probe uses Node 24.19.0, unchanged playwright-core 1.58.2 and the verified
+public v0.9.19 binary from release commit
+`9179426360904f01ab3b4394f7699c7ba4c70da9`, SHA-256
+`242819ede1aac0710490bf76a94cf00256193f3dbd68aad58e295ee30b2f5378`.
+The corrected harness explicitly disables scripting and automatic updates.
+Both configuration regressions pass; the actual client journey **fails**:
+
+- HTTP discovery and direct browser WebSocket reach `Browser.getVersion`.
+- Both fail during connection at `Target.setAutoAttach` with `-32601`.
+- Both raw logs also retain the parallel `Browser.setDownloadBehavior` error.
+- Each result has `passed:false`, no completed steps and no client events.
+  Exactly one startup fixture `GET /` returns 200. It is not a Playwright
+  navigation, title, locator, screenshot or error-event pass.
+
+Evidence: `tmp/playwright-acceptance-AtoPCC`; bounded outer receipt
+`tmp/oct23-playwright-v0919-baseline-a/receipt.json`, SHA-256
+`6a1ea9cc3bd4d037f5b261b7a7e910218e0e05dba2fccb86c2d0ec559b8ddb5e`.
+The harness exits 1 normally in 1.355s. An independent owner enforces 165s, 2 MiB
+outer output and polled artifact bounds of 512 entries, 8 MiB/file, 64 MiB total.
+It terminates the owned inherited process group before reaping its direct
+leader, even after normal nonzero exit. This is not an OS disk quota or proof
+of individually reaping every descendant. Xvfb's retained display-collision
+warnings do not prevent the owned native window loading the fixture.
+
+Before this correction, the harness reported `scriptsEnabled:false` but omitted
+`--disable-scripts`. Do not use that old launch configuration to claim scripting
+was disabled on a default-on release. The older observations below retain their
+original release scope; the corrected19 run is the current public baseline.
 
 ## Observed public v0.7.2 baseline: 2026-09-17
 
@@ -114,11 +151,78 @@ this exact client/workflow before changing its status.
 
 ## Proposed implementation sequence
 
-This is a source-derived plan, not adopted behavior or completed acceptance.
-The automation-script permission decision remains open. Existing scripting
-opt-in is unchanged; the proposed first implementation requires both
-`--remote-debugging-port=0` and `--enable-scripts`. A debugging port must not
-silently enable scripting. All evaluation stays in the restricted worker.
+This is a source-derived plan, not adopted browser behavior or completed
+acceptance. The next bounded increment is a main-world synchronous Runtime
+foundation. Its permission policy requires remote debugging **and effective
+page scripting enabled**, whether by the current default or `--enable-scripts`.
+`--disable-scripts` must remain effective: debugging alone never starts,
+restarts or grants execution to a realm. All evaluation stays in the restricted
+worker. The current scripts-disabled client fixture remains unchanged; it will
+need a separately reviewed automation permission/world implementation before
+ordinary Playwright utilities can execute there.
+
+### First Runtime increment: implementation acceptance contract
+
+No Runtime command is implemented by this documentation change. Before changing
+the advertised schema or browser behavior, freeze the typed request/reply/value
+forms, numeric handle/argument/property/serialization admissions and authored
+negative controls against the current sources. Do not infer them from client
+success or enlarge an old bound to fit an injected utility.
+
+- Expose only an existing accepted, usable main-world worker context. Identity
+  includes target, worker session, navigation generation and world, plus client/
+  flattened-session authority. A DOM projection revision is not a new realm.
+  Native tab moves preserve it; navigation, terminal failure and closure destroy
+  it. No replacement worker or second engine merely to satisfy a command.
+  A final transaction can stop the child despite a Ready reply: never publish
+  usable handles/context authority after that worker has stopped.
+- Evaluate supplied source generically with guarded `evaluate_raw`; compile
+  and invoke actual functions with guarded `call_raw`. Root actual returned
+  objects in bounded traced worker storage. Preserve receiver/argument identity;
+  never substitute a parent title/selector or use page-overridable `.call`.
+  Property inspection must have an explicit descriptor/proxy policy, not invoke
+  getters merely to produce a description or pretend unsupported objects empty.
+- Freeze lossless primitive/UTF-16/nonfinite/negative-zero/BigInt representation,
+  by-value cycles/depth/size handling and release/group semantics before coding.
+  The current CDP JSON codec cannot represent lone-surrogate strings: reject
+  unsupported values explicitly unless a separately reviewed codec supports
+  them, never silently replace them with lossy text or literal escape characters.
+  Forged, foreign, stale and already-released IDs need deliberate tests. Revoking
+  client authority and releasing worker roots must stay bounded on disconnect,
+  including during execution or after transaction exhaustion; no cleanup queue
+  with unlimited work or hidden roots.
+- Return genuine caught exceptions without calling page `window.onerror` merely
+  because a Runtime evaluation threw. Distinguish ordinary preceding effects
+  from fatal rejection. Do not reuse the page's uncaught-error adapter blindly.
+  Freeze the injected-source privacy policy before execution: a destination
+  context is not proof of fetched same-origin source provenance. Preserve the
+  sticky conservative error/rejection exposure rules and trusted observer inputs.
+  Only after identity/resource/projection validation and the existing exactly-one
+  active-time charge may results, handles and DOM effects become visible.
+- Use the existing single pending/validation slot shared with activations/tasks.
+  Carry real bounded native control edits and version acknowledgements where
+  needed, preserving newer typing. Runtime evaluation is not a click/submit and
+  grants no user activation or fabricated lifecycle/default action.
+- Preserve modern-v7/legacy-v1 separation and deliberately version a new typed
+  automation envelope. Keep 64 transactions, 64 KiB later frames, 4 MiB replies,
+  32 MiB lifetime wire, 2s active/300s absolute lifetime and all source/opcode/
+  System/DOM/process/work limits. Existing Event/TaskPump cannot acquire script
+  payloads. New admission must account for handles, conversion and cleanup too.
+- Explicitly reject unsupported promise awaiting, utility-world creation,
+  user-gesture and other semantic options in this first synchronous increment.
+  One guarded microtask checkpoint does not implement waiting for timer-settled
+  promises or a separate world. No extra source, work, syscall or parent authority.
+
+Acceptance must span Butane/Sparkle retained state, forced-GC roots and genuine
+exceptions; actual restricted-child frames/resources/terminal cleanup; parent
+single-flight/stale/edit/charge/publication rejection; direct and flattened CDP
+cross-client/context/navigation lifetime; packaged and public native behavior.
+Update only assertions whose formerly unsupported command is genuinely adopted;
+retain unknown-method negatives using an actually unsupported method. The
+user-facing increment requires its normal versioned release. Full F-011/F-016/
+F-024 acceptance, the unchanged client journey and all other features stay open.
+
+### Subsequent integration
 
 1. **Worker foundation, then connection and title on an existing HTTP page.**
    Add typed automation transactions through `scripts.rs`, `page_session.rs`
@@ -143,9 +247,12 @@ silently enable scripting. All evaluation stays in the restricted worker.
    public connection options have no `noDefaults` or `acceptDownloads` escape.
 
 2. **Ordinary locator fill/click on the existing authored form fixture.**
-   The untouched locator utility is 305,013 source bytes; current v2 later
-   messages allow only 64 KiB and click/submit events. Introduce an explicitly
-   bounded automation-message class rather than enlarge the existing event cap.
+   The untouched locator utility is 305,013 source bytes. Current modern-v7
+   Event/TaskPump frames allow only 64 KiB, and the CDP incoming-command ceiling
+   is 256 KiB: the stock utility exceeds both before JSON/wrapper overhead.
+   Full locator support needs a separate explicit transport/resource-policy
+   review, not fragmentation, repeated Init or a silent Event/TaskPump cap change.
+   A dedicated bounded automation-message class alone cannot solve the CDP cap.
    Preserve cumulative source, memory, work, transaction, wire and time bounds;
    execute the exact utility in an owned worker fixture to measure feasibility.
    Its constructor already needs MutationObserver and option-object capture

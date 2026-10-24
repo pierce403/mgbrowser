@@ -8,6 +8,7 @@ import { createWriteStream } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { browserConfiguration } from './configuration.mjs';
 
 const self = fileURLToPath(import.meta.url);
 const repo = fileURLToPath(new URL('../../', import.meta.url));
@@ -158,7 +159,8 @@ async function run(binary) {
     const env = { ...process.env, HOME: profileHome, XDG_CONFIG_HOME: join(profileHome, 'config'), XDG_DATA_HOME: join(profileHome, 'data'), XDG_CACHE_HOME: join(profileHome, 'cache'), XDG_RUNTIME_DIR: runtime, DISPLAY: `:${display.trim()}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/no-session-bus`, MGBROWSER_NO_AUTO_UPDATE: '1' };
     delete env.XAUTHORITY;
     delete env.WAYLAND_DISPLAY;
-    const native = start(executable, ['--remote-debugging-port=0', '--no-auto-update', fixture], { env, stdio: ['ignore', 'pipe', 'pipe'] }, 'browser');
+    const configuration = browserConfiguration(fixture);
+    const native = start(executable, configuration.args, { env, stdio: ['ignore', 'pipe', 'pipe'] }, 'browser');
     let browserLog = '';
     native.stderr.on('data', chunk => { browserLog = (browserLog + chunk).slice(-1048576); });
     const websocket = await until(() => {
@@ -183,7 +185,7 @@ async function run(binary) {
       results.push(result);
       console.log(`${name}: ${result.passed ? 'PASS' : `FAIL at ${result.failedStage}: ${result.error.split('\n')[0]}`}`);
     }
-    const summary = { version, clientVersion, scriptsEnabled: false, fixture, results };
+    const summary = { version, clientVersion, scriptsEnabled: configuration.scriptsEnabled, browserArgs: configuration.args, fixture, results };
     await writeFile(join(directory, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     if (!results.every(result => result.passed)) throw new Error('Playwright acceptance failed; see exact protocol logs. Unsupported behavior is not a passing test.');
     console.log('PLAYWRIGHT_ACCEPTANCE_OK');

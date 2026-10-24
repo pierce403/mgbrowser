@@ -2,7 +2,7 @@
 
 mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The implementation is a bounded subset with stable targets for existing tabs. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
 
-The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Production opt-in page scripts use the restricted [Boa page execution lane](BOA.md), but expose no remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline. There is no Runtime domain in the advertised subset.
+The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Production page scripts use the restricted [Boa page execution lane](BOA.md), enabled by default since v0.9.4 with `--disable-scripts` to opt out, but expose no remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline. There is no Runtime domain in the advertised subset.
 
 ## Connection and scope
 

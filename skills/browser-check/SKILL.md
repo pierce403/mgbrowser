@@ -414,6 +414,13 @@ verify native creation/detachment/closure through actual protocol routes.
 Run the unmodified pinned
 client in tools/playwright before claiming Playwright compatibility: a passing
 Rust CDP journey or successful attachment is insufficient.
+Run its pure configuration regression separately. Record the actual browser
+arguments; the ordinary-client fixture must explicitly pass --disable-scripts,
+not assume an older default. Production scripting defaults on since v0.9.4.
+An outer output limit does not cover the probe's internal protocol/native logs;
+admit those artifacts separately. Its direct-child shutdown alone is not proof
+of descendant cleanup: use finite owned-group supervision when recording a
+bounded baseline, and retain actual nonzero client results as compatibility FAIL.
 
 For script changes, read docs/JAVASCRIPT.md. Keep live execution in the restricted worker; run the language/DOM tests and actual worker isolation selftest before an authorized live page. Use --enable-scripts with /script-redirect and /script-home on the local fixture server: the form must be created by real script execution, then usable through normal input and the external CDP client. Exercise /script-loop, verify a bounded error with readable content, and navigate onward in the same browser over CDP. CI reproduces these local checks. Source/projection rejection must retain the original no-script fallback and discard proposed navigation. Passing authored fixtures or syscall-denial probes is not full ECMAScript conformance or whole-browser sandbox assurance.
 

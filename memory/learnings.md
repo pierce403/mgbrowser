@@ -156,3 +156,11 @@
   logical at 2x. Curator adds this verified procedure to browser-check; full
   inline/baseline/intrinsic support and hidden diagnostics are not inferred.
   See docs/ATOMIC_INLINE.md and the 2026-10-23 public closeout.
+- 2026-10-23: The Playwright probe's scriptsEnabled:false label outlived the
+  production default-off policy. Explicit --disable-scripts and a shared pure
+  launch configuration now bind actual argv to the recorded policy. The fresh
+  public19 probe still genuinely fails attachment on both transports; correcting
+  setup does not add client acceptance. Its internal file logs need separate
+  byte admission, and direct-child shutdown alone is not group cleanup. Curator
+  records these verified boundaries in browser-check without changing the
+  pinned client, compatibility assertions or existing worker/transport limits.

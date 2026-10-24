@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Pinned external-client acceptance, not a browser dependency",
   "scripts": {
-    "test": "node acceptance.mjs"
+    "test": "node acceptance.mjs",
+    "test:configuration": "node configuration.test.mjs"
   },
   "dependencies": {
     "playwright-core": "1.58.2"
