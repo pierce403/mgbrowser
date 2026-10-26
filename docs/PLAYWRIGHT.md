@@ -54,6 +54,36 @@ baseline green. It is intentionally not added to the currently passing CI suite.
 The pure configuration regression runs separately in CI; it
 neither launches a browser nor changes the failing compatibility assertions.
 
+## Observed public v0.9.21 baseline: 2026-10-26
+
+The latest verified public executable comes from immutable release commit
+`321e1e87e47e76102d5cc3a4d010acc24d3eff72`, SHA-256
+`5889e5a5e8e3c6be23154d2ead091f20ce7ab69a95a1e1f8f8d9b13d1b372dbb`.
+Node24.19.0 and the unchanged1.58.2 client use the frozen explicit
+`--disable-scripts` configuration. Both HTTP and browser-WebSocket connections
+fail at `Target.setAutoAttach`; both logs also contain the parallel
+`Browser.setDownloadBehavior` failure. Each result has no completed steps or
+events. Exactly one native startup `GET /` returns200; this is not a Playwright
+navigation/title/locator pass.
+
+Actual client exit1 is retained, with normal completion and confirmed owned-
+group cleanup, in1.729s. The outer evidence owner exits0 only because it verifies
+that failure, not because compatibility passes. Its unchanged producer limits
+are165s/2MiB output,512 artifact entries/8MiB per file/64MiB total. It terminates
+the inherited owned group and reaps its direct Node leader, not every descendant
+individually. Xvfb's display-collision warnings do not prevent native startup.
+
+Evidence: `tmp/playwright-acceptance-B2MX9t`; bounded receipt
+`tmp/oct26-playwright-v0921-baseline-a/receipt.json`, SHA-256
+`094e9a0835322d582122329d9a6e145847534591dd5c5a6813420693cc5b7eaf`.
+The owner pins the executable, Node, configuration/lock and relevant installed
+client modules; its SHA-256 is
+`68d1d41c980bd6816e6b939edf2a3175a474fd25a8134fecc48bde6d28f54034`.
+An earlier owner startup exited before its terminal output could be retained,
+with no output directory or client result: its32MiB input-hash limit could not
+admit the125,989,464-byte configured Node executable. Only that exact pinned host
+input's hash admission became128MiB; no browser or produced-artifact limit changed.
+
 ## Observed public v0.9.19 baseline: 2026-10-23
 
 The fresh probe uses Node 24.19.0, unchanged playwright-core 1.58.2 and the verified
@@ -83,7 +113,7 @@ warnings do not prevent the owned native window loading the fixture.
 Before this correction, the harness reported `scriptsEnabled:false` but omitted
 `--disable-scripts`. Do not use that old launch configuration to claim scripting
 was disabled on a default-on release. The older observations below retain their
-original release scope; the corrected19 run is the current public baseline.
+original release scope; the corrected19 run is historical, superseded above.
 
 ## Observed public v0.7.2 baseline: 2026-09-17
 
@@ -157,8 +187,9 @@ Its focused typed-realm, parent/broker, actual child, native/CDP and local
 Rust/JSPLAN controls pass. Both complete score lanes, normal publication and
 public install/update acceptance pass separately in the
 [public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout).
-The next native target mutation increment is separately scoped in
-[TARGET_LIFECYCLE.md](TARGET_LIFECYCLE.md), with release acceptance pending.
+Native target mutations ship as v0.9.21 under
+[TARGET_LIFECYCLE.md](TARGET_LIFECYCLE.md), with public acceptance recorded in the
+2026-10-26 log. Do not repeat that completed implementation.
 Neither increment completes the client journey. Runtime's permission
 policy requires remote debugging **and effective
 page scripting enabled**, whether by the current default or `--enable-scripts`.
@@ -167,6 +198,55 @@ restarts or grants execution to a realm. All evaluation stays in the restricted
 worker. The current scripts-disabled client fixture remains unchanged; it will
 need a separately reviewed automation permission/world implementation before
 ordinary Playwright utilities can execute there.
+
+### Next meaningful increment
+
+Require both unmodified ordinary connection paths, real existing-page utility-
+world `document.title`, and actual initialized `about:blank` creation/closure
+without changing page A. Autoattachment alone is a prerequisite, not this
+increment's completion boundary. [AUTOMATION_STARTUP.md](AUTOMATION_STARTUP.md)
+freezes its native startup/session contract before implementation.
+
+The following gates remain required, not stub acknowledgements:
+
+- Distinct named globals share one actual DOM and one restricted worker's
+  cumulative policy. Remote debugging grants reviewed client execution, never
+  permission to run inline/external page sources under `--disable-scripts`.
+  Automation-only initialization must preserve the accepted arena, `noscript`
+  semantics and real readiness. Existing `BoaPageRealm::start` reparses/runs
+  page sources and is not that initialization mode. A blank document currently
+  intentionally has no worker/context; do not fabricate one on the parent.
+  Owner/root/group issuance and one pending transaction stay document-wide,
+  not multiplied per world. Adding a second Engine or worker is not world
+  isolation under the current shared profile.
+- Title uses the10,122-byte stock utility,10,257 bytes in its ordinary wrapper,
+  followed by a call requesting `awaitPromise:true,userGesture:true`. Both
+  semantic flags currently reject. The stock utility returns a primitive title
+  directly; accepting await-on-a-non-Promise need not implement waiting for a
+  timer-settled Promise. Carry the option into the worker and inspect the actual
+  result, leaving unsupported real Promise waiting an explicit error. Define and
+  test genuine activation before accepting userGesture; do not ignore it or
+  manufacture a click. Generic worker execution must supply the title.
+- Implement actual Log/Network subscriptions, lifecycle delivery, future named-
+  world registration/creation, focus and media/default behavior requested during
+  page initialization. Default attachment uses `noDefaultViewport:true`; do not
+  unnecessarily pull window-resizing work into this boundary.
+  The named-world request includes the upstream-spelled
+  `grantUniveralAccess:true`: its cross-origin authority requires an explicit
+  decision, not an ignored default. Browser-root parameterless `getTargetInfo`
+  currently rejects zero/multiple pages; genuine browser-target metadata is a
+  further decision before claiming connection with those rosters.
+- Implement finite parent-owned `allowAndName` download behavior with real files,
+  safe paths, actual progress/terminal events, cancellation/failure and teardown.
+  The stock default requests it even though the current form fixture downloads
+  nothing. Add a genuine local download witness; connection success alone cannot
+  prove download support. Keep unsupported options explicit errors.
+
+Freeze an explicit permission/world/download design and additive positive and
+negative controls before those production changes. This documentation adopts
+no new message size, CPU/memory/time allowance or filesystem/syscall authority.
+The full unchanged acceptance must still run and record its actual remaining
+failure; do not turn this partial boundary into F-024 completion.
 
 ### First Runtime increment: implementation acceptance contract
 
@@ -257,9 +337,10 @@ F-024 acceptance, the unchanged client journey and all other features stay open.
    public connection options have no `noDefaults` or `acceptDownloads` escape.
 
 2. **Ordinary locator fill/click on the existing authored form fixture.**
-   The untouched locator utility is 305,013 source bytes. Current modern-v8
-   later frames allow only 64 KiB, and the CDP incoming-command ceiling
-   is 256 KiB: the stock utility exceeds both before JSON/wrapper overhead.
+   The untouched locator utility is 305,013 source bytes. Current automation
+   source/operation admissions are16KiB/32KiB, modern-v8 later frames allow
+   only64KiB, and incoming CDP commands allow256KiB: it exceeds all four
+   before JSON/wrapper overhead.
    Full locator support needs a separate explicit transport/resource-policy
    review, not fragmentation, repeated Init or a silent Event/TaskPump cap change.
    A dedicated bounded automation-message class alone cannot solve the CDP cap.

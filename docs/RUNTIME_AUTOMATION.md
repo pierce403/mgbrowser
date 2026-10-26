@@ -9,8 +9,10 @@ images were inspected. Both complete score lanes remain unchanged. Exact-source
 required CI/hosting, normal publication, public install/update and frozen controls
 pass separately; see the [public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout).
 This advances TASKS item3/F-011/F-024, not their full requirements or the broader
-goal. The last recorded ordinary-client baseline is the failed public v0.9.19
-unmodified Playwright1.58.2 run in [PLAYWRIGHT.md](PLAYWRIGHT.md).
+goal. The latest ordinary-client baseline is the failed public v0.9.21
+unmodified Playwright1.58.2 run in [PLAYWRIGHT.md](PLAYWRIGHT.md). It still fails
+connection before title/locators; the synchronous Runtime contract below is
+unchanged. Future startup work is scoped in [AUTOMATION_STARTUP.md](AUTOMATION_STARTUP.md).
 
 ## Required result
 

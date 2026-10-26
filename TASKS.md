@@ -8,9 +8,12 @@ local gates, both reviewed score lanes, all eight required exact-source CI/
 hosting checks and normal tagged publication pass. Public install/reinstall,
 actual v0.9.20 update/no-op, thirteen native helpers, two Runtime proofs, the new
 Target proof, eight layout proofs and both frozen worker suites pass; all58
-additive public images were inspected. See the dated public closeout. Finish
-this documentation commit's separate exact-source CI/site verification before
-the next bounded feature. Automatic attachment and the full pinned Playwright
+additive public images were inspected. See the dated public closeout. The
+documentation closeout at `77c7da020af4713d0fcc462057a94331b50b65a3` passes all
+eight required exact-source checks and twelve-path public source/report parity.
+Browser text/layout inspection passes; unavailable screenshot capture remains
+an explicit site raster-QA limit. The next pre-implementation review is below.
+Automatic attachment and the full pinned Playwright
 journey remain open; real Reddit/Google News acceptance below is not replaced.
 
 2026-10-25 resumed: the user explicitly approved running the remaining release
@@ -303,18 +306,25 @@ following dependency order, updating evidence as each increment ships:
    See the [public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout),
    including the separate unresolved Dependabot build-tool update failure.
    Static339/610/62 and Window15/16 files,77/79 final subtests are unchanged;
-   authored proofs add no WPT passes. The last recorded ordinary Playwright
-   baseline remains public v0.9.19 with explicit `--disable-scripts`: attachment
+   authored proofs add no WPT passes. The fresh ordinary Playwright
+   baseline is public v0.9.21 with explicit `--disable-scripts`: attachment
    and download-policy initialization fail before title/locators. Respect
    effective script permission, restricted-worker execution and parent
    publication/charge boundaries. Promise awaiting, utility worlds and the stock
-   locator's conflicts with the 64 KiB worker/256 KiB CDP limits require separate review;
+   locator's conflicts with16KiB source/32KiB operation/64KiB worker/256KiB CDP
+   limits require separate review;
    no stubs or unreviewed limit changes. The prior tooling correction968c654
    added no browser capability. The released foundation does not complete this
    item, full CDP or ordinary client compatibility.
    Native create/activate/close now ships in v0.9.21 under
    [TARGET_LIFECYCLE.md](docs/TARGET_LIFECYCLE.md), with public acceptance above.
    Do not reimplement that completed subset; autoattachment/downloads remain open.
+   Next meaningful boundary: both ordinary connection paths, actual utility-world
+   title, initialized blank-page creation/closure and preserved page A, under
+   [PLAYWRIGHT.md](docs/PLAYWRIGHT.md#next-meaningful-increment). Its native
+   pre-navigation/session acceptance is frozen in
+   [AUTOMATION_STARTUP.md](docs/AUTOMATION_STARTUP.md); do not call autoattachment
+   alone completion or acknowledge unavailable download/world behavior.
 4. Make real signed-out **reddit.com and news.google.com load and look as
    expected** (F-027/F-025), following the shared visual/reading acceptance above.
    Diagnose fresh actual failures and implement bounded renderer/resource/script

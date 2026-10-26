@@ -2,6 +2,18 @@
 
 ## Purpose and responsibilities
 
+Current continuation (2026-10-26): documentation closeout77c7da0 passes all eight
+required checks and public source/report parity, with unavailable site screenshot
+capture explicitly unverified. Fresh unmodified Playwright1.58.2 on public21
+still fails both connection paths at autoattachment/download setup. Next
+meaningful boundary: ordinary connection, real utility-world title and initialized
+blank-page creation/closure, under docs/PLAYWRIGHT.md. docs/AUTOMATION_STARTUP.md
+freezes its native startup/session contract only; permission/world/download
+design and implementation remain open. No new profile or feature completion
+follows from that plan. Preserve the full client probe and all FEATURES criteria;
+real reddit.com/news.google.com reading and expected appearance remain explicit
+unfinished targets under docs/SITE_COMPATIBILITY.md. The broader goal stays active.
+
 Completed bounded increment (2026-10-26): native-host CDP target lifecycle ships
 as v0.9.21 at `321e1e87e47e76102d5cc3a4d010acc24d3eff72` under
 docs/TARGET_LIFECYCLE.md. All20 local Rust/harness and8 JSPLAN gates, both

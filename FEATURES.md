@@ -243,11 +243,15 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
 The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. The last recorded ordinary-client baseline is public v0.9.19:
+tools/playwright. The latest ordinary-client baseline is public v0.9.21:
 discovery succeeds, but auto-attachment and download-policy initialization fail
 before title or locators. See docs/PLAYWRIGHT.md for that explicit
 scripts-disabled baseline. No acceptance checkbox changes; a passing custom CDP
 client is not a substitute for this gate.
+The next connection/title/initialized-blank-page increment and its still-open
+permission/world/download requirements are scoped in docs/PLAYWRIGHT.md;
+docs/AUTOMATION_STARTUP.md freezes the native pre-navigation barrier contract.
+This is planning, not shipped autoattachment or a completed client criterion.
 v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7` ships the bounded
 [synchronous main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md).
 Packaged and public native/CDP proofs verify real worker roots, newer edits and

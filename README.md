@@ -429,7 +429,7 @@ and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
 **Ordinary Playwright compatibility remains unfinished.**
 Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
-The last recorded ordinary-client probe, on public v0.9.19, fails target
+The fresh ordinary-client probe, on public v0.9.21, fails target
 auto-attachment/download initialization before title or locators. That probe
 explicitly disables page scripts rather than assuming a default. The
 [worker-backed Runtime foundation](docs/RUNTIME_AUTOMATION.md) ships in v0.9.20,
@@ -439,6 +439,11 @@ awaiting, utility worlds and broader target/download behavior remain unfinished.
 v0.9.21 adds real native create/activate/close under the
 [Target lifecycle contract](docs/TARGET_LIFECYCLE.md), not autoattachment or
 download initialization.
+The next scoped increment requires both ordinary connection paths, actual
+utility-world title and initialized blank-page creation/closure. The
+[startup contract](docs/AUTOMATION_STARTUP.md) freezes genuine pre-navigation
+waiting; permission/world/download design and the full unchanged client journey
+remain open. This plan adds no browser capability or resource allowance.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
 [signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 
