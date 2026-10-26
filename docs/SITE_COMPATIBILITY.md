@@ -4,8 +4,9 @@ The user explicitly added **reddit.com and news.google.com should load and look
 as expected** to the active all-features goal on 2026-10-25. This is an acceptance
 target, not a claim of current compatibility. The Runtime foundation shipped
 as v0.9.20; its separate documentation closeout is verified at
-`c30570b4f9654adf168343d1474e76d89b92a426`. The next bounded automation increment
-does not replace or complete these real-site acceptance targets.
+`c30570b4f9654adf168343d1474e76d89b92a426`. v0.9.21 adds verified native CDP
+target creation/activation/closure at `321e1e87e47e76102d5cc3a4d010acc24d3eff72`;
+it does not replace or complete these real-site acceptance targets.
 
 ## First milestone: faithful signed-out desktop reading
 

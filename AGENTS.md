@@ -2,6 +2,22 @@
 
 ## Purpose and responsibilities
 
+Completed bounded increment (2026-10-26): native-host CDP target lifecycle ships
+as v0.9.21 at `321e1e87e47e76102d5cc3a4d010acc24d3eff72` under
+docs/TARGET_LIFECYCLE.md. All20 local Rust/harness and8 JSPLAN gates, both
+reviewed score lanes, all eight required exact-source CI/hosting checks and
+normal publication pass. Public install/reinstall, actual v0.9.20 update/no-op,
+thirteen native helpers, two Runtime proofs, the Target proof, eight layout
+proofs and both frozen public-worker suites pass; all58 additive public images
+were inspected. See the [public closeout](memory/logs/2026-10-26.md#v0921-public-release-closeout).
+Static339/610/62 of1,011 and Window15/16 files,77/79 final subtests remain
+unchanged. Preserve original contracts, inputs, authority, limits and immutable
+tags. Autoattachment, downloads, full Playwright, F-011/F-016/F-024/F-025/F-026/
+F-027/formal MVP and real Reddit/Google News acceptance remain open. The high
+undici build-tool dependency alert remains unresolved. This release does not
+prove the later documentation commit's CI/public delivery; verify that separate
+closeout before the next bounded feature.
+
 Completed bounded increment (2026-10-25): synchronous worker-backed main-world
 CDP Runtime ships as v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7`,
 under docs/RUNTIME_AUTOMATION.md. Nineteen local Rust gates, eight JSPLAN gates

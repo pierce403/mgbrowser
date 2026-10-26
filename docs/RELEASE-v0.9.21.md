@@ -49,6 +49,18 @@ add no upstream WPT passes. Source CI/hosting, tagged publication and the public
 installer/update are separate gates: see the dated release receipts, not an
 inference from these local results.
 
+Published at `321e1e87e47e76102d5cc3a4d010acc24d3eff72`, with all eight required
+exact-source CI/hosting checks and tagged release workflow40346494949 passing.
+The checksum-verified public archive is8,253,866 bytes, SHA-256
+`6aacdf6e9ed4bab922610953194a90d08e8971b7d157b0e7f350290e8d2173a9`.
+Public install/reinstall, actual v0.9.20 upgrade/no-op, worker/session/Boa/CSSOM,
+desktop/icons, thirteen existing native helpers, both Runtime proofs, the Target
+proof, eight layout proofs and both frozen direct-worker suites pass. All58
+additive public images were inspected. See the
+[public closeout](../memory/logs/2026-10-26.md#v0921-public-release-closeout)
+for retained-data reviews and their explicit observability limits. The unrelated
+high-severity undici build-tool dependency alert remains unresolved.
+
 ## Install and known limitations
 
 ```sh

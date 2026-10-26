@@ -1,15 +1,17 @@
 # Work queue
 
-2026-10-26: v0.9.20's separate documentation closeout passes at
-`c30570b4f9654adf168343d1474e76d89b92a426`, with all eight exact-source checks
-and matching public delivery revalidated. The next bounded browser increment is
-the real native target mutation foundation in
-[docs/TARGET_LIFECYCLE.md](docs/TARGET_LIFECYCLE.md): create, activate and close
-actual tabs through the existing workspace owner. Implementation and local
-Rust/JSPLAN, reviewed WPT, package/native/Runtime/layout/original and frozen-worker
-gates pass; exact-source CI and release/public acceptance remain pending, not
-shipped. Automatic attachment and the full
-pinned Playwright journey remain separate open requirements.
+2026-10-26: **v0.9.21 is published** at
+`321e1e87e47e76102d5cc3a4d010acc24d3eff72`: the real native target mutation
+foundation in [docs/TARGET_LIFECYCLE.md](docs/TARGET_LIFECYCLE.md) creates,
+activates and closes actual tabs through the existing workspace owner. Full
+local gates, both reviewed score lanes, all eight required exact-source CI/
+hosting checks and normal tagged publication pass. Public install/reinstall,
+actual v0.9.20 update/no-op, thirteen native helpers, two Runtime proofs, the new
+Target proof, eight layout proofs and both frozen worker suites pass; all58
+additive public images were inspected. See the dated public closeout. Finish
+this documentation commit's separate exact-source CI/site verification before
+the next bounded feature. Automatic attachment and the full pinned Playwright
+journey remain open; real Reddit/Google News acceptance below is not replaced.
 
 2026-10-25 resumed: the user explicitly approved running the remaining release
 checks and added **reddit.com and news.google.com load and look as expected** to
@@ -310,6 +312,9 @@ following dependency order, updating evidence as each increment ships:
    no stubs or unreviewed limit changes. The prior tooling correction968c654
    added no browser capability. The released foundation does not complete this
    item, full CDP or ordinary client compatibility.
+   Native create/activate/close now ships in v0.9.21 under
+   [TARGET_LIFECYCLE.md](docs/TARGET_LIFECYCLE.md), with public acceptance above.
+   Do not reimplement that completed subset; autoattachment/downloads remain open.
 4. Make real signed-out **reddit.com and news.google.com load and look as
    expected** (F-027/F-025), following the shared visual/reading acceptance above.
    Diagnose fresh actual failures and implement bounded renderer/resource/script

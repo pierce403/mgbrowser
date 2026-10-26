@@ -2,9 +2,9 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.21 candidate: native CDP target control
+## Latest verified release: v0.9.21
 
-The next release adds real `Target.createTarget`, `activateTarget` and
+The release adds real `Target.createTarget`, `activateTarget` and
 `closeTarget` through the native workspace owner. Blank targets are empty
 documents; HTTP(S) navigation starts only after tab admission. Activation
 selects the actual tab/pane/window and requests X11 focus; closure retires only
@@ -17,13 +17,23 @@ inspected. Both complete reviewed WPT lanes remain static339/610/62 of1,011
 and Window15/16 files,77/79 final subtests, with no new upstream passes.
 Normal package/installer/updater, all13 native helpers, both Runtime proofs,
 all8 layout proofs, original26/26 journeys and frozen worker controls pass;
-all14 Runtime and36 layout images were inspected. Exact-source CI/hosting and
-public release acceptance are pending. Autoattachment, downloads, promise awaiting, utility worlds and the
-unchanged full Playwright journey remain unfinished. The public installer still
-follows the latest actually published release, verified below.
-[Contract](docs/TARGET_LIFECYCLE.md) and [candidate notes](docs/RELEASE-v0.9.21.md).
+all14 Runtime and36 layout images were inspected.
 
-## Latest verified release: v0.9.20
+Published as [v0.9.21](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.21)
+at `321e1e87e47e76102d5cc3a4d010acc24d3eff72`. All eight required exact-source
+CI/hosting checks and normal tagged publication pass. The exact public curl
+install/reinstall, worker/session/Boa/CSSOM/desktop/icon checks and actual
+v0.9.20 update/no-op pass. The downloaded executable passes all13 existing native
+helpers, both Runtime proofs, the new Target proof, eight layout proofs and
+both frozen direct-worker suites. All58 additive public images were inspected.
+The website installer delivers v0.9.21. Autoattachment, downloads, promise
+awaiting, utility worlds and the unchanged full Playwright journey remain open.
+The high-severity undici build-tool dependency alert remains unresolved; it is
+not part of the Rust browser payload, and passing release checks do not resolve it.
+[Contract](docs/TARGET_LIFECYCLE.md), [release notes](docs/RELEASE-v0.9.21.md) and
+[public closeout](memory/logs/2026-10-26.md#v0921-public-release-closeout).
+
+## Previous release: v0.9.20
 
 v0.9.20 adds a bounded worker-backed main-world Runtime foundation:
 generic evaluation/function calls, actual retained object handles, own-property
@@ -49,7 +59,7 @@ CI/hosting checks and tagged publication pass. The public curl install/reinstall
 worker/session/Boa/CSSOM/desktop/icon checks and actual v0.9.19 update/no-op pass.
 The public binary passes all thirteen existing native helpers, both Runtime
 proofs, eight layout proofs and both frozen worker-control suites. All fourteen
-Runtime and36 layout images were inspected. The website installer delivers v0.9.20.
+Runtime and36 layout images were inspected. That installer verification delivered v0.9.20.
 A separate same-source Dependabot build-tool update failed
 `security_update_not_possible`; its undici dependency constraint remains unresolved.
 This is not an all-observed-checks-green claim. See the
@@ -426,6 +436,9 @@ explicitly disables page scripts rather than assuming a default. The
 with packaged/public native execution and tab-move proofs. It is a synchronous
 main-world subset, not ordinary Playwright or locator compatibility. Promise
 awaiting, utility worlds and broader target/download behavior remain unfinished.
+v0.9.21 adds real native create/activate/close under the
+[Target lifecycle contract](docs/TARGET_LIFECYCLE.md), not autoattachment or
+download initialization.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
 [signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 
