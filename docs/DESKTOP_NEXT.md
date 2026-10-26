@@ -49,7 +49,9 @@ input at 100/125/200%; transactional failures and caps; final-window exit only.
 CDP stays bound to stable tab identities, never silently following the active tab.
 v0.8.0 exposes all live tabs through discovery and explicit attachment;
 moving a tab retains its target and closing it invalidates that target's routes.
-Automatic attachment and protocol-driven target creation/closure remain absent.
+Automatic attachment remains absent. The next source increment adds real
+protocol-driven creation/activation/closure through the native workspace owner;
+its release acceptance remains pending in [TARGET_LIFECYCLE.md](TARGET_LIFECYCLE.md).
 
 ## Pinned Playwright acceptance: T-021 / F-024
 

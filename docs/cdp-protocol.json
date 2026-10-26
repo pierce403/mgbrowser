@@ -150,7 +150,7 @@
     },
     {
       "domain": "Target",
-      "description": "Stable targets for existing native tabs, including inactive tabs. Browser connections can attach using flattened sessions; no auto-attach, target mutation commands, workers, or browser contexts.",
+      "description": "Stable targets for native tabs, including inactive tabs. Browser-root mutation commands use the native host's real tab ownership. Browser connections attach explicitly using flattened sessions; no auto-attach, workers or browser contexts.",
       "types": [
         { "id": "TargetID", "type": "string" },
         { "id": "SessionID", "type": "string" },
@@ -168,6 +168,23 @@
         }
       ],
       "commands": [
+        {
+          "name": "createTarget",
+          "description": "Browser endpoint without sessionId only. Create a real selected native tab in the focused pane, returning its permanent target identity after admission. Empty or about:blank creates an empty document, without script execution; HTTP(S) starts ordinary navigation after admission, not after initial-load completion. Only url is supported, at most16KiB; contexts, windows, geometry and background options reject. Embeddings without an explicit native target host reject.",
+          "parameters": [ { "name": "url", "type": "string" } ],
+          "returns": [ { "name": "targetId", "$ref": "TargetID" } ]
+        },
+        {
+          "name": "closeTarget",
+          "description": "Browser endpoint without sessionId only. Close exactly the named native tab and perform its ordinary teardown before success. Closing the last native tab is explicitly unsupported in this subset. Unknown or closed identities reject; other tabs never retarget.",
+          "parameters": [ { "name": "targetId", "$ref": "TargetID" } ],
+          "returns": [ { "name": "success", "type": "boolean" } ]
+        },
+        {
+          "name": "activateTarget",
+          "description": "Browser endpoint without sessionId only. Select the actual named tab/pane/window and request X11 window raising/input focus. This is not Page.bringToFront or a promise that a desktop window manager will permit focus stealing.",
+          "parameters": [ { "name": "targetId", "$ref": "TargetID" } ]
+        },
         {
           "name": "getTargets",
           "description": "Return all current native page targets; target filters are unsupported. Moving a tab preserves its target ID; closed IDs are never reused.",

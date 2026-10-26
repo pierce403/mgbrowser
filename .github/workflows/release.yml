@@ -15,7 +15,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth fonts-dejavu-core desktop-file-utils dbus
       - name: Build locked release binary
-        run: cargo +1.91.1 build --locked --release --bin mgbrowser --example journey_server --example runtime_smoke --example runtime_moves_smoke
+        run: cargo +1.91.1 build --locked --release --bin mgbrowser --example journey_server --example runtime_smoke --example runtime_moves_smoke --example target_lifecycle_smoke
       - name: Package and verify the user payload
         env:
           RUSTUP_TOOLCHAIN: 1.91.1
@@ -24,6 +24,7 @@ jobs:
           python3 tools/test_gzip_release.py
           python3 tools/test_chrome_update_smoke.py
           python3 -B tools/test_runtime_smoke.py
+          python3 -B tools/test_target_lifecycle_smoke.py
           cargo +1.91.1 test --locked --release -p mg-browser --test script_automation
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
@@ -70,11 +71,11 @@ jobs:
             sleep 0.1
           done
           timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
-      - name: Verify packaged worker Runtime execution and native tab moves
+      - name: Verify packaged worker Runtime, native tab moves and target mutations
         env:
           RUSTUP_TOOLCHAIN: 1.91.1
         run: |
-          for runtime_case in runtime runtime-moves; do
+          for runtime_case in runtime runtime-moves target-lifecycle; do
             runtime_client="${runtime_case//-/_}_smoke"
             python3 "tools/$runtime_case-smoke.py" \
               --binary tmp/release/mgbrowser-linux-x86_64/mgbrowser \
@@ -103,6 +104,7 @@ jobs:
             tmp/cssom-methods-smoke-*/
             tmp/runtime-smoke-*/
             tmp/runtime-moves-smoke-*/
+            tmp/target-lifecycle-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

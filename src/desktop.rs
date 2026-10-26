@@ -5,7 +5,7 @@ use crate::{
     updater,
     workspace::{Limits, PaneId, Removed, Side, TabId, WindowId, Workspace},
 };
-use mg_chassis::{Browser as App, BrowserCdp, ColorScheme};
+use mg_chassis::{Browser as App, BrowserCdp, ColorScheme, TargetAction, TargetOutcome};
 use mg_sparkle::paint::{Canvas, Fonts};
 use std::{
     collections::BTreeMap,
@@ -91,6 +91,34 @@ struct Desktop {
     session: mg_chassis::net::Session,
     notice: Option<(String, Instant)>,
     titles: BTreeMap<TabId, String>,
+}
+
+enum TargetHostError {
+    Rejected(String),
+    Native(String),
+}
+
+fn target_name(initial: TabId, tab: TabId) -> String {
+    if tab == initial {
+        "page-1".into()
+    } else {
+        format!("page-{}", tab.get())
+    }
+}
+
+fn target_tab<T>(space: &Workspace<T>, initial: TabId, target: &str) -> Result<TabId, String> {
+    space
+        .tabs()
+        .find_map(|(tab, _)| (target_name(initial, tab) == target).then_some(tab))
+        .ok_or_else(|| "Unknown or closed target".into())
+}
+
+fn closable_target<T>(space: &Workspace<T>, initial: TabId, target: &str) -> Result<TabId, String> {
+    let tab = target_tab(space, initial, target)?;
+    if space.tabs().count() == 1 {
+        return Err("Closing the last native tab is not supported through CDP".into());
+    }
+    Ok(tab)
 }
 
 impl Desktop {
@@ -343,40 +371,164 @@ impl Desktop {
             self.notify("Maximum16 tabs reached; close a tab first");
             return Ok(());
         }
-        let fonts = match platform::load_fonts() {
-            Ok(fonts) => fonts,
+        let app = match self.tab_payload(bookmarks, false, false) {
+            Ok(app) => app,
             Err(error) => {
                 self.notify(format!("Cannot create tab: {error}"));
                 return Ok(());
             }
         };
-        let active = self.space.get(self.space.active_tab().unwrap()).unwrap();
-        let mut app = App::new_with_session(
-            fonts,
-            std::sync::Arc::new(platform::LinuxScripts::default()),
-            self.session.clone(),
-        );
+        self.cancel_drag(conn)?;
+        match self.insert_tab(pane, app, url) {
+            Ok(_) => self.sync_geometry(conn)?,
+            Err(error) => self.notify(error.to_string()),
+        }
+        Ok(())
+    }
+
+    fn tab_payload(
+        &self,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        blank: bool,
+        debugging: bool,
+    ) -> Result<App, String> {
+        let fonts = platform::load_fonts().map_err(|error| error.to_string())?;
+        let active = self
+            .space
+            .active_tab()
+            .and_then(|tab| self.space.get(tab))
+            .ok_or("No active native tab")?;
+        let scripts = std::sync::Arc::new(platform::LinuxScripts::default());
+        let mut app = if blank {
+            App::new_blank_with_session(fonts, scripts, self.session.clone())
+        } else {
+            App::new_with_session(fonts, scripts, self.session.clone())
+        };
         app.set_build_info(env!("CARGO_PKG_VERSION"), crate::COMPILED, crate::REVISION);
         app.set_theme_preference(active.theme_preference());
         app.set_scale_preference(active.scale_preference());
         app.set_system_theme(self.system_theme);
         app.set_system_scale(self.system_scale);
         app.set_scripts_enabled(self.scripts);
+        app.set_debugging(debugging);
         match bookmarks.load() {
             Ok(entries) => app.set_bookmarks(entries),
             Err(error) => app.set_bookmark_status(error),
         }
+        Ok(app)
+    }
+
+    fn insert_tab(
+        &mut self,
+        pane: PaneId,
+        app: App,
+        url: Option<String>,
+    ) -> Result<TabId, crate::workspace::Error> {
+        let tab = self
+            .space
+            .open_tab(pane, app)
+            .map_err(|error| error.error)?;
+        // Ownership and permissions precede any request or worker startup.
         if let Some(url) = url {
-            app.navigate(url, None, true);
+            self.space.get_mut(tab).unwrap().navigate(url, None, true);
         }
-        self.cancel_drag(conn)?;
-        match self.space.open_tab(pane, app) {
-            Ok(tab) => {
-                self.strip = true;
-                eprintln!("TAB opened={} pane={}", tab.get(), pane.get());
-                self.sync_geometry(conn)?;
+        self.strip = true;
+        eprintln!("TAB opened={} pane={}", tab.get(), pane.get());
+        Ok(tab)
+    }
+
+    fn target_action(
+        &mut self,
+        action: &TargetAction,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        conn: &RustConnection,
+    ) -> Result<TargetOutcome, TargetHostError> {
+        match action {
+            TargetAction::Create { url } => {
+                if self.space.tabs().count() >= self.space.limits().tabs {
+                    return Err(TargetHostError::Rejected("Maximum16 tabs reached".into()));
+                }
+                let pane = self
+                    .space
+                    .active_tab()
+                    .and_then(|tab| self.space.location(tab))
+                    .map(|location| location.pane)
+                    .ok_or_else(|| TargetHostError::Rejected("No active native pane".into()))?;
+                let app = self
+                    .tab_payload(bookmarks, true, true)
+                    .map_err(TargetHostError::Rejected)?;
+                self.cancel_drag(conn)
+                    .map_err(|error| TargetHostError::Native(error.to_string()))?;
+                let navigation = (!url.is_empty() && url != "about:blank").then(|| url.clone());
+                let tab = self
+                    .insert_tab(pane, app, navigation)
+                    .map_err(|error| TargetHostError::Rejected(error.to_string()))?;
+                self.sync_geometry(conn)
+                    .map_err(|error| TargetHostError::Native(error.to_string()))?;
+                Ok(TargetOutcome::Created(target_name(self.initial_tab, tab)))
             }
-            Err(error) => self.notify(error.error.to_string()),
+            TargetAction::Close { target } => {
+                let tab = closable_target(&self.space, self.initial_tab, target)
+                    .map_err(TargetHostError::Rejected)?;
+                self.close_tab(tab, conn)
+                    .map_err(|error| TargetHostError::Native(error.to_string()))?;
+                Ok(TargetOutcome::Closed)
+            }
+            TargetAction::Activate { target } => {
+                let tab = target_tab(&self.space, self.initial_tab, target)
+                    .map_err(TargetHostError::Rejected)?;
+                self.activate_tab(tab, conn)
+                    .map_err(|error| TargetHostError::Native(error.to_string()))?;
+                Ok(TargetOutcome::Activated)
+            }
+        }
+    }
+
+    fn tick_cdp(
+        &mut self,
+        protocol: &mut BrowserCdp,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        conn: &RustConnection,
+    ) -> Result<(), String> {
+        let names = self
+            .space
+            .tabs()
+            .map(|(tab, _)| target_name(self.initial_tab, tab))
+            .collect::<Vec<_>>();
+        let mut pages = self
+            .space
+            .tabs_mut()
+            .zip(&names)
+            .map(|((_, app), name)| (name.as_str(), app))
+            .collect::<Vec<_>>();
+        protocol.tick_pages_with_target_host(&mut pages)?;
+        drop(pages);
+        if let Some(request) = protocol.take_target_request() {
+            let (outcome, native_error) =
+                match self.target_action(request.action(), bookmarks, conn) {
+                    Ok(outcome) => (Ok(outcome), None),
+                    Err(TargetHostError::Rejected(error)) => (Err(error), None),
+                    Err(TargetHostError::Native(error)) => (Err(error.clone()), Some(error)),
+                };
+            // The old borrowed roster is gone before any native mutation. Rebuild
+            // it even on failure so partial native work cannot report success.
+            let names = self
+                .space
+                .tabs()
+                .map(|(tab, _)| target_name(self.initial_tab, tab))
+                .collect::<Vec<_>>();
+            let mut pages = self
+                .space
+                .tabs_mut()
+                .zip(&names)
+                .map(|((_, app), name)| (name.as_str(), app))
+                .collect::<Vec<_>>();
+            protocol.complete_target_request(request, outcome, &mut pages)?;
+            // An activation can fail after selection without changing membership.
+            // Such X11 failures also retire debugging rather than claim success.
+            if let Some(error) = native_error {
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -427,6 +579,26 @@ impl Desktop {
         self.space.select_tab(tab)?;
         self.space.get_mut(tab).unwrap().request_redraw();
         self.dirty_all();
+        Ok(())
+    }
+
+    fn activate_tab(&mut self, tab: TabId, conn: &RustConnection) -> Result<(), Box<dyn Error>> {
+        let location = self
+            .space
+            .location(tab)
+            .ok_or(crate::workspace::Error::UnknownTab)?;
+        let xid = self
+            .native
+            .get(&location.window)
+            .ok_or("Target native window is unavailable")?
+            .xid;
+        self.cancel_drag(conn)?;
+        self.select(tab)?;
+        conn.configure_window(xid, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))?
+            .check()?;
+        conn.set_input_focus(InputFocus::PARENT, xid, x11rb::CURRENT_TIME)?
+            .check()?;
+        conn.flush()?;
         Ok(())
     }
 
@@ -1638,26 +1810,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
             }
         }
         if let Some(protocol) = &mut cdp {
-            let initial = desktop.initial_tab;
-            let names = desktop
-                .space
-                .tabs()
-                .map(|(id, _)| {
-                    if id == initial {
-                        "page-1".into()
-                    } else {
-                        format!("page-{}", id.get())
-                    }
-                })
-                .collect::<Vec<String>>();
-            let mut pages = desktop
-                .space
-                .tabs_mut()
-                .zip(names.iter())
-                .map(|((_, app), name)| (name.as_str(), app))
-                .collect::<Vec<_>>();
-            if let Err(error) = protocol.tick_pages(&mut pages) {
-                drop(pages);
+            if let Err(error) = desktop.tick_cdp(protocol, &bookmarks, &conn) {
                 cdp = None;
                 for (_, app) in desktop.space.tabs_mut() {
                     app.set_debugging(false);
@@ -1684,6 +1837,71 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod display_coordinate_tests {
     use super::*;
+
+    #[test]
+    fn target_identity_keeps_initial_alias_and_survives_native_moves_without_reuse() {
+        let mut space = Workspace::new(Limits::default()).unwrap();
+        let initial = space.open_window("initial").unwrap();
+        assert_ne!(initial.tab.get(), 1);
+        let second = space.open_tab(initial.pane, "second").unwrap();
+        let second_name = format!("page-{}", second.get());
+        assert_eq!(target_name(initial.tab, initial.tab), "page-1");
+        assert_eq!(target_tab(&space, initial.tab, "page-1"), Ok(initial.tab));
+        assert_eq!(target_tab(&space, initial.tab, &second_name), Ok(second));
+        for invalid in [
+            "page-0",
+            "page-01",
+            "page-+1",
+            "frame-1",
+            "page-18446744073709551616",
+        ] {
+            assert!(target_tab(&space, initial.tab, invalid).is_err());
+        }
+        assert!(target_tab(&space, initial.tab, &format!("page-{}", initial.tab.get())).is_err());
+
+        let plan = space.prepare_detach(second).unwrap();
+        space.commit_detach(plan).unwrap();
+        assert_eq!(target_tab(&space, initial.tab, &second_name), Ok(second));
+        space.move_tab(second, initial.pane, 0).unwrap();
+        assert_eq!(target_tab(&space, initial.tab, &second_name), Ok(second));
+        space.select_tab(initial.tab).unwrap();
+        assert_eq!(target_tab(&space, initial.tab, &second_name), Ok(second));
+
+        space.close_tab(initial.tab).unwrap();
+        assert!(target_tab(&space, initial.tab, "page-1").is_err());
+        assert_eq!(target_tab(&space, initial.tab, &second_name), Ok(second));
+        let replacement = space.open_tab(initial.pane, "replacement").unwrap();
+        assert!(replacement.get() > second.get());
+        assert_ne!(target_name(initial.tab, replacement), "page-1");
+        assert!(target_tab(&space, initial.tab, "page-1").is_err());
+    }
+
+    #[test]
+    fn target_close_guard_rejects_stale_and_final_tabs_without_changing_selection() {
+        let mut space = Workspace::new(Limits::default()).unwrap();
+        let initial = space.open_window("initial").unwrap();
+        assert!(closable_target(&space, initial.tab, "page-1").is_err());
+        assert_eq!(space.active_tab(), Some(initial.tab));
+        assert_eq!(space.tabs().count(), 1);
+        let second = space.open_tab(initial.pane, "second").unwrap();
+        let second_name = target_name(initial.tab, second);
+        assert_eq!(
+            closable_target(&space, initial.tab, "page-1"),
+            Ok(initial.tab)
+        );
+        assert_eq!(
+            closable_target(&space, initial.tab, &second_name),
+            Ok(second)
+        );
+        assert!(closable_target(&space, initial.tab, "page-999").is_err());
+        assert_eq!(space.active_tab(), Some(second));
+        space.close_tab(initial.tab).unwrap();
+        assert!(closable_target(&space, initial.tab, "page-1").is_err());
+        assert!(closable_target(&space, initial.tab, &second_name).is_err());
+        assert_eq!(space.active_tab(), Some(second));
+        assert_eq!(space.get(second), Some(&"second"));
+        assert_eq!(space.tabs().count(), 1);
+    }
 
     #[test]
     fn native_focus_transfer_cancels_old_press_but_same_window_focus_preserves_it() {

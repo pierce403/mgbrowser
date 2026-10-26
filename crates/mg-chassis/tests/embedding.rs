@@ -125,3 +125,22 @@ fn selected_provider_builds_a_client() {
     let client = rustls::ClientConnection::new(config.into(), name).unwrap();
     assert!(client.wants_write());
 }
+
+#[test]
+fn blank_target_is_empty_without_replacing_the_native_welcome_page() {
+    let mut blank = Browser::new_blank_with_session(
+        fonts(),
+        Arc::new(DisabledScripts),
+        mg_chassis::net::Session::default(),
+    );
+    let welcome = Browser::new(fonts(), Arc::new(DisabledScripts));
+    assert_eq!(blank.page_url(), "about:blank");
+    assert!(blank.document().title.is_empty());
+    assert!(blank.document().items.is_empty());
+    assert!(blank.document().forms.is_empty());
+    assert!(!blank.is_loading());
+    blank.poll();
+    assert!(blank.document().items.is_empty());
+    assert_eq!(welcome.document().title, "mgbrowser");
+    assert!(!welcome.document().items.is_empty());
+}

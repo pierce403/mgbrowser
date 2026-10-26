@@ -37,9 +37,24 @@ fails pending navigation replies, emits `Target.detachedFromTarget` for attached
 browser sessions, and closes its direct page sockets. A replacement tab gets a
 new ID. Inactive tabs remain addressable. `Target.getTargetInfo` without a target
 uses the direct/attached page; on an unattached browser socket it requires an
-explicit `targetId` when zero or multiple pages exist. No automatic attach,
-target creation/closure/activation, or target-discovery event subscription is
-implemented: poll the real target list and attach explicitly.
+explicit `targetId` when zero or multiple pages exist. No automatic attach or
+target-discovery event subscription is implemented: poll the real target list
+and attach explicitly.
+
+The next source increment implements native-host-backed `Target.createTarget`,
+`Target.closeTarget` and `Target.activateTarget` under
+[TARGET_LIFECYCLE.md](TARGET_LIFECYCLE.md). Release acceptance is still pending.
+These commands require the browser endpoint without `sessionId`. Creation accepts
+only `url`, at most16KiB: empty or `about:blank` creates a genuinely empty page,
+while HTTP(S) starts normal navigation after tab admission. It does not wait for
+that navigation to finish or create a script realm in a blank page. The new tab
+uses the focused native pane and ordinary shared session/preferences, with its
+own Browser and script service. Extra contexts/windows/geometry/background
+options reject. Closure removes only the named tab and completes ordinary
+teardown before replying; closing the last native tab explicitly rejects in
+this subset. Activation selects the real tab/pane/window and requests X11
+raising/input focus, subject to desktop window-manager policy. It does not
+implement the separate `Page.bringToFront` command or general Playwright support.
 
 Embedding hosts call `BrowserCdp::tick_pages(&mut [(&str, &mut Browser)])` with
 all live tabs, not just visible panes. It returns an error before processing
@@ -48,6 +63,17 @@ commands if IDs are duplicate, recycled, out of allocation order, noncanonical
 remain bound to the same Browser payload. The original `tick(&mut Browser)`
 wrapper retains the single `page-1` embedding contract. Transport client, queue,
 message, and per-client attached-session limits are unchanged.
+Native mutation hosts use `tick_pages_with_target_host` instead: a validated
+mutation stops command draining, and `take_target_request` yields at most one
+opaque single-use request. Complete every handed request with
+`complete_target_request(request, outcome, fresh_pages)` before resuming command
+draining, or retire the broker on a host error. Completion reconciles the full
+actual roster, pending operations and stale direct/session routes before replying;
+it never recursively drains commands. Client loss before handoff cancels the
+queued action; an already handed action may finish without a disconnected
+client's reply. Ordinary `tick`/`tick_pages` embeddings explicitly reject native
+mutation rather than hang or manufacture tabs. The host must not reuse a target
+identity for a different Browser, including after native moves.
 Hosts must enable debugging explicitly on each Browser. Before dropping a
 BrowserCdp while retaining its Browsers, call `set_debugging(false)` on them.
 This retires only exact workers that accepted automation, not ordinary pages
@@ -69,7 +95,7 @@ the local `/script-loop` fuel error is separately checked before onward navigati
 | Domain | Commands |
 | --- | --- |
 | Browser | `getVersion` |
-| Target | `getTargets`, `getTargetInfo`, `attachToTarget`, `detachFromTarget` |
+| Target | `getTargets`, `getTargetInfo`, `attachToTarget`, `detachFromTarget`, `createTarget`, `closeTarget`, `activateTarget` |
 | Page | `enable`, `disable`, `navigate`, `reload`, `getFrameTree`, `getLayoutMetrics`, `captureScreenshot` |
 | DOM | `enable`, `disable`, `getDocument`, `querySelector`, `querySelectorAll`, `getAttributes`, `getBoxModel`, `focus` |
 | Input | `dispatchMouseEvent`, `dispatchKeyEvent`, `insertText` |
@@ -217,6 +243,18 @@ Build `workspace_cdp_smoke`, then run
 packaged and public-installed binary. It uses native tab creation, detachment
 and closure alongside actual WebSocket discovery/attachment/input to check
 retained edits, stable routes and closed-target rejection on an owned display.
+
+The v0.9.21 candidate's separate [native target contract](TARGET_LIFECYCLE.md)
+has a supplied-binary proof in `tools/target-lifecycle-smoke.py`. Build the normal
+release `target_lifecycle_smoke` and `journey_server` examples; pass explicit
+`--binary`, `--expected-sha`, `--expected-version`, `--expected-commit`, `--client`,
+`--client-sha`, `--server`, `--server-sha`, `--font` and `--font-sha` values.
+The proof owns its display/profile/server and checks real blank creation, focus,
+native moves, close ordering and surviving Runtime state. Review the raw ledgers,
+cleanup and all eight actual images. Run the fourteen synthetic checker groups
+with `python3 -B tools/test_target_lifecycle_smoke.py` separately; neither these
+controls nor the native fixture are WPT or ordinary-client compatibility.
+Current release/public verification remains in the dated work log.
 
 The last recorded ordinary Playwright 1.58.2 probe, on public v0.9.19, fails
 during attachment before any locator or page operation. See

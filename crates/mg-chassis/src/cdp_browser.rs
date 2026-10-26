@@ -5,9 +5,41 @@ use super::{TOP, test_app};
 use crate::cdp::{Command, MAX_TARGETS, PageInfo, Server, target_number};
 use base64::Engine;
 use serde_json::{Value, json};
-use std::{collections::HashMap, io::Cursor, time::Instant};
+use std::{collections::HashMap, io::Cursor, sync::Arc, time::Instant};
 
 mod runtime;
+
+/// A validated browser-root mutation for the native owner of the live pages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetAction {
+    Create { url: String },
+    Close { target: String },
+    Activate { target: String },
+}
+/// An opaque, single-use handoff. It cannot be cloned or constructed by a host.
+pub struct TargetRequest {
+    action: TargetAction,
+    ticket: Arc<()>,
+}
+impl TargetRequest {
+    pub fn action(&self) -> &TargetAction {
+        &self.action
+    }
+}
+#[derive(Debug)]
+pub enum TargetOutcome {
+    Created(String),
+    Closed,
+    Activated,
+}
+struct PendingTarget {
+    action: TargetAction,
+    ticket: Arc<()>,
+    handed: bool,
+    route: Route,
+    id: Value,
+    before: Vec<String>,
+}
 
 const FRAME: &str = "frame-1";
 const TARGET: &str = "page-1";
@@ -58,6 +90,7 @@ pub struct BrowserCdp {
     live_targets: Vec<String>,
     last_target_number: u64,
     runtime: runtime::Broker,
+    target_request: Option<PendingTarget>,
 }
 
 type Reply = Result<Value, (i32, String)>;
@@ -143,6 +176,7 @@ impl BrowserCdp {
             live_targets: Vec::new(),
             last_target_number: 0,
             runtime: runtime::Broker::default(),
+            target_request: None,
         })
     }
     pub fn tick(&mut self, app: &mut App) {
@@ -156,6 +190,19 @@ impl BrowserCdp {
     /// must retain its ID; a closed ID can never identify a new Browser.
     /// Validation completes before any command or event is processed.
     pub fn tick_pages(&mut self, pages: &mut [(&str, &mut App)]) -> Result<(), String> {
+        self.tick_pages_mode(pages, false)
+    }
+
+    /// Enable the explicit native-owner handoff. A mutation stops this tick's
+    /// command drain until the owner completes it with a fresh full page roster.
+    pub fn tick_pages_with_target_host(
+        &mut self,
+        pages: &mut [(&str, &mut App)],
+    ) -> Result<(), String> {
+        self.tick_pages_mode(pages, true)
+    }
+
+    fn reconcile_pages(&mut self, pages: &mut [(&str, &mut App)]) -> Result<(), String> {
         if pages.len() > MAX_TARGETS {
             return Err("CDP target limit is 16".into());
         }
@@ -206,20 +253,143 @@ impl BrowserCdp {
         }
         self.publish_pages(pages)?;
         self.reconcile_clients();
+        Ok(())
+    }
+
+    fn tick_pages_mode(
+        &mut self,
+        pages: &mut [(&str, &mut App)],
+        target_host: bool,
+    ) -> Result<(), String> {
+        self.reconcile_pages(pages)?;
         for (target, app) in pages.iter_mut() {
             self.flush_page_events(target, app);
+        }
+        if self.target_request.as_ref().is_some_and(|pending| {
+            !pending.handed && !self.server.client_ids().contains(&pending.route.client)
+        }) {
+            self.target_request = None;
+        }
+        if self.target_request.is_some() {
+            return Ok(());
         }
         // Bound work per window frame so a busy client cannot monopolize input.
         for _ in 0..16 {
             let Some(command) = self.server.try_recv() else {
                 break;
             };
-            self.command_pages(pages, command);
+            self.command_pages_mode(pages, command, target_host);
             for (target, app) in pages.iter_mut() {
                 self.flush_page_events(target, app);
             }
+            if self.target_request.is_some() {
+                break;
+            }
         }
         self.publish_pages(pages)
+    }
+
+    /// Hand a validated action to the host once, and only while its originating
+    /// client is still present. A disconnected queued action is never replayed.
+    /// After handoff the trusted host must complete the request, or drop this
+    /// entire broker; discarding a ticket deliberately blocks further draining.
+    pub fn take_target_request(&mut self) -> Option<TargetRequest> {
+        let pending = self.target_request.as_mut()?;
+        if pending.handed {
+            return None;
+        }
+        if !self.server.client_ids().contains(&pending.route.client) {
+            self.target_request = None;
+            return None;
+        }
+        pending.handed = true;
+        Some(TargetRequest {
+            action: pending.action.clone(),
+            ticket: pending.ticket.clone(),
+        })
+    }
+
+    /// Reconcile ordinary teardown and discovery before acknowledging the real
+    /// native outcome. This method never drains later protocol commands.
+    pub fn complete_target_request(
+        &mut self,
+        request: TargetRequest,
+        result: Result<TargetOutcome, String>,
+        pages: &mut [(&str, &mut App)],
+    ) -> Result<(), String> {
+        let pending = self
+            .target_request
+            .as_ref()
+            .ok_or("No native target request is pending")?;
+        if !pending.handed || !Arc::ptr_eq(&pending.ticket, &request.ticket) {
+            return Err("Native target request does not belong to this pending handoff".into());
+        }
+        let pending = self.target_request.take().unwrap();
+        if let Err(error) = self.reconcile_pages(pages) {
+            self.reply(
+                &pending.route,
+                pending.id,
+                Err(failed(format!("Invalid native target roster: {error}"))),
+            );
+            return Err(error);
+        }
+        for (target, app) in pages.iter_mut() {
+            self.flush_page_events(target, app);
+        }
+        let same_roster = |expected: &[String]| {
+            expected.len() == self.live_targets.len()
+                && expected
+                    .iter()
+                    .all(|target| self.live_targets.contains(target))
+        };
+        let outcome = match (&pending.action, result) {
+            (_, Err(error)) if same_roster(&pending.before) => {
+                self.reply(
+                    &pending.route,
+                    pending.id,
+                    Err(failed(crate::cdp::bounded_text(&error, 512))),
+                );
+                return Ok(());
+            }
+            (TargetAction::Create { .. }, Ok(TargetOutcome::Created(target)))
+                if !pending.before.contains(&target)
+                    && self.live_targets.contains(&target)
+                    && self.live_targets.len() == pending.before.len() + 1
+                    && pending
+                        .before
+                        .iter()
+                        .all(|id| self.live_targets.contains(id)) =>
+            {
+                json!({"targetId":target})
+            }
+            (TargetAction::Close { target }, Ok(TargetOutcome::Closed)) => {
+                let expected: Vec<_> = pending
+                    .before
+                    .iter()
+                    .filter(|id| *id != target)
+                    .cloned()
+                    .collect();
+                if !same_roster(&expected) {
+                    let error = "Native close outcome does not match the live target roster";
+                    self.reply(&pending.route, pending.id, Err(failed(error)));
+                    return Err(error.into());
+                }
+                json!({"success":true})
+            }
+            (TargetAction::Activate { target }, Ok(TargetOutcome::Activated))
+                if self.live_targets.contains(target) && same_roster(&pending.before) =>
+            {
+                json!({})
+            }
+            _ => {
+                let error =
+                    "Native target outcome does not match the requested action and live roster";
+                self.reply(&pending.route, pending.id, Err(failed(error)));
+                return Err(error.into());
+            }
+        };
+        self.reply(&pending.route, pending.id, Ok(outcome));
+        Ok(())
     }
 
     fn reconcile_clients(&mut self) -> Vec<u64> {
@@ -404,7 +574,16 @@ impl BrowserCdp {
     fn command(&mut self, app: &mut App, command: Command) {
         self.command_pages(&mut [(TARGET, app)], command);
     }
+    #[cfg(test)]
     fn command_pages(&mut self, pages: &mut [(&str, &mut App)], command: Command) {
+        self.command_pages_mode(pages, command, false);
+    }
+    fn command_pages_mode(
+        &mut self,
+        pages: &mut [(&str, &mut App)],
+        command: Command,
+        target_host: bool,
+    ) {
         // A frame may have been queued before its transport disconnected. Do
         // not let that stale frame recreate a revoked scope or worker owner.
         // Reconcile every command, not just the beginning of a native frame.
@@ -441,6 +620,36 @@ impl BrowserCdp {
         }
         let method = message["method"].as_str().unwrap();
         let params = message.get("params").cloned().unwrap_or(json!({}));
+        if target_mutation(method) {
+            let action =
+                self.validate_target_action(pages, &route, command.browser, method, &params);
+            match action {
+                Err(error) => self.reply(&route, id, Err(error)),
+                Ok(_) if !target_host => self.reply(
+                    &route,
+                    id,
+                    Err(failed(
+                        "Native target mutation host is unavailable in this embedding",
+                    )),
+                ),
+                Ok(_) if self.target_request.is_some() => self.reply(
+                    &route,
+                    id,
+                    Err(failed("Native target mutation is already pending")),
+                ),
+                Ok(action) => {
+                    self.target_request = Some(PendingTarget {
+                        action,
+                        ticket: Arc::new(()),
+                        handed: false,
+                        route,
+                        id,
+                        before: pages.iter().map(|(id, _)| (*id).to_owned()).collect(),
+                    })
+                }
+            }
+            return;
+        }
         if method == "Browser.getVersion" {
             self.reply(&route, id, version(&params));
             return;
@@ -534,6 +743,60 @@ impl BrowserCdp {
             result => self.reply(&route, id, result),
         }
     }
+
+    fn validate_target_action(
+        &self,
+        pages: &[(&str, &mut App)],
+        route: &Route,
+        browser: bool,
+        method: &str,
+        params: &Value,
+    ) -> Result<TargetAction, (i32, String)> {
+        if !browser || route.session.is_some() {
+            return Err(invalid(
+                "Target mutation requires the browser endpoint without sessionId",
+            ));
+        }
+        if method == "Target.createTarget" {
+            keys(params, &["url"])?;
+            let value = string(params, "url")?;
+            if value.len() > 16_384 {
+                return Err(invalid("URL too long"));
+            }
+            let url = if value.is_empty() || value == "about:blank" {
+                value.to_owned()
+            } else {
+                let url = url::Url::parse(value).map_err(|error| invalid(error.to_string()))?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return Err(invalid(
+                        "Only empty, about:blank, HTTP and HTTPS targets are supported",
+                    ));
+                }
+                url.to_string()
+            };
+            if pages.len() >= MAX_TARGETS {
+                return Err(failed("CDP target limit is 16"));
+            }
+            return Ok(TargetAction::Create { url });
+        }
+        keys(params, &["targetId"])?;
+        let target = string(params, "targetId")?;
+        if !pages.iter().any(|(id, _)| *id == target) {
+            return Err(failed("Unknown or closed target"));
+        }
+        if method == "Target.closeTarget" {
+            if pages.len() <= 1 {
+                return Err(failed("Closing the final native tab is unsupported"));
+            }
+            Ok(TargetAction::Close {
+                target: target.to_owned(),
+            })
+        } else {
+            Ok(TargetAction::Activate {
+                target: target.to_owned(),
+            })
+        }
+    }
     #[cfg(test)]
     fn dispatch(
         &mut self,
@@ -554,6 +817,14 @@ impl BrowserCdp {
         method: &str,
         p: &Value,
     ) -> Reply {
+        // This synchronous page-only seam cannot hand native ownership back to
+        // a host. Recognition still rejects explicitly, never as a fake success.
+        if target_mutation(method) {
+            self.validate_target_action(&[(target, app)], route, browser, method, p)?;
+            return Err(failed(
+                "Native target mutation host is unavailable in this embedding",
+            ));
+        }
         match method {
             "Browser.getVersion" => return version(p),
             "Target.getTargets" => {
@@ -890,6 +1161,13 @@ impl BrowserCdp {
             _ => unreachable!(),
         }
     }
+}
+
+fn target_mutation(method: &str) -> bool {
+    matches!(
+        method,
+        "Target.createTarget" | "Target.closeTarget" | "Target.activateTarget"
+    )
 }
 
 fn page_method(method: &str) -> bool {
@@ -1326,6 +1604,713 @@ mod tests {
                 message => panic!("Unexpected CDP message: {message:?}"),
             }
         }
+    }
+
+    fn target_command(
+        cdp: &mut BrowserCdp,
+        pages: &mut [(&str, &mut App)],
+        client: u64,
+        id: u64,
+        method: &str,
+        params: Value,
+        browser: bool,
+        session: Option<&str>,
+    ) {
+        let mut message = json!({"id":id,"method":method,"params":params});
+        if let Some(session) = session {
+            message["sessionId"] = json!(session);
+        }
+        cdp.command_pages_mode(
+            pages,
+            Command {
+                client,
+                browser,
+                target: (!browser).then(|| "page-1".into()),
+                message,
+            },
+            true,
+        );
+    }
+
+    fn target_reply(socket: &mut tungstenite::WebSocket<TcpStream>) -> Value {
+        serde_json::from_str(&read_wire(socket).unwrap().into_text().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn target_host_handoff_create_replies_only_with_new_live_identity() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first)],
+            client,
+            1,
+            "Target.createTarget",
+            json!({"url":"https://example.org/"}),
+            true,
+            None,
+        );
+        let request = cdp.take_target_request().expect(
+            "Target.createTarget must hand off to the native host, not report method absent",
+        );
+        assert_eq!(
+            request.action(),
+            &TargetAction::Create {
+                url: "https://example.org/".into()
+            }
+        );
+        assert!(
+            cdp.take_target_request().is_none(),
+            "handoff must be single use"
+        );
+        assert!(
+            matches!(socket.read(), Err(tungstenite::Error::Io(_))),
+            "no reply before native admission"
+        );
+        cdp.complete_target_request(
+            request,
+            Ok(TargetOutcome::Created("page-7".into())),
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+        )
+        .unwrap();
+        assert_eq!(
+            target_reply(&mut socket),
+            json!({"id":1,"result":{"targetId":"page-7"}})
+        );
+        assert_eq!(cdp.live_targets, ["page-1", "page-7"]);
+    }
+
+    #[test]
+    fn target_host_root_route_and_strict_parameter_admission() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+            .unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+        for (index, (method, params, code)) in [
+            ("Target.createTarget", json!({}), -32602),
+            ("Target.createTarget", json!({"url":false}), -32602),
+            (
+                "Target.createTarget",
+                json!({"url":"file:///tmp/a"}),
+                -32602,
+            ),
+            ("Target.createTarget", json!({"url":"about:config"}), -32602),
+            (
+                "Target.createTarget",
+                json!({"url":"https://example.org/","background":false}),
+                -32602,
+            ),
+            (
+                "Target.createTarget",
+                json!({"url":"x".repeat(16_385)}),
+                -32602,
+            ),
+            ("Target.closeTarget", json!({}), -32602),
+            ("Target.closeTarget", json!({"targetId":7}), -32602),
+            ("Target.closeTarget", json!([]), -32602),
+            ("Target.activateTarget", json!({}), -32602),
+            (
+                "Target.closeTarget",
+                json!({"targetId":"page-7","browserContextId":"x"}),
+                -32602,
+            ),
+            ("Target.closeTarget", json!({"targetId":"page-99"}), -32000),
+            (
+                "Target.activateTarget",
+                json!({"targetId":"page-99"}),
+                -32000,
+            ),
+            (
+                "Target.activateTarget",
+                json!({"targetId":"page-7","extra":true}),
+                -32602,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first), ("page-7", &mut second)],
+                client,
+                index as u64,
+                method,
+                params,
+                true,
+                None,
+            );
+            let reply = target_reply(&mut socket);
+            assert_eq!(reply["error"]["code"], code, "{method}: {reply}");
+            assert!(cdp.take_target_request().is_none());
+        }
+        let attached = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut socket,
+            50,
+            "Target.attachToTarget",
+            json!({"targetId":"page-7","flatten":true}),
+            None,
+        );
+        let session = attached["result"]["sessionId"].as_str().unwrap().to_owned();
+        for (index, method) in [
+            "Target.createTarget",
+            "Target.closeTarget",
+            "Target.activateTarget",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let params = if method.ends_with("createTarget") {
+                json!({"url":""})
+            } else {
+                json!({"targetId":"page-7"})
+            };
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first), ("page-7", &mut second)],
+                client,
+                60 + index as u64,
+                method,
+                params,
+                true,
+                Some(&session),
+            );
+            assert_eq!(target_reply(&mut socket)["error"]["code"], -32602);
+            assert!(cdp.take_target_request().is_none());
+        }
+        let mut direct = wire(&cdp, "/devtools/page/page-1");
+        let direct_client = cdp.server.page_clients()[0].0;
+        for (index, method) in [
+            "Target.createTarget",
+            "Target.closeTarget",
+            "Target.activateTarget",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let params = if method.ends_with("createTarget") {
+                json!({"url":""})
+            } else {
+                json!({"targetId":"page-7"})
+            };
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first), ("page-7", &mut second)],
+                direct_client,
+                70 + index as u64,
+                method,
+                params,
+                false,
+                None,
+            );
+            assert_eq!(target_reply(&mut direct)["error"]["code"], -32602);
+            assert!(cdp.take_target_request().is_none());
+        }
+    }
+
+    #[test]
+    fn target_host_blank_and_http_urls_are_validated_before_native_admission() {
+        let mut first = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+        for (index, (source, normalized)) in [
+            ("", ""),
+            ("about:blank", "about:blank"),
+            ("http://EXAMPLE.org:80/path", "http://example.org/path"),
+            ("https://EXAMPLE.org:443/", "https://example.org/"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first)],
+                client,
+                index as u64,
+                "Target.createTarget",
+                json!({"url":source}),
+                true,
+                None,
+            );
+            let request = cdp.take_target_request().unwrap();
+            assert_eq!(
+                request.action(),
+                &TargetAction::Create {
+                    url: normalized.into()
+                }
+            );
+            cdp.complete_target_request(
+                request,
+                Err("Native admission deliberately refused".into()),
+                &mut [("page-1", &mut first)],
+            )
+            .unwrap();
+            assert_eq!(target_reply(&mut socket)["error"]["code"], -32000);
+        }
+    }
+
+    #[test]
+    fn target_host_request_cannot_complete_another_browser_broker() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let (mut one, mut two) = (BrowserCdp::bind(0).unwrap(), BrowserCdp::bind(0).unwrap());
+        one.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        two.tick_pages(&mut [("page-1", &mut second)]).unwrap();
+        let _first_socket = wire(&one, "/devtools/browser/browser-1");
+        let mut second_socket = wire(&two, "/devtools/browser/browser-1");
+        let (first_client, second_client) =
+            (one.server.client_ids()[0], two.server.client_ids()[0]);
+        target_command(
+            &mut one,
+            &mut [("page-1", &mut first)],
+            first_client,
+            1,
+            "Target.createTarget",
+            json!({"url":""}),
+            true,
+            None,
+        );
+        target_command(
+            &mut two,
+            &mut [("page-1", &mut second)],
+            second_client,
+            2,
+            "Target.createTarget",
+            json!({"url":""}),
+            true,
+            None,
+        );
+        let wrong = one.take_target_request().unwrap();
+        let right = two.take_target_request().unwrap();
+        assert!(
+            two.complete_target_request(
+                wrong,
+                Err("Not admitted".into()),
+                &mut [("page-1", &mut second)]
+            )
+            .is_err()
+        );
+        assert!(one.target_request.is_some());
+        assert!(two.target_request.is_some());
+        two.complete_target_request(
+            right,
+            Err("Not admitted".into()),
+            &mut [("page-1", &mut second)],
+        )
+        .unwrap();
+        assert_eq!(target_reply(&mut second_socket)["id"], 2);
+        // Losing the first host's ticket is a trusted embedding programming
+        // error: only dropping that broker, not a replay, resolves ownership.
+        assert!(one.take_target_request().is_none());
+    }
+
+    #[test]
+    fn target_host_unavailable_final_tab_and_capacity_are_explicit() {
+        let mut first = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        for (index, (method, params)) in [
+            ("Target.createTarget", json!({"url":""})),
+            ("Target.activateTarget", json!({"targetId":"page-1"})),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let reply = rpc_pages(
+                &mut cdp,
+                &mut [("page-1", &mut first)],
+                &mut socket,
+                index as u64,
+                method,
+                params,
+                None,
+            );
+            assert_eq!(reply["error"]["code"], -32000, "{reply}");
+            assert!(reply["error"]["message"].as_str().unwrap().contains("host"));
+        }
+        let client = cdp.server.client_ids()[0];
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first)],
+            client,
+            3,
+            "Target.closeTarget",
+            json!({"targetId":"page-1"}),
+            true,
+            None,
+        );
+        assert_eq!(target_reply(&mut socket)["error"]["code"], -32000);
+        assert!(cdp.take_target_request().is_none());
+        let mut apps: Vec<_> = (0..16).map(|_| fixture()).collect();
+        let ids: Vec<_> = (1..=16).map(|i| format!("page-{i}")).collect();
+        let mut pages: Vec<_> = ids
+            .iter()
+            .zip(apps.iter_mut())
+            .map(|(id, app)| (id.as_str(), app))
+            .collect();
+        cdp.tick_pages(&mut pages).unwrap();
+        target_command(
+            &mut cdp,
+            &mut pages,
+            client,
+            4,
+            "Target.createTarget",
+            json!({"url":"about:blank"}),
+            true,
+            None,
+        );
+        assert_eq!(target_reply(&mut socket)["error"]["code"], -32000);
+        assert!(cdp.take_target_request().is_none());
+    }
+
+    #[test]
+    fn target_host_failed_creation_and_invalid_outcomes_never_claim_success() {
+        for case in 0..5 {
+            let (mut first, mut second) = (fixture(), fixture());
+            let mut cdp = BrowserCdp::bind(0).unwrap();
+            cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+            let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+            let client = cdp.server.client_ids()[0];
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first)],
+                client,
+                1,
+                "Target.createTarget",
+                json!({"url":""}),
+                true,
+                None,
+            );
+            let request = cdp
+                .take_target_request()
+                .expect("create host handoff required");
+            let result = match case {
+                0 => cdp.complete_target_request(
+                    request,
+                    Err("Native tab admission failed".into()),
+                    &mut [("page-1", &mut first)],
+                ),
+                1 => cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Created("page-1".into())),
+                    &mut [("page-1", &mut first)],
+                ),
+                2 => cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Created("page-99".into())),
+                    &mut [("page-1", &mut first)],
+                ),
+                3 => cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Closed),
+                    &mut [("page-1", &mut first)],
+                ),
+                _ => cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Created("page-7".into())),
+                    &mut [("page-7", &mut second)],
+                ),
+            };
+            assert_eq!(
+                result.is_ok(),
+                case == 0,
+                "invalid host outcomes must fail closed"
+            );
+            assert_eq!(target_reply(&mut socket)["error"]["code"], -32000);
+            assert!(cdp.take_target_request().is_none());
+        }
+    }
+
+    #[test]
+    fn target_host_disconnect_before_handoff_cancels_without_replay() {
+        let mut first = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first)],
+            client,
+            1,
+            "Target.createTarget",
+            json!({"url":""}),
+            true,
+            None,
+        );
+        assert!(
+            cdp.target_request.is_some(),
+            "a real action must be queued before disconnect"
+        );
+        drop(socket);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while cdp.server.client_ids().contains(&client) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(cdp.take_target_request().is_none());
+        let _replacement = wire(&cdp, "/devtools/browser/browser-1");
+        assert!(cdp.take_target_request().is_none());
+        assert_eq!(cdp.live_targets, ["page-1"]);
+    }
+
+    #[test]
+    fn target_host_disconnect_after_handoff_completes_once_without_retargeting() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first)],
+            client,
+            1,
+            "Target.createTarget",
+            json!({"url":""}),
+            true,
+            None,
+        );
+        let request = cdp.take_target_request().unwrap();
+        drop(socket);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while cdp.server.client_ids().contains(&client) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut replacement = wire(&cdp, "/devtools/browser/browser-1");
+        cdp.complete_target_request(
+            request,
+            Ok(TargetOutcome::Created("page-7".into())),
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+        )
+        .unwrap();
+        assert!(matches!(replacement.read(), Err(tungstenite::Error::Io(_))));
+        assert!(cdp.take_target_request().is_none());
+        assert_eq!(cdp.live_targets, ["page-1", "page-7"]);
+    }
+
+    #[test]
+    fn target_host_ticket_and_close_activate_outcomes_are_checked() {
+        for close in [false, true] {
+            let (mut first, mut second) = (fixture(), fixture());
+            let mut cdp = BrowserCdp::bind(0).unwrap();
+            cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+                .unwrap();
+            let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+            let client = cdp.server.client_ids()[0];
+            let method = if close {
+                "Target.closeTarget"
+            } else {
+                "Target.activateTarget"
+            };
+            target_command(
+                &mut cdp,
+                &mut [("page-1", &mut first), ("page-7", &mut second)],
+                client,
+                1,
+                method,
+                json!({"targetId":"page-7"}),
+                true,
+                None,
+            );
+            let request = cdp.take_target_request().unwrap();
+            // The ticket cannot be manufactured by an embedding. This internal
+            // forged-ticket control proves broker identity as well as ownership.
+            let forged = TargetRequest {
+                action: request.action.clone(),
+                ticket: Arc::new(()),
+            };
+            assert!(
+                cdp.complete_target_request(
+                    forged,
+                    Ok(TargetOutcome::Activated),
+                    &mut [("page-1", &mut first), ("page-7", &mut second)]
+                )
+                .is_err()
+            );
+            assert!(cdp.target_request.is_some());
+            let result = if close {
+                cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Closed),
+                    &mut [("page-1", &mut first), ("page-7", &mut second)],
+                )
+            } else {
+                cdp.complete_target_request(
+                    request,
+                    Ok(TargetOutcome::Activated),
+                    &mut [("page-1", &mut first)],
+                )
+            };
+            assert!(result.is_err());
+            assert_eq!(target_reply(&mut socket)["error"]["code"], -32000);
+            assert!(cdp.target_request.is_none());
+        }
+    }
+
+    #[test]
+    fn target_host_single_flight_completion_requires_a_fresh_tick_to_drain() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first)]).unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        for request in [
+            json!({"id":1,"method":"Target.createTarget","params":{"url":"about:blank"}}),
+            json!({"id":2,"method":"Target.getTargets"}),
+        ] {
+            socket
+                .send(tungstenite::Message::Text(request.to_string().into()))
+                .unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let request = loop {
+            assert!(Instant::now() < deadline, "real create handoff missing");
+            cdp.tick_pages_with_target_host(&mut [("page-1", &mut first)])
+                .unwrap();
+            if let Some(request) = cdp.take_target_request() {
+                break request;
+            }
+            if let Ok(tungstenite::Message::Text(text)) = socket.read() {
+                panic!("mutation replied before native host: {text}");
+            }
+        };
+        cdp.tick_pages_with_target_host(&mut [("page-1", &mut first)])
+            .unwrap();
+        assert!(matches!(socket.read(), Err(tungstenite::Error::Io(_))));
+        cdp.complete_target_request(
+            request,
+            Ok(TargetOutcome::Created("page-7".into())),
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+        )
+        .unwrap();
+        assert_eq!(target_reply(&mut socket)["id"], 1);
+        assert!(
+            matches!(socket.read(), Err(tungstenite::Error::Io(_))),
+            "completion must not recursively drain queued commands"
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(Instant::now() < deadline);
+            cdp.tick_pages_with_target_host(&mut [("page-1", &mut first), ("page-7", &mut second)])
+                .unwrap();
+            if let Ok(tungstenite::Message::Text(text)) = socket.read() {
+                let reply: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(reply["id"], 2);
+                assert_eq!(reply["result"]["targetInfos"].as_array().unwrap().len(), 2);
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn target_host_activate_and_close_reconcile_before_reply() {
+        let (mut first, mut second) = (fixture(), fixture());
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut first), ("page-7", &mut second)])
+            .unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        let mut direct = wire(&cdp, "/devtools/page/page-7");
+        let client = cdp
+            .server
+            .client_ids()
+            .into_iter()
+            .find(|client| !cdp.server.page_client_ids().contains(client))
+            .unwrap();
+        let attached = rpc_pages(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            &mut socket,
+            1,
+            "Target.attachToTarget",
+            json!({"targetId":"page-7","flatten":true}),
+            None,
+        );
+        let session = attached["result"]["sessionId"].as_str().unwrap().to_owned();
+        let pending_route = Route {
+            client,
+            session: Some(session.clone()),
+        };
+        cdp.pending.push(Pending {
+            target: "page-7".into(),
+            route: pending_route,
+            id: json!(99),
+            generation: second.generation,
+        });
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            client,
+            2,
+            "Target.activateTarget",
+            json!({"targetId":"page-7"}),
+            true,
+            None,
+        );
+        let request = cdp
+            .take_target_request()
+            .expect("activation needs actual native host");
+        assert_eq!(
+            request.action(),
+            &TargetAction::Activate {
+                target: "page-7".into()
+            }
+        );
+        cdp.complete_target_request(
+            request,
+            Ok(TargetOutcome::Activated),
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+        )
+        .unwrap();
+        assert_eq!(target_reply(&mut socket), json!({"id":2,"result":{}}));
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut first), ("page-7", &mut second)],
+            client,
+            3,
+            "Target.closeTarget",
+            json!({"targetId":"page-7"}),
+            true,
+            None,
+        );
+        let request = cdp
+            .take_target_request()
+            .expect("closure needs actual native host");
+        assert_eq!(
+            request.action(),
+            &TargetAction::Close {
+                target: "page-7".into()
+            }
+        );
+        cdp.complete_target_request(
+            request,
+            Ok(TargetOutcome::Closed),
+            &mut [("page-1", &mut first)],
+        )
+        .unwrap();
+        assert_eq!(
+            target_reply(&mut socket)["id"],
+            99,
+            "pending navigation teardown precedes close success"
+        );
+        assert_eq!(
+            target_reply(&mut socket)["method"],
+            "Target.detachedFromTarget"
+        );
+        assert_eq!(
+            target_reply(&mut socket),
+            json!({"id":3,"result":{"success":true}})
+        );
+        assert!(read_wire(&mut direct).is_err());
+        assert_eq!(cdp.live_targets, ["page-1"]);
     }
 
     #[test]

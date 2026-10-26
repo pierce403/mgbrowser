@@ -106,6 +106,13 @@ two equal-width groups; preferences, bookmarks, network session and updater are
 host-shared. The 16-tab/four-window cap is not an aggregate page-memory quota.
 `BrowserCdp::tick_pages` receives every live tab, including hidden pages, under
 stable target IDs. Neither switching nor detaching changes a target's identity.
+The next target-mutation increment keeps native ownership in that same host:
+Chassis hands off an opaque, single-use validated action and stops command
+draining. Desktop creates/selects/closes the actual payload, then Chassis
+reconciles the full fresh roster before replying. Ordinary embedding ticks
+reject mutations without this explicit host integration. Protocol-created
+about:blank documents use `new_blank_with_session`; native welcome tabs retain
+their existing constructor. See [the bounded contract](TARGET_LIFECYCLE.md).
 
 Chassis fences navigation generations and validates returned DOM/default actions.
 The platform service owns child processes, isolation, cumulative accounting,

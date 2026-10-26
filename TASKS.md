@@ -1,9 +1,21 @@
 # Work queue
 
+2026-10-26: v0.9.20's separate documentation closeout passes at
+`c30570b4f9654adf168343d1474e76d89b92a426`, with all eight exact-source checks
+and matching public delivery revalidated. The next bounded browser increment is
+the real native target mutation foundation in
+[docs/TARGET_LIFECYCLE.md](docs/TARGET_LIFECYCLE.md): create, activate and close
+actual tabs through the existing workspace owner. Implementation and local
+Rust/JSPLAN, reviewed WPT, package/native/Runtime/layout/original and frozen-worker
+gates pass; exact-source CI and release/public acceptance remain pending, not
+shipped. Automatic attachment and the full
+pinned Playwright journey remain separate open requirements.
+
 2026-10-25 resumed: the user explicitly approved running the remaining release
 checks and added **reddit.com and news.google.com load and look as expected** to
 the broader goal. The bounded Runtime foundation shipped as v0.9.20; complete
-its separate documentation-closeout gates before the next browser increment.
+its separate documentation-closeout gates before the next browser increment
+(completed at the separately verified commit above).
 Then pursue the real-site reading/visual acceptance in [docs/SITE_COMPATIBILITY.md](docs/SITE_COMPATIBILITY.md)
 under F-027/F-025. Neither site is complete today; preserve the prior failures,
 resource limits and the Google News reading-first/interactions-later decision.

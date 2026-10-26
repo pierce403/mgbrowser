@@ -151,11 +151,15 @@ this exact client/workflow before changing its status.
 
 ## Proposed implementation sequence
 
-This is a source-derived sequence, not completed client acceptance. The current
-unreleased source integrates the [separately frozen Runtime contract](RUNTIME_AUTOMATION.md).
-Its focused typed-realm, parent/broker and actual child controls pass. Both
-native/CDP proofs and local Rust/JSPLAN regressions pass; fresh reviewed scores
-and package/public release gates remain separate. Its permission
+This is a source-derived sequence, not completed client acceptance.
+v0.9.20 ships the [separately frozen Runtime contract](RUNTIME_AUTOMATION.md).
+Its focused typed-realm, parent/broker, actual child, native/CDP and local
+Rust/JSPLAN controls pass. Both complete score lanes, normal publication and
+public install/update acceptance pass separately in the
+[public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout).
+The next native target mutation increment is separately scoped in
+[TARGET_LIFECYCLE.md](TARGET_LIFECYCLE.md), with release acceptance pending.
+Neither increment completes the client journey. Runtime's permission
 policy requires remote debugging **and effective
 page scripting enabled**, whether by the current default or `--enable-scripts`.
 `--disable-scripts` must remain effective: debugging alone never starts,
@@ -171,8 +175,9 @@ Before source adoption, [RUNTIME_AUTOMATION.md](RUNTIME_AUTOMATION.md) froze typ
 request/reply/value forms, numeric handle/argument/property/serialization
 admissions and authored negative controls. Preserve that contract during current
 integration. Do not infer correctness from client success or enlarge an old bound
-to fit an injected utility. Current source uses strict modern-v8; public v0.9.19
-still has no Runtime implementation. Full client criteria remain unchecked.
+to fit an injected utility. Current source and public v0.9.20 use strict
+modern-v8; the recorded public v0.9.19 baseline had no Runtime implementation.
+Full client criteria remain unchecked.
 
 - Expose only an existing accepted, usable main-world worker context. Identity
   includes target, worker session, navigation generation and world, plus client/
@@ -208,8 +213,8 @@ still has no Runtime implementation. Full client criteria remain unchecked.
   Carry real bounded native control edits and version acknowledgements where
   needed, preserving newer typing. Runtime evaluation is not a click/submit and
   grants no user activation or fabricated lifecycle/default action.
-- Preserve modern-v7/legacy-v1 separation and deliberately version a new typed
-  automation envelope. Keep 64 transactions, 64 KiB later frames, 4 MiB replies,
+- Preserve strict modern-v8/legacy-v1 separation and the typed automation
+  envelope. Keep 64 transactions, 64 KiB later frames, 4 MiB replies,
   32 MiB lifetime wire, 2s active/300s absolute lifetime and all source/opcode/
   System/DOM/process/work limits. Existing Event/TaskPump cannot acquire script
   payloads. New admission must account for handles, conversion and cleanup too.
@@ -252,8 +257,8 @@ F-024 acceptance, the unchanged client journey and all other features stay open.
    public connection options have no `noDefaults` or `acceptDownloads` escape.
 
 2. **Ordinary locator fill/click on the existing authored form fixture.**
-   The untouched locator utility is 305,013 source bytes. Current modern-v7
-   Event/TaskPump frames allow only 64 KiB, and the CDP incoming-command ceiling
+   The untouched locator utility is 305,013 source bytes. Current modern-v8
+   later frames allow only 64 KiB, and the CDP incoming-command ceiling
    is 256 KiB: the stock utility exceeds both before JSON/wrapper overhead.
    Full locator support needs a separate explicit transport/resource-policy
    review, not fragmentation, repeated Init or a silent Event/TaskPump cap change.

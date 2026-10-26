@@ -1354,7 +1354,7 @@ F-003 and F-004 initially; broader browser capabilities for eventual full protoc
 
 ### Properties
 
-Opt-in, loopback-only CDP controls the actual native browser. The subset covers discovery, stable per-tab targets, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Native tab moves retain target identity; closed targets reject requests. Protocol-driven creation/closing and auto-attachment remain unsupported. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
+Opt-in, loopback-only CDP controls the actual native browser. The subset covers discovery, stable per-tab targets, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Native tab moves retain target identity; closed targets reject requests. The next source increment adds native-host-backed creation/activation/closure under docs/TARGET_LIFECYCLE.md; release acceptance remains pending. Auto-attachment remains unsupported. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
 
 v0.9.20 adds synchronous main-world evaluation/calls in the existing restricted
 page worker, bounded remote handles, supported own-property inspection and

@@ -2,6 +2,27 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
+## v0.9.21 candidate: native CDP target control
+
+The next release adds real `Target.createTarget`, `activateTarget` and
+`closeTarget` through the native workspace owner. Blank targets are empty
+documents; HTTP(S) navigation starts only after tab admission. Activation
+selects the actual tab/pane/window and requests X11 focus; closure retires only
+that tab's payload/routes. The last native tab cannot be closed through CDP in
+this subset. Unsupported options and routes reject explicitly.
+
+Focused checks, all20 final-version Rust/harness gates and all8 frozen JSPLAN
+gates pass. The first packaged native target proof passes, with all eight images
+inspected. Both complete reviewed WPT lanes remain static339/610/62 of1,011
+and Window15/16 files,77/79 final subtests, with no new upstream passes.
+Normal package/installer/updater, all13 native helpers, both Runtime proofs,
+all8 layout proofs, original26/26 journeys and frozen worker controls pass;
+all14 Runtime and36 layout images were inspected. Exact-source CI/hosting and
+public release acceptance are pending. Autoattachment, downloads, promise awaiting, utility worlds and the
+unchanged full Playwright journey remain unfinished. The public installer still
+follows the latest actually published release, verified below.
+[Contract](docs/TARGET_LIFECYCLE.md) and [candidate notes](docs/RELEASE-v0.9.21.md).
+
 ## Latest verified release: v0.9.20
 
 v0.9.20 adds a bounded worker-backed main-world Runtime foundation:

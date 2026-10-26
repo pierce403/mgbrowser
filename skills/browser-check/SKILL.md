@@ -423,6 +423,19 @@ count is workspace-wide, while groups is per window. Check those meanings agains
 actual routing, visible windows and pixels rather than treating count as the
 number of tabs in that one window.
 
+For native Target mutations, follow docs/TARGET_LIFECYCLE.md and run
+tools/test_target_lifecycle_smoke.py separately as fourteen pure checker groups.
+Build the normal release target_lifecycle_smoke client and use
+tools/target-lifecycle-smoke.py with explicit packaged/public binary, client,
+server and font hashes plus version/build identity. Preserve the old thirteen
+native helpers and both Runtime proofs. Require the real empty blank DOM,
+seven successful mutations, twenty mutation negatives, actual focus/title,
+stable routes/roots across native detach/redock, teardown before the close reply,
+closed direct socket/404, final-tab rejection and surviving-page state. Review
+all raw source/resource/cleanup evidence and all eight actual images. The
+old-public missing-method baseline is a failure witness, not browser acceptance;
+the successful authored journey adds no WPT passes or ordinary Playwright claim.
+
 For native inspection, build inspector_smoke and run tools/inspector-smoke.sh
 against the packaged and public-installed binary. Check actual right-click
 selection, input isolation, fresh navigation and real CSS/resource/script

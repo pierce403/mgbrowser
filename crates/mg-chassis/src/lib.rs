@@ -13,7 +13,7 @@ mod scale;
 pub mod scripts;
 mod scroll;
 mod theme;
-pub use cdp_browser::BrowserCdp;
+pub use cdp_browser::{BrowserCdp, TargetAction, TargetOutcome, TargetRequest};
 pub use initial_load::{InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus};
 use mg_sparkle::{
     document::{self, Document, Item},
@@ -606,6 +606,24 @@ impl Browser {
         scripts: Arc<dyn scripts::ScriptRuntime>,
         session: net::Session,
     ) -> Self {
+        Self::new_initial_document(fonts, scripts, session, false)
+    }
+    /// Create a genuinely empty about:blank page for a host-owned new target.
+    /// This does not navigate, execute scripts, or grant debugging authority.
+    /// Ordinary native new tabs retain their welcome document.
+    pub fn new_blank_with_session(
+        fonts: Fonts,
+        scripts: Arc<dyn scripts::ScriptRuntime>,
+        session: net::Session,
+    ) -> Self {
+        Self::new_initial_document(fonts, scripts, session, true)
+    }
+    fn new_initial_document(
+        fonts: Fonts,
+        scripts: Arc<dyn scripts::ScriptRuntime>,
+        session: net::Session,
+        blank: bool,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             devtools: devtools::State::default(),
@@ -642,10 +660,14 @@ impl Browser {
             height: 820,
             address: String::new(),
             status: "Experimental browser · Rust document flow · Boa ECMAScript".into(),
-            document: document::parse(
-                "<title>mgbrowser</title><h1>mgbrowser</h1><p>Enter a URL above to begin browsing.</p>",
-                "https://mgbrowser.org/",
-            ),
+            document: if blank {
+                document::parse("", "about:blank")
+            } else {
+                document::parse(
+                    "<title>mgbrowser</title><h1>mgbrowser</h1><p>Enter a URL above to begin browsing.</p>",
+                    "https://mgbrowser.org/",
+                )
+            },
             values: HashMap::new(),
             page_url: "about:blank".into(),
             page_mime: "text/html".into(),
