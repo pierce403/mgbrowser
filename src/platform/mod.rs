@@ -10,7 +10,7 @@ use mg_chassis::{
 };
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{SessionInput, SessionReply, TaskPump},
+    page_session::{SessionInput, SessionReply, TaskPump, automation::AutomationRequest},
     paint::Fonts,
 };
 use std::time::Duration;
@@ -78,12 +78,17 @@ impl ScriptSession for script_worker::Session {
     fn try_task_pump(&mut self, pump: TaskPump, revision: u64) -> Result<u64, String> {
         self.try_task_pump(pump, revision)
     }
+    fn try_automation(&mut self, request: AutomationRequest, revision: u64) -> Result<u64, String> {
+        self.try_automation(request, revision)
+    }
     fn try_recv(&mut self) -> Option<SessionUpdate> {
         self.try_recv().map(|update| SessionUpdate {
             generation: update.generation,
             session_id: update.session_id,
             sequence: update.sequence,
             reply: update.reply,
+            automation: update.automation,
+            continuation: update.continuation,
         })
     }
     fn cancel(&self) {

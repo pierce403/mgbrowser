@@ -2,7 +2,7 @@
 
 mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The implementation is a bounded subset with stable targets for existing tabs. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
 
-The initial contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Production page scripts use the restricted [Boa page execution lane](BOA.md), enabled by default since v0.9.4 with `--disable-scripts` to opt out, but expose no remote execution contexts: `Runtime.evaluate` still returns method-not-found (`-32601`). The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline. There is no Runtime domain in the advertised subset.
+The contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Page scripts use the restricted [Boa page execution lane](BOA.md), enabled by default since v0.9.4 with `--disable-scripts` to opt out. The current source adds the synchronous [worker-backed Runtime subset](RUNTIME_AUTOMATION.md); its integration/release acceptance is still in progress. Public v0.9.19 does not implement Runtime. The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline, without automation authority.
 
 ## Connection and scope
 
@@ -48,6 +48,11 @@ commands if IDs are duplicate, recycled, out of allocation order, noncanonical
 remain bound to the same Browser payload. The original `tick(&mut Browser)`
 wrapper retains the single `page-1` embedding contract. Transport client, queue,
 message, and per-client attached-session limits are unchanged.
+Hosts must enable debugging explicitly on each Browser. Before dropping a
+BrowserCdp while retaining its Browsers, call `set_debugging(false)` on them.
+This retires only exact workers that accepted automation, not ordinary pages
+or replacement sessions. The native host does so on protocol failure; normal
+Browser teardown already cancels and reaps its workers.
 
 The endpoint grants control of this browser session to local clients. The transport checks loopback Host values; an Origin must be absent or the same loopback HTTP origin and port. Other web origins are rejected. It limits clients, message sizes, pending commands, and output queues; an oversized or stalled client is disconnected. It is not a remote hosting service or an authentication mechanism for other local users.
 
@@ -58,7 +63,7 @@ The initial local CDP journey passed on 2026-09-07: the external WebSocket clien
 The same external journey also passes with opt-in scripts at `/script-home` and
 `/script-dynamic`. The latter creates its real form through the original Function
 constructor and direct JavaScript eval inside the restricted worker. CDP reads
-and operates the resulting DOM; it does not evaluate code itself. Recovery after
+and operates the resulting DOM without requiring Runtime. Recovery after
 the local `/script-loop` fuel error is separately checked before onward navigation.
 
 | Domain | Commands |
@@ -68,6 +73,7 @@ the local `/script-loop` fuel error is separately checked before onward navigati
 | Page | `enable`, `disable`, `navigate`, `reload`, `getFrameTree`, `getLayoutMetrics`, `captureScreenshot` |
 | DOM | `enable`, `disable`, `getDocument`, `querySelector`, `querySelectorAll`, `getAttributes`, `getBoxModel`, `focus` |
 | Input | `dispatchMouseEvent`, `dispatchKeyEvent`, `insertText` |
+| Runtime | `enable`, `disable`, `evaluate`, `callFunctionOn`, `getProperties`, `releaseObject`, `releaseObjectGroup` |
 
 `Browser.getVersion` identifies mgbrowser and reports `jsVersion: "mgbrowser-js/0.1-experimental"`. This identifies the bundled partial interpreter, not whether script execution is enabled for a document. Protocol fields have their ordinary [Browser-domain meanings](https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-getVersion).
 
@@ -111,7 +117,66 @@ There is no asynchronous Input-completion event in this subset. Editing can
 continue while a reply is pending; version acknowledgments
 cannot erase newer typing. An accepted event snapshot invalidates all CDP node IDs
 and emits only DOM.documentUpdated, not a page load. Requery before further DOM
-operations. This adds no commands, remote execution context or Runtime evaluation.
+operations. That retained-event increment itself added no Runtime commands;
+the separate source integration is described below.
+
+## Synchronous worker-backed Runtime
+
+This subset operates only an existing accepted main world after LoadComplete,
+with debugging and scripting enabled. It cannot enable scripts, start a new
+worker, renew allowances or enter the trusted Window-observer/legacy lanes.
+Busy/loading/expired/failed realms reject explicitly. Direct page and flattened
+routes share the actual realm but have separate owners; handles from another
+connection/session/context cannot be used. Context identity survives projections
+and native tab moves, not navigation, closure or terminal failure.
+
+`evaluate` executes arbitrary admitted source. `callFunctionOn` compiles a real
+function and preserves receiver/argument identity through native guarded calls.
+Omit both objectId/executionContextId to select the realm global. Source is at
+most16KiB; calls accept at most32 arguments/16KiB encoded arguments. Object groups
+are at most64 UTF-8 bytes, with32 live groups. See the full numeric admissions in
+[RUNTIME_AUTOMATION.md](RUNTIME_AUTOMATION.md). Existing worker/wire/System/CPU/
+source/opcode/task bounds still apply, including64 total transactions and the
+300-second absolute lifetime. No reserved automation allowance or restart exists.
+
+Top-level undefined/null/booleans/strings, numeric special values and bounded
+BigInts are exact. Returned objects are actual traced worker roots, not DOM node
+IDs. By-value output admits bounded ordinary own enumerable data trees/dense
+arrays, without getters, proxies, toJSON or coercion. Cycles, holes, symbol keys,
+unsupported exotics and compound negative zero reject, never silently normalize.
+The current external JSON codec cannot represent unpaired UTF-16 surrogates;
+reject them before staged root publication, without lossy replacement.
+
+`getProperties` requires `ownProperties:true` and returns complete own descriptors
+in native key order, at most64. It does not invoke accessors/proxies or run a
+checkpoint. Accessor functions are real handles. Explicit release drops roots,
+never cumulative accounting; unknown/foreign IDs reject and same-owner duplicate
+release is idempotent. Disable only stops notifications: release, detach or
+disconnect for cleanup. Revoked owners remain capacity-charged until one ordinary
+single-flight cleanup is accepted. If existing allowance prevents cleanup, that
+same worker is canceled; a replacement is never canceled for an old context.
+
+Parent validation and exactly one active charge precede DOM/result publication.
+Control edits preserve newer typing. Ordinary exceptions/representation rejection
+retain real preceding effects. Terminal final-sequence results may return data,
+never surviving handles; their result/rejection precedes context destruction.
+Evaluate/call perform one outer checkpoint after success or ordinary exception;
+property/release/cleanup commands run no JavaScript or checkpoint.
+
+Caught exceptions use bounded native diagnostics without reading script-controlled
+name/message/stack properties and do not dispatch page onerror. Our explicitly
+narrowed ExceptionDetails omits unknown source positions and stacks, unlike the
+full upstream required shape. If the thrown value cannot be represented, both
+the exception member and command result are absent: not fabricated undefined.
+This divergence is intentional and does not imply ordinary client compatibility.
+
+Promise awaiting, utility worlds, user activation, previews, silent execution,
+command-line helpers, side-effect analysis and REPL mode are unsupported. Their
+semantic flags accept only false; unknown parameters reject. There is no DOM
+resolveNode/requestNode bridge, Debugger domain or exception-event stream.
+Enabling Runtime acknowledges before reporting existing actual contexts; context
+destruction precedes replacement creation. Full Playwright remains a separate
+unmodified-client gate, including its still-failing attachment initialization.
 
 Enabled Page sessions receive `frameStartedLoading`, `frameNavigated`, `domContentEventFired`, `loadEventFired`, and `frameStoppedLoading` as the corresponding navigation work occurs. Transport failures omit the two content/load completion events. DOM sessions receive `documentUpdated` when their node references become stale. Attach/detach events describe actual session changes. Navigation errors stay distinguishable from successful content delivery. Event timestamps use monotonic seconds; load events cannot establish that unsupported scripts or images completed.
 
@@ -140,7 +205,8 @@ two real Browser values with equal navigation generations and DOM epochs. They
 verify discovery, direct/attached routing, DOM/input isolation, reordered host
 enumeration, target-specific events and replies, close/detach cancellation, and
 rejected ID reuse. They do not establish ordinary Playwright attachment or
-browser-context/Runtime support.
+browser contexts or worker-backed Runtime behavior. Runtime's separate native
+acceptance must prove its own retained roots, execution, input and paint.
 
 Build `workspace_cdp_smoke`, then run
 `bash tools/workspace-cdp-smoke.sh /absolute/path/to/mgbrowser` against the
@@ -170,7 +236,7 @@ Run the separate client through the public page WebSocket:
 cargo run --locked --example cdp_journey -- ws://127.0.0.1:9222/devtools/page/page-1 http://127.0.0.1:7878/ tmp/cdp-journey.png
 ```
 
-The client has a 30-second deadline and prints `CDP_JOURNEY_OK` only after its assertions pass. It also exercises a separate flattened browser session and checks that `Runtime.evaluate` is explicitly unsupported. The fixture server and browser remain open until stopped by the operator. Local evidence from the initial run is in ignored `tmp/cdp-client.log`, `tmp/cdp-browser.log`, and `tmp/cdp-journey.png`.
+The client has a 30-second deadline and prints `CDP_JOURNEY_OK` only after its assertions pass. It also exercises a separate flattened browser session and checks an unknown Runtime method returns `-32601`. The initial v0.1-era client used Runtime.evaluate for that negative before its implementation; the separate Runtime journey must prove the new real behavior. The fixture server and browser remain open until stopped by the operator. Local evidence from the initial run is in ignored `tmp/cdp-client.log`, `tmp/cdp-browser.log`, and `tmp/cdp-journey.png`.
 
 Continued acceptance must cover the full advertised contract: discovery, direct and attached sessions, request/response IDs, event gating, stale node/session rejection, supported parameters, limits, selectors against the real tree, input focus/text/submission, coordinates after scrolling, and PNG dimensions. Live Google search and first-result navigation remain separate product acceptance; a CDP connection or successful fixture cannot prove those work.
 
@@ -178,7 +244,7 @@ The full-protocol direction is staged around real browser capabilities:
 
 1. Freeze the advertised subset and add independent protocol/client fixtures. Validate every advertised method, optional parameter, result, event, and error path. Pin a reviewed upstream schema revision for future changes; tip-of-tree changes are not automatically adopted.
 2. Add real frame/target lifecycles, navigation history, cancellation, Network request/response/error events, resource bodies, and more accurate layout/DOM inspection as their browser implementations mature.
-3. Expand the Boa-backed Rust execution facade and web bindings, then expose Runtime execution contexts, object handles, evaluation, exceptions, and Debugger behavior. Internal retained page realms now support bounded later activation, but expose no remote Runtime context. Execution and isolation tests precede compatibility claims.
+3. Complete acceptance and release of the synchronous worker-backed Runtime foundation, then implement broader execution/Debugger behavior only under separately reviewed contracts. Promise awaiting and utility worlds are not part of this subset. Execution, isolation and actual client tests precede compatibility claims.
 4. Connect actual style/compositing and platform features to CSS, DOMSnapshot, Accessibility, Emulation, storage, workers, profiling, tracing, and the remaining relevant domains. Maintain an explicit inventory of unsupported platform-specific features.
 5. Run pinned external clients and DevTools frontend versions against documented workflows. Claim compatibility per client/version/workflow only after observed success; retain the full protocol as the longer-term goal.
 

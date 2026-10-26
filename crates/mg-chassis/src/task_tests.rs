@@ -119,6 +119,8 @@ fn complete(app: &Browser, state: &Arc<Mutex<State>>, reply: SessionReply) {
         session_id: 91,
         sequence: Some(app.page_revision + 1),
         reply: Ok(reply),
+        automation: None,
+        continuation: scripts::SessionContinuation::Live,
     });
 }
 
@@ -433,6 +435,8 @@ fn stale_task_completion_never_publishes_a_projection() {
             session_id: 91,
             sequence: Some(1),
             reply: Ok(reply(&app, None)),
+            automation: None,
+            continuation: scripts::SessionContinuation::Live,
         };
         match field {
             "generation" => update.generation += 1,
@@ -472,6 +476,8 @@ fn unsolicited_success_is_charged_once_but_error_closures_are_not() {
             } else {
                 Err("Expired".into())
             },
+            automation: None,
+            continuation: scripts::SessionContinuation::Live,
         });
         app.poll_page_session();
         assert!(app.script_blocked);
@@ -828,6 +834,8 @@ fn invalid_lifecycle_and_opaque_failures_stop_without_fake_completion() {
                 session_id: 91,
                 sequence: Some(1),
                 reply: Err("Opaque worker transport failure".into()),
+                automation: None,
+                continuation: scripts::SessionContinuation::Live,
             });
         } else {
             let mut invalid = lifecycle_reply(
@@ -1635,6 +1643,8 @@ mod link_default_receipts {
                 session_id: 91,
                 sequence: Some(1),
                 reply: Ok(response),
+                automation: None,
+                continuation: scripts::SessionContinuation::Live,
             };
             match field {
                 "generation" => update.generation = 43,
@@ -1795,6 +1805,8 @@ mod link_default_receipts {
             session_id: 91,
             sequence: Some(1),
             reply: Err("Owned activation transport failure".into()),
+            automation: None,
+            continuation: scripts::SessionContinuation::Live,
         });
         app.poll_page_session();
         retained(

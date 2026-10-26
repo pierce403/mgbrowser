@@ -1261,6 +1261,8 @@ mod tests {
                 session_id: 9,
                 sequence: Some(sequence),
                 reply: Ok(reply),
+                automation: None,
+                continuation: mg_chassis::scripts::SessionContinuation::Live,
             })
         }
         fn cancel(&self) {

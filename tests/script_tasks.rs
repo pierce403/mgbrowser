@@ -1,4 +1,4 @@
-//! Owned modern-v7 process controls; no display, fixture server or parent JS.
+//! Owned modern-v8 process controls; no display, fixture server or parent JS.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use mg_butane::modern::Report;
@@ -55,7 +55,7 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
-        self.send_version(7, sequence, revision, kind, payload);
+        self.send_version(8, sequence, revision, kind, payload);
     }
     fn send_version(
         &mut self,
@@ -65,8 +65,8 @@ impl Peer {
         kind: &str,
         payload: Value,
     ) {
-        let payload = if matches!(version, 6 | 7) && kind == "Init" {
-            // Version 6 keeps its genuine old wrapper in the rejection control.
+        let payload = if matches!(version, 6 | 7 | 8) && kind == "Init" {
+            // Versions6/7 keep their genuine old wrapper in rejection controls.
             json!({"page":payload,"observer":{"kind":"Disabled"}})
         } else {
             payload
@@ -74,7 +74,7 @@ impl Peer {
         self.send_wire(version, sequence, revision, kind, payload);
     }
     fn send_observed_init(&mut self, page: Value, observer: Value) {
-        self.send_wire(7, 0, 0, "Init", json!({"page":page,"observer":observer}));
+        self.send_wire(8, 0, 0, "Init", json!({"page":page,"observer":observer}));
     }
     fn send_wire(&mut self, version: u8, sequence: u64, revision: u64, kind: &str, payload: Value) {
         let payload = serde_json::to_vec(&json!({
@@ -133,7 +133,7 @@ impl Peer {
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 7),
+            ("version", 8),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -141,6 +141,11 @@ impl Peer {
         ] {
             assert_eq!(frame[field], value, "{field}");
         }
+        assert_eq!(
+            frame["result"],
+            json!({"kind":"Page"}),
+            "Page-only reply discriminator"
+        );
         serde_json::from_value::<mg_sparkle::page_session::LifecycleProgress>(
             frame["reply"]["lifecycle"].clone(),
         )
@@ -270,7 +275,7 @@ fn no_activation(frame: &Value) {
 }
 
 // Additive retained CSSOM process control, not an upstream WPT result.
-// Reuses that file's exact modern-v7 Peer, five-second whole harness,
+// Reuses that file's exact modern-v8 Peer, five-second whole harness,
 // <8192-byte input-frame guard, attribute/no_activation/report helpers, and
 // owned child cleanup. No display, fixture server, new profile, or API.
 
@@ -607,7 +612,7 @@ fn real_worker_cssom_methods_retain_identity_priority_and_removal_across_real_cl
 }
 
 #[test]
-fn real_worker_v7_output_configuration_is_init_only_and_keeps_old_contract_off() {
+fn real_worker_v8_output_configuration_is_init_only_and_keeps_old_contract_off() {
     use mg_sparkle::page_session::observer::{ObserverContract, ObserverInit};
     // Synthetic ordinary functions isolate the public process/configuration
     // seam. This is not a full-harness result or a new startup work golden.
@@ -1315,7 +1320,7 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
 #[test]
 fn real_worker_rejects_v1_through_v6_init_and_later_commands_without_reply_or_execution() {
     for (version, kind) in
-        (1..=6).flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
+        (1..=7).flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
     {
         let mut peer = Peer::start();
         let (sequence, payload) = match kind {
@@ -1545,7 +1550,7 @@ fn real_worker_fatal_rejection_delivery_exits_with_parent_input_still_open() {
     assert_eq!(peer.output.read(&mut byte).unwrap(), 0);
 }
 
-// Additive preservation controls for docs/LINK_DEFAULTS.md. These real v7
+// Additive preservation controls for docs/LINK_DEFAULTS.md. These real v8
 // restricted children prove worker default selection, not parent navigation,
 // HTTP, native input or a new upstream WPT pass. The existing Peer/limits stay
 // unchanged; both mandatory lifecycle tasks complete before the retained click.

@@ -41,6 +41,11 @@ jobs:
           python3 -B -m unittest discover -s tools -p test_lifecycle_baseline.py
       - name: Check layout geometry and diagnostics in release mode
         run: cargo +1.91.1 test --locked --release -p mg-sparkle --test percentage_heights --test style_diagnostics --test style_layout --test formatting_contexts --test physical_justify --test atomic_inline --test formatting_inline --test auto_inline_height --test layout_boundaries --test positioned_layout --test viewport_overflow --test stacking_layout --test svg_styles --test inline_svg_render --test gradient_styles --test gradient_render --test fit_content_width --test max_content_width --test column_baseline --test anonymous_table_layout
+      - name: Check actual Runtime workers in both feature configurations
+        run: |
+          cargo +1.91.1 test --locked --release -p mg-browser --test script_automation
+          cargo +1.91.1 test --locked --release -p mg-browser --features legacy-test-engine --test script_automation
+          python3 -B tools/test_runtime_smoke.py
       - name: Build browser and local fixture server
         run: |
           cargo +1.91.1 build --locked --workspace --features legacy-test-engine --bins --examples
@@ -54,7 +59,7 @@ jobs:
           cargo +1.91.1 test --locked -p mg-chassis --no-default-features --test embedding
       - name: Check packaged preview installation
         run: |
-          cargo +1.91.1 build --locked --release --bin mgbrowser
+          cargo +1.91.1 build --locked --release --bin mgbrowser --example journey_server --example runtime_smoke --example runtime_moves_smoke
           python3 tools/test_gzip_release.py
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
@@ -93,6 +98,21 @@ jobs:
             --server-sha "$(sha256sum target/debug/examples/journey_server | cut -d ' ' -f 1)" \
             --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
             --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
+      - name: Check packaged worker Runtime execution and native tab moves
+        run: |
+          for runtime_case in runtime runtime-moves; do
+            runtime_client="${runtime_case//-/_}_smoke"
+            python3 "tools/$runtime_case-smoke.py" \
+              --binary tmp/release/mgbrowser-linux-x86_64/mgbrowser \
+              --expected-sha "$(sha256sum tmp/release/mgbrowser-linux-x86_64/mgbrowser | cut -d ' ' -f 1)" \
+              --expected-version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" --expected-commit "$GITHUB_SHA" \
+              --client "target/release/examples/$runtime_client" \
+              --client-sha "$(sha256sum "target/release/examples/$runtime_client" | cut -d ' ' -f 1)" \
+              --server target/release/examples/journey_server \
+              --server-sha "$(sha256sum target/release/examples/journey_server | cut -d ' ' -f 1)" \
+              --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+              --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
+          done
       - name: Check packaged definite atomic inline sizing at 1x and 2x
         run: |
           for atomic_scale in 1 2; do
@@ -435,3 +455,5 @@ jobs:
             tmp/physical-justify-smoke-*/
             tmp/atomic-inline-smoke-*/
             tmp/cssom-methods-smoke-*/
+            tmp/runtime-smoke-*/
+            tmp/runtime-moves-smoke-*/

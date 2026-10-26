@@ -812,7 +812,7 @@ fn run(payload: &Path, scratch: &Path) -> Result<()> {
         format!("{}/first/submit?q=alpha", fixture.base)
     );
     let unsupported = cdp.raw(
-        "Runtime.evaluate",
+        "Runtime.notImplemented",
         json!({"expression":"1+1"}),
         Some(&first_session),
     )?;

@@ -25,11 +25,17 @@ existing fault/fatal/navigation/privacy guards after every call and the outer
 checkpoint before committing installation. Failure closes the realm and cancels
 binding work without pretending to roll back JavaScript already executed.
 
-Strict private modern v7 intentionally rejects v6 and earlier modern frames.
+The published v0.9.13 private modern v7 intentionally rejects v6 and earlier modern frames.
 Required Init/reply shapes are otherwise unchanged; strict legacy-v1 and
 one-shot formats remain separate. No resource, permission or dependency profile
 is expanded. The real setup cancels and rearms the normal ten-second file timer;
 pending capacity can be released, but lifetime admission is never refunded.
+
+The v0.9.20 Runtime increment advances only the private transport to
+strict modern v8 with a required ordinary Page result discriminator. The fixed
+observer contract and frozen control inputs remain unchanged, and this lane
+cannot accept Automation. The raw driver rejects missing/malformed Page results
+and all older modern versions; see [RUNTIME_AUTOMATION.md](RUNTIME_AUTOMATION.md).
 
 ## Focused evidence
 

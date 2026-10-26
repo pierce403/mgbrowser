@@ -4,6 +4,14 @@ summary: Compact map of mgbrowser project decisions and evidence.
 
 # Project memory
 
+- `docs/SITE_COMPATIBILITY.md`: explicit 2026-10-25 goal addition: real
+  reddit.com and news.google.com loading and expected desktop appearance, not
+  connection/fallback success. F-027 Reddit is planned; F-025 News stays
+  in-progress with reading first and interactions later. Preserve same-input
+  reference and separate fresh-live/packaged/public acceptance. The user also
+  explicitly approved resuming the previously denied normal release checks;
+  finish the current Runtime release before another browser feature increment.
+
 - `docs/AUTO_INLINE_HEIGHT.md`: pre-implementation contract after the verified
   v0.9.18/be71e0c closeout. Ordinary auto-width inline-block/flex/grid line metrics
   must measure the same actual layout used for painting, not replaced-control

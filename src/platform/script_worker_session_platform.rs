@@ -3,6 +3,8 @@ use super::super::linux::{
 };
 use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
+use mg_chassis::scripts::SessionContinuation;
+use mg_sparkle::page_session::automation::{AutomationRequest, AutomationResult};
 use mg_sparkle::page_session::observer::{ObserverInit, ObserverReply};
 use mg_sparkle::page_session::{
     ArenaSnapshot, ControlAck, DefaultAction, EventOutcome, LifecycleProgress, MAX_EDIT_BYTES,
@@ -22,7 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 7;
+const VERSION: u8 = 8;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -39,20 +41,41 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RequestFrame<I = Request, E = SessionInput, T = TaskPump> {
+struct RequestFrame<I = Request, E = SessionInput, T = TaskPump, A = AutomationRequest> {
     version: u8,
     generation: u64,
     session_id: u64,
     sequence: u64,
     expected_revision: u64,
-    command: FrameCommand<I, E, T>,
+    command: FrameCommand<I, E, T, A>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", deny_unknown_fields)]
-enum FrameCommand<I = Request, E = SessionInput, T = TaskPump> {
+enum FrameCommand<I = Request, E = SessionInput, T = TaskPump, A = AutomationRequest> {
     Init(I),
     Event(E),
     TaskPump(T),
+    Automation(A),
+}
+
+// This historical command vocabulary must never deserialize Automation, even
+// with a v1 header. The executable's trusted lane selects it, not the input.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", deny_unknown_fields)]
+enum LegacyFrameCommand<I, E = SessionInput, T = TaskPump> {
+    Init(I),
+    Event(E),
+    TaskPump(T),
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyRequestFrame<I, E = SessionInput, T = TaskPump> {
+    version: u8,
+    generation: u64,
+    session_id: u64,
+    sequence: u64,
+    expected_revision: u64,
+    command: LegacyFrameCommand<I, E, T>,
 }
 
 /// Init-only trusted configuration. Neither shared Request nor later commands
@@ -78,8 +101,11 @@ fn decode_request_frame(
     legacy: bool,
 ) -> Result<(RequestFrame, ObserverInit), String> {
     if legacy {
-        let frame: RequestFrame<mg_sparkle::js_browser::LegacyRequest> =
+        let frame: LegacyRequestFrame<mg_sparkle::js_browser::LegacyRequest> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        if frame.version != 1 {
+            return Err("Legacy lane requires protocol v1".into());
+        }
         Ok((
             RequestFrame {
                 version: frame.version,
@@ -88,9 +114,9 @@ fn decode_request_frame(
                 sequence: frame.sequence,
                 expected_revision: frame.expected_revision,
                 command: match frame.command {
-                    FrameCommand::Init(request) => FrameCommand::Init(request.into()),
-                    FrameCommand::Event(input) => FrameCommand::Event(input),
-                    FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+                    LegacyFrameCommand::Init(request) => FrameCommand::Init(request.into()),
+                    LegacyFrameCommand::Event(input) => FrameCommand::Event(input),
+                    LegacyFrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
                 },
             },
             ObserverInit::Disabled,
@@ -98,6 +124,9 @@ fn decode_request_frame(
     } else {
         let frame: RequestFrame<ModernInit> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        if frame.version != VERSION {
+            return Err("Modern lane requires protocol v8".into());
+        }
         let mut observer = ObserverInit::Disabled;
         let command = match frame.command {
             FrameCommand::Init(init) => {
@@ -106,6 +135,7 @@ fn decode_request_frame(
             }
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+            FrameCommand::Automation(request) => FrameCommand::Automation(request),
         };
         Ok((
             RequestFrame {
@@ -141,6 +171,7 @@ fn encode_request_frame_observed(
             FrameCommand::Init(page) => FrameCommand::Init(ModernInitView { page, observer }),
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+            FrameCommand::Automation(request) => FrameCommand::Automation(request),
         };
         return encode(
             &RequestFrame {
@@ -160,12 +191,13 @@ fn encode_request_frame_observed(
     // Borrow sources, edits and pumps. Counting and transmission use the same
     // view; no modern-only provenance can change old v1 bytes or renew a budget.
     let command = match &frame.command {
-        FrameCommand::Init(request) => FrameCommand::Init(request.legacy_wire_view()),
-        FrameCommand::Event(input) => FrameCommand::Event(input),
-        FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+        FrameCommand::Init(request) => LegacyFrameCommand::Init(request.legacy_wire_view()),
+        FrameCommand::Event(input) => LegacyFrameCommand::Event(input),
+        FrameCommand::TaskPump(pump) => LegacyFrameCommand::TaskPump(pump),
+        FrameCommand::Automation(_) => return Err("Legacy v1 cannot carry automation".into()),
     };
     encode(
-        &RequestFrame {
+        &LegacyRequestFrame {
             version: frame.version,
             generation: frame.generation,
             session_id: frame.session_id,
@@ -179,6 +211,52 @@ fn encode_request_frame_observed(
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplyFrame<R = SessionReply> {
+    version: u8,
+    generation: u64,
+    session_id: u64,
+    sequence: u64,
+    expected_revision: u64,
+    reply: R,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result: Option<ModernResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", content = "payload", deny_unknown_fields)]
+enum ModernResult {
+    Page,
+    Automation(AutomationResult),
+}
+impl<'de> Deserialize<'de> for ModernResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // A unit Page has no payload, including no redundant null payload.
+        // Preserve the existing adjacent serialization and owned tuple API.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", deny_unknown_fields)]
+        enum StrictResult {
+            Page {},
+            Automation { payload: AutomationResult },
+        }
+        Ok(match StrictResult::deserialize(deserializer)? {
+            StrictResult::Page {} => Self::Page,
+            StrictResult::Automation { payload } => Self::Automation(payload),
+        })
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModernReplyFrame<R = SessionReply, M = ModernResult> {
+    version: u8,
+    generation: u64,
+    session_id: u64,
+    sequence: u64,
+    expected_revision: u64,
+    reply: R,
+    result: M,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyReplyFrame<R> {
     version: u8,
     generation: u64,
     session_id: u64,
@@ -230,8 +308,11 @@ struct LegacySessionReplyView<'a> {
 
 fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String> {
     if legacy {
-        let frame: ReplyFrame<LegacySessionReply> =
+        let frame: LegacyReplyFrame<LegacySessionReply> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+        if frame.version != 1 {
+            return Err("Legacy reply requires protocol v1".into());
+        }
         let old = frame.reply;
         Ok(ReplyFrame {
             version: frame.version,
@@ -239,6 +320,7 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
             session_id: frame.session_id,
             sequence: frame.sequence,
             expected_revision: frame.expected_revision,
+            result: None,
             reply: SessionReply {
                 revision: old.revision,
                 snapshot: old.snapshot,
@@ -257,12 +339,23 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
             },
         })
     } else {
-        let frame: ReplyFrame =
+        let frame: ModernReplyFrame =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
-        if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v7 reply requires non-null lifecycle and observer progress".into());
+        if frame.version != VERSION {
+            return Err("Modern reply requires protocol v8".into());
         }
-        Ok(frame)
+        if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
+            return Err("Modern v8 reply requires non-null lifecycle and observer progress".into());
+        }
+        Ok(ReplyFrame {
+            version: frame.version,
+            generation: frame.generation,
+            session_id: frame.session_id,
+            sequence: frame.sequence,
+            expected_revision: frame.expected_revision,
+            reply: frame.reply,
+            result: Some(frame.result),
+        })
     }
 }
 
@@ -274,17 +367,36 @@ fn write_reply_frame(
 ) -> Result<(), String> {
     if !legacy {
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v7 reply requires lifecycle and observer progress".into());
+            return Err("Modern v8 reply requires lifecycle and observer progress".into());
         }
-        return write_frame(writer, frame, total);
+        let result = frame
+            .result
+            .as_ref()
+            .ok_or("Modern v8 reply requires a command result")?;
+        if let ModernResult::Automation(result) = result {
+            result.validate()?;
+        }
+        return write_frame(
+            writer,
+            &ModernReplyFrame {
+                version: frame.version,
+                generation: frame.generation,
+                session_id: frame.session_id,
+                sequence: frame.sequence,
+                expected_revision: frame.expected_revision,
+                reply: &frame.reply,
+                result,
+            },
+            total,
+        );
     }
     let reply = &frame.reply;
-    if reply.lifecycle.is_some() || reply.observer.is_some() {
+    if reply.lifecycle.is_some() || reply.observer.is_some() || frame.result.is_some() {
         return Err("Legacy v1 reply forbids lifecycle and observer progress".into());
     }
     write_frame(
         writer,
-        &ReplyFrame {
+        &LegacyReplyFrame {
             version: frame.version,
             generation: frame.generation,
             session_id: frame.session_id,
@@ -387,6 +499,7 @@ impl Shared {
 enum TransactionCommand {
     Event(SessionInput),
     TaskPump(TaskPump),
+    Automation(AutomationRequest),
 }
 enum Control {
     Transaction {
@@ -412,6 +525,8 @@ pub struct Session {
     shared: Arc<Shared>,
     manager: Option<JoinHandle<()>>,
     pool: ChildPool,
+    automation_enabled: bool,
+    lifecycle: Option<LifecycleProgress>,
 }
 impl Session {
     pub fn start(
@@ -441,6 +556,8 @@ impl Session {
         let (updates, rx) = mpsc::sync_channel(1);
         let manager_shared = shared.clone();
         let manager_pool = pool.clone();
+        let automation_enabled =
+            !super::super::legacy_test_mode() && matches!(observer, ObserverInit::Disabled);
         let manager = thread::Builder::new()
             .name("mgbrowser-page-worker".into())
             .spawn(move || {
@@ -471,6 +588,8 @@ impl Session {
             shared,
             manager: Some(manager),
             pool,
+            automation_enabled,
+            lifecycle: None,
         };
         let left = WALL_LIMIT.saturating_sub(started.elapsed());
         let update = session.rx.recv_timeout(left).map_err(|_| {
@@ -481,7 +600,11 @@ impl Session {
             return Err("Invalid initial script-session completion".into());
         }
         let reply = update.reply?;
+        if update.automation.is_some() {
+            return Err("Initial completion cannot carry an automation result".into());
+        }
         session.revision = reply.revision;
+        session.lifecycle = reply.lifecycle;
         session.task_wake = reply.task_wake.clone();
         session.validation_pending = true;
         Ok((session, reply))
@@ -529,6 +652,21 @@ impl Session {
         }
         self.try_submit(TransactionCommand::TaskPump(pump), expected_revision)
     }
+    pub fn try_automation(
+        &mut self,
+        request: AutomationRequest,
+        expected_revision: u64,
+    ) -> Result<u64, String> {
+        if !self.automation_enabled {
+            return Err("Automation requires a modern Disabled-observer session".into());
+        }
+        if !self.lifecycle.is_some_and(|progress| {
+            progress.phase == mg_sparkle::page_session::LifecyclePhase::LoadComplete
+        }) {
+            return Err("Automation requires completed initial load".into());
+        }
+        self.try_submit(TransactionCommand::Automation(request), expected_revision)
+    }
     fn try_submit(
         &mut self,
         command: TransactionCommand,
@@ -550,7 +688,15 @@ impl Session {
             return Err("Stale script-session revision".into());
         }
         if let Err(error) = validate_command(&command) {
-            let _ = self.shared.charge(started.elapsed());
+            if let Err(charge_error) = self.shared.charge(started.elapsed()) {
+                self.cancel();
+                return Err(charge_error);
+            }
+            // Public automation preflight is nonmutating and consumes no slot.
+            // The same validation on untrusted child wire remains terminal.
+            if matches!(command, TransactionCommand::Automation(_)) {
+                return Err(error);
+            }
             self.shared.fail(error.clone());
             self.cancel();
             return Err(error);
@@ -593,9 +739,12 @@ impl Session {
                     && let Some(error) = self.shared.error()
                 {
                     update.reply = Err(error);
+                    update.automation = None;
+                    update.continuation = SessionContinuation::Terminal;
                 }
                 if let Ok(reply) = &update.reply {
                     self.revision = reply.revision;
+                    self.lifecycle = reply.lifecycle;
                     self.validation_pending = true;
                     self.task_wake = reply.task_wake.clone();
                 } else {
@@ -614,6 +763,8 @@ impl Session {
                         generation: self.generation,
                         session_id: self.id,
                         sequence: self.pending.take(),
+                        automation: None,
+                        continuation: SessionContinuation::Terminal,
                         reply: Err(self
                             .shared
                             .error()
@@ -778,7 +929,12 @@ impl Worker {
         request: &RequestFrame,
         shared: &Shared,
         started: Instant,
-    ) -> Result<SessionReply, String> {
+    ) -> Result<(SessionReply, Option<AutomationResult>), String> {
+        if matches!(request.command, FrameCommand::Automation(_))
+            && (self.legacy || !matches!(self.observer, ObserverInit::Disabled))
+        {
+            return Err("Automation requires a modern Disabled-observer session".into());
+        }
         let deadline = started
             .checked_add(shared.remaining()?)
             .ok_or("Script active deadline exceeds the monotonic clock range")?;
@@ -908,14 +1064,18 @@ impl Worker {
                 if let Some(wake) = &frame.reply.task_wake {
                     self.last_wake_token = wake.token;
                 }
-                return Ok(frame.reply);
+                let automation = match frame.result {
+                    Some(ModernResult::Automation(result)) => Some(result),
+                    Some(ModernResult::Page) | None => None,
+                };
+                return Ok((frame.reply, automation));
             }
             if !progressed {
                 thread::sleep(TICK);
             }
         }
     }
-    fn stop(&mut self) {
+    fn stop(&mut self) -> bool {
         self.owned.stop();
         if !self.owned.reaped {
             // Do not admit a replacement child after an unconfirmed reap.
@@ -923,6 +1083,7 @@ impl Worker {
                 std::mem::forget(permit);
             }
         }
+        self.owned.reaped
     }
 }
 impl Drop for Worker {
@@ -942,6 +1103,8 @@ fn update(
         session_id: id,
         sequence,
         reply,
+        automation: None,
+        continuation: SessionContinuation::Terminal,
     }
 }
 fn manage(
@@ -985,16 +1148,22 @@ fn manage(
     let elapsed = shared.charge(started.elapsed());
     let result = result.and_then(|reply| elapsed.map(|_| reply));
     let mut revision = match result {
-        Ok(reply) => {
+        Ok((reply, automation)) => {
             let revision = reply.revision;
             let terminal = reply.state != RealmState::Ready;
-            if terminal {
-                worker.stop();
+            if terminal && !worker.stop() {
+                let error = shared.close("Terminal script child reaping was not confirmed".into());
+                let _ = updates.try_send(update(generation, id, Some(0), Err(error)));
+                return;
             }
-            if updates
-                .try_send(update(generation, id, Some(0), Ok(reply)))
-                .is_err()
-            {
+            let mut completion = update(generation, id, Some(0), Ok(reply));
+            completion.automation = automation;
+            completion.continuation = if terminal {
+                SessionContinuation::Terminal
+            } else {
+                SessionContinuation::Live
+            };
+            if updates.try_send(completion).is_err() {
                 worker.stop();
                 shared.close("Script-session initial completion disconnected".into());
                 return;
@@ -1048,24 +1217,39 @@ fn manage(
                         command: match command {
                             TransactionCommand::Event(input) => FrameCommand::Event(input),
                             TransactionCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
+                            TransactionCommand::Automation(request) => {
+                                FrameCommand::Automation(request)
+                            }
                         },
                     };
                     worker.transaction(&request, &shared, started)
                 })();
                 let elapsed = shared.charge(started.elapsed());
                 match result.and_then(|reply| elapsed.map(|_| reply)) {
-                    Ok(reply) => {
+                    Ok((reply, automation)) => {
                         next_sequence += 1;
                         revision = reply.revision;
                         let terminal =
                             reply.state != RealmState::Ready || sequence + 1 == TRANSACTIONS;
-                        if terminal {
-                            worker.stop();
+                        if terminal && !worker.stop() {
+                            let error = shared
+                                .close("Terminal script child reaping was not confirmed".into());
+                            let _ = updates.try_send(update(
+                                generation,
+                                id,
+                                Some(sequence),
+                                Err(error),
+                            ));
+                            return;
                         }
-                        if updates
-                            .try_send(update(generation, id, Some(sequence), Ok(reply)))
-                            .is_err()
-                        {
+                        let mut completion = update(generation, id, Some(sequence), Ok(reply));
+                        completion.automation = automation;
+                        completion.continuation = if terminal {
+                            SessionContinuation::Terminal
+                        } else {
+                            SessionContinuation::Live
+                        };
+                        if updates.try_send(completion).is_err() {
                             worker.stop();
                             shared.close(
                                 "Script-session completion queue is full or disconnected".into(),
@@ -1119,14 +1303,19 @@ fn validate_command(command: &TransactionCommand) -> Result<(), String> {
         TransactionCommand::Event(input) => validate_input(input),
         TransactionCommand::TaskPump(pump) if pump.wake_token != 0 => Ok(()),
         TransactionCommand::TaskPump(_) => Err("Task wake token must be nonzero".into()),
+        TransactionCommand::Automation(request) => request.validate(),
     }
 }
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
     if !matches!(request.version, 1 | VERSION) {
         return Err("Unsupported script-session protocol version".into());
     }
-    if matches!(request.command, FrameCommand::TaskPump(_)) && request.version != VERSION {
-        return Err("Legacy script session does not support task pumping".into());
+    if matches!(
+        request.command,
+        FrameCommand::TaskPump(_) | FrameCommand::Automation(_)
+    ) && request.version != VERSION
+    {
+        return Err("Legacy script session does not support tasks or automation".into());
     }
     if frame.version != request.version
         || frame.generation != request.generation
@@ -1137,6 +1326,17 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
         return Err("Script-session reply identity or sequence mismatch".into());
     }
     let reply = &frame.reply;
+    match (&request.command, &frame.result) {
+        (FrameCommand::Automation(input), Some(ModernResult::Automation(result))) => {
+            result.validate_for(input)?
+        }
+        (FrameCommand::Automation(_), _) => {
+            return Err("Automation reply omitted its matching result".into());
+        }
+        (_, Some(ModernResult::Page)) if request.version == VERSION => {}
+        (_, None) if request.version == 1 => {}
+        _ => return Err("Script command/result kind mismatch".into()),
+    }
     let initial = matches!(request.command, FrameCommand::Init(_));
     if (request.version == VERSION) != reply.lifecycle.is_some()
         || (request.version == VERSION) != reply.observer.is_some()
@@ -1234,6 +1434,14 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Task pump returned activation effects or startup-script counts".into());
     }
+    if matches!(request.command, FrameCommand::Automation(_))
+        && (reply.default_action != DefaultAction::None
+            || reply.outcome.click_canceled.is_some()
+            || reply.outcome.submit_canceled.is_some()
+            || reply.scripts_executed != 0)
+    {
+        return Err("Automation returned activation effects or startup counts".into());
+    }
     if rejected_input
         && (reply.snapshot.is_some()
             || !reply.acknowledgements.is_empty()
@@ -1242,13 +1450,18 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Rejected script event returned effects or acknowledgements".into());
     }
-    if let FrameCommand::Event(input) = &request.command {
+    let edits = match &request.command {
+        FrameCommand::Event(input) => Some(input.edits.as_slice()),
+        FrameCommand::Automation(input) => Some(input.edits.as_slice()),
+        _ => None,
+    };
+    if let Some(edits) = edits {
         if !rejected_input
-            && (reply.acknowledgements.len() != input.edits.len()
+            && (reply.acknowledgements.len() != edits.len()
                 || reply
                     .acknowledgements
                     .iter()
-                    .zip(&input.edits)
+                    .zip(edits)
                     .any(|(ack, edit)| ack.node != edit.node || ack.version != edit.version))
         {
             return Err("Script-session edit acknowledgement mismatch".into());
@@ -1465,6 +1678,16 @@ impl PageEngine {
             Self::Legacy(_) => Err("The legacy test runtime does not support task pumping".into()),
         }
     }
+    fn automation(
+        &mut self,
+        request: AutomationRequest,
+    ) -> Result<(SessionReply, AutomationResult), String> {
+        match self {
+            Self::Boa(realm) => Ok(realm.automation(request)),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(_) => Err("Legacy v1 cannot execute automation".into()),
+        }
+    }
 }
 fn attach_memory(reply: &mut SessionReply) {
     if let Some(report) = &mut reply.boa {
@@ -1492,9 +1715,11 @@ fn child_loop_for(
     let FrameCommand::Init(initial) = request.command else {
         return Err("First session command must be Init".into());
     };
+    let automation_enabled = !legacy && matches!(observer, ObserverInit::Disabled);
     let (mut realm, mut reply) = PageEngine::start(initial, legacy, observer);
     attach_memory(&mut reply);
     let mut revision = reply.revision;
+    let mut lifecycle = reply.lifecycle;
     let mut terminal = reply.state != RealmState::Ready;
     write_reply_frame(
         writer,
@@ -1504,6 +1729,7 @@ fn child_loop_for(
             session_id: request.session_id,
             sequence: 0,
             expected_revision: 0,
+            result: (!legacy).then_some(ModernResult::Page),
             reply,
         },
         &mut wire,
@@ -1526,18 +1752,32 @@ fn child_loop_for(
             return Err("Invalid script-session event envelope".into());
         }
         let realm = realm.as_mut().ok_or("Script realm is unavailable")?;
-        let mut reply = match event.command {
+        let (mut reply, result) = match event.command {
             FrameCommand::Event(input) => {
                 validate_input(&input)?;
-                realm.dispatch(input)
+                (
+                    realm.dispatch(input),
+                    (!legacy).then_some(ModernResult::Page),
+                )
             }
             FrameCommand::TaskPump(pump) if !legacy && pump.wake_token != 0 => {
-                realm.pump_tasks(pump)?
+                (realm.pump_tasks(pump)?, Some(ModernResult::Page))
+            }
+            FrameCommand::Automation(input)
+                if automation_enabled
+                    && lifecycle.is_some_and(|progress| {
+                        progress.phase == mg_sparkle::page_session::LifecyclePhase::LoadComplete
+                    }) =>
+            {
+                input.validate()?;
+                let (reply, result) = realm.automation(input)?;
+                (reply, Some(ModernResult::Automation(result)))
             }
             _ => return Err("Repeated initialization or unsupported task command".into()),
         };
         attach_memory(&mut reply);
         revision = reply.revision;
+        lifecycle = reply.lifecycle;
         terminal = reply.state != RealmState::Ready;
         write_reply_frame(
             writer,
@@ -1547,6 +1787,7 @@ fn child_loop_for(
                 session_id: request.session_id,
                 sequence,
                 expected_revision: event.expected_revision,
+                result,
                 reply,
             },
             &mut wire,
@@ -1660,6 +1901,110 @@ pub fn session_selftest() -> Result<(), String> {
     );
 
     if !super::super::legacy_test_mode() {
+        // This runs in the actual normal executable, not a Rust test-harness
+        // re-exec. Reuse exactly the same manager, validation slot and ledger.
+        let (mut automation, mut reply) = Session::start(
+            Request {
+                external_scripts: None,
+                url: "https://example.test/automation-selftest".into(),
+                html: "<p>bounded</p>".into(),
+            },
+            1,
+            pool.clone(),
+        )?;
+        let evaluate = || AutomationRequest {
+            owner: 1,
+            operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                source: "1".into(),
+                return_by_value: false,
+                group: None,
+            },
+            edits: vec![],
+        };
+        if automation.try_automation(evaluate(), 0).is_ok() {
+            return Err("Automation bypassed initial-load/validation admission".into());
+        }
+        automation.charge_active(Duration::ZERO)?;
+        for sequence in 1..=2 {
+            let wake = reply
+                .task_wake
+                .as_ref()
+                .ok_or("Automation lifecycle wake missing")?
+                .token;
+            automation.try_task_pump(TaskPump { wake_token: wake }, reply.revision)?;
+            let completion = wait(&mut automation)?;
+            if completion.sequence != Some(sequence)
+                || completion.automation.is_some()
+                || completion.continuation != SessionContinuation::Live
+            {
+                return Err("Automation lifecycle completion metadata mismatch".into());
+            }
+            reply = completion.reply?;
+            automation.charge_active(Duration::ZERO)?;
+        }
+        for sequence in 3..=63 {
+            let previous = reply.boa.clone().ok_or("Automation report missing")?;
+            if automation.try_automation(evaluate(), reply.revision)? != sequence {
+                return Err("Automation transaction sequence changed".into());
+            }
+            if automation
+                .try_automation(evaluate(), reply.revision)
+                .is_ok()
+            {
+                return Err("Automation admitted concurrent work".into());
+            }
+            let completion = wait(&mut automation)?;
+            let expected = if sequence == 63 {
+                SessionContinuation::Terminal
+            } else {
+                SessionContinuation::Live
+            };
+            if completion.sequence != Some(sequence)
+                || completion.continuation != expected
+                || completion.automation
+                    != Some(AutomationResult::Value(
+                        mg_sparkle::page_session::automation::RemoteValue::Number(
+                            mg_sparkle::page_session::automation::Number::Finite(1.0),
+                        ),
+                    ))
+            {
+                return Err("Automation result/continuation publication mismatch".into());
+            }
+            reply = completion.reply?;
+            if reply.state != RealmState::Ready {
+                return Err("Primitive final completion lost its Ready snapshot".into());
+            }
+            reply
+                .boa
+                .as_ref()
+                .ok_or("Automation report missing")?
+                .validate_after(&previous)
+                .map_err(str::to_owned)?;
+            if automation
+                .try_automation(evaluate(), reply.revision)
+                .is_ok()
+            {
+                return Err("Automation bypassed pending validation".into());
+            }
+            automation.charge_active(Duration::ZERO)?;
+            if automation.charge_active(Duration::ZERO).is_ok() {
+                return Err("Automation completion accepted two charges".into());
+            }
+        }
+        if automation
+            .try_automation(evaluate(), reply.revision)
+            .is_ok()
+        {
+            return Err("Automation renewed the 64-transaction allowance".into());
+        }
+        let pid = automation.shared.pid.load(Ordering::Acquire);
+        drop(automation);
+        reaped(pid)?;
+        empty(&pool)?;
+        println!(
+            "SCRIPT_SESSION_CHECK automation: retained actual primitive results; shared single-flight/one-charge; sequence63 terminal and child reaped"
+        );
+
         let timed = Request {
             external_scripts: None,
             url: "https://example.test/task-selftest".into(),
@@ -2003,6 +2348,7 @@ mod tests {
             session_id: request.session_id,
             sequence: request.sequence,
             expected_revision: request.expected_revision,
+            result: None,
             reply: SessionReply {
                 revision: request.sequence,
                 snapshot: Some(ArenaSnapshot { nodes: Vec::new() }),
@@ -2026,6 +2372,7 @@ mod tests {
         let mut frame = response(request);
         frame.reply.allocations = None;
         frame.reply.observer = Some(ObserverReply::Disabled);
+        frame.result = Some(ModernResult::Page);
         frame.reply.boa = Some(mg_butane::modern::Engine::new().unwrap().report());
         let initial = matches!(request.command, FrameCommand::Init(_));
         frame.reply.lifecycle = Some(LifecycleProgress {
@@ -2056,8 +2403,286 @@ mod tests {
         output.extend_from_slice(&payload);
     }
 
+    fn automation_request() -> RequestFrame {
+        let mut frame = request(3);
+        frame.version = VERSION;
+        frame.command = FrameCommand::Automation(AutomationRequest {
+            owner: 1,
+            operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                source: "1".into(),
+                return_by_value: false,
+                group: None,
+            },
+            edits: vec![],
+        });
+        frame
+    }
+
     #[test]
-    fn observer_v7_init_requires_exact_wrapper_and_disabled_tag() {
+    fn modern_v8_result_is_required_non_null_strict_and_command_matched() {
+        let mut page = request(0);
+        page.version = VERSION;
+        let request = automation_request();
+        let mut frame = modern_response(&request);
+        frame.reply.scripts_executed = 0;
+        frame.result = Some(ModernResult::Automation(AutomationResult::Value(
+            mg_sparkle::page_session::automation::RemoteValue::Null,
+        )));
+        validate_reply(&request, &frame).unwrap();
+        let raw = serde_json::to_value(&frame).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"kind":"Automation","payload":null}),
+            serde_json::json!({"kind":"Page","payload":null}),
+            serde_json::json!({"kind":"Page","extra":true}),
+        ] {
+            let mut bad = raw.clone();
+            bad["result"] = value;
+            assert!(
+                decode_reply_frame(&serde_json::to_vec(&bad).unwrap(), false).is_err(),
+                "Forbidden result shape accepted: {}",
+                bad["result"]
+            );
+        }
+        let mut missing = raw.clone();
+        missing.as_object_mut().unwrap().remove("result");
+        assert!(decode_reply_frame(&serde_json::to_vec(&missing).unwrap(), false).is_err());
+        for duplicate in [
+            r#"{"kind":"Page","kind":"Page"}"#,
+            r#"{"kind":"Automation","payload":"Released","payload":"Released"}"#,
+        ] {
+            assert!(serde_json::from_str::<ModernResult>(duplicate).is_err());
+        }
+        frame.result = Some(ModernResult::Page);
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.result = Some(ModernResult::Automation(AutomationResult::Released));
+        assert!(validate_reply(&request, &frame).is_err());
+        assert!(validate_reply(&page, &frame).is_err());
+    }
+
+    #[test]
+    fn legacy_command_and_reply_vocabulary_never_accepts_automation_even_null() {
+        let frame = automation_request();
+        assert!(encode_request_frame(&frame, true, MAX_EVENT_BYTES).is_err());
+        let mut raw = serde_json::to_value(&frame).unwrap();
+        raw["version"] = serde_json::json!(1);
+        assert!(decode_request_frame(&serde_json::to_vec(&raw).unwrap(), true).is_err());
+        raw["command"]["payload"] = serde_json::Value::Null;
+        assert!(decode_request_frame(&serde_json::to_vec(&raw).unwrap(), true).is_err());
+        let old = response(&request(0));
+        let mut raw = serde_json::to_value(&old).unwrap();
+        for value in [serde_json::Value::Null, serde_json::json!({"kind":"Page"})] {
+            raw["result"] = value;
+            assert!(decode_reply_frame(&serde_json::to_vec(&raw).unwrap(), true).is_err());
+        }
+    }
+
+    #[test]
+    fn automation_edits_require_exact_acks_and_cannot_supply_activation_effects() {
+        let mut request = automation_request();
+        let FrameCommand::Automation(input) = &mut request.command else {
+            unreachable!()
+        };
+        input.edits.push(ControlEdit {
+            node: 4,
+            version: 9,
+            value: "Unicode café".into(),
+        });
+        let mut frame = modern_response(&request);
+        frame.reply.scripts_executed = 0;
+        frame.result = Some(ModernResult::Automation(AutomationResult::Rejected {
+            diagnostic: "representation unavailable".into(),
+        }));
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.reply.acknowledgements.push(ControlAck {
+            node: 4,
+            version: 9,
+        });
+        validate_reply(&request, &frame).unwrap();
+        frame.reply.acknowledgements[0].version = 8;
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.reply.acknowledgements[0].version = 9;
+        frame.reply.outcome.click_canceled = Some(false);
+        assert!(validate_reply(&request, &frame).is_err());
+        frame.reply.outcome.click_canceled = None;
+        frame.reply.scripts_executed = 1;
+        assert!(validate_reply(&request, &frame).is_err());
+    }
+
+    #[test]
+    fn automation_uses_existing_frame_counting_and_narrower_operation_edit_limits() {
+        use mg_sparkle::page_session::automation::{
+            MAX_EDITS_BYTES, MAX_OPERATION_BYTES, Operation, encoded_size,
+        };
+        let mut frame = automation_request();
+        frame.generation = u64::MAX;
+        frame.session_id = u64::MAX;
+        frame.expected_revision = u64::MAX;
+        let FrameCommand::Automation(input) = &mut frame.command else {
+            unreachable!()
+        };
+        let base = encoded_size(&input.operation, MAX_OPERATION_BYTES).unwrap() - 1;
+        let padding = MAX_OPERATION_BYTES - base;
+        input.operation = Operation::Evaluate {
+            source: format!("{}{}", "\0".repeat(padding / 6), "x".repeat(padding % 6)),
+            return_by_value: false,
+            group: None,
+        };
+        assert_eq!(
+            encoded_size(&input.operation, MAX_OPERATION_BYTES).unwrap(),
+            MAX_OPERATION_BYTES
+        );
+        input.edits = (1..=3)
+            .map(|node| ControlEdit {
+                node,
+                version: u64::MAX,
+                value: String::new(),
+            })
+            .collect();
+        let mut left = MAX_EDITS_BYTES - encoded_size(&input.edits, MAX_EDITS_BYTES).unwrap();
+        for edit in &mut input.edits {
+            let n = left.min(MAX_EDIT_BYTES);
+            edit.value = "x".repeat(n);
+            left -= n;
+        }
+        assert_eq!(left, 0);
+        input.validate().unwrap();
+        let bytes = encode_request_frame(&frame, false, MAX_EVENT_BYTES).unwrap();
+        assert!(bytes.len() <= MAX_EVENT_BYTES);
+        assert_eq!(
+            encode_request_frame(&frame, false, bytes.len()).unwrap(),
+            bytes
+        );
+        assert!(encode_request_frame(&frame, false, bytes.len() - 1).is_err());
+        let FrameCommand::Automation(input) = &mut frame.command else {
+            unreachable!()
+        };
+        if let Operation::Evaluate { source, .. } = &mut input.operation {
+            source.push('x');
+        }
+        assert!(input.validate().is_err());
+        if let Operation::Evaluate { source, .. } = &mut input.operation {
+            source.pop();
+        }
+        input.edits.last_mut().unwrap().value.push('x');
+        assert!(
+            input.validate().is_err(),
+            "encoded edits +1 must not borrow operation headroom"
+        );
+        input.edits.clear();
+        input.operation = Operation::Evaluate {
+            source: String::new(),
+            return_by_value: false,
+            group: None,
+        };
+        let base = encode_request_frame(&frame, false, MAX_EVENT_BYTES)
+            .unwrap()
+            .len();
+        let FrameCommand::Automation(input) = &mut frame.command else {
+            unreachable!()
+        };
+        let Operation::Evaluate { source, .. } = &mut input.operation else {
+            unreachable!()
+        };
+        *source = "x".repeat(MAX_EVENT_BYTES - base);
+        // Serialization-only boundary: source admission independently rejects
+        // this payload; no larger executable source allowance is implied.
+        assert!(input.validate().is_err());
+        assert_eq!(
+            encode_request_frame(&frame, false, MAX_EVENT_BYTES)
+                .unwrap()
+                .len(),
+            MAX_EVENT_BYTES
+        );
+        let FrameCommand::Automation(input) = &mut frame.command else {
+            unreachable!()
+        };
+        if let Operation::Evaluate { source, .. } = &mut input.operation {
+            source.push('x');
+        }
+        assert!(encode_request_frame(&frame, false, MAX_EVENT_BYTES).is_err());
+    }
+
+    #[test]
+    fn automation_result_section_has_an_exact_128k_boundary_before_full_reply_encoding() {
+        use mg_sparkle::page_session::automation::{
+            MAX_RESULT_BYTES, OwnProperty, PropertyDescriptor, RemoteValue, encoded_size,
+        };
+        let mut properties: Vec<_> = (1..=6)
+            .map(|name| OwnProperty {
+                name: vec![name],
+                enumerable: true,
+                configurable: true,
+                descriptor: PropertyDescriptor::Data {
+                    value: RemoteValue::String(if name < 6 {
+                        vec![u16::MAX; 4096]
+                    } else {
+                        vec![]
+                    }),
+                    writable: true,
+                },
+            })
+            .collect();
+        let base = encoded_size(
+            &AutomationResult::Properties(properties.clone()),
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        let units = (MAX_RESULT_BYTES - base + 1) / 6;
+        assert!(units > 0 && units <= 4096);
+        let PropertyDescriptor::Data {
+            value: RemoteValue::String(text),
+            ..
+        } = &mut properties[5].descriptor
+        else {
+            unreachable!()
+        };
+        text.resize(units, u16::MAX);
+        let used = encoded_size(
+            &AutomationResult::Properties(properties.clone()),
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        let gap = MAX_RESULT_BYTES - used;
+        assert!(gap <= 5);
+        let first = gap.min(4);
+        properties[0].name[0] = 10u16.pow(first as u32);
+        properties[1].name[0] = 2 * 10u16.pow((gap - first) as u32);
+        let result = AutomationResult::Properties(properties);
+        assert_eq!(
+            encoded_size(&result, MAX_RESULT_BYTES).unwrap(),
+            MAX_RESULT_BYTES
+        );
+        result.validate().unwrap();
+        let mut frame = modern_response(&automation_request());
+        frame.reply.scripts_executed = 0;
+        frame.result = Some(ModernResult::Automation(result));
+        let mut bytes = Vec::new();
+        write_reply_frame(&mut bytes, &frame, &mut 0, false).unwrap();
+        let Some(ModernResult::Automation(AutomationResult::Properties(properties))) =
+            &mut frame.result
+        else {
+            unreachable!()
+        };
+        // Preserve valid descriptor/string counts while adding one JSON digit.
+        properties[2].name[0] = 30;
+        let Some(ModernResult::Automation(result)) = &frame.result else {
+            unreachable!()
+        };
+        assert_eq!(
+            encoded_size(result, MAX_RESULT_BYTES + 1).unwrap(),
+            MAX_RESULT_BYTES + 1
+        );
+        let mut bytes = Vec::new();
+        let mut wire = 0;
+        assert!(write_reply_frame(&mut bytes, &frame, &mut wire, false).is_err());
+        assert!(bytes.is_empty());
+        assert_eq!(wire, 0);
+    }
+
+    #[test]
+    fn observer_v8_init_requires_exact_wrapper_and_disabled_tag() {
         let mut frame = request(0);
         frame.version = VERSION;
         let bytes = encode_request_frame(&frame, false, INPUT_LIMIT).unwrap();
@@ -2102,7 +2727,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_v7_both_contracts_bind_exact_init_mode_and_run_without_new_reply_fields() {
+    fn observer_v8_both_contracts_bind_exact_init_mode_and_run_without_new_page_reply_fields() {
         use mg_sparkle::page_session::observer::{ObserverContract, ObserverProgress};
         for contract in [
             ObserverContract::PinnedWindowHarnessV1,
@@ -2118,7 +2743,7 @@ mod tests {
             let encoded =
                 encode_request_frame_observed(&initial, false, INPUT_LIMIT, &observer).unwrap();
             let (decoded, actual) = decode_request_frame(&encoded, false).unwrap();
-            assert_eq!(decoded.version, 7);
+            assert_eq!(decoded.version, VERSION);
             assert_eq!(actual, observer);
             assert!(encode_request_frame_observed(&initial, true, INPUT_LIMIT, &observer).is_err());
             assert!(decode_request_frame(&encoded, true).is_err());
@@ -2211,7 +2836,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_v7_maximum_metadata_fits_old_reserve_without_new_allowance() {
+    fn observer_v8_maximum_metadata_fits_old_reserve_without_new_allowance() {
         use mg_sparkle::page_session::observer::ObserverContract;
         let mut lengths = Vec::new();
         for contract in [
@@ -2492,9 +3117,9 @@ mod tests {
         }
     }
     #[test]
-    fn observer_modern_v7_rejects_v1_through_v6_before_execution() {
-        assert_eq!(VERSION, 7);
-        for version in 1..=6 {
+    fn observer_modern_v8_rejects_v1_through_v7_before_execution() {
+        assert_eq!(VERSION, 8);
+        for version in 1..=7 {
             for wrapped in [false, true] {
                 let mut initial = request(0);
                 initial.version = version;
@@ -2518,7 +3143,7 @@ mod tests {
         }
     }
     #[test]
-    fn observer_modern_v7_accepts_absent_source_metadata_in_required_wrapper() {
+    fn observer_modern_v8_accepts_absent_source_metadata_in_required_wrapper() {
         let mut initial = request(0);
         initial.version = VERSION;
         let mut input = Vec::new();
@@ -2533,9 +3158,9 @@ mod tests {
         assert_eq!(reply.reply.state, RealmState::Ready);
     }
     #[test]
-    fn observer_modern_v7_rejects_later_v1_through_v6_events_and_pumps_without_replies() {
+    fn observer_modern_v8_rejects_later_v1_through_v7_events_and_pumps_without_replies() {
         for (task, old_version) in
-            (1..=6).flat_map(|version| [false, true].map(|task| (task, version)))
+            (1..=7).flat_map(|version| [false, true].map(|task| (task, version)))
         {
             let mut initial = request(0);
             initial.version = VERSION;

@@ -5,15 +5,29 @@
 pub use mg_sparkle::js_browser::SourceWireMode;
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{SessionInput, SessionReply, TaskPump},
+    page_session::{
+        SessionInput, SessionReply, TaskPump,
+        automation::{AutomationRequest, AutomationResult},
+    },
 };
 use std::time::Duration;
+
+/// Host-derived worker liveness after accepting this completion. A Ready page
+/// reply alone cannot promise a live realm: the last permitted transaction may
+/// have completed just before the manager stopped and reaped its child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionContinuation {
+    Live,
+    Terminal,
+}
 
 pub struct SessionUpdate {
     pub generation: u64,
     pub session_id: u64,
     pub sequence: Option<u64>,
     pub reply: Result<SessionReply, String>,
+    pub automation: Option<AutomationResult>,
+    pub continuation: SessionContinuation,
 }
 
 pub trait ScriptSession: Send {
@@ -22,6 +36,11 @@ pub trait ScriptSession: Send {
     /// Tasks are not activations and carry no control edits or default actions.
     fn try_task_pump(&mut self, _: TaskPump, _: u64) -> Result<u64, String> {
         Err("This script runtime does not support task pumping".into())
+    }
+    /// Automation must share the runtime's ordinary single-flight slot and
+    /// cumulative budgets; a host without this service fails explicitly.
+    fn try_automation(&mut self, _: AutomationRequest, _: u64) -> Result<u64, String> {
+        Err("This script runtime does not support Runtime automation".into())
     }
     fn try_recv(&mut self) -> Option<SessionUpdate>;
     fn cancel(&self);

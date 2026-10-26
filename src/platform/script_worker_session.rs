@@ -1,7 +1,8 @@
 //! Parent-owned, bounded sessions; the legacy EOF-delimited worker is separate.
+use mg_chassis::scripts::SessionContinuation;
 use mg_sparkle::{
     js_browser::Request,
-    page_session::{SessionInput, SessionReply, TaskPump},
+    page_session::{SessionInput, SessionReply, TaskPump, automation::AutomationResult},
 };
 use std::sync::{Arc, Mutex};
 
@@ -92,6 +93,8 @@ pub struct SessionUpdate {
     /// None denotes an idle closure, not an activation/default-action reply.
     pub sequence: Option<u64>,
     pub reply: Result<SessionReply, String>,
+    pub automation: Option<AutomationResult>,
+    pub continuation: SessionContinuation,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -131,6 +134,13 @@ impl Session {
         None
     }
     pub fn try_task_pump(&mut self, _: TaskPump, _: u64) -> Result<u64, String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
+    pub fn try_automation(
+        &mut self,
+        _: mg_sparkle::page_session::automation::AutomationRequest,
+        _: u64,
+    ) -> Result<u64, String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }
     pub fn cancel(&self) {}

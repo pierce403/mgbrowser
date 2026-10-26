@@ -335,11 +335,10 @@ fn run(endpoint: url::Url, fixture: url::Url, evidence: &Path) -> Result<()> {
         client.attach()?;
     }
     client.command("Page.enable", json!({}))?;
-    let unsupported = client.command_raw("Runtime.evaluate", json!({"expression": "1 + 1"}))?;
+    let unsupported =
+        client.command_raw("Runtime.notImplemented", json!({"expression": "1 + 1"}))?;
     if unsupported.pointer("/error/code").and_then(Value::as_i64) != Some(-32601) {
-        return Err(failure(
-            "Unimplemented Runtime.evaluate did not return -32601",
-        ));
+        return Err(failure("Unknown Runtime method did not return -32601"));
     }
     client.clear_load_events();
     client.command("Page.navigate", json!({"url": fixture.as_str()}))?;

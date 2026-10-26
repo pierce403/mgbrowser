@@ -838,6 +838,8 @@ mod tests {
                 session_id: 99,
                 sequence: Some(1),
                 reply: Ok(reply),
+                automation: None,
+                continuation: mg_chassis::scripts::SessionContinuation::Live,
             }),
         };
         (

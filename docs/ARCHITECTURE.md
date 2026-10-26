@@ -88,6 +88,11 @@ unchanged worker, page-image and encoded-screenshot budgets.
   and an `Arc<dyn scripts::ScriptRuntime>`. The host polls navigation, supplies
   pointer/key input, and displays the `Canvas` returned by `paint`. `BrowserCdp`
   can expose the documented loopback protocol subset for that same browser.
+  The unreleased Runtime integration carries only typed operations/results
+  across the existing worker transaction slot. Actual JS values/GC roots stay
+  in Sparkle's BoaPageRealm; Chassis binds scalar handles to context and route.
+  A retained Browser's host must disable debugging before dropping BrowserCdp
+  so exact automation-used workers retire without touching ordinary pages.
 - **Platform:** `mg-browser::platform` supplies font discovery and `LinuxScripts`.
   Each Browser needs its own script service. The service currently re-execs the
   host executable, so that executable must dispatch `--script-worker` and

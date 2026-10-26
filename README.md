@@ -2,6 +2,36 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
+## Next release candidate: v0.9.20
+
+The current source adds a bounded worker-backed main-world Runtime foundation:
+generic evaluation/function calls, actual retained object handles, own-property
+inspection and release. It uses the existing restricted page worker and its
+unchanged cumulative limits. Remote debugging and effective scripting are both
+required. This does not implement promise awaiting, utility worlds or ordinary
+Playwright compatibility.
+[Contract](docs/RUNTIME_AUTOMATION.md) and [candidate notes](docs/RELEASE-v0.9.20.md).
+
+Focused realm/broker and actual restricted-child checks pass. Both authored
+native/CDP proofs pass, including inspected newer-input/navigation images and
+object/context identity across native detach/redock/closure. Frozen JSPLAN
+retains all 364 outcomes. All nineteen local Rust/harness gates pass, retaining
+existing assertions and limits. Both complete, reviewed WPT lanes retain
+static 339/610/62 of 1,011 and Window 15/16 files, 77/79 final subtests.
+Normal candidate packaging, installer/checksum, updater, worker selftests and
+all thirteen existing native helpers pass. Both Runtime proofs also pass on the
+packaged executable; all fourteen actual images were inspected. The eight
+additional layout proofs and both frozen worker-control suites also pass.
+Fresh score review, exact-source CI and public release acceptance stay separate.
+Public v0.9.20 acceptance is not yet recorded. The last verified public installer
+baseline is v0.9.19; the command follows the latest published release.
+
+The active all-features goal explicitly includes real **reddit.com and
+news.google.com loading and expected desktop appearance**. Faithful signed-out
+reading comes first, with same-input reference comparisons and fresh packaged/
+public live navigation. Neither site is complete.
+[Acceptance targets](docs/SITE_COMPATIBILITY.md).
+
 ## Latest verified release: v0.9.19
 
 Auto-width inline-block, inline-flex and inline-grid boxes reserve their actual
@@ -362,8 +392,10 @@ Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
 Fresh public v0.9.19 still fails target auto-attachment/download initialization,
 before title or locators. The probe now explicitly disables page scripts rather
-than assuming a default. Worker-backed Runtime is the next bounded increment;
-no evaluation or client compatibility is claimed yet.
+than assuming a default. The [worker-backed Runtime foundation](docs/RUNTIME_AUTOMATION.md)
+is currently unreleased source integration: focused typed-realm/parent/broker
+controls pass, with actual child/native/full regression/score/release gates
+remaining. No installed evaluation feature or client compatibility is claimed.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
 [signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 

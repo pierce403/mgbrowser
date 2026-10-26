@@ -400,6 +400,29 @@ The driver exercises application input handlers in a real window; state that dis
 
 For CDP changes, read docs/CDP.md and docs/cdp-protocol.json. Run the external Rust examples/cdp_journey.rs client against an owned native browser with --remote-debugging-port=0 and the loopback fixture server; docs/CDP.md gives commands and CI reproduces them under Xvfb. This proves public WebSocket behavior independently of App hooks. Verify schema/discovery, session and stale-node errors, actual form query/result destination, viewport PNG dimensions and rendered output. Keep local endpoint ports/process identities explicit and stop only test processes you started. Use the implemented protocol subset; an unsupported Runtime command is not authorization to substitute another browser engine.
 
+For the synchronous worker-backed Runtime increment, follow the separately frozen
+docs/RUNTIME_AUTOMATION.md contract. Run script_automation in normal and
+legacy-feature configurations, debug and release, retaining actual-child framing,
+terminal-sequence and cleanup assertions. Run tools/test_runtime_smoke.py as pure
+checker controls, never browser or WPT passes. Build the normal release clients
+runtime_smoke/runtime_moves_smoke and run tools/runtime-smoke.py and
+tools/runtime-moves-smoke.py against both packaged and public-installed bytes,
+with explicit binary/client/server/font hashes and build identity. Require actual
+native/CDP images, routed contexts/real roots, exact source/transaction/resource
+ledgers, input ordering and owned cleanup. Inspect all retained positive images.
+Frame order alone does not prove server admission or an in-flight native edit;
+the core requires both real pending rejections and input acknowledgment before
+the Call result. Preserve any failed witness instead of tuning workload/limits
+or retrying until it passes. The move proof counts visible native windows, not
+an intermediate X-resource leak census. Neither authored proof is full Runtime,
+ordinary Playwright support or an upstream WPT score.
+Bind new targets to actual discovery plus the native TAB opening record; do not
+assume that the second tab is page-2. Workspace tab/window/pane IDs share an
+allocator, and the initial CDP target has a special alias. The TABS diagnostic's
+count is workspace-wide, while groups is per window. Check those meanings against
+actual routing, visible windows and pixels rather than treating count as the
+number of tabs in that one window.
+
 For native inspection, build inspector_smoke and run tools/inspector-smoke.sh
 against the packaged and public-installed binary. Check actual right-click
 selection, input isolation, fresh navigation and real CSS/resource/script

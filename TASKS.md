@@ -1,5 +1,12 @@
 # Work queue
 
+2026-10-25 resumed: the user explicitly approved running the remaining release
+checks and added **reddit.com and news.google.com load and look as expected** to
+the broader goal. Complete the current Runtime release first, then pursue the
+real-site reading/visual acceptance in [docs/SITE_COMPATIBILITY.md](docs/SITE_COMPATIBILITY.md)
+under F-027/F-025. Neither site is complete today; preserve the prior failures,
+resource limits and the Google News reading-first/interactions-later decision.
+
 2026-10-21 resumed: the user explicitly chose **Resume feature work** after the
 v0.9.6 closeout. Continue the broader goal without weakening its acceptance gates.
 
@@ -272,17 +279,31 @@ following dependency order, updating evidence as each increment ships:
    utilities, then the pinned Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
    Fresh public v0.9.19 with explicit `--disable-scripts` still fails attachment
-   and download-policy initialization, before title/locators. First implement
-   the [main-world Runtime foundation contract](docs/PLAYWRIGHT.md#first-runtime-increment-implementation-acceptance-contract),
-   after freezing its typed values/admissions and negative controls. Respect
+   and download-policy initialization, before title/locators. Current unreleased
+   source integrates the [main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md)
+   after freezing typed values/admissions and negative controls. Typed-realm
+   and parent/broker focused checks pass. Actual restricted-child, core native
+   and tab-move proofs now pass with all fourteen images inspected. Full local
+   Rust/JSPLAN regressions pass. Both complete, reviewed score lanes retain
+   static339/610/62 and Window15/16 files,77/79 final subtests. Complete the
+   normal versioned release/public acceptance next. The normal package,
+   installer/updater, thirteen existing native helpers, eight layout proofs and
+   frozen worker controls now pass locally; fresh score review is running.
+   Respect
    effective script permission, real restricted-worker execution and the parent
    publication/charge boundary. Promise awaiting, utility worlds and the stock
    locator's conflicts with the 64 KiB worker/256 KiB CDP limits require separate review;
-   no stubs or unreviewed limit changes. This tooling correction
-   adds no browser capability or completed feature gate.
-4. Finish the versioned renderer/navigation/image corpus and missing transport
-   cancellation (F-003/F-004/F-005), then signed-out News fidelity and the actual
-   Google result/destination journey (F-025/F-010).
+   no stubs or unreviewed limit changes. The prior tooling correction968c654
+   added no browser capability or completed feature gate; current source work
+   is not an installed release or ordinary client compatibility yet.
+4. Make real signed-out **reddit.com and news.google.com load and look as
+   expected** (F-027/F-025), following the shared visual/reading acceptance above.
+   Diagnose fresh actual failures and implement bounded renderer/resource/script
+   prerequisites as needed; finish each increment through its release gates.
+   Retain the versioned renderer/navigation/image corpus and missing transport
+   cancellation (F-003/F-004/F-005), and the separate actual Google
+   result/destination journey (F-010). Site success does not complete these
+   broader features or authorize widening resource/security profiles.
 5. Build the reproducible evaluator and contributor reproduction gates (F-006),
    complete the formal Linux MVP criteria (F-007), and advance the remaining
    language/framework/embedding contracts in F-016 with their specified tests.

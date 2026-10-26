@@ -787,8 +787,44 @@ mod tests {
             serde_json::from_str(protocol.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(schema["version"], json!({"major":"1", "minor":"3"}));
         let domains = schema["domains"].as_array().unwrap();
-        assert_eq!(domains.len(), 5);
-        assert!(domains.iter().all(|domain| domain["domain"] != "Runtime"));
+        assert_eq!(domains.len(), 6);
+        let runtime = domains
+            .iter()
+            .find(|domain| domain["domain"] == "Runtime")
+            .unwrap();
+        assert_eq!(runtime["experimental"], true);
+        assert_eq!(
+            runtime["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|command| command["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "enable",
+                "disable",
+                "evaluate",
+                "callFunctionOn",
+                "getProperties",
+                "releaseObject",
+                "releaseObjectGroup"
+            ]
+        );
+        let exception = runtime["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "ExceptionDetails")
+            .unwrap();
+        assert_eq!(
+            exception["properties"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|property| property["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["exceptionId", "text", "executionContextId", "exception"]
+        );
         assert!(
             http(&server, "GET", "/json/new?https://example.org", &host)
                 .starts_with("HTTP/1.1 404")

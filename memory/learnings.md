@@ -164,3 +164,12 @@
   byte admission, and direct-child shutdown alone is not group cleanup. Curator
   records these verified boundaries in browser-check without changing the
   pinned client, compatibility assertions or existing worker/transport limits.
+- 2026-10-23: The native move proof exposed two test-premise errors, not browser
+  defects. Workspace IDs share one allocator and the initial CDP page has a
+  special alias; bind the next actual discovery target to its native TAB record
+  rather than assuming page-2. In sync_geometry, TABS count is workspace-wide
+  and groups is per window. The corrected complete local proof preserves three
+  real roots through detach/redock and checks actual closed-target rejection,
+  eight native/CDP images and normal final browser exit. Curator records those
+  source-specific diagnostic meanings in browser-check. Earlier failed owners
+  stay ERROR; a repaired data-only audit is not a fresh native execution.

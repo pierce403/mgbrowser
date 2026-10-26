@@ -35,6 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod automation;
 mod cssom;
 mod dom_exception;
 #[cfg(test)]
@@ -469,6 +470,7 @@ pub struct BoaPageRealm {
     closed_work_latched: bool,
     lifecycle: LifecycleProgress,
     pending_milestone: Option<LifecyclePhase>,
+    automation_registry: Option<Gc<GcRefCell<automation::Registry>>>,
 }
 
 struct PageSource {
@@ -1558,6 +1560,7 @@ impl BoaPageRealm {
                 initial_failure: false,
             },
             pending_milestone: None,
+            automation_registry: None,
         })
     }
     fn empty_reply() -> SessionReply {
@@ -1769,6 +1772,9 @@ impl BoaPageRealm {
     }
 
     fn clear_work(&mut self) {
+        if let Some(registry) = &self.automation_registry {
+            automation::clear(registry);
+        }
         // In particular, a permit's Drop must not run under the State borrow.
         let discarded = self.state.borrow_mut().take_work();
         drop(discarded);
@@ -2872,6 +2878,13 @@ impl BoaPageRealm {
             Ok(DefaultAction::None)
         }
     }
+    pub fn automation(
+        &mut self,
+        request: page_session::automation::AutomationRequest,
+    ) -> (SessionReply, page_session::automation::AutomationResult) {
+        automation::run(self, request)
+    }
+
     pub fn dispatch(&mut self, input: SessionInput) -> SessionReply {
         let mut reply = Self::empty_reply();
         reply.revision = self.revision;

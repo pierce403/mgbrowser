@@ -28,6 +28,15 @@ keep local and public evidence separate; the public closeout log is
 [dated log](../memory/logs/2026-10-22.md#v0913-public-release-closeout). The v6 statements below describe historical
 v0.9.12; required progress, strict legacy-v1 and resource policy remain unchanged.
 
+The v0.9.20 source increment adds [worker-backed synchronous Runtime](RUNTIME_AUTOMATION.md)
+with strict modern-v8. A required non-null result discriminator distinguishes
+ordinary Page from typed Automation completions without changing SessionReply
+or granting automation to the trusted observer/legacy lanes. Old-modern versions
+reject, never translate by shape. Automation shares the actual pending slot,
+control-edit versions and cumulative limits. Manager-derived Live/Terminal
+continuation is host metadata after terminal stop/reap, not worker wire authority.
+Focused controls are not full regression/native/public release acceptance.
+
 Since the v0.4.0 increment, one restricted child retains a Boa realm and the
 existing Rust DOM after startup. The original Runtime path remains an explicit
 test baseline, not a production fallback. Real

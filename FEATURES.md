@@ -180,6 +180,10 @@ F-005 layout/resources, F-022 diagnostics and reviewed bounded resource profiles
 
 Signed-out, scripts-disabled real Google News desktop reading first.
 No account/personalization or general web compatibility claim. See docs/DESKTOP_NEXT.md.
+The user renewed the explicit news.google.com loading/visual-fidelity goal on
+2026-10-25. Follow docs/SITE_COMPATIBILITY.md for real-site/reference comparison
+and packaged/public acceptance; previous incremental checks are not a completed
+faithful-reading milestone.
 The v0.9.0 reading increment adds bounded flex/grid, positioning/clipping,
 inline SVG, gradients, fit-content and reviewed JPEG/foreign-image loading.
 Saved HN screenshots and geometry remain byte-identical. Same-input News
@@ -193,6 +197,30 @@ claim. Keep this feature in-progress until its broader criteria are satisfied.
 - [x] Fresh packaged live page, aligned scroll/click, actual served link navigation and Back; topic destination fallback remains explicit.
 - [x] Reviewed Rust-only dependencies/resource policies, focused regressions and all old gates.
 - [x] Versioned release and public installer/native verification.
+
+## F-027 : Reddit loading and desktop reading
+
+Stability: planned
+
+### Dependencies
+
+F-003 transport, F-005 layout/resources, F-016 scripting as actually required,
+F-022 diagnostics and reviewed bounded resource profiles.
+
+### Properties
+
+User-directed goal added 2026-10-25: reddit.com should load and look as expected.
+Start with real signed-out desktop feed and thread reading, not an old.reddit.com
+substitute or a fixture. Follow docs/SITE_COMPATIBILITY.md. Authentication,
+posting and voting are separate later interaction work, not implied support.
+
+### Test criteria
+
+- [ ] Record a fresh ordinary-network baseline and actionable CSS/resource/script failures.
+- [ ] Same-input reference comparison: recognizable navigation, feed, story cards, media and thread/comment layout at both specified desktop sizes, without critical overlap or unreadable content.
+- [ ] Fresh live feed and thread load, aligned scrolling, actual served reading-link navigation and Back; no challenge/error/fallback counted as success.
+- [ ] Focused regressions, unchanged old resource/isolation gates and separate honest WPT scores.
+- [ ] Versioned release, public installer and actual packaged/public-binary site verification with inspected screenshots.
 
 ## F-024 : Pinned Playwright browser control
 
@@ -220,6 +248,14 @@ and download-policy initialization, before title or locators. See
 docs/PLAYWRIGHT.md for the corrected explicit scripts-disabled baseline and the
 next worker-backed Runtime contract. No acceptance checkbox changes. A passing
 custom CDP client is not a substitute for this gate.
+Current unreleased source integrates [that contract](docs/RUNTIME_AUTOMATION.md),
+with typed-realm, parent/broker and actual restricted-child controls passing.
+Both native/CDP proofs retain real worker roots, newer edits and tab identity;
+all fourteen images were inspected. Local Rust/JSPLAN regressions and both
+complete, reviewed score lanes pass without changed outcomes. Normal packaging,
+installer/updater, thirteen existing native helpers, eight layout proofs and
+both frozen worker suites pass locally. Exact-source/public release gates remain.
+Promise awaiting, utility worlds and all full-client criteria stay open.
 
 ## F-023 : Detachable tabs and left/right page groups
 
@@ -1329,7 +1365,7 @@ Opt-in, loopback-only CDP controls the actual native browser. The subset covers 
 - [x] GitHub CI independently reproduces the CDP fixture journey for the published revision.
 - [ ] A pinned upstream schema inventory and client-version compatibility matrix cover the entire protocol as underlying capabilities become available.
 
-Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. Runtime.evaluate still explicitly returns -32601: the new script worker does not yet expose persistent execution contexts or remote objects. Initial subset is working; full protocol remains in-progress.
+Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. That initial implementation returned -32601 for Runtime.evaluate; public v0.9.19 still does. Current unreleased source integrates the separately frozen synchronous worker-backed Runtime contract, not full Runtime, Debugger or Playwright compatibility. Focused and actual restricted-child controls, core/tab-move native proofs and all nineteen local Rust/harness gates pass; frozen JSPLAN retains all 364 outcomes. Both complete, reviewed WPT lanes retain their outcomes; packaged acceptance and publication remain. Full protocol stays in-progress.
 
 Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.
 

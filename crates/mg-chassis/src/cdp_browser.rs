@@ -7,6 +7,8 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::{collections::HashMap, io::Cursor, time::Instant};
 
+mod runtime;
+
 const FRAME: &str = "frame-1";
 const TARGET: &str = "page-1";
 const NODE_STRIDE: u64 = 100_000;
@@ -55,6 +57,7 @@ pub struct BrowserCdp {
     started: Instant,
     live_targets: Vec<String>,
     last_target_number: u64,
+    runtime: runtime::Broker,
 }
 
 type Reply = Result<Value, (i32, String)>;
@@ -139,6 +142,7 @@ impl BrowserCdp {
             started: Instant::now(),
             live_targets: Vec::new(),
             last_target_number: 0,
+            runtime: runtime::Broker::default(),
         })
     }
     pub fn tick(&mut self, app: &mut App) {
@@ -176,6 +180,8 @@ impl BrowserCdp {
             .iter()
             .map(|(target, _)| (*target).to_owned())
             .collect();
+        let deliveries = self.runtime.retain_targets(&self.live_targets);
+        self.deliver_runtime(deliveries);
         let stale: Vec<_> = self
             .scopes
             .iter()
@@ -184,6 +190,7 @@ impl BrowserCdp {
             })
             .collect();
         for route in stale {
+            self.runtime.revoke(&route);
             self.cancel_pending(&route, "Target closed");
             self.scopes.remove(&route);
             if let Some(session) = &route.session {
@@ -198,10 +205,7 @@ impl BrowserCdp {
             }
         }
         self.publish_pages(pages)?;
-        let clients = self.server.client_ids();
-        self.scopes
-            .retain(|route, _| clients.contains(&route.client));
-        self.pending.retain(|p| clients.contains(&p.route.client));
+        self.reconcile_clients();
         for (target, app) in pages.iter_mut() {
             self.flush_page_events(target, app);
         }
@@ -216,6 +220,21 @@ impl BrowserCdp {
             }
         }
         self.publish_pages(pages)
+    }
+
+    fn reconcile_clients(&mut self) -> Vec<u64> {
+        let clients = self.server.client_ids();
+        for route in self
+            .scopes
+            .keys()
+            .filter(|route| !clients.contains(&route.client))
+        {
+            self.runtime.revoke(route);
+        }
+        self.scopes
+            .retain(|route, _| clients.contains(&route.client));
+        self.pending.retain(|p| clients.contains(&p.route.client));
+        clients
     }
 
     fn publish_pages(&self, pages: &[(&str, &mut App)]) -> Result<(), String> {
@@ -250,6 +269,18 @@ impl BrowserCdp {
         }
         self.server.send(route.client, message);
     }
+    fn deliver_runtime(&self, deliveries: Vec<runtime::Delivery>) {
+        for delivery in deliveries {
+            match delivery {
+                runtime::Delivery::Reply { route, id, result } => self.reply(&route, id, result),
+                runtime::Delivery::Event {
+                    route,
+                    method,
+                    params,
+                } => self.event(&route, method, params),
+            }
+        }
+    }
     fn event(&self, route: &Route, method: &str, params: Value) {
         let mut message = json!({"method":method,"params":params});
         if let Some(session) = &route.session {
@@ -262,6 +293,8 @@ impl BrowserCdp {
         self.flush_page_events(TARGET, app);
     }
     fn flush_page_events(&mut self, target: &str, app: &mut App) {
+        let deliveries = self.runtime.poll(target, app);
+        self.deliver_runtime(deliveries);
         let frame_id = frame_id(target);
         for event in std::mem::take(&mut app.cdp_events) {
             match event {
@@ -372,6 +405,12 @@ impl BrowserCdp {
         self.command_pages(&mut [(TARGET, app)], command);
     }
     fn command_pages(&mut self, pages: &mut [(&str, &mut App)], command: Command) {
+        // A frame may have been queued before its transport disconnected. Do
+        // not let that stale frame recreate a revoked scope or worker owner.
+        // Reconcile every command, not just the beginning of a native frame.
+        if !self.reconcile_clients().contains(&command.client) {
+            return;
+        }
         let message = &command.message;
         let id = message.get("id").cloned().unwrap_or(Value::Null);
         let route = Route {
@@ -453,6 +492,31 @@ impl BrowserCdp {
             self.reply(&route, id, Err(failed("Unknown or closed target")));
             return;
         };
+        if runtime::recognizes(method) {
+            if command.browser && route.session.is_none() {
+                self.reply(
+                    &route,
+                    id,
+                    Err(failed(
+                        "Page commands require an attached sessionId on the browser endpoint",
+                    )),
+                );
+                return;
+            }
+            let scope = self.scopes.entry(route.clone()).or_insert_with(|| Scope {
+                target: target.clone(),
+                ..Scope::default()
+            });
+            if scope.target != target {
+                self.reply(&route, id, Err(failed("Session target mismatch")));
+                return;
+            }
+            let deliveries = self
+                .runtime
+                .command(&target, *app, &route, id, method, &params);
+            self.deliver_runtime(deliveries);
+            return;
+        }
         let result = self.dispatch_page(app, &target, &route, command.browser, method, &params);
         match result {
             Ok(result) if method == "Page.navigate" => {
@@ -553,6 +617,7 @@ impl BrowserCdp {
                 if self.scopes.remove(&detached).is_none() {
                     return Err(failed("Unknown sessionId"));
                 }
+                self.runtime.revoke(&detached);
                 self.cancel_pending(&detached, "Session detached");
                 self.event(
                     route,
@@ -578,6 +643,11 @@ impl BrowserCdp {
         });
         if scope.target != target {
             return Err(failed("Session target mismatch"));
+        }
+        if runtime::recognizes(method) {
+            return Err(failed(
+                "Runtime commands require the asynchronous worker broker",
+            ));
         }
         let frame_id = frame_id(target);
         match method {
@@ -823,27 +893,28 @@ impl BrowserCdp {
 }
 
 fn page_method(method: &str) -> bool {
-    matches!(
-        method,
-        "Page.enable"
-            | "Page.disable"
-            | "Page.navigate"
-            | "Page.reload"
-            | "Page.getFrameTree"
-            | "Page.getLayoutMetrics"
-            | "Page.captureScreenshot"
-            | "DOM.enable"
-            | "DOM.disable"
-            | "DOM.getDocument"
-            | "DOM.querySelector"
-            | "DOM.querySelectorAll"
-            | "DOM.getAttributes"
-            | "DOM.getBoxModel"
-            | "DOM.focus"
-            | "Input.dispatchMouseEvent"
-            | "Input.dispatchKeyEvent"
-            | "Input.insertText"
-    )
+    runtime::recognizes(method)
+        || matches!(
+            method,
+            "Page.enable"
+                | "Page.disable"
+                | "Page.navigate"
+                | "Page.reload"
+                | "Page.getFrameTree"
+                | "Page.getLayoutMetrics"
+                | "Page.captureScreenshot"
+                | "DOM.enable"
+                | "DOM.disable"
+                | "DOM.getDocument"
+                | "DOM.querySelector"
+                | "DOM.querySelectorAll"
+                | "DOM.getAttributes"
+                | "DOM.getBoxModel"
+                | "DOM.focus"
+                | "Input.dispatchMouseEvent"
+                | "Input.dispatchKeyEvent"
+                | "Input.insertText"
+        )
 }
 
 fn coordinate(p: &Value, key: &str, bound: f64) -> Result<i32, (i32, String)> {
@@ -1706,13 +1777,188 @@ mod tests {
                 &mut app,
                 &r,
                 false,
-                "Runtime.evaluate",
+                "Runtime.notImplemented",
                 &json!({"expression":"1"})
             )
             .unwrap_err()
             .0,
             -32601
         );
+    }
+    #[test]
+    fn runtime_commands_use_the_real_router_but_never_grant_scripting() {
+        let mut app = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick(&mut app);
+        let mut direct = wire(&cdp, "/devtools/page/page-1");
+        let reply = rpc_pages(
+            &mut cdp,
+            &mut [(TARGET, &mut app)],
+            &mut direct,
+            1,
+            "Runtime.enable",
+            json!({}),
+            None,
+        );
+        assert_eq!(reply["result"], json!({}));
+        let reply = rpc_pages(
+            &mut cdp,
+            &mut [(TARGET, &mut app)],
+            &mut direct,
+            2,
+            "Runtime.evaluate",
+            json!({"expression":"globalThis.mustNeverExecute=1"}),
+            None,
+        );
+        assert_eq!(reply["error"]["code"], -32000);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("usable page script realm")
+        );
+        assert!(cdp.runtime.is_empty());
+        let mut browser = wire(&cdp, "/devtools/browser/browser-1");
+        let reply = rpc_pages(
+            &mut cdp,
+            &mut [(TARGET, &mut app)],
+            &mut browser,
+            3,
+            "Runtime.evaluate",
+            json!({"expression":"1"}),
+            None,
+        );
+        assert_eq!(reply["error"]["code"], -32000);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("attached sessionId")
+        );
+        let reply = rpc_pages(
+            &mut cdp,
+            &mut [(TARGET, &mut app)],
+            &mut direct,
+            4,
+            "Runtime.notImplemented",
+            json!({}),
+            None,
+        );
+        assert_eq!(reply["error"]["code"], -32601);
+    }
+    #[test]
+    fn actual_runtime_queued_commands_cannot_recreate_authority_after_known_disconnect() {
+        use crate::scripts::{ScriptSession, SessionUpdate};
+        use mg_sparkle::page_session::{
+            SessionInput,
+            automation::AutomationRequest,
+            observer::{ObserverExpectation, ObserverLedger},
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        // A counting admission service is not JavaScript execution proof. It
+        // makes any forbidden post-disconnect worker admission observable while
+        // retaining the actual Browser gate and transport command provenance.
+        struct AdmissionCounter(Arc<AtomicUsize>);
+        impl ScriptSession for AdmissionCounter {
+            fn id(&self) -> u64 {
+                17
+            }
+            fn try_dispatch(&mut self, _: SessionInput, _: u64) -> Result<u64, String> {
+                Err("No fixture page activation".into())
+            }
+            fn try_automation(&mut self, _: AutomationRequest, _: u64) -> Result<u64, String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err("Unexpected revoked worker admission".into())
+            }
+            fn try_recv(&mut self) -> Option<SessionUpdate> {
+                None
+            }
+            fn cancel(&self) {}
+            fn charge_active(&mut self, _: Duration) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let mut app = fixture();
+        app.cdp_enabled = true;
+        app.scripts_enabled = true;
+        app.generation = 7;
+        app.lifecycle = Some(crate::LifecycleProgress {
+            phase: crate::LifecyclePhase::LoadComplete,
+            initial_failure: false,
+        });
+        app.observer_ledger = Some(ObserverLedger::new(ObserverExpectation::Disabled).unwrap());
+        let admissions = Arc::new(AtomicUsize::new(0));
+        app.page_session = Some(Box::new(AdmissionCounter(admissions.clone())));
+        assert!(
+            app.runtime_automation_idle(),
+            "Actual parent admission gate is usable"
+        );
+        let (node, _) = input(&app);
+        app.focus = Focus::Input(node);
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick(&mut app);
+        let mut connection = wire(&cdp, "/devtools/page/page-1");
+        let client = cdp.server.client_ids()[0];
+        assert_eq!(
+            rpc_pages(
+                &mut cdp,
+                &mut [(TARGET, &mut app)],
+                &mut connection,
+                1,
+                "Runtime.enable",
+                json!({}),
+                None
+            )["result"],
+            json!({})
+        );
+        assert_eq!(cdp.scopes.len(), 1);
+        for message in [
+            json!({"id":2,"method":"Runtime.evaluate","params":{"expression":"globalThis.revokedMustNotRun=1"}}),
+            json!({"id":3,"method":"Input.insertText","params":{"text":"must-not-insert"}}),
+        ] {
+            connection
+                .send(tungstenite::Message::Text(message.to_string().into()))
+                .unwrap();
+        }
+        // Retain the actual queued frames across the known transport-close
+        // boundary, exactly where a native-frame queue drain could be delayed.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut queued = Vec::new();
+        while queued.len() < 2 {
+            assert!(Instant::now() < deadline, "Actual commands were not queued");
+            if let Some(command) = cdp.server.try_recv() {
+                queued.push(command);
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert_eq!(queued[0].message["method"], "Runtime.evaluate");
+        assert_eq!(queued[1].message["method"], "Input.insertText");
+        assert!(queued.iter().all(|command| command.client == client
+            && !command.browser
+            && command.target.as_deref() == Some(TARGET)));
+        connection.close(None).unwrap();
+        drop(connection);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while cdp.server.client_ids().contains(&client) {
+            assert!(
+                Instant::now() < deadline,
+                "Transport did not report its owned client closed"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for command in queued {
+            cdp.command_pages(&mut [(TARGET, &mut app)], command);
+        }
+        assert_eq!(admissions.load(Ordering::SeqCst), 0);
+        assert!(app.runtime_automation_idle());
+        assert!(app.pending_transaction.is_none());
+        assert!(app.values.get(&node).is_none());
+        assert!(cdp.scopes.is_empty());
     }
     #[test]
     fn input_is_atomic_bounded_and_raw_key_does_not_duplicate_char() {
@@ -1998,7 +2244,11 @@ mod tests {
     fn attached_sessions_scope_enablement_and_reject_detached_commands() {
         let mut app = fixture();
         let mut cdp = BrowserCdp::bind(0).unwrap();
-        let r = route();
+        let _connection = wire(&cdp, "/devtools/browser/browser-1");
+        let r = Route {
+            client: cdp.server.client_ids()[0],
+            session: None,
+        };
         assert!(
             cdp.dispatch(&mut app, &r, true, "Page.getFrameTree", &json!({}))
                 .is_err()

@@ -79,6 +79,11 @@ unchanged vendor. Real guarded `setup({output:false})` only disables optional
 output/tracking; keep assertions and the normal 10,000 ms harness timer/rearm.
 No `explicit_timeout`, fake opener, replacement vendor or injected setup script.
 
+The modern-v7 reference above records the original boundary. The v0.9.20
+transport uses strict modern v8 and required Page results, without
+changing this fixed observer configuration, upstream inputs or resource policy.
+Automation remains forbidden in the trusted observer lane.
+
 Verify the actual request URL/HTML, three external bodies, script eligibility,
 real Mg node identities/order and final-response SameOrigin provenance before
 inner start. No earlier eligible source may precede bootstrap. Meta/default or

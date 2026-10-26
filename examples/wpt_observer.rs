@@ -202,6 +202,11 @@ mod linux {
         command: Command,
     }
     #[derive(Deserialize)]
+    #[serde(tag = "kind", deny_unknown_fields)]
+    enum PageResult {
+        Page {},
+    }
+    #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Reply {
         version: u8,
@@ -210,6 +215,7 @@ mod linux {
         sequence: u64,
         expected_revision: u64,
         reply: SessionReply,
+        result: PageResult,
     }
     struct Limited(Vec<u8>, usize);
     impl Write for Limited {
@@ -246,7 +252,8 @@ mod linux {
         expected_sources: usize,
     ) -> Result<()> {
         ensure(
-            response.version == 7
+            response.version == 8
+                && matches!(response.result, PageResult::Page {})
                 && response.generation == frame.generation
                 && response.session_id == frame.session_id
                 && response.sequence == frame.sequence
@@ -799,7 +806,7 @@ mod linux {
             )?;
         }
         let mut frame = Frame {
-            version: 7,
+            version: 8,
             generation: 1,
             session_id: run_id,
             sequence: 0,
@@ -992,7 +999,7 @@ mod linux {
                 let wake = wake.ok_or("No eligible wake")?;
                 last_wake = wake.token;
                 frame = Frame {
-                    version: 7,
+                    version: 8,
                     generation: 1,
                     session_id: run_id,
                     sequence: frame.sequence.checked_add(1).ok_or("Sequence overflow")?,
@@ -1203,27 +1210,44 @@ mod linux {
 
         #[test]
         fn strict_reply_wrapper_rejects_unknown_and_duplicate_identity_fields() {
-            let original = r#"{"version":7,"generation":1,"session_id":1,"sequence":0,"expected_revision":0,"reply":{"revision":0,"snapshot":null,"outcome":{"click_canceled":null,"submit_canceled":null},"default_action":{"kind":"None"},"navigation":null,"errors":[],"scripts_executed":0,"allocations":null,"boa":null,"state":"Closed","acknowledgements":[],"lifecycle":{"phase":"Initializing","initial_failure":true},"observer":{"kind":"ObservationFailed","run_id":1,"prefix_end":0,"fault":"RejectedInit","execution_failed":true}}}"#;
+            let original = r#"{"version":8,"generation":1,"session_id":1,"sequence":0,"expected_revision":0,"result":{"kind":"Page"},"reply":{"revision":0,"snapshot":null,"outcome":{"click_canceled":null,"submit_canceled":null},"default_action":{"kind":"None"},"navigation":null,"errors":[],"scripts_executed":0,"allocations":null,"boa":null,"state":"Closed","acknowledgements":[],"lifecycle":{"phase":"Initializing","initial_failure":true},"observer":{"kind":"ObservationFailed","run_id":1,"prefix_end":0,"fault":"RejectedInit","execution_failed":true}}}"#;
             assert!(serde_json::from_str::<Reply>(original).is_ok());
+            for replacement in [
+                "",
+                "\"result\":null,",
+                "\"result\":{\"kind\":\"Automation\",\"payload\":\"Released\"},",
+                "\"result\":{\"kind\":\"Page\",\"payload\":null},",
+                "\"result\":{\"kind\":\"Page\",\"extra\":true},",
+            ] {
+                assert!(
+                    serde_json::from_str::<Reply>(&original.replacen(
+                        "\"result\":{\"kind\":\"Page\"},",
+                        replacement,
+                        1,
+                    ))
+                    .is_err(),
+                    "Required modern Page discriminator: {replacement}"
+                );
+            }
             assert!(
                 serde_json::from_str::<Reply>(&original.replacen(
-                    "\"version\":7",
-                    "\"version\":7,\"unknown\":0",
+                    "\"version\":8",
+                    "\"version\":8,\"unknown\":0",
                     1
                 ))
                 .is_err()
             );
             assert!(
                 serde_json::from_str::<Reply>(&original.replacen(
-                    "\"version\":7",
-                    "\"version\":7,\"version\":7",
+                    "\"version\":8",
+                    "\"version\":8,\"version\":8",
                     1
                 ))
                 .is_err()
             );
             let response: Reply = serde_json::from_str(original).unwrap();
             let frame = Frame {
-                version: 7,
+                version: 8,
                 generation: 1,
                 session_id: 1,
                 sequence: 0,

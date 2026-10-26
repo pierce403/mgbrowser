@@ -15,7 +15,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth fonts-dejavu-core desktop-file-utils dbus
       - name: Build locked release binary
-        run: cargo +1.91.1 build --locked --release --bin mgbrowser
+        run: cargo +1.91.1 build --locked --release --bin mgbrowser --example journey_server --example runtime_smoke --example runtime_moves_smoke
       - name: Package and verify the user payload
         env:
           RUSTUP_TOOLCHAIN: 1.91.1
@@ -23,6 +23,8 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$(target/release/mgbrowser --version | cut -d ' ' -f 2)"
           python3 tools/test_gzip_release.py
           python3 tools/test_chrome_update_smoke.py
+          python3 -B tools/test_runtime_smoke.py
+          cargo +1.91.1 test --locked --release -p mg-browser --test script_automation
           bash tools/package-release.sh
           python3 tools/release-smoke.py tmp/release
           MGBROWSER_TEST_RELEASE=tmp/release/mgbrowser-linux-x86_64.tar.gz cargo +1.91.1 test --locked -p mg-browser --lib updater::tests::packaged_update_smoke -- --ignored
@@ -68,6 +70,23 @@ jobs:
             sleep 0.1
           done
           timeout 30s xvfb-run -a tmp/release/mgbrowser-linux-x86_64/mgbrowser http://127.0.0.1:7878/script-boa --enable-scripts --smoke-search 'Rust & café' --exit-after-smoke --evidence-dir tmp/release-journey
+      - name: Verify packaged worker Runtime execution and native tab moves
+        env:
+          RUSTUP_TOOLCHAIN: 1.91.1
+        run: |
+          for runtime_case in runtime runtime-moves; do
+            runtime_client="${runtime_case//-/_}_smoke"
+            python3 "tools/$runtime_case-smoke.py" \
+              --binary tmp/release/mgbrowser-linux-x86_64/mgbrowser \
+              --expected-sha "$(sha256sum tmp/release/mgbrowser-linux-x86_64/mgbrowser | cut -d ' ' -f 1)" \
+              --expected-version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" --expected-commit "$GITHUB_SHA" \
+              --client "target/release/examples/$runtime_client" \
+              --client-sha "$(sha256sum "target/release/examples/$runtime_client" | cut -d ' ' -f 1)" \
+              --server target/release/examples/journey_server \
+              --server-sha "$(sha256sum target/release/examples/journey_server | cut -d ' ' -f 1)" \
+              --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+              --font-sha "$(sha256sum /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf | cut -d ' ' -f 1)"
+          done
       - name: Preserve packaged page-service acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -82,6 +101,8 @@ jobs:
             tmp/lifecycle-services-smoke-*/
             tmp/physical-justify-smoke-*/
             tmp/cssom-methods-smoke-*/
+            tmp/runtime-smoke-*/
+            tmp/runtime-moves-smoke-*/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:

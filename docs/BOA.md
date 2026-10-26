@@ -6,6 +6,12 @@ installer verification are recorded separately in the dated work log.
 This is a bounded JSPLAN integration increment, not completion of P1-P8 or a
 claim that modern web applications generally work.
 
+The v0.9.20 source increment integrates the separately frozen
+[synchronous Runtime foundation](RUNTIME_AUTOMATION.md) in the same restricted
+page worker. Real evaluation/calls/roots do not introduce a parent engine or a new
+resource allowance. Focused controls are not complete native/release acceptance,
+promise awaiting, utility worlds or ordinary Playwright compatibility.
+
 Shipped v0.9.11: [queued snapshot lifecycle](DOCUMENT_LIFECYCLE.md) replaces
 bundled Init with two later DCL/load tasks, strict modern v5 progress and typed
 sticky initial-load evidence. Exact release/public and actual old-update

@@ -151,9 +151,12 @@ this exact client/workflow before changing its status.
 
 ## Proposed implementation sequence
 
-This is a source-derived plan, not adopted browser behavior or completed
-acceptance. The next bounded increment is a main-world synchronous Runtime
-foundation. Its permission policy requires remote debugging **and effective
+This is a source-derived sequence, not completed client acceptance. The current
+unreleased source integrates the [separately frozen Runtime contract](RUNTIME_AUTOMATION.md).
+Its focused typed-realm, parent/broker and actual child controls pass. Both
+native/CDP proofs and local Rust/JSPLAN regressions pass; fresh reviewed scores
+and package/public release gates remain separate. Its permission
+policy requires remote debugging **and effective
 page scripting enabled**, whether by the current default or `--enable-scripts`.
 `--disable-scripts` must remain effective: debugging alone never starts,
 restarts or grants execution to a realm. All evaluation stays in the restricted
@@ -163,11 +166,13 @@ ordinary Playwright utilities can execute there.
 
 ### First Runtime increment: implementation acceptance contract
 
-No Runtime command is implemented by this documentation change. Before changing
-the advertised schema or browser behavior, freeze the typed request/reply/value
-forms, numeric handle/argument/property/serialization admissions and authored
-negative controls against the current sources. Do not infer them from client
-success or enlarge an old bound to fit an injected utility.
+The preparatory documentation commit968c654 implemented no Runtime commands.
+Before source adoption, [RUNTIME_AUTOMATION.md](RUNTIME_AUTOMATION.md) froze typed
+request/reply/value forms, numeric handle/argument/property/serialization
+admissions and authored negative controls. Preserve that contract during current
+integration. Do not infer correctness from client success or enlarge an old bound
+to fit an injected utility. Current source uses strict modern-v8; public v0.9.19
+still has no Runtime implementation. Full client criteria remain unchecked.
 
 - Expose only an existing accepted, usable main-world worker context. Identity
   includes target, worker session, navigation generation and world, plus client/

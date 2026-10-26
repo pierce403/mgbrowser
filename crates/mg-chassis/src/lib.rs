@@ -8,6 +8,7 @@ mod devtools;
 mod initial_load;
 pub mod net;
 pub mod resources;
+mod runtime_automation;
 mod scale;
 pub mod scripts;
 mod scroll;
@@ -19,10 +20,12 @@ use mg_sparkle::{
     page_session::{
         AccountingSnapshot, ControlEdit, DefaultAction, InputKind, LifecyclePhase,
         LifecycleProgress, RealmState, SessionInput, SessionReply, TaskPump, TaskWake,
+        automation::{AutomationRequest, AutomationResult},
         observer::{ObserverLedger, ObserverParentFailure, ObserverProgress},
     },
     paint::{Canvas, Fonts},
 };
+pub(crate) use runtime_automation::AutomationCompletion;
 pub use scale::ScalePreference;
 use std::sync::{
     Arc,
@@ -170,6 +173,10 @@ enum PendingTransaction {
         identity: TransactionIdentity,
         wake_token: u64,
     },
+    Automation {
+        identity: TransactionIdentity,
+        request: AutomationRequest,
+    },
 }
 /// Owned default selected from the validated candidate, never looked up again
 /// after its projection commits. FollowLink receives final URL policy before
@@ -251,6 +258,9 @@ pub struct Browser {
     page_session: Option<Box<dyn scripts::ScriptSession>>,
     page_revision: u64,
     pending_transaction: Option<PendingTransaction>,
+    automation_waiting: Option<u64>,
+    automation_completion: Option<AutomationCompletion>,
+    automation_session: Option<(u64, u64)>,
     task_wake: Option<ScheduledTaskWake>,
     last_task_wake_token: u64,
     script_blocked: bool,
@@ -651,6 +661,9 @@ impl Browser {
             page_session: None,
             page_revision: 0,
             pending_transaction: None,
+            automation_waiting: None,
+            automation_completion: None,
+            automation_session: None,
             task_wake: None,
             last_task_wake_token: 0,
             script_blocked: false,
@@ -722,6 +735,10 @@ impl Browser {
             self.finish_initial_load(Some("net::ERR_ABORTED: superseded navigation".into()));
         }
         self.generation += 1;
+        self.finish_automation(
+            Err("Runtime context destroyed by navigation".into()),
+            scripts::SessionContinuation::Terminal,
+        );
         self.loading = true;
         self.fetching = true;
         self.lifecycle = None;
@@ -1350,6 +1367,7 @@ impl Browser {
         if let Some(session) = &self.page_session {
             session.cancel();
         }
+        self.finish_automation(Err(error.into()), scripts::SessionContinuation::Terminal);
         self.pending_transaction = None;
         self.task_wake = None;
         self.script_blocked = true;
@@ -1453,7 +1471,11 @@ impl Browser {
         self.task_wake = wake;
     }
     fn poll_task_wake(&mut self, now: Instant) {
-        if self.fetching || self.script_blocked || self.pending_transaction.is_some() {
+        if self.fetching
+            || self.script_blocked
+            || self.pending_transaction.is_some()
+            || self.automation_completion.is_some()
+        {
             return;
         }
         let Some(wake) = self.task_wake.filter(|wake| now >= wake.at) else {
@@ -1501,7 +1523,7 @@ impl Browser {
             self.dirty = true;
             return Err(self.status.clone());
         }
-        if self.pending_transaction.is_some() {
+        if self.pending_transaction.is_some() || self.automation_completion.is_some() {
             self.status = "A page event is still running; activation not queued".into();
             self.dirty = true;
             return Err(self.status.clone());
@@ -1666,8 +1688,8 @@ impl Browser {
                 .pending_transaction
                 .take()
                 .ok_or("Script session expired or sent an unsolicited completion")?;
-            let (identity, activation) = match pending {
-                PendingTransaction::Activation { identity, input } => (identity, Some(input)),
+            let (identity, activation, automation) = match pending {
+                PendingTransaction::Activation { identity, input } => (identity, Some(input), None),
                 PendingTransaction::TaskPump {
                     identity,
                     wake_token,
@@ -1675,7 +1697,10 @@ impl Browser {
                     if wake_token == 0 || wake_token != self.last_task_wake_token {
                         return Err("Invalid pending task wake identity".into());
                     }
-                    (identity, None)
+                    (identity, None, None)
+                }
+                PendingTransaction::Automation { identity, request } => {
+                    (identity, None, Some(request))
                 }
             };
             if identity.generation != self.generation
@@ -1690,6 +1715,12 @@ impl Browser {
                 .as_ref()
                 .into_iter()
                 .flat_map(|input| input.edits.iter())
+                .chain(
+                    automation
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|request| request.edits.iter()),
+                )
                 .map(|edit| (edit.node, edit.version))
                 .collect();
             let mut ack: Vec<_> = reply
@@ -1701,6 +1732,11 @@ impl Browser {
             if ack != expected {
                 return Err("Invalid control-edit acknowledgement".into());
             }
+            match (&automation, &update.automation) {
+                (Some(request), Some(result)) => result.validate_for(request)?,
+                (None, None) => {}
+                _ => return Err("Script completion has mismatched Runtime result authority".into()),
+            }
             if activation.is_none()
                 && (reply.default_action != DefaultAction::None
                     || reply.outcome.click_canceled.is_some()
@@ -1708,11 +1744,14 @@ impl Browser {
                     || reply.scripts_executed != 0)
             {
                 return Err(
-                    "Task pump returned activation effects or startup-script counts".into(),
+                    "Non-activation transaction returned activation effects or startup-script counts".into(),
                 );
             }
             let wake = self.validate_task_wake(&reply, received)?;
-            let lifecycle = self.validate_lifecycle_reply(&reply, Some(activation.is_none()))?;
+            let lifecycle = self.validate_lifecycle_reply(
+                &reply,
+                Some(activation.is_none() && automation.is_none()),
+            )?;
             if self
                 .last_accounting
                 .as_ref()
@@ -1752,6 +1791,7 @@ impl Browser {
                 lifecycle,
                 identity,
                 activation.is_some(),
+                automation.is_some(),
                 ack,
                 default,
             ))
@@ -1774,7 +1814,7 @@ impl Browser {
             Ok(None)
         };
         let projection = projection.and_then(
-            |(document, wake, lifecycle, identity, activation, ack, default)| {
+            |(document, wake, lifecycle, identity, activation, automation, ack, default)| {
                 observation.map(|observation| {
                     (
                         document,
@@ -1782,6 +1822,7 @@ impl Browser {
                         lifecycle,
                         identity,
                         activation,
+                        automation,
                         ack,
                         default,
                         observation,
@@ -1798,21 +1839,30 @@ impl Browser {
             .unwrap()
             .charge_active(received.elapsed());
         let charge_failed = timed.is_err();
-        let (document, wake, lifecycle, identity, activation, ack, default, observation) =
-            match projection.and_then(|value| timed.map(|_| value)) {
-                Ok(value) => value,
-                Err(error) => {
-                    if let Some(ledger) = &mut self.observer_ledger {
-                        ledger.fail_parent(if charge_failed {
-                            ObserverParentFailure::ActiveCharge
-                        } else {
-                            ObserverParentFailure::Validation
-                        });
-                    }
-                    self.block_session(&error);
-                    return;
+        let (
+            document,
+            wake,
+            lifecycle,
+            identity,
+            activation,
+            automation,
+            ack,
+            default,
+            observation,
+        ) = match projection.and_then(|value| timed.map(|_| value)) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(ledger) = &mut self.observer_ledger {
+                    ledger.fail_parent(if charge_failed {
+                        ObserverParentFailure::ActiveCharge
+                    } else {
+                        ObserverParentFailure::Validation
+                    });
                 }
-            };
+                self.block_session(&error);
+                return;
+            }
+        };
         if let Some(staged) = observation {
             staged.commit();
         }
@@ -1827,7 +1877,8 @@ impl Browser {
         }
         self.acknowledge_projection(document, &ack);
         self.last_accounting = Some(reply.accounting_snapshot());
-        self.replace_task_wake(wake);
+        let terminal = update.continuation == scripts::SessionContinuation::Terminal;
+        self.replace_task_wake(if terminal { None } else { wake });
         if self
             .observer_ledger
             .as_ref()
@@ -1846,10 +1897,39 @@ impl Browser {
         }
         self.accept_lifecycle(lifecycle, received);
         let _ = self.script_summary(&reply);
+        if automation {
+            let result = update.automation.ok_or("Runtime result missing after validation".to_string())
+                .and_then(|result| {
+                    if terminal && runtime_automation::has_handles(&result) {
+                        Err("Runtime transaction completed, but its terminal worker cannot retain object handles".into())
+                    } else {
+                        Ok(result)
+                    }
+                });
+            self.finish_automation(result, update.continuation);
+        }
+        if terminal {
+            self.script_blocked = true;
+            self.task_wake = None;
+            if let Some(session) = &self.page_session {
+                session.cancel();
+            }
+        }
         self.status = format!(
-            "Page {} completed · {} diagnostics",
-            if activation { "event" } else { "task" },
-            reply.errors.len()
+            "Page {} completed · {} diagnostics{}",
+            if automation {
+                "Runtime transaction"
+            } else if activation {
+                "event"
+            } else {
+                "task"
+            },
+            reply.errors.len(),
+            if terminal {
+                " · script worker stopped"
+            } else {
+                ""
+            },
         );
         if activation {
             eprintln!(
@@ -1858,6 +1938,11 @@ impl Browser {
                 reply.revision,
                 reply.outcome.click_canceled,
                 reply.outcome.submit_canceled
+            );
+        } else if automation {
+            eprintln!(
+                "PAGE_AUTOMATION_APPLIED sequence={} revision={} terminal={}",
+                identity.sequence, reply.revision, terminal
             );
         } else {
             eprintln!(
@@ -3819,9 +3904,15 @@ impl Browser {
     }
     /// Scripts remain opt-in and require a host-provided isolated runtime.
     pub fn set_scripts_enabled(&mut self, enabled: bool) {
+        if !enabled {
+            self.revoke_automation_permission("Page scripting disabled after Runtime use");
+        }
         self.scripts_enabled = enabled;
     }
     pub fn set_debugging(&mut self, enabled: bool) {
+        if !enabled {
+            self.revoke_automation_permission("Remote debugging disabled after Runtime use");
+        }
         self.cdp_enabled = enabled;
     }
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.

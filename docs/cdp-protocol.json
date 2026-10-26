@@ -7,7 +7,7 @@
       "commands": [
         {
           "name": "getVersion",
-          "description": "Report mgbrowser identity and the bundled experimental interpreter version. This does not imply scripting is enabled or the Runtime domain is implemented.",
+          "description": "Report mgbrowser identity and the bundled experimental interpreter version. This does not imply scripting is enabled or full Runtime compatibility.",
           "returns": [
             { "name": "protocolVersion", "type": "string" },
             { "name": "product", "type": "string" },
@@ -16,6 +16,136 @@
             { "name": "jsVersion", "type": "string" }
           ]
         }
+      ]
+    },
+    {
+      "domain": "Runtime",
+      "experimental": true,
+      "description": "Bounded synchronous main-world execution in the existing restricted page worker. Requires debugging, enabled page scripts and accepted LoadComplete. No promise awaiting, utility worlds, activation, previews or full upstream exception schema. See RUNTIME_AUTOMATION.md for admissions and lifetime rules.",
+      "types": [
+        { "id": "ExecutionContextId", "type": "integer" },
+        { "id": "RemoteObjectId", "type": "string", "description": "Opaque context/route-owner/worker-root identity; foreign, stale and forged IDs reject." },
+        {
+          "id": "RemoteObject", "type": "object",
+          "properties": [
+            { "name": "type", "type": "string", "enum": [ "undefined", "object", "function", "boolean", "number", "string", "bigint" ] },
+            { "name": "subtype", "type": "string", "enum": [ "null", "array", "promise", "proxy", "error" ], "optional": true },
+            { "name": "value", "type": "any", "optional": true },
+            { "name": "unserializableValue", "type": "string", "optional": true, "description": "NaN, Infinity, -Infinity, -0 or canonical bounded decimal BigInt followed by n." },
+            { "name": "objectId", "$ref": "RemoteObjectId", "optional": true }
+          ]
+        },
+        {
+          "id": "CallArgument", "type": "object",
+          "description": "At most one form; an empty object means undefined. Objects by value are bounded ordinary JSON trees, not arbitrary structured clone.",
+          "properties": [
+            { "name": "value", "type": "any", "optional": true },
+            { "name": "unserializableValue", "type": "string", "optional": true },
+            { "name": "objectId", "$ref": "RemoteObjectId", "optional": true }
+          ]
+        },
+        {
+          "id": "PropertyDescriptor", "type": "object",
+          "description": "Complete own descriptors only. Accessors are rooted, never invoked; symbol keys and unsupported exotics reject without a partial list.",
+          "properties": [
+            { "name": "name", "type": "string" },
+            { "name": "value", "$ref": "RemoteObject", "optional": true },
+            { "name": "writable", "type": "boolean", "optional": true },
+            { "name": "get", "$ref": "RemoteObject", "optional": true },
+            { "name": "set", "$ref": "RemoteObject", "optional": true },
+            { "name": "configurable", "type": "boolean" },
+            { "name": "enumerable", "type": "boolean" },
+            { "name": "isOwn", "type": "boolean" }
+          ]
+        },
+        {
+          "id": "ExceptionDetails", "type": "object",
+          "description": "Deliberately narrowed, not the full upstream required shape. Unknown line/column/source/stack fields are omitted. An unrepresentable thrown value omits exception and the command result instead of inventing thrown undefined. Runtime catches do not dispatch page onerror.",
+          "properties": [
+            { "name": "exceptionId", "type": "integer" },
+            { "name": "text", "type": "string" },
+            { "name": "executionContextId", "$ref": "ExecutionContextId" },
+            { "name": "exception", "$ref": "RemoteObject", "optional": true }
+          ]
+        },
+        {
+          "id": "ExecutionContextDescription", "type": "object",
+          "properties": [
+            { "name": "id", "$ref": "ExecutionContextId" },
+            { "name": "origin", "type": "string" },
+            { "name": "name", "type": "string" },
+            { "name": "uniqueId", "type": "string" },
+            { "name": "auxData", "type": "object", "properties": [
+              { "name": "isDefault", "type": "boolean" },
+              { "name": "type", "type": "string" },
+              { "name": "frameId", "$ref": "Page.FrameId" }
+            ] }
+          ]
+        }
+      ],
+      "commands": [
+        { "name": "enable", "description": "Acknowledge before reporting existing contexts. Notifications alone grant no scripting permission or worker credit." },
+        { "name": "disable", "description": "Disable notifications only; explicitly release roots or detach/disconnect for cleanup." },
+        {
+          "name": "evaluate",
+          "description": "Evaluate at most 16 KiB in the actual retained main world. Optional semantic booleans other than returnByValue accept false only. An ordinary caught exception returns exceptionDetails; unsupported representation is a protocol error with real preceding DOM effects retained.",
+          "parameters": [
+            { "name": "expression", "type": "string" },
+            { "name": "contextId", "$ref": "ExecutionContextId", "optional": true },
+            { "name": "objectGroup", "type": "string", "optional": true },
+            { "name": "returnByValue", "type": "boolean", "optional": true },
+            { "name": "awaitPromise", "type": "boolean", "optional": true },
+            { "name": "userGesture", "type": "boolean", "optional": true },
+            { "name": "silent", "type": "boolean", "optional": true },
+            { "name": "generatePreview", "type": "boolean", "optional": true },
+            { "name": "includeCommandLineAPI", "type": "boolean", "optional": true },
+            { "name": "throwOnSideEffect", "type": "boolean", "optional": true },
+            { "name": "replMode", "type": "boolean", "optional": true }
+          ],
+          "returns": [
+            { "name": "result", "$ref": "RemoteObject", "optional": true, "description": "Absent only when the caught thrown value cannot be represented; see ExceptionDetails." },
+            { "name": "exceptionDetails", "$ref": "ExceptionDetails", "optional": true }
+          ]
+        },
+        {
+          "name": "callFunctionOn",
+          "description": "Compile and invoke the supplied function with native guarded receiver/argument identity. Specify objectId or executionContextId, not both; omit both to use the actual realm global. Missing objectGroup inherits the receiver group. Semantic booleans other than returnByValue accept false only.",
+          "parameters": [
+            { "name": "functionDeclaration", "type": "string" },
+            { "name": "objectId", "$ref": "RemoteObjectId", "optional": true },
+            { "name": "executionContextId", "$ref": "ExecutionContextId", "optional": true },
+            { "name": "arguments", "type": "array", "items": { "$ref": "CallArgument" }, "optional": true },
+            { "name": "objectGroup", "type": "string", "optional": true },
+            { "name": "returnByValue", "type": "boolean", "optional": true },
+            { "name": "awaitPromise", "type": "boolean", "optional": true },
+            { "name": "userGesture", "type": "boolean", "optional": true },
+            { "name": "silent", "type": "boolean", "optional": true },
+            { "name": "generatePreview", "type": "boolean", "optional": true },
+            { "name": "throwOnSideEffect", "type": "boolean", "optional": true }
+          ],
+          "returns": [
+            { "name": "result", "$ref": "RemoteObject", "optional": true },
+            { "name": "exceptionDetails", "$ref": "ExceptionDetails", "optional": true }
+          ]
+        },
+        {
+          "name": "getProperties",
+          "description": "Require ownProperties:true; other optional booleans accept false only. Maximum64 complete descriptors; no getters, proxy traps or checkpoint execution.",
+          "parameters": [
+            { "name": "objectId", "$ref": "RemoteObjectId" },
+            { "name": "ownProperties", "type": "boolean" },
+            { "name": "accessorPropertiesOnly", "type": "boolean", "optional": true },
+            { "name": "generatePreview", "type": "boolean", "optional": true },
+            { "name": "nonIndexedPropertiesOnly", "type": "boolean", "optional": true }
+          ],
+          "returns": [ { "name": "result", "type": "array", "items": { "$ref": "PropertyDescriptor" } } ]
+        },
+        { "name": "releaseObject", "description": "Drop an actual owned root; same-owner duplicate release is idempotent. No cumulative accounting refund.", "parameters": [ { "name": "objectId", "$ref": "RemoteObjectId" } ] },
+        { "name": "releaseObjectGroup", "description": "Release this route owner's named group only. No JavaScript or checkpoint; native edits remain pending.", "parameters": [ { "name": "objectGroup", "type": "string" } ] }
+      ],
+      "events": [
+        { "name": "executionContextCreated", "parameters": [ { "name": "context", "$ref": "ExecutionContextDescription" } ] },
+        { "name": "executionContextDestroyed", "parameters": [ { "name": "executionContextId", "$ref": "ExecutionContextId" }, { "name": "executionContextUniqueId", "type": "string" } ] }
       ]
     },
     {
@@ -195,7 +325,7 @@
     },
     {
       "domain": "DOM",
-      "description": "Inspection of mgbrowser's actual bounded HTML tree. Selectors are a declared subset. Node references are invalidated by document replacement or accepted script-event projection; Runtime object handles are unsupported.",
+      "description": "Inspection of mgbrowser's actual bounded HTML tree. Selectors are a declared subset. Node references are invalidated by document replacement or accepted script projection. DOM node-handle arguments cannot use Runtime object IDs; no resolveNode/requestNode bridge.",
       "types": [
         { "id": "NodeId", "type": "integer" },
         { "id": "BackendNodeId", "type": "integer" },
