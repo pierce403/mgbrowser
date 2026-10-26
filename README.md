@@ -2,15 +2,15 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Next release candidate: v0.9.20
+## Latest verified release: v0.9.20
 
-The current source adds a bounded worker-backed main-world Runtime foundation:
+v0.9.20 adds a bounded worker-backed main-world Runtime foundation:
 generic evaluation/function calls, actual retained object handles, own-property
 inspection and release. It uses the existing restricted page worker and its
 unchanged cumulative limits. Remote debugging and effective scripting are both
 required. This does not implement promise awaiting, utility worlds or ordinary
 Playwright compatibility.
-[Contract](docs/RUNTIME_AUTOMATION.md) and [candidate notes](docs/RELEASE-v0.9.20.md).
+[Contract](docs/RUNTIME_AUTOMATION.md) and [release notes](docs/RELEASE-v0.9.20.md).
 
 Focused realm/broker and actual restricted-child checks pass. Both authored
 native/CDP proofs pass, including inspected newer-input/navigation images and
@@ -22,9 +22,17 @@ Normal candidate packaging, installer/checksum, updater, worker selftests and
 all thirteen existing native helpers pass. Both Runtime proofs also pass on the
 packaged executable; all fourteen actual images were inspected. The eight
 additional layout proofs and both frozen worker-control suites also pass.
-Fresh score review, exact-source CI and public release acceptance stay separate.
-Public v0.9.20 acceptance is not yet recorded. The last verified public installer
-baseline is v0.9.19; the command follows the latest published release.
+Published as [v0.9.20](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.20)
+at `28413873dc1c19cae537af9158899760c40dc7f7`. All eight required exact-source
+CI/hosting checks and tagged publication pass. The public curl install/reinstall,
+worker/session/Boa/CSSOM/desktop/icon checks and actual v0.9.19 update/no-op pass.
+The public binary passes all thirteen existing native helpers, both Runtime
+proofs, eight layout proofs and both frozen worker-control suites. All fourteen
+Runtime and36 layout images were inspected. The website installer delivers v0.9.20.
+A separate same-source Dependabot build-tool update failed
+`security_update_not_possible`; its undici dependency constraint remains unresolved.
+This is not an all-observed-checks-green claim. See the
+[public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout).
 
 The active all-features goal explicitly includes real **reddit.com and
 news.google.com loading and expected desktop appearance**. Faithful signed-out
@@ -32,7 +40,7 @@ reading comes first, with same-input reference comparisons and fresh packaged/
 public live navigation. Neither site is complete.
 [Acceptance targets](docs/SITE_COMPATIBILITY.md).
 
-## Latest verified release: v0.9.19
+## Previous release: v0.9.19
 
 Auto-width inline-block, inline-flex and inline-grid boxes reserve their actual
 allocated height in the surrounding line. Enclosing borders and following blocks
@@ -59,7 +67,7 @@ CI/hosting checks and the tagged release pass. Checksum-verified public install/
 reinstall, worker/session/Boa/CSSOM/desktop/icons, actual v0.9.18 update/no-op,
 thirteen existing public native helpers, eight additive native/CDP proofs and
 both frozen public-worker suites pass; all36 additive public images were
-inspected. The website command delivers v0.9.19. A separate Dependabot build-tool
+inspected. That public installer verification delivered v0.9.19. A separate Dependabot build-tool
 update failed with an unresolved undici dependency constraint; this is not an
 all-observed-checks-green claim. See the
 [public closeout](memory/logs/2026-10-23.md#v0919-public-release-closeout).
@@ -390,12 +398,13 @@ and two groups per window. [Desktop scope](docs/DESKTOP_NEXT.md).
 **Ordinary Playwright compatibility remains unfinished.**
 Stable CDP targets and a failing pinned-client acceptance test are foundations,
 not a claim that ordinary Playwright locators work.
-Fresh public v0.9.19 still fails target auto-attachment/download initialization,
-before title or locators. The probe now explicitly disables page scripts rather
-than assuming a default. The [worker-backed Runtime foundation](docs/RUNTIME_AUTOMATION.md)
-is currently unreleased source integration: focused typed-realm/parent/broker
-controls pass, with actual child/native/full regression/score/release gates
-remaining. No installed evaluation feature or client compatibility is claimed.
+The last recorded ordinary-client probe, on public v0.9.19, fails target
+auto-attachment/download initialization before title or locators. That probe
+explicitly disables page scripts rather than assuming a default. The
+[worker-backed Runtime foundation](docs/RUNTIME_AUTOMATION.md) ships in v0.9.20,
+with packaged/public native execution and tab-move proofs. It is a synchronous
+main-world subset, not ordinary Playwright or locator compatibility. Promise
+awaiting, utility worlds and broader target/download behavior remain unfinished.
 [Playwright acceptance](docs/PLAYWRIGHT.md) and the
 [signed-out News reading scope](docs/GOOGLE_NEWS.md) keep their remaining gates explicit.
 

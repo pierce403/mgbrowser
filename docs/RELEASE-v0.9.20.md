@@ -57,6 +57,21 @@ Both Runtime proofs pass on the packaged executable, with all fourteen actual
 images inspected. CI and public-install evidence remains distinct from these
 local source/package measurements in the work log.
 
+Published as [v0.9.20](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.20)
+at `28413873dc1c19cae537af9158899760c40dc7f7`. All eight required exact-source
+CI/hosting checks and the normal tagged release pass. The archive is8,243,531
+bytes, below the unchanged8MiB updater cap, SHA-256
+`a56623fb06f49334a963e70e26c7c04ea732aee02e45e18d9f3cc34725df0bbb`.
+Public curl install/reinstall, worker/session/Boa/CSSOM/desktop/icons, actual
+v0.9.19 upgrade/no-op, thirteen native helpers, two Runtime proofs, eight layout
+proofs and both frozen direct-worker suites pass. All50 additive public images
+were inspected. Full97 raw worker request/reply/resource records were reviewed;
+the eight positive and thirteen negative expectations are not21 WPT passes.
+A separate same-source Dependabot build-tool update failed
+`security_update_not_possible` and remains unresolved; not all observed checks
+are green. Exact receipts and caveats are in the
+[public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout).
+
 No existing test, source/opcode/System-allocation/work/time/lifetime/wire/OS
 limit, dependency or worker profile is relaxed. Runtime adds narrower admissions
 inside the existing profile, not a resource reset or new worker allowance.

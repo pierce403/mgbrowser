@@ -2,8 +2,9 @@
 
 The user explicitly added **reddit.com and news.google.com should load and look
 as expected** to the active all-features goal on 2026-10-25. This is an acceptance
-target, not a claim of current compatibility. Complete the existing Runtime
-release before starting the next bounded browser increment.
+target, not a claim of current compatibility. The Runtime foundation shipped
+as v0.9.20; finish its separate documentation-closeout gates before starting
+the next bounded browser increment.
 
 ## First milestone: faithful signed-out desktop reading
 

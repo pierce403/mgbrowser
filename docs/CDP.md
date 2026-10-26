@@ -2,7 +2,7 @@
 
 mgbrowser implements a Chrome DevTools Protocol (CDP) interface so tools can inspect and operate the same Rust browser that a person sees. The implementation is a bounded subset with stable targets for existing tabs. The long-term goal is full protocol support as the browser gains the corresponding behavior. Returning success for an unimplemented browser feature does not count as compatibility.
 
-The contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Page scripts use the restricted [Boa page execution lane](BOA.md), enabled by default since v0.9.4 with `--disable-scripts` to opt out. The current source adds the synchronous [worker-backed Runtime subset](RUNTIME_AUTOMATION.md); its integration/release acceptance is still in progress. Public v0.9.19 does not implement Runtime. The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline, without automation authority.
+The contract is [cdp-protocol.json](cdp-protocol.json). Discovery advertises version `1.3` alongside the mgbrowser product name; this does not claim complete Chrome 1.3, tip-of-tree, Playwright, Puppeteer, or Chrome DevTools frontend compatibility. Page scripts use the restricted [Boa page execution lane](BOA.md), enabled by default since v0.9.4 with `--disable-scripts` to opt out. v0.9.20 ships the synchronous [worker-backed Runtime subset](RUNTIME_AUTOMATION.md), with separate packaged/public native acceptance in the [public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout). The historical public v0.9.19 baseline did not implement Runtime. The [original JavaScript evaluator](JAVASCRIPT.md) remains a historical test baseline, without automation authority.
 
 ## Connection and scope
 
@@ -205,8 +205,12 @@ two real Browser values with equal navigation generations and DOM epochs. They
 verify discovery, direct/attached routing, DOM/input isolation, reordered host
 enumeration, target-specific events and replies, close/detach cancellation, and
 rejected ID reuse. They do not establish ordinary Playwright attachment or
-browser contexts or worker-backed Runtime behavior. Runtime's separate native
-acceptance must prove its own retained roots, execution, input and paint.
+browser contexts or worker-backed Runtime behavior. v0.9.20's separate core and
+tab-move native/CDP proofs pass on packaged and public-installed binaries. They
+verify real worker closure/property roots and release, exception effects, newer
+page form edits, actual paint/navigation and retained roots across native tab
+detach/redock/closure. All fourteen actual images were inspected. This authored
+client evidence does not satisfy the ordinary Playwright criteria.
 
 Build `workspace_cdp_smoke`, then run
 `bash tools/workspace-cdp-smoke.sh /absolute/path/to/mgbrowser` against the
@@ -214,8 +218,9 @@ packaged and public-installed binary. It uses native tab creation, detachment
 and closure alongside actual WebSocket discovery/attachment/input to check
 retained edits, stable routes and closed-target rejection on an owned display.
 
-Ordinary Playwright 1.58.2 currently fails during attachment, before any locator
-or page operation. See [the actual pinned baseline and acceptance command](PLAYWRIGHT.md).
+The last recorded ordinary Playwright 1.58.2 probe, on public v0.9.19, fails
+during attachment before any locator or page operation. See
+[the actual pinned baseline and acceptance command](PLAYWRIGHT.md).
 The Rust client below is not a substitute for that independent-client gate.
 
 Reproduce the local journey in three terminals. Start the fixture service:
@@ -244,7 +249,7 @@ The full-protocol direction is staged around real browser capabilities:
 
 1. Freeze the advertised subset and add independent protocol/client fixtures. Validate every advertised method, optional parameter, result, event, and error path. Pin a reviewed upstream schema revision for future changes; tip-of-tree changes are not automatically adopted.
 2. Add real frame/target lifecycles, navigation history, cancellation, Network request/response/error events, resource bodies, and more accurate layout/DOM inspection as their browser implementations mature.
-3. Complete acceptance and release of the synchronous worker-backed Runtime foundation, then implement broader execution/Debugger behavior only under separately reviewed contracts. Promise awaiting and utility worlds are not part of this subset. Execution, isolation and actual client tests precede compatibility claims.
+3. Build on the released v0.9.20 synchronous worker-backed Runtime foundation; implement broader execution/Debugger behavior only under separately reviewed contracts. Promise awaiting and utility worlds are not part of this subset. Execution, isolation and actual client tests precede compatibility claims.
 4. Connect actual style/compositing and platform features to CSS, DOMSnapshot, Accessibility, Emulation, storage, workers, profiling, tracing, and the remaining relevant domains. Maintain an explicit inventory of unsupported platform-specific features.
 5. Run pinned external clients and DevTools frontend versions against documented workflows. Claim compatibility per client/version/workflow only after observed success; retain the full protocol as the longer-term goal.
 

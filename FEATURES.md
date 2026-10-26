@@ -243,19 +243,20 @@ Unsupported commands and browser capabilities must fail explicitly.
 - [ ] Packaged/public release journey and all existing resource/isolation gates pass.
 
 The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. Fresh public v0.9.19 passes discovery but still fails auto-attachment
-and download-policy initialization, before title or locators. See
-docs/PLAYWRIGHT.md for the corrected explicit scripts-disabled baseline and the
-next worker-backed Runtime contract. No acceptance checkbox changes. A passing
-custom CDP client is not a substitute for this gate.
-Current unreleased source integrates [that contract](docs/RUNTIME_AUTOMATION.md),
-with typed-realm, parent/broker and actual restricted-child controls passing.
-Both native/CDP proofs retain real worker roots, newer edits and tab identity;
-all fourteen images were inspected. Local Rust/JSPLAN regressions and both
-complete, reviewed score lanes pass without changed outcomes. Normal packaging,
-installer/updater, thirteen existing native helpers, eight layout proofs and
-both frozen worker suites pass locally. Exact-source/public release gates remain.
-Promise awaiting, utility worlds and all full-client criteria stay open.
+tools/playwright. The last recorded ordinary-client baseline is public v0.9.19:
+discovery succeeds, but auto-attachment and download-policy initialization fail
+before title or locators. See docs/PLAYWRIGHT.md for that explicit
+scripts-disabled baseline. No acceptance checkbox changes; a passing custom CDP
+client is not a substitute for this gate.
+v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7` ships the bounded
+[synchronous main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md).
+Packaged and public native/CDP proofs verify real worker roots, newer edits and
+stable tab identity, with all fourteen public images inspected. Local regressions,
+both unchanged score lanes, required exact-source CI/hosting, normal publication,
+public install/reinstall, actual v0.9.19 update/no-op, thirteen existing native
+helpers, eight layout proofs and both frozen public-worker suites pass; see the
+[public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout).
+Promise awaiting, utility worlds and every full-client criterion stay open.
 
 ## F-023 : Detachable tabs and left/right page groups
 
@@ -1355,6 +1356,12 @@ F-003 and F-004 initially; broader browser capabilities for eventual full protoc
 
 Opt-in, loopback-only CDP controls the actual native browser. The subset covers discovery, stable per-tab targets, flattened sessions, navigation, actual DOM inspection/selectors, editable controls, mouse/keyboard input, and PNG viewport screenshots. Native tab moves retain target identity; closed targets reject requests. Protocol-driven creation/closing and auto-attachment remain unsupported. Unsupported commands and parameters fail explicitly. docs/CDP.md and docs/cdp-protocol.json describe the implemented contract, limitations and roadmap toward full protocol support. No production, full Chrome, DevTools frontend, Playwright or Puppeteer compatibility claim.
 
+v0.9.20 adds synchronous main-world evaluation/calls in the existing restricted
+page worker, bounded remote handles, supported own-property inspection and
+explicit handle/group release. Effective script permission, shared transaction
+admission, parent validation and lifetime cleanup remain enforced. Promise
+awaiting, utility worlds and broader Runtime/Debugger behavior are not supported.
+
 ### Test Criteria
 
 - [x] Discovery and real WebSocket tests cover endpoint identity, Host/Origin restrictions, bounded messages, connection limits and cleanup.
@@ -1365,7 +1372,20 @@ Opt-in, loopback-only CDP controls the actual native browser. The subset covers 
 - [x] GitHub CI independently reproduces the CDP fixture journey for the published revision.
 - [ ] A pinned upstream schema inventory and client-version compatibility matrix cover the entire protocol as underlying capabilities become available.
 
-Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. That initial implementation returned -32601 for Runtime.evaluate; public v0.9.19 still does. Current unreleased source integrates the separately frozen synchronous worker-backed Runtime contract, not full Runtime, Debugger or Playwright compatibility. Focused and actual restricted-child controls, core/tab-move native proofs and all nineteen local Rust/harness gates pass; frozen JSPLAN retains all 364 outcomes. Both complete, reviewed WPT lanes retain their outcomes; packaged acceptance and publication remain. Full protocol stays in-progress.
+Evidence: 2026-09-07 initial cargo test --locked --all-targets passed 47 tests (35 library, 9 binary, 3 external-client regressions). External CDP journey passed under Xvfb with exact Unicode query and hidden form field, first-anchor mouse click, HTTP 200 destination and 1100×683 PNG; rendered destination inspected. The Rust command client also inspected and captured the real Google homepage through CDP. That initial implementation returned -32601 for Runtime.evaluate; the recorded public v0.9.19 baseline did too.
+
+The bounded Runtime foundation ships as v0.9.20 at
+`28413873dc1c19cae537af9158899760c40dc7f7`. Focused and actual restricted-child
+controls, all nineteen local Rust/harness gates and eight JSPLAN gates pass,
+preserving all364 research outcomes, not364 passes. Separate current-source WPT
+scores remain static339/610/62 of1,011 and Window15/16 files,77/79 final subtests.
+Packaged/public core and native tab-move proofs pass with all fourteen public
+images inspected. All eight required exact-source CI/hosting checks, normal
+release and public installation/update acceptance pass; see the
+[public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout).
+Separate same-source Dependabot run40250902264/check121342346638 failed
+`security_update_not_possible` for the Cloudflare build-tool undici constraint
+and remains unresolved, not a passing check. Full protocol stays in-progress.
 
 Remote evidence: implementation commit fba063a passed Rust CI 34129329323 with all 47 tests, both native/CDP journeys and the dependency guard. Pages run 34129329247 deployed matching HTTPS HTML; HTTP redirects to HTTPS. Full protocol inventory/compatibility is the remaining feature gate.
 

@@ -2,6 +2,26 @@
 
 ## Purpose and responsibilities
 
+Completed bounded increment (2026-10-25): synchronous worker-backed main-world
+CDP Runtime ships as v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7`,
+under docs/RUNTIME_AUTOMATION.md. Nineteen local Rust gates, eight JSPLAN gates
+preserving all364 research outcomes, both reviewed score lanes, all eight
+required exact-source CI/hosting checks and normal publication pass. Public
+install/reinstall, actual v0.9.19 update/no-op, thirteen existing native helpers,
+two Runtime proofs/all14 inspected images, eight layout proofs/all36 inspected
+images and both frozen public-worker suites pass. See the
+[public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout).
+Static339/610/62 of1,011 and separate Window15/16 files,77/79 final subtests are
+unchanged; authored controls add no WPT passes. Separate same-source Dependabot
+run40250902264/check121342346638 failed `security_update_not_possible` for the
+Cloudflare build-tool undici constraint and remains unresolved, not a green
+check. Preserve the existing worker authority, cumulative limits, dependencies,
+frozen contracts/inputs and immutable release tags. Promise awaiting, utility
+worlds, full CDP/Playwright, F-016/F-026/formal MVP and the broader Reddit/News
+goals remain unfinished. The broader goal continues after the separate fresh
+documentation-closeout gates; this release does not prove that later commit's
+CI or public delivery.
+
 Completed bounded increment (2026-10-23): auto-width atomic inline height parity
 ships as v0.9.19 at `9179426360904f01ab3b4394f7699c7ba4c70da9`, under the frozen
 docs/AUTO_INLINE_HEIGHT.md contract. Full local gates, both fresh reviewed score

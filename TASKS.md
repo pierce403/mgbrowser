@@ -2,8 +2,9 @@
 
 2026-10-25 resumed: the user explicitly approved running the remaining release
 checks and added **reddit.com and news.google.com load and look as expected** to
-the broader goal. Complete the current Runtime release first, then pursue the
-real-site reading/visual acceptance in [docs/SITE_COMPATIBILITY.md](docs/SITE_COMPATIBILITY.md)
+the broader goal. The bounded Runtime foundation shipped as v0.9.20; complete
+its separate documentation-closeout gates before the next browser increment.
+Then pursue the real-site reading/visual acceptance in [docs/SITE_COMPATIBILITY.md](docs/SITE_COMPATIBILITY.md)
 under F-027/F-025. Neither site is complete today; preserve the prior failures,
 resource limits and the Google News reading-first/interactions-later decision.
 
@@ -275,27 +276,28 @@ following dependency order, updating evidence as each increment ships:
    The historical baseline is not a
    substitute for a current public Window report. Never invent passes from authored
    controls or change the current 1,011 cases/expectations. F-016/F-026/MVP stay open.
-3. Complete real CDP target lifecycle, worker execution contexts/handles and DOM
-   utilities, then the pinned Playwright locator/navigation/multi-target journey
+3. Complete remaining CDP target lifecycle and DOM utilities, then the pinned
+   Playwright locator/navigation/multi-target journey
    (F-011/F-024). Preserve cumulative worker admission and stale-target rejection.
-   Fresh public v0.9.19 with explicit `--disable-scripts` still fails attachment
-   and download-policy initialization, before title/locators. Current unreleased
-   source integrates the [main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md)
-   after freezing typed values/admissions and negative controls. Typed-realm
-   and parent/broker focused checks pass. Actual restricted-child, core native
-   and tab-move proofs now pass with all fourteen images inspected. Full local
-   Rust/JSPLAN regressions pass. Both complete, reviewed score lanes retain
-   static339/610/62 and Window15/16 files,77/79 final subtests. Complete the
-   normal versioned release/public acceptance next. The normal package,
-   installer/updater, thirteen existing native helpers, eight layout proofs and
-   frozen worker controls now pass locally; fresh score review is running.
-   Respect
-   effective script permission, real restricted-worker execution and the parent
-   publication/charge boundary. Promise awaiting, utility worlds and the stock
+   The [synchronous main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md)
+   shipped as v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7`.
+   Full local Rust/JSPLAN, both reviewed score lanes, all eight required
+   exact-source CI/hosting checks and normal publication pass. Public
+   install/reinstall, actual v0.9.19 update/no-op, thirteen existing native
+   helpers, Runtime core/tab-move proofs, eight layout proofs and both frozen
+   public-worker suites pass; all14 Runtime and36 layout images were inspected.
+   See the [public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout),
+   including the separate unresolved Dependabot build-tool update failure.
+   Static339/610/62 and Window15/16 files,77/79 final subtests are unchanged;
+   authored proofs add no WPT passes. The last recorded ordinary Playwright
+   baseline remains public v0.9.19 with explicit `--disable-scripts`: attachment
+   and download-policy initialization fail before title/locators. Respect
+   effective script permission, restricted-worker execution and parent
+   publication/charge boundaries. Promise awaiting, utility worlds and the stock
    locator's conflicts with the 64 KiB worker/256 KiB CDP limits require separate review;
    no stubs or unreviewed limit changes. The prior tooling correction968c654
-   added no browser capability or completed feature gate; current source work
-   is not an installed release or ordinary client compatibility yet.
+   added no browser capability. The released foundation does not complete this
+   item, full CDP or ordinary client compatibility.
 4. Make real signed-out **reddit.com and news.google.com load and look as
    expected** (F-027/F-025), following the shared visual/reading acceptance above.
    Diagnose fresh actual failures and implement bounded renderer/resource/script

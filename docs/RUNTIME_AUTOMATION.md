@@ -1,13 +1,15 @@
 # Worker-backed Runtime foundation
 
-Implementation contract, 2026-10-23. Source integration in progress, unreleased.
-Focused typed-realm, parent/broker and actual restricted-child controls pass.
-Both native/CDP proofs and all fourteen manually inspected images pass, including
-actual newer edits and retained roots across detach/redock/closure. Full local
-Rust and frozen JSPLAN regressions pass. Both complete score measurements and
-package/public release acceptance remain separate gates. This
-advances TASKS item3/F-011/F-024; it does not replace their full requirements or
-the broader feature goal. The current public baseline remains the failed
+Implementation contract, 2026-10-23. Shipped as v0.9.20 at
+`28413873dc1c19cae537af9158899760c40dc7f7`. Focused typed-realm, parent/broker,
+actual restricted-child and full local Rust/JSPLAN checks pass. Both native/CDP
+proofs pass on packaged and public-installed executables, including newer page
+form edits and retained roots across detach/redock/closure; all fourteen actual
+images were inspected. Both complete score lanes remain unchanged. Exact-source
+required CI/hosting, normal publication, public install/update and frozen controls
+pass separately; see the [public closeout](../memory/logs/2026-10-25.md#v0920-public-release-closeout).
+This advances TASKS item3/F-011/F-024, not their full requirements or the broader
+goal. The last recorded ordinary-client baseline is the failed public v0.9.19
 unmodified Playwright1.58.2 run in [PLAYWRIGHT.md](PLAYWRIGHT.md).
 
 ## Required result

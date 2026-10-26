@@ -10,7 +10,26 @@ summary: Compact map of mgbrowser project decisions and evidence.
   in-progress with reading first and interactions later. Preserve same-input
   reference and separate fresh-live/packaged/public acceptance. The user also
   explicitly approved resuming the previously denied normal release checks;
-  finish the current Runtime release before another browser feature increment.
+  the bounded Runtime foundation now ships as v0.9.20. Its separate
+  documentation-closeout gates precede another browser feature increment.
+
+- `docs/RUNTIME_AUTOMATION.md`: shipped v0.9.20 at
+  `28413873dc1c19cae537af9158899760c40dc7f7`: synchronous main-world evaluation,
+  calls and bounded handles in the existing restricted worker, with unchanged
+  authority/admissions and no parent JavaScript execution. Nineteen local Rust
+  gates and eight JSPLAN gates preserve all364 research outcomes. Separate
+  current-source scores stay static339/610/62 of1,011 and Window15/16 files,
+  77/79 final subtests; authored controls add no WPT passes. All eight required
+  exact-source CI/hosting checks and normal publication pass. Public
+  install/reinstall, actual v0.9.19 update/no-op, thirteen existing native
+  helpers, two Runtime proofs/all14 inspected images, eight layout proofs/all36
+  inspected images and both frozen public-worker suites pass. See the
+  [public closeout](memory/logs/2026-10-25.md#v0920-public-release-closeout).
+  Separate same-source Dependabot run40250902264/check121342346638 failed
+  `security_update_not_possible` for the Cloudflare build-tool undici constraint;
+  it remains unresolved, not a passing check. Promise awaiting, utility worlds,
+  ordinary Playwright and F-011/F-016/F-024/F-026/MVP remain open, as do the
+  separate Reddit/News and Google result/destination goals.
 
 - `docs/AUTO_INLINE_HEIGHT.md`: pre-implementation contract after the verified
   v0.9.18/be71e0c closeout. Ordinary auto-width inline-block/flex/grid line metrics
