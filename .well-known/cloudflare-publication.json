@@ -1,10 +1,10 @@
 {
   "repository": "pierce403/mgbrowser",
-  "sourceRevision": "c30570b4f9654adf168343d1474e76d89b92a426",
-  "triggerRevision": "c30570b4f9654adf168343d1474e76d89b92a426",
+  "sourceRevision": "321e1e87e47e76102d5cc3a4d010acc24d3eff72",
+  "triggerRevision": "321e1e87e47e76102d5cc3a4d010acc24d3eff72",
   "branch": "codex/cloudflare-static",
   "workflow": "pierce403/mgbrowser/.github/workflows/pages.yml@refs/heads/main",
-  "runId": "40257635341",
+  "runId": "40341675937",
   "runAttempt": "1",
   "files": [
     {
@@ -34,8 +34,8 @@
     },
     {
       "path": "index.html",
-      "bytes": 32819,
-      "sha256": "9c720f63d4b004c7573328c908875219a2179cf728125dbc1ddbf20044e21f36"
+      "bytes": 33794,
+      "sha256": "34a221043fe80ea6950d1e0e4df42104354554e8af2d08f78eb2751d850e0b01"
     },
     {
       "path": "install.sh",
@@ -44,13 +44,13 @@
     },
     {
       "path": "wpt-results.json",
-      "bytes": 3748499,
-      "sha256": "688681988c1f1b0e642cea3c75812c90a00be888fcfd91109ec4c2cb7abc9b6b"
+      "bytes": 3748479,
+      "sha256": "5a66ef6669a8ebf3ea4fc06a580875e884d38e4051ce2e1cdbf6e6c4ba728d60"
     },
     {
       "path": "wpt-window-results.json",
-      "bytes": 69233,
-      "sha256": "306957daab095b82f77ee8a6ec100a504bf1b08abfc2f44efde150f477baae51"
+      "bytes": 69235,
+      "sha256": "4bd9d95e903c7e0e6c8bcfd78ac445a36c3802cd5ab7f6fdb4f09ccbab9889b5"
     }
   ]
 }
