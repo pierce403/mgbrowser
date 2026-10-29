@@ -16,6 +16,29 @@ struct Entry {
     done: bool,
 }
 
+pub(super) fn is_inset_zero_passthrough(layout: &Layout<'_, '_>, id: usize) -> bool {
+    let node = &layout.document.nodes[id];
+    let style = &layout.styles[id];
+    node.tag == "div"
+        && style.layout.position == Position::Absolute
+        && style.layout.inset == [Length::Px(0.0); 4]
+        && style.width == Length::Auto
+        && style.height == Length::Auto
+        && style.margin == [Length::Px(0.0); 4]
+        && style.padding == [Length::Px(0.0); 4]
+        && style.border_width == [0.0; 4]
+        && style.background_color.alpha == 0.0
+        && style.background_images.is_empty()
+        && !node.children.is_empty()
+        && node.children.iter().all(|&child| {
+            layout.document.nodes[child].tag == "#text"
+                || matches!(
+                    layout.styles[child].layout.position,
+                    Position::Absolute | Position::Fixed
+                )
+        })
+}
+
 pub(super) fn run(layout: &mut Layout<'_, '_>) {
     if layout.exhausted {
         return;
@@ -31,13 +54,9 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
             layout.styles[id].layout.position,
             Position::Absolute | Position::Fixed
         ) || layout.document.nodes[id].tag == "#text"
+            || is_inset_zero_passthrough(layout, id)
         {
             continue;
-        }
-        count += 1;
-        if count > MAX_POSITIONED {
-            layout.fail(id, "positioned node limit (512)");
-            return;
         }
         let mut cursor = id;
         let mut depth = 0;
@@ -51,8 +70,8 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
                 return;
             }
             let style = &layout.styles[cursor];
-            hidden |= style.display == Display::None || !style.visible;
-            if cursor != id {
+            hidden |= style.display == Display::None || !style.visible || style.opacity <= 0.0;
+            if cursor != id && !is_inset_zero_passthrough(layout, cursor) {
                 fixed_ancestor |= style.layout.position == Position::Fixed;
                 if containing.is_none() && style.layout.position != Position::Static {
                     containing = Some(cursor);
@@ -72,7 +91,12 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         if hidden {
             continue;
         }
-        if layout.styles[id].layout.unsupported {
+        count += 1;
+        if count > MAX_POSITIONED {
+            layout.fail(id, "positioned node limit (512)");
+            return;
+        }
+        if layout.styles[id].layout.unsupported && !layout.styles[id].layout.outer_calc_only {
             layout.fail(id, "positioned snapshot has an unrepresented CSS value");
             return;
         }
@@ -104,6 +128,20 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
             entry.dependency = Some(index);
         }
     }
+    if entries.is_empty() {
+        return;
+    }
+    let Some(budget) = layout.budget.checked_sub(layout.scene.borders.len()) else {
+        layout.fail(entries[0].id, "positioned border lookup work limit");
+        return;
+    };
+    layout.budget = budget;
+    let mut border_boxes = vec![None; layout.document.nodes.len()];
+    for &(node, r) in &layout.scene.borders {
+        if let Some(slot) = border_boxes.get_mut(node) {
+            *slot = Some(r);
+        }
+    }
     // Ancestors must provide final geometry before descendants. Among ready
     // nodes, numeric z-index and then DOM order decide paint and hit order.
     for _ in 0..entries.len() {
@@ -126,7 +164,7 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
             layout.fail(0, "positioned ancestor ordering cannot progress");
             return;
         };
-        if !paint(layout, &entries[index]) {
+        if !paint(layout, &mut border_boxes, &entries[index]) {
             layout.fail(entries[index].id, "positioned box rejected");
             return;
         }
@@ -134,27 +172,34 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
     }
 }
 
-fn border(layout: &mut Layout<'_, '_>, id: usize, missing: &'static str) -> Option<Rect> {
-    // The existing structural geometry vector is bounded but its reverse lookup
-    // is linear. Charge the whole scan conservatively, not just its caller.
-    let Some(budget) = layout.budget.checked_sub(layout.scene.borders.len()) else {
+fn border(
+    layout: &mut Layout<'_, '_>,
+    border_boxes: &[Option<Rect>],
+    id: usize,
+    missing: &'static str,
+) -> Option<Rect> {
+    if !layout.spend(0) {
         layout.fail(id, "positioned border lookup work limit");
         return None;
-    };
-    layout.budget = budget;
-    let rect = layout.border_box(id);
+    }
+    let rect = border_boxes.get(id).copied().flatten();
     if rect.is_none() {
         layout.fail(id, missing);
     }
     rect
 }
 
-fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
+fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: &Entry) -> bool {
     let id = entry.id;
     let style = layout.styles[id].clone();
     let fixed = style.layout.position == Position::Fixed;
     let containing = if !fixed && let Some(ancestor) = entry.containing {
-        let Some(r) = border(layout, ancestor, "positioned containing border box missing") else {
+        let Some(r) = border(
+            layout,
+            border_boxes,
+            ancestor,
+            "positioned containing border box missing",
+        ) else {
             return false;
         };
         let b = layout.styles[ancestor].border_width;
@@ -403,8 +448,12 @@ fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
                 .iter()
                 .any(|overflow| !matches!(overflow, crate::style::Overflow::Visible))
             {
-                let Some(r) = border(layout, ancestor, "positioned overflow ancestor box missing")
-                else {
+                let Some(r) = border(
+                    layout,
+                    border_boxes,
+                    ancestor,
+                    "positioned overflow ancestor box missing",
+                ) else {
                     return false;
                 };
                 if let Some(next) = layout.clip_for(ancestor, r) {
@@ -422,6 +471,11 @@ fn paint(layout: &mut Layout<'_, '_>, entry: &Entry) -> bool {
         || (top.is_some() && bottom.is_some()))
     .then_some((height - vertical).max(0.0));
     layout.paint_allocated(id, rect, padding, definite_height, entry.depth + 1);
+    for &(node, r) in &layout.scene.borders[mark.3..] {
+        if let Some(slot) = border_boxes.get_mut(node) {
+            *slot = Some(r);
+        }
+    }
     if fixed || entry.fixed_ancestor {
         layout.scene.box_scroll[mark.1..].fill(false);
     }

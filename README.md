@@ -2,6 +2,18 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
+## v0.9.22 candidate: Google News visual parity and styled Topic destination
+
+The next release adds outer-box linear `calc(percent + px)` (`Length::Calc` with
+`outer_calc_only` gating), empty-element `:before` `background-image` and
+`background-size: contain | cover` resolution, multiplied subtree `opacity` with
+borderless `<input>` control painting, Material icon ligature mapping
+(`chevron_right` to `›`), and positioned/stacking/grid-measurement optimizations
+so both the Google News homepage and the 9,997-node `Headlines` Topic
+destination page render in full styled layout without fallback across
+`1280x800`, default `1100x727`, and `1024x768` viewports.
+[Contract](docs/GOOGLE_NEWS.md) and [candidate notes](docs/RELEASE-v0.9.22.md).
+
 ## Latest verified release: v0.9.21
 
 The release adds real `Target.createTarget`, `activateTarget` and

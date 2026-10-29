@@ -78,7 +78,7 @@ impl<'a> StyleView<'a> {
             return Ok(());
         }
         let l = &self.style.layout;
-        if l.unsupported {
+        if l.unsupported && (self.item_box() || !l.outer_calc_only) {
             return Err("computed layout contains an unrepresented CSS value");
         }
         if self.item_box() && matches!(l.position, mg::Position::Fixed | mg::Position::Sticky) {
@@ -103,6 +103,9 @@ impl<'a> StyleView<'a> {
         if let mg::FlexBasis::Length(length) = l.flex_basis {
             if !finite_length(length) {
                 return Err("non-finite flex basis");
+            }
+            if matches!(length, mg::Length::Calc { .. }) {
+                return Err("computed layout contains an unrepresented CSS value");
             }
         }
         if !l.flex_grow.is_finite()
@@ -135,6 +138,24 @@ impl<'a> StyleView<'a> {
             if !finite_length(*length) {
                 return Err("non-finite layout length");
             }
+        }
+        if l.gap.iter().any(|v| matches!(v, mg::Length::Calc { .. }))
+            || (self.item_box()
+                && l.inset
+                    .iter()
+                    .chain(self.style.margin.iter())
+                    .chain(self.style.padding.iter())
+                    .chain([
+                        &self.style.width,
+                        &self.style.height,
+                        &self.style.min_width,
+                        &self.style.min_height,
+                        &self.style.max_width,
+                        &self.style.max_height,
+                    ])
+                    .any(|v| matches!(v, mg::Length::Calc { .. })))
+        {
+            return Err("computed layout contains an unrepresented CSS value");
         }
         if l.gap
             .iter()
@@ -197,7 +218,8 @@ impl<'a> StyleView<'a> {
                                 return Err("invalid grid fraction");
                             }
                             mg::TrackBreadth::Length(v)
-                                if !finite_length(v) || matches!(v, mg::Length::Auto) =>
+                                if !finite_length(v)
+                                    || matches!(v, mg::Length::Auto | mg::Length::Calc { .. }) =>
                             {
                                 return Err("invalid grid track length");
                             }
@@ -271,6 +293,7 @@ fn finite_length(value: mg::Length) -> bool {
     match value {
         mg::Length::Auto => true,
         mg::Length::Px(v) | mg::Length::Percent(v) => v.is_finite(),
+        mg::Length::Calc { px, percent, .. } => px.is_finite() && percent.is_finite(),
     }
 }
 fn lp(value: mg::Length) -> LengthPercentage {
@@ -278,21 +301,21 @@ fn lp(value: mg::Length) -> LengthPercentage {
         mg::Length::Px(v) => LengthPercentage::length(v),
         mg::Length::Percent(v) => LengthPercentage::percent(v),
         // Invalid for the properties calling this helper; validate rejects it.
-        mg::Length::Auto => LengthPercentage::length(0.),
+        mg::Length::Auto | mg::Length::Calc { .. } => LengthPercentage::length(0.),
     }
 }
 fn lpa(value: mg::Length) -> LengthPercentageAuto {
     match value {
         mg::Length::Px(v) => LengthPercentageAuto::length(v),
         mg::Length::Percent(v) => LengthPercentageAuto::percent(v),
-        mg::Length::Auto => LengthPercentageAuto::auto(),
+        mg::Length::Auto | mg::Length::Calc { .. } => LengthPercentageAuto::auto(),
     }
 }
 fn dimension(value: mg::Length) -> Dimension {
     match value {
         mg::Length::Px(v) => Dimension::length(v),
         mg::Length::Percent(v) => Dimension::percent(v),
-        mg::Length::Auto => Dimension::auto(),
+        mg::Length::Auto | mg::Length::Calc { .. } => Dimension::auto(),
     }
 }
 fn rect<T: Copy>(values: [T; 4]) -> Rect<T> {
@@ -699,7 +722,9 @@ fn max_track(value: mg::TrackBreadth) -> MaxTrackSizingFunction {
         mg::TrackBreadth::Fr(v) => MaxTrackSizingFunction::fr(v),
         mg::TrackBreadth::Length(mg::Length::Px(v)) => MaxTrackSizingFunction::length(v),
         mg::TrackBreadth::Length(mg::Length::Percent(v)) => MaxTrackSizingFunction::percent(v),
-        mg::TrackBreadth::Length(mg::Length::Auto) => MaxTrackSizingFunction::auto(),
+        mg::TrackBreadth::Length(mg::Length::Auto | mg::Length::Calc { .. }) => {
+            MaxTrackSizingFunction::auto()
+        }
     }
 }
 fn track(value: &mg::TrackSize) -> TrackSizingFunction {

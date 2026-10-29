@@ -131,6 +131,9 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         ) && style.layout.z_index.is_some();
         let context = if id != 0
             && layout.document.nodes[id].tag != "#text"
+            && style.display != Display::None
+            && style.opacity > 0.0
+            && !positioned::is_inset_zero_passthrough(layout, id)
             && (numeric_positioned || style.layout.position == Position::Fixed)
         {
             if contexts.len() > MAX_CONTEXTS {

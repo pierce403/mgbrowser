@@ -179,6 +179,40 @@ full News acceptance. Scripts remain disabled, with a private profile and owned
 Xvfb. CDP captures show page pixels; link/scroll use real public CDP input and
 Back uses native X11 input. This is not an ordinary Playwright journey.
 
+## Visual parity and styled Topic destination increment: 2026-10-28
+
+Working-tree engine improvements in `mg-sparkle` close the primary visual and
+styled-layout gaps between Chromium and `mgbrowser` on both the Google News
+homepage and the `Top stories` (`Headlines`) Topic destination page without
+widening any resource or work budget:
+
+- Outer-box linear `calc(percent + px)` (`Length::Calc` with `outer_calc_only`
+  gating) resolves `<main class="IKXQhd">` (`width: calc(100% - 160px)`) at
+  `1024..1439px` viewports (including `mgbrowser`'s default `1100x727` viewport)
+  and button ripple overlays (`width: calc(100% + 2px)`) while preserving all
+  existing inner/nested `calc(...)` diagnostics and WPT expectations.
+- Empty elements with `:before` `background-image` and `background-size: contain`
+  or `cover` cascade and resolve against final box geometry, rendering the
+  4-color `Google` wordmark in the top-left `Google News` lockup.
+- Multiplied subtree `opacity` (including `Canvas::text_alpha` and skipping
+  `opacity <= 0.0` paints), borderless `<input>` painting (`border-color:
+  transparent`), and standard `google-material-icons` / `material-icons`
+  ligature mapping (`chevron_right` to `›`) align the search bar (`Search for
+  topics, locations & sources`), hidden duplicate input overlay, and section
+  header chevrons with Chromium.
+- On the 9,997-node, 262-article `Headlines` Topic destination page, invisible
+  (`display: none` or `opacity <= 0.0`) positioned subtrees and unstyled
+  `inset: 0` passthrough `<div>` wrappers (`.XlKvRb` around `<a class="WwrzSb">`)
+  no longer consume the 512-entry positioned/stacking admission slots while
+  retaining `<a class="WwrzSb">`'s full-card link hit box; `positioned::run`
+  indexes `border_boxes` in `O(1)`; and `Adapter::measure` skips redundant
+  `measure_content_height` passes during horizontal-only Taffy grid track sizing.
+- Same-input verification (`tmp/news-live.afBANY/mg-{home,topic}-{1280x800,1100x727,1024x768}-s{0,600}.png`)
+  and a fresh live `mgbrowser` Xvfb/CDP/X11 journey (`live-mgbrowser-{home-s0,home-s600,topic-s0,topic-s600,back}.png`)
+  render both the Homepage (`height: 1890..1970`) and the `Headlines` Topic
+  destination (`height: 28928..29338`) with zero styled-layout fallbacks
+  (`fallbacks=[]`), while keeping saved Hacker News 1024/1280 PNGs byte-identical.
+
 ## Historical baseline and migration evidence
 
 The 2026-09-17 live baseline was HTTP 200, 1,849,110 bytes, 31 links, six admitted

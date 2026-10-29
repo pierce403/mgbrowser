@@ -168,6 +168,13 @@ pub enum Length {
     Px(f32),
     /// A fraction: `0.85` represents `85%`.
     Percent(f32),
+    /// A linear `<length-percentage>` sum (`px + percent * basis`), clamped to
+    /// non-negative when `non_negative` is true (`width`, `height`, `padding`).
+    Calc {
+        px: f32,
+        percent: f32,
+        non_negative: bool,
+    },
 }
 
 impl Length {
@@ -176,6 +183,14 @@ impl Length {
             Self::Auto => None,
             Self::Px(value) => Some(value),
             Self::Percent(value) => Some(value * basis),
+            Self::Calc {
+                px,
+                percent,
+                non_negative,
+            } => {
+                let value = px + percent * basis;
+                Some(if non_negative { value.max(0.0) } else { value })
+            }
         }
     }
 }
@@ -375,6 +390,7 @@ pub struct LayoutStyle {
     /// Conversion lost a value (for example calc or a named grid line). The
     /// adapter must reject this snapshot, not interpret its fallback as support.
     pub unsupported: bool,
+    pub(crate) outer_calc_only: bool,
 }
 impl Default for LayoutStyle {
     fn default() -> Self {
@@ -407,6 +423,7 @@ impl Default for LayoutStyle {
             grid_column: [GridLine::Auto; 2],
             grid: None,
             unsupported: false,
+            outer_calc_only: false,
         }
     }
 }
@@ -537,6 +554,7 @@ pub struct ComputedStyle {
     pub vertical_align: VerticalAlign,
     pub white_space: WhiteSpace,
     pub visible: bool,
+    pub(crate) opacity: f32,
     pub pointer_events: bool,
     pub border_collapse: bool,
     /// Horizontal, vertical CSS pixel spacing.
@@ -576,6 +594,7 @@ impl Default for ComputedStyle {
             vertical_align: VerticalAlign::Baseline,
             white_space: WhiteSpace::Normal,
             visible: true,
+            opacity: 1.0,
             pointer_events: true,
             border_collapse: false,
             border_spacing: [2.0; 2],
@@ -616,6 +635,7 @@ impl ComputedStyle {
             vertical_align: self.vertical_align,
             white_space: self.white_space,
             visible: self.visible,
+            opacity: self.opacity,
             pointer_events: self.pointer_events,
             border_collapse: self.border_collapse,
             border_spacing: self.border_spacing,
@@ -960,10 +980,11 @@ impl Element for DomNode<'_> {
     }
     fn match_pseudo_element(
         &self,
-        _: &PseudoElement,
-        _: &mut MatchingContext<SelectorImpl>,
+        pe: &PseudoElement,
+        context: &mut MatchingContext<SelectorImpl>,
     ) -> bool {
-        false
+        context.matching_mode() == MatchingMode::ForStatelessPseudoElement
+            && matches!(pe, PseudoElement::Before)
     }
     fn apply_selector_flags(&self, _: ElementSelectorFlags) {}
     fn is_link(&self) -> bool {
@@ -1715,6 +1736,61 @@ pub fn compute_styles_with_diagnostics(
             &mut tree_caches,
         );
         let mut snapshot = renderer_style(&computed)?;
+        snapshot.opacity = output[parent_id].opacity
+            * if svg_contexts[id] {
+                1.0
+            } else {
+                computed.get_effects().opacity.clamp(0.0, 1.0)
+            };
+        if node.node().children.is_empty() && snapshot.background_images.is_empty() {
+            let mut before_declarations = ApplicableDeclarationList::new();
+            let mut before_context = MatchingContext::new(
+                MatchingMode::ForStatelessPseudoElement,
+                None,
+                &mut caches,
+                QuirksMode::NoQuirks,
+                NeedsSelectorFlags::No,
+                MatchingForInvalidation::No,
+            );
+            stylist.push_applicable_declarations(
+                node,
+                Some(&PseudoElement::Before),
+                None,
+                None,
+                Default::default(),
+                RuleInclusion::All,
+                &mut before_declarations,
+                &mut before_context,
+            );
+            if !before_declarations.is_empty() {
+                let before_rules = stylist.rule_tree().insert_ordered_rules_with_important(
+                    before_declarations
+                        .into_iter()
+                        .map(ApplicableDeclarationBlock::for_rule_tree),
+                    &guards,
+                );
+                let before_computed = stylist.cascade_style_and_visited(
+                    Some(node),
+                    Some(&PseudoElement::Before),
+                    &CascadeInputs {
+                        rules: Some(before_rules),
+                        ..Default::default()
+                    },
+                    &guards,
+                    Some(computed.as_ref()),
+                    Some(computed.as_ref()),
+                    style::properties::cascade::FirstLineReparenting::No,
+                    &Default::default(),
+                    None,
+                    &mut Default::default(),
+                    &mut tree_caches,
+                );
+                let before_snapshot = renderer_style(&before_computed)?;
+                if !before_snapshot.background_images.is_empty() {
+                    snapshot.background_images = before_snapshot.background_images;
+                }
+            }
+        }
         if svg_contexts[id] {
             for (property, paint) in [("fill", snapshot.svg_fill), ("stroke", snapshot.svg_stroke)]
             {
@@ -1905,6 +1981,56 @@ fn report_unsupported(
     }
 }
 
+fn linear_calc_sum(
+    node: &style::values::specified::calc::CalcNode,
+    sign: f32,
+) -> Option<(f32, f32)> {
+    use style::values::generics::calc::CalcNode;
+    use style::values::specified::calc::Leaf;
+    match node {
+        CalcNode::Leaf(Leaf::Length(length)) => {
+            let px = length.to_computed_pixel_length_without_context().ok()?;
+            px.is_finite().then_some((sign * px, 0.0))
+        }
+        CalcNode::Leaf(Leaf::Percentage(percent)) => percent
+            .get()
+            .is_finite()
+            .then_some((0.0, sign * percent.get())),
+        CalcNode::Negate(child) => linear_calc_sum(child, -sign),
+        CalcNode::Sum(children) => {
+            let mut total_px = 0.0f32;
+            let mut total_percent = 0.0f32;
+            for child in children.iter() {
+                let (px, percent) = linear_calc_sum(child, sign)?;
+                total_px += px;
+                total_percent += percent;
+            }
+            (total_px.is_finite() && total_percent.is_finite()).then_some((total_px, total_percent))
+        }
+        _ => None,
+    }
+}
+
+fn linear_calc_length(
+    value: &style::values::computed::LengthPercentage,
+    non_negative: bool,
+) -> Option<Length> {
+    use style::values::{computed::ToComputedValue, specified::LengthPercentage as Specified};
+    let Specified::Calc(calc) = Specified::from_computed_value(value) else {
+        return None;
+    };
+    let (px, percent) = linear_calc_sum(&calc.0.node, 1.0)?;
+    Some(Length::Calc {
+        px,
+        percent,
+        non_negative: non_negative
+            || matches!(
+                calc.0.clamping_mode,
+                style_traits::values::specified::AllowedNumericType::NonNegative
+            ),
+    })
+}
+
 fn plain_length(value: &style::values::computed::LengthPercentage) -> Length {
     if let Some(px) = value.to_length() {
         Length::Px(px.px())
@@ -1918,9 +2044,22 @@ fn plain_length(value: &style::values::computed::LengthPercentage) -> Length {
     }
 }
 
+fn box_length(value: &style::values::computed::LengthPercentage, non_negative: bool) -> Length {
+    if let Some(px) = value.to_length() {
+        Length::Px(px.px())
+    } else if let Some(percent) = value.to_percentage() {
+        Length::Percent(percent.0)
+    } else if let Some(calc) = linear_calc_length(value, non_negative) {
+        calc
+    } else {
+        Length::Auto
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum MappingFailure {
     Unsupported(&'static str),
+    OuterCalc(Length, &'static str),
     Limit(&'static str),
 }
 type Mapping<T> = Result<T, MappingFailure>;
@@ -1938,7 +2077,25 @@ fn layout_length(value: &style::values::computed::LengthPercentage) -> Mapping<L
         _ => Err(MappingFailure::Limit("non-finite computed layout length")),
     }
 }
-fn layout_size(value: &style::values::computed::Size) -> Mapping<Length> {
+fn outer_layout_length(
+    value: &style::values::computed::LengthPercentage,
+    non_negative: bool,
+) -> Mapping<Length> {
+    let result = if let Some(px) = value.to_length() {
+        Length::Px(px.px())
+    } else if let Some(percent) = value.to_percentage() {
+        Length::Percent(percent.0)
+    } else if let Some(calc) = linear_calc_length(value, non_negative) {
+        return Err(MappingFailure::OuterCalc(calc, "mixed calc lengths"));
+    } else {
+        return Err(MappingFailure::Unsupported("mixed calc lengths"));
+    };
+    match result {
+        Length::Px(v) | Length::Percent(v) if v.is_finite() => Ok(result),
+        _ => Err(MappingFailure::Limit("non-finite computed layout length")),
+    }
+}
+fn flex_basis_size(value: &style::values::computed::Size) -> Mapping<Length> {
     use style::values::computed::Size;
     match value {
         Size::Auto => Ok(Length::Auto),
@@ -1946,11 +2103,19 @@ fn layout_size(value: &style::values::computed::Size) -> Mapping<Length> {
         _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
     }
 }
+fn layout_size(value: &style::values::computed::Size) -> Mapping<Length> {
+    use style::values::computed::Size;
+    match value {
+        Size::Auto => Ok(Length::Auto),
+        Size::LengthPercentage(v) => outer_layout_length(&v.0, true),
+        _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
+    }
+}
 fn layout_inset(value: &style::values::computed::Inset) -> Mapping<Length> {
     use style::values::computed::Inset;
     match value {
         Inset::Auto => Ok(Length::Auto),
-        Inset::LengthPercentage(v) => layout_length(v),
+        Inset::LengthPercentage(v) => outer_layout_length(v, false),
         _ => Err(MappingFailure::Unsupported("anchor positioning")),
     }
 }
@@ -2166,14 +2331,43 @@ struct LayoutReporter<'a> {
     node: usize,
     source: &'a str,
     unsupported: bool,
+    non_outer_calc_unsupported: bool,
 }
 impl LayoutReporter<'_> {
     fn convert<T>(&mut self, property: &str, value: Mapping<T>, fallback: T) -> Result<T, String> {
         match value {
             Ok(value) => Ok(value),
             Err(MappingFailure::Limit(message)) => Err(message.into()),
+            Err(MappingFailure::Unsupported(message) | MappingFailure::OuterCalc(_, message)) => {
+                self.unsupported = true;
+                self.non_outer_calc_unsupported = true;
+                self.diagnostics.record("css-unsupported",
+                    format_args!("CSS {property}: {message} are not represented by the layout snapshot; retaining fallback"),
+                    format_args!("{}", self.source), Some(self.node), None);
+                Ok(fallback)
+            }
+        }
+    }
+
+    fn convert_length(
+        &mut self,
+        property: &str,
+        value: Mapping<Length>,
+        fallback: Length,
+    ) -> Result<Length, String> {
+        match value {
+            Ok(value) => Ok(value),
+            Err(MappingFailure::Limit(message)) => Err(message.into()),
+            Err(MappingFailure::OuterCalc(value, message)) => {
+                self.unsupported = true;
+                self.diagnostics.record("css-unsupported",
+                    format_args!("CSS {property}: {message} are not represented by the layout snapshot; retaining fallback"),
+                    format_args!("{}", self.source), Some(self.node), None);
+                Ok(value)
+            }
             Err(MappingFailure::Unsupported(message)) => {
                 self.unsupported = true;
+                self.non_outer_calc_unsupported = true;
                 self.diagnostics.record("css-unsupported",
                     format_args!("CSS {property}: {message} are not represented by the layout snapshot; retaining fallback"),
                     format_args!("{}", self.source), Some(self.node), None);
@@ -2202,6 +2396,7 @@ fn renderer_layout(
         node,
         source,
         unsupported: false,
+        non_outer_calc_unsupported: false,
     };
     let mut output = LayoutStyle {
         box_sizing: match p.box_sizing {
@@ -2238,7 +2433,7 @@ fn renderer_layout(
             "flex-basis",
             match &p.flex_basis {
                 B::Content => Ok(FlexBasis::Content),
-                B::Size(value) => layout_size(value).map(|v| {
+                B::Size(value) => flex_basis_size(value).map(|v| {
                     if v == Length::Auto {
                         FlexBasis::Auto
                     } else {
@@ -2294,7 +2489,7 @@ fn renderer_layout(
         ("bottom", &p.bottom),
         ("left", &p.left),
     ]) {
-        *slot = report.convert(name, layout_inset(value), Length::Auto)?;
+        *slot = report.convert_length(name, layout_inset(value), Length::Auto)?;
     }
     for (slot, (name, value)) in output
         .gap
@@ -2307,17 +2502,17 @@ fn renderer_layout(
     output.width_fit_content = matches!(p.width, Size::FitContent);
     output.width_max_content = matches!(p.width, Size::MaxContent);
     if !output.width_fit_content && !output.width_max_content {
-        report.convert("width", layout_size(&p.width), Length::Auto)?;
+        report.convert_length("width", layout_size(&p.width), Length::Auto)?;
     }
     for (name, value) in [("height", &p.height), ("min-height", &p.min_height)] {
-        report.convert(name, layout_size(value), Length::Auto)?;
+        report.convert_length(name, layout_size(value), Length::Auto)?;
     }
     output.min_width_intrinsic = match p.min_width {
         Size::MinContent => Some(IntrinsicSize::MinContent),
         Size::MaxContent => Some(IntrinsicSize::MaxContent),
         Size::FitContent => Some(IntrinsicSize::FitContent),
         _ => {
-            report.convert("min-width", layout_size(&p.min_width), Length::Auto)?;
+            report.convert_length("min-width", layout_size(&p.min_width), Length::Auto)?;
             None
         }
     };
@@ -2327,11 +2522,11 @@ fn renderer_layout(
             output.max_width_fit_content = true;
             continue;
         }
-        report.convert(
+        report.convert_length(
             name,
             match value {
                 MaxSize::None => Ok(Length::Auto),
-                MaxSize::LengthPercentage(v) => layout_length(&v.0),
+                MaxSize::LengthPercentage(v) => outer_layout_length(&v.0, true),
                 _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
             },
             Length::Auto,
@@ -2345,11 +2540,11 @@ fn renderer_layout(
         ("margin-left", &margin.margin_left),
     ] {
         use style::values::computed::Margin;
-        report.convert(
+        report.convert_length(
             name,
             match value {
                 Margin::Auto => Ok(Length::Auto),
-                Margin::LengthPercentage(v) => layout_length(v),
+                Margin::LengthPercentage(v) => outer_layout_length(v, false),
                 _ => Err(MappingFailure::Unsupported("anchor margin")),
             },
             Length::Auto,
@@ -2362,7 +2557,7 @@ fn renderer_layout(
         ("padding-bottom", &padding.padding_bottom),
         ("padding-left", &padding.padding_left),
     ] {
-        report.convert(name, layout_length(&value.0), Length::Px(0.))?;
+        report.convert_length(name, outer_layout_length(&value.0, true), Length::Px(0.))?;
     }
     for (slot, (name, value)) in output.grid_row.iter_mut().zip([
         ("grid-row-start", &p.grid_row_start),
@@ -2380,26 +2575,27 @@ fn renderer_layout(
         output.grid = report.convert("grid-template", grid_style(p, remaining).map(Some), None)?;
     }
     output.unsupported = report.unsupported;
+    output.outer_calc_only = report.unsupported && !report.non_outer_calc_unsupported;
     Ok(output)
 }
 
 fn size_length(value: &style::values::computed::Size) -> Length {
     match value {
-        style::values::computed::Size::LengthPercentage(value) => plain_length(&value.0),
+        style::values::computed::Size::LengthPercentage(value) => box_length(&value.0, true),
         _ => Length::Auto,
     }
 }
 
 fn max_size_length(value: &style::values::computed::MaxSize) -> Length {
     match value {
-        style::values::computed::MaxSize::LengthPercentage(value) => plain_length(&value.0),
+        style::values::computed::MaxSize::LengthPercentage(value) => box_length(&value.0, true),
         _ => Length::Auto,
     }
 }
 
 fn margin_length(value: &style::values::computed::Margin) -> Length {
     match value {
-        style::values::computed::Margin::LengthPercentage(value) => plain_length(value),
+        style::values::computed::Margin::LengthPercentage(value) => box_length(value, false),
         _ => Length::Auto,
     }
 }
@@ -2694,13 +2890,19 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
                     .0
                     .get(index % background.background_size.0.len().max(1))
                 {
-                    if let style::values::generics::background::BackgroundSize::ExplicitSize {
-                        width: w,
-                        height: h,
-                    } = size
-                    {
-                        if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = w { width = plain_length(&v.0); }
-                        if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = h { height = plain_length(&v.0); }
+                    match size {
+                        style::values::generics::background::BackgroundSize::ExplicitSize {
+                            width: w,
+                            height: h,
+                        } => {
+                            if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = w { width = plain_length(&v.0); }
+                            if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = h { height = plain_length(&v.0); }
+                        }
+                        style::values::generics::background::BackgroundSize::Contain
+                        | style::values::generics::background::BackgroundSize::Cover => {
+                            width = Length::Percent(1.0);
+                            height = Length::Percent(1.0);
+                        }
                     }
                 }
                 background_images.push(BackgroundImage {
@@ -2770,7 +2972,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             &padding.padding_bottom,
             &padding.padding_left,
         ]
-        .map(|v| plain_length(&v.0)),
+        .map(|v| box_length(&v.0, true)),
         border_width,
         border_color: [
             &border.border_top_color,
@@ -2789,6 +2991,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         vertical_align,
         white_space,
         visible: values.get_inherited_box().visibility == visibility::computed_value::T::Visible,
+        opacity: values.get_effects().opacity.clamp(0.0, 1.0),
         pointer_events: values.get_inherited_ui().pointer_events != PointerEvents::None,
         border_collapse: table.border_collapse == border_collapse::computed_value::T::Collapse,
         border_spacing: [

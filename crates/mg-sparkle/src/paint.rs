@@ -177,6 +177,22 @@ impl Canvas {
 
     /// Paint a shaped, single line; `y` is the top of its font line box.
     pub fn text(&mut self, fonts: &mut Fonts, x: i32, y: i32, text: &str, size: f32, color: u32) {
+        self.text_alpha(fonts, x, y, text, size, color, 1.0);
+    }
+
+    pub fn text_alpha(
+        &mut self,
+        fonts: &mut Fonts,
+        x: i32,
+        y: i32,
+        text: &str,
+        size: f32,
+        color: u32,
+        alpha: f32,
+    ) {
+        if alpha <= 0.0 {
+            return;
+        }
         let size = font_size(size);
         let ascent = fonts
             .font
@@ -204,7 +220,12 @@ impl Canvas {
                 let source_row = (screen_y - top) as usize * metrics.width;
                 let target_row = screen_y as usize * self.width as usize;
                 for screen_x in from_x..to_x {
-                    let coverage = cached.1[source_row + (screen_x - left) as usize];
+                    let raw = cached.1[source_row + (screen_x - left) as usize];
+                    let coverage = if alpha >= 1.0 {
+                        raw
+                    } else {
+                        (f32::from(raw) * alpha.clamp(0.0, 1.0)).round() as u8
+                    };
                     let target = &mut self.pixels[target_row + screen_x as usize];
                     *target = blend(*target, color, coverage);
                 }
@@ -223,10 +244,23 @@ impl Canvas {
         color: u32,
         bold: bool,
     ) {
+        self.text_weight_alpha(fonts, position, text, size, color, bold, 1.0);
+    }
+
+    pub fn text_weight_alpha(
+        &mut self,
+        fonts: &mut Fonts,
+        position: (i32, i32),
+        text: &str,
+        size: f32,
+        color: u32,
+        bold: bool,
+        alpha: f32,
+    ) {
         if bold && let Some(face) = fonts.bold.as_deref_mut() {
-            self.text(face, position.0, position.1, text, size, color);
+            self.text_alpha(face, position.0, position.1, text, size, color, alpha);
         } else {
-            self.text(fonts, position.0, position.1, text, size, color);
+            self.text_alpha(fonts, position.0, position.1, text, size, color, alpha);
         }
     }
 

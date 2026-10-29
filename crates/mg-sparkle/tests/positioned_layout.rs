@@ -390,3 +390,29 @@ fn static_position_absolute_overlay_covers_aspect_ratio_only_svg_in_column_flex(
     assert_eq!(pixel(&rendered, overlay.0 + 50, overlay.1 + 75), 0x008000);
     assert!(!rendered.canvas.pixels.contains(&0xff0000));
 }
+
+#[test]
+fn outer_calc_width_passthrough_inset_zero_wrapper_and_opacity_zero_positioned_skip() {
+    let doc = document(
+        "<div id=grid style='display:grid;grid-template-columns:1fr;width:calc(100% - 160px)'>\
+           <div id=card style='position:relative;height:40px'>\
+             <div style='position:absolute;inset:0;z-index:1'>\
+               <a id=hit href=/story style='position:absolute;inset:0;z-index:1'></a>\
+             </div>\
+             <div id=btn style='position:absolute;left:0;top:0;width:calc(100% + 2px);height:10px;background:#00aa00'></div>\
+             <div id=invisible style='position:absolute;left:0;top:0;width:40px;height:40px;opacity:0;z-index:3;background:#ff0000'></div>\
+           </div>\
+         </div>",
+    );
+    let rendered = frame(&doc, 0, 1.0);
+    styled(&rendered);
+    assert_eq!(geometry(rect(&doc, &rendered, "#grid")), (0, 0, 160, 40));
+    assert_eq!(geometry(rect(&doc, &rendered, "#hit")), (0, 0, 160, 40));
+    assert_eq!(geometry(rect(&doc, &rendered, "#btn")), (0, 0, 162, 10));
+    assert_eq!(pixel(&rendered, 20, 5), 0x00aa00);
+    assert_eq!(pixel(&rendered, 20, 25), 0xffffff);
+    assert_eq!(
+        hit(&rendered, 20, 25),
+        Some("https://fixture.example/story")
+    );
+}

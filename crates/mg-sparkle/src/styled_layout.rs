@@ -40,6 +40,14 @@ fn height_length(length: Length, containing_height: Option<f32>) -> Option<f32> 
         Length::Auto => None,
         Length::Px(value) => Some(value),
         Length::Percent(value) => containing_height.map(|height| value * height),
+        Length::Calc {
+            px,
+            percent,
+            non_negative,
+        } => containing_height.map(|height| {
+            let value = px + percent * height;
+            if non_negative { value.max(0.0) } else { value }
+        }),
     }
     .map(|height| height.clamp(0.0, MAX_EXTENT))
 }
@@ -49,6 +57,14 @@ fn height_length_signed(length: Length, containing_height: Option<f32>) -> Optio
         Length::Auto => None,
         Length::Px(value) => Some(value),
         Length::Percent(value) => containing_height.map(|height| value * height),
+        Length::Calc {
+            px,
+            percent,
+            non_negative,
+        } => containing_height.map(|height| {
+            let value = px + percent * height;
+            if non_negative { value.max(0.0) } else { value }
+        }),
     }
     .map(|value| value.clamp(-MAX_EXTENT, MAX_EXTENT))
 }
@@ -457,6 +473,10 @@ pub(crate) fn render_scaled_profiled(
     let mut decoded_bytes = 0usize;
     let full_clip = canvas.intersect_clip(0, 0, viewport.width, viewport.height);
     for (index, op) in layout.scene.paints.iter().enumerate() {
+        let opacity = layout.styles[layout.scene.paint_nodes[index]].opacity;
+        if opacity <= 0.0 && !matches!(op, Paint::Image(..)) {
+            continue;
+        }
         canvas.restore_clip(full_clip);
         if let Some(clip) = layout.scene.clips[index] {
             canvas.intersect_clip(
@@ -477,7 +497,10 @@ pub(crate) fn render_scaled_profiled(
                     paint_rect(
                         &mut canvas,
                         color_box,
-                        style.background_color,
+                        Color {
+                            rgb: style.background_color.rgb,
+                            alpha: style.background_color.alpha * opacity,
+                        },
                         viewport.scroll,
                     );
                 }
@@ -493,13 +516,21 @@ pub(crate) fn render_scaled_profiled(
                     );
                 }
             }
-            Paint::Rect(rect, color) => paint_rect(&mut canvas, *rect, *color, viewport.scroll),
+            Paint::Rect(rect, color) => paint_rect(
+                &mut canvas,
+                *rect,
+                Color {
+                    rgb: color.rgb,
+                    alpha: color.alpha * opacity,
+                },
+                viewport.scroll,
+            ),
             Paint::Text(rect, node, text) => {
                 if !visible(*rect, viewport) {
                     continue;
                 }
                 let style = &layout.styles[*node];
-                canvas.text_weight(
+                canvas.text_weight_alpha(
                     layout.fonts.select_family(&style.font_families),
                     (
                         rect.x.round() as i32,
@@ -509,14 +540,22 @@ pub(crate) fn render_scaled_profiled(
                     style.font_size,
                     style.color.rgb,
                     style.font_weight >= 600,
+                    opacity,
                 );
                 if style.underline {
-                    canvas.rect(
-                        rect.x.round() as i32,
-                        (rect.y + style.font_size).round() as i32 - viewport.scroll,
-                        rect.w.ceil() as u32,
-                        1,
-                        style.color.rgb,
+                    paint_rect(
+                        &mut canvas,
+                        Rect {
+                            x: rect.x.round(),
+                            y: (rect.y + style.font_size).round(),
+                            w: rect.w.ceil(),
+                            h: 1.0,
+                        },
+                        Color {
+                            rgb: style.color.rgb,
+                            alpha: opacity,
+                        },
+                        viewport.scroll,
                     );
                 }
             }
@@ -626,24 +665,34 @@ pub(crate) fn render_scaled_profiled(
                     continue;
                 }
                 let focused = controls.focused_input == Some(*node);
-                let y = rect.y.round() as i32 - viewport.scroll;
-                canvas.rect(
-                    rect.x.round() as i32,
-                    y,
-                    rect.w.ceil() as u32,
-                    rect.h.ceil() as u32,
-                    if focused { 0x277453 } else { 0x888888 },
-                );
-                canvas.rect(
-                    rect.x.round() as i32 + 1,
-                    y + 1,
-                    (rect.w - 2.0).max(0.0) as u32,
-                    (rect.h - 2.0).max(0.0) as u32,
-                    if *submit { 0xeeeeee } else { 0xffffff },
-                );
                 let style = &layout.styles[*node];
-                let shown =
-                    super::render::fit_tail(layout.fonts, text, style.font_size, rect.w - 8.0);
+                let borderless = !focused
+                    && !*submit
+                    && (style.border_width == [0.0; 4]
+                        || style.border_color.iter().all(|c| c.alpha == 0.0));
+                let y = rect.y.round() as i32 - viewport.scroll;
+                if !borderless {
+                    canvas.rect(
+                        rect.x.round() as i32,
+                        y,
+                        rect.w.ceil() as u32,
+                        rect.h.ceil() as u32,
+                        if focused { 0x277453 } else { 0x888888 },
+                    );
+                    canvas.rect(
+                        rect.x.round() as i32 + 1,
+                        y + 1,
+                        (rect.w - 2.0).max(0.0) as u32,
+                        (rect.h - 2.0).max(0.0) as u32,
+                        if *submit { 0xeeeeee } else { 0xffffff },
+                    );
+                }
+                let shown = super::render::fit_tail(
+                    layout.fonts,
+                    text,
+                    style.font_size,
+                    rect.w - if borderless { 0.0 } else { 8.0 },
+                );
                 if focused && controls.select_all {
                     canvas.rect(
                         rect.x.round() as i32 + 3,
@@ -653,14 +702,31 @@ pub(crate) fn render_scaled_profiled(
                         0xc6dfed,
                     );
                 }
-                canvas.text_weight(
-                    layout.fonts,
-                    (rect.x.round() as i32 + 3, y + 2),
-                    &shown,
-                    style.font_size,
-                    style.color.rgb,
-                    style.font_weight >= 600,
-                );
+                if borderless {
+                    let line_h = layout
+                        .fonts
+                        .select_family(&style.font_families)
+                        .line_height(style.font_size) as f32;
+                    let text_y = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
+                    canvas.text_weight_alpha(
+                        layout.fonts.select_family(&style.font_families),
+                        (rect.x.round() as i32, text_y),
+                        &shown,
+                        style.font_size,
+                        style.color.rgb,
+                        style.font_weight >= 600,
+                        opacity,
+                    );
+                } else {
+                    canvas.text_weight(
+                        layout.fonts,
+                        (rect.x.round() as i32 + 3, y + 2),
+                        &shown,
+                        style.font_size,
+                        style.color.rgb,
+                        style.font_weight >= 600,
+                    );
+                }
             }
         }
     }
@@ -916,14 +982,6 @@ impl Layout<'_, '_> {
     fn fail(&mut self, node: usize, reason: &'static str) {
         self.failure.get_or_insert((node, reason));
         self.exhausted = true;
-    }
-    fn border_box(&self, id: usize) -> Option<Rect> {
-        self.scene
-            .borders
-            .iter()
-            .rev()
-            .find(|(node, _)| *node == id)
-            .map(|(_, r)| *r)
     }
     /// Overflow clips descendants at the padding edge. An unconstrained axis
     /// remains unbounded within this renderer's finite coordinate envelope.
@@ -1653,7 +1711,7 @@ impl Layout<'_, '_> {
         }
         let node = &self.document.nodes[id];
         if node.tag == "#text" {
-            let text = collapse(&node.text);
+            let text = collapse(material_icon_ligature(&node.text, &s.font_families));
             let max = self.fonts.select_family(&s.font_families).width_weight(
                 &text,
                 s.font_size,
@@ -2121,6 +2179,13 @@ impl Layout<'_, '_> {
                 *old = rect;
             }
         }
+        for (i, bg) in self.styles[id].background_images.iter().rev().enumerate() {
+            let w = bg.width.resolve(r.w).unwrap_or(r.w);
+            let h = bg.height.resolve(r.h).unwrap_or(w);
+            if let Some(Paint::Image(old, ..)) = self.scene.paints.get_mut(start + 5 + i) {
+                *old = Rect { w, h, ..r };
+            }
+        }
     }
     fn layout_table<const EMIT: bool>(
         &mut self,
@@ -2333,7 +2398,7 @@ impl Layout<'_, '_> {
         let s = self.styles[id].clone();
         if node.tag == "#text" {
             let mut word = String::new();
-            for ch in node.text.chars() {
+            for ch in material_icon_ligature(&node.text, &s.font_families).chars() {
                 if out.len() >= MAX_OPS {
                     self.exhausted = true;
                     break;
@@ -3167,6 +3232,19 @@ fn measurement_dimension(value: f32) -> bool {
 }
 fn is_css_space(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0c')
+}
+fn material_icon_ligature<'a>(text: &'a str, families: &[String]) -> &'a str {
+    if families.iter().any(|f| {
+        f.eq_ignore_ascii_case("Google Material Icons") || f.eq_ignore_ascii_case("Material Icons")
+    }) {
+        match text.trim() {
+            "chevron_right" => "›",
+            "chevron_left" => "‹",
+            _ => text,
+        }
+    } else {
+        text
+    }
 }
 fn collapse(text: &str) -> String {
     let mut result = String::new();

@@ -601,8 +601,10 @@ impl Adapter<'_, '_, '_> {
                 .width
                 .resolve(input.parent_size.width.unwrap_or(0.0))
                 .is_some()
-            && (!matches!(self.layout.styles[node].width, Length::Percent(_))
-                || input.parent_size.width.is_some());
+            && (!matches!(
+                self.layout.styles[node].width,
+                Length::Percent(_) | Length::Calc { .. }
+            ) || input.parent_size.width.is_some());
         let fixed_width = input.known_dimensions.width.is_some() || own_width;
         let own_height = !anonymous
             && input.sizing_mode == SizingMode::InherentSize
@@ -691,7 +693,9 @@ impl Adapter<'_, '_, '_> {
                 }
             }
         };
-        let height = if anonymous {
+        let height = if input.axis == RequestedAxis::Horizontal {
+            0.0
+        } else if anonymous {
             let tokens = self.anonymous_tokens(index)?;
             self.layout.flow_tokens::<false>(
                 self.slots[0].node,

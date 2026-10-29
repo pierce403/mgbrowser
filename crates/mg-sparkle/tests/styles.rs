@@ -222,3 +222,23 @@ fn inactive_noscript_cannot_be_reenabled_by_author_css() {
         );
     }
 }
+
+#[test]
+fn before_pseudo_background_image_and_contain_cover_sizing_apply_to_empty_elements() {
+    let document = parse(
+        "<html><head><style>\
+         #logo{display:inline-block;width:74px;height:24px}\
+         #logo:before{content:'';background-image:url(logo.svg);background-size:contain}\
+         </style></head><body><span id=logo></span></body></html>",
+        "https://fixture.example/news/",
+    );
+    let styles = compute_styles(&document, &document.stylesheets, (1280.0, 800.0)).unwrap();
+    let logo = at(&document, &styles, "#logo");
+    assert_eq!(logo.background_images.len(), 1);
+    assert_eq!(
+        logo.background_images[0].url,
+        "https://fixture.example/news/logo.svg"
+    );
+    assert_eq!(logo.background_images[0].width, Length::Percent(1.0));
+    assert_eq!(logo.background_images[0].height, Length::Percent(1.0));
+}

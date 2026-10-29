@@ -112,7 +112,7 @@ impl Adapter<'_, '_, '_> {
         let resolve = |value| match value {
             Length::Px(value) => Some(value),
             Length::Percent(value) => width.map(|width| value * width),
-            Length::Auto => None,
+            Length::Auto | Length::Calc { .. } => None,
         };
         resolve(style.layout.inset[3])
             .or_else(|| resolve(style.layout.inset[1]).map(|value| -value))
