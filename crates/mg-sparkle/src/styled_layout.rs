@@ -40,14 +40,7 @@ fn height_length(length: Length, containing_height: Option<f32>) -> Option<f32> 
         Length::Auto => None,
         Length::Px(value) => Some(value),
         Length::Percent(value) => containing_height.map(|height| value * height),
-        Length::Calc {
-            px,
-            percent,
-            non_negative,
-        } => containing_height.map(|height| {
-            let value = px + percent * height;
-            if non_negative { value.max(0.0) } else { value }
-        }),
+        Length::Calc { .. } => containing_height.and_then(|height| length.resolve(height)),
     }
     .map(|height| height.clamp(0.0, MAX_EXTENT))
 }
@@ -57,14 +50,7 @@ fn height_length_signed(length: Length, containing_height: Option<f32>) -> Optio
         Length::Auto => None,
         Length::Px(value) => Some(value),
         Length::Percent(value) => containing_height.map(|height| value * height),
-        Length::Calc {
-            px,
-            percent,
-            non_negative,
-        } => containing_height.map(|height| {
-            let value = px + percent * height;
-            if non_negative { value.max(0.0) } else { value }
-        }),
+        Length::Calc { .. } => containing_height.and_then(|height| length.resolve(height)),
     }
     .map(|value| value.clamp(-MAX_EXTENT, MAX_EXTENT))
 }
@@ -530,7 +516,7 @@ pub(crate) fn render_scaled_profiled(
                     continue;
                 }
                 let style = &layout.styles[*node];
-                canvas.text_weight_alpha(
+                canvas.text_styled_alpha(
                     layout.fonts.select_family(&style.font_families),
                     (
                         rect.x.round() as i32,
@@ -540,6 +526,7 @@ pub(crate) fn render_scaled_profiled(
                     style.font_size,
                     style.color.rgb,
                     style.font_weight >= 600,
+                    style.italic,
                     opacity,
                 );
                 if style.underline {
@@ -708,13 +695,14 @@ pub(crate) fn render_scaled_profiled(
                         .select_family(&style.font_families)
                         .line_height(style.font_size) as f32;
                     let text_y = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
-                    canvas.text_weight_alpha(
+                    canvas.text_styled_alpha(
                         layout.fonts.select_family(&style.font_families),
                         (rect.x.round() as i32, text_y),
                         &shown,
                         style.font_size,
                         style.color.rgb,
                         style.font_weight >= 600,
+                        style.italic,
                         opacity,
                     );
                 } else {

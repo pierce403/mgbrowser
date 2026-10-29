@@ -2,19 +2,38 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.22 candidate: Google News visual parity and styled Topic destination
+## v0.9.23 candidate: Google News default-mode browsing and WOFF1/WOFF2 web fonts
 
-The next release adds outer-box linear `calc(percent + px)` (`Length::Calc` with
+The next release skips isolated script-worker startup cleanly (`JavaScript
+skipped`) when an ordinary browsing document exceeds the 1 MiB source, 16 KiB
+URL, or 2 MiB JSON wire admission caps, eliminating script-rejection errors and
+`"Page activation unavailable while loading or after script failure"` on
+`news.google.com` with default flags (`--enable-scripts`) while keeping `< 1 MiB`
+closed-realm protection and `WindowHarness` observation intact. It also adds
+bounded `min`/`max` outer-calc comparisons and linear CSS grid preflight work
+charging for `Full coverage` (`/stories/...`) pages, plus pure-Rust WOFF1/WOFF2
+(`wOFF`/`wOF2`) `@font-face` SFNT reconstruction (`brotli-decompressor = 5.0.3`,
+`default-features = false`, `#![forbid(unsafe_code)]`) and synthetic
+bold/oblique styling for downloaded web fonts (`badge.nyx.ms`, `sl.ush.fund`).
+[Contract](docs/GOOGLE_NEWS.md), [dependencies](docs/DEPENDENCIES.md), and
+[candidate notes](docs/RELEASE-v0.9.23.md).
+
+## Latest verified release: v0.9.22
+
+v0.9.22 adds outer-box linear `calc(percent + px)` (`Length::Calc` with
 `outer_calc_only` gating), empty-element `:before` `background-image` and
 `background-size: contain | cover` resolution, multiplied subtree `opacity` with
 borderless `<input>` control painting, Material icon ligature mapping
 (`chevron_right` to `›`), and positioned/stacking/grid-measurement optimizations
 so both the Google News homepage and the 9,997-node `Headlines` Topic
 destination page render in full styled layout without fallback across
-`1280x800`, default `1100x727`, and `1024x768` viewports.
-[Contract](docs/GOOGLE_NEWS.md) and [candidate notes](docs/RELEASE-v0.9.22.md).
+`1280x800`, default `1100x727`, and `1024x768` viewports. Published as
+[v0.9.22](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.22) at
+`06ac47464f951bbf5ba7a1d1a35e27889ba70d4f`, passing CI, tagged release, and
+public installer smoke verification (`v0.9.21` upgrade + no-op).
+[Contract](docs/GOOGLE_NEWS.md) and [release notes](docs/RELEASE-v0.9.22.md).
 
-## Latest verified release: v0.9.21
+## Previous release: v0.9.21
 
 The release adds real `Target.createTarget`, `activateTarget` and
 `closeTarget` through the native workspace owner. Blank targets are empty

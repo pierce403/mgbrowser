@@ -293,7 +293,12 @@ fn finite_length(value: mg::Length) -> bool {
     match value {
         mg::Length::Auto => true,
         mg::Length::Px(v) | mg::Length::Percent(v) => v.is_finite(),
-        mg::Length::Calc { px, percent, .. } => px.is_finite() && percent.is_finite(),
+        mg::Length::Calc {
+            px,
+            percent,
+            bound_px,
+            ..
+        } => px.is_finite() && percent.is_finite() && bound_px.is_finite(),
     }
 }
 fn lp(value: mg::Length) -> LengthPercentage {

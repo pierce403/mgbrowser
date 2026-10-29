@@ -212,6 +212,22 @@ widening any resource or work budget:
   render both the Homepage (`height: 1890..1970`) and the `Headlines` Topic
   destination (`height: 28928..29338`) with zero styled-layout fallbacks
   (`fallbacks=[]`), while keeping saved Hacker News 1024/1280 PNGs byte-identical.
+- In v0.9.23, `mg-chassis::resources::script_document_admissible` checks the
+  existing 1 MiB source, 16 KiB URL, and 2 MiB JSON wire caps before preparing
+  external scripts or starting a worker in ordinary browsing mode. Oversize SSR
+  documents (`1.86..4.40 MB` on `/home`, `/topics/...`, `/stories/...`, and
+  `/showcase`) skip script execution cleanly (`JavaScript skipped`) with zero
+  `SCRIPT_*` or DevTools JS rejection errors, preserve `<noscript>`, and keep
+  `script_blocked = false` so scrolling and link navigation work normally with
+  default flags (`--enable-scripts`). Admitted `< 1 MiB` realms that start and
+  fail still enforce `closed_script_realm_never_falls_through_to_native_activation`.
+- `Length::Calc` also supports bounded `min`/`max` comparisons between a pixel
+  bound and a linear `<length-percentage>` term (`CalcOp::{Linear, MinPx, MaxPx}`,
+  retaining `size_of::<Length>() == 16`), and CSS grid preflight charges linear
+  `O(cells * count + count^2)` work within `MAX_GRID_WORK = 1_000_000`, so
+  51-item 12-column `Full coverage` (`/stories/...`) pages and Material 3
+  `max(48px, 100%)` touch-target overlays render in full centered styled layout
+  without fallback.
 
 ## Historical baseline and migration evidence
 

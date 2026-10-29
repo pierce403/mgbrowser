@@ -11,6 +11,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | aes | 0.9.3 | MIT OR Apache-2.0 |
 | aes-gcm | 0.11.1 | Apache-2.0 OR MIT |
 | aligned-vec | 0.6.4 | MIT |
+| alloc-no-stdlib | 2.0.4 | BSD-3-Clause |
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | app_units | 0.7.8 | MPL-2.0 |
 | arbitrary | 1.4.2 | MIT OR Apache-2.0 |
@@ -44,6 +45,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | boa_macros | 0.22.0 | Unlicense OR MIT |
 | boa_parser | 0.22.0 | Unlicense OR MIT |
 | boa_string | 0.22.0 | Unlicense OR MIT |
+| brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
 | bytemuck_derive | 1.12.1 | Zlib OR Apache-2.0 OR MIT |
 | byteorder | 1.5.0 | Unlicense OR MIT |
@@ -174,10 +176,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.9.22 | Apache-2.0 |
-| mg-butane | 0.9.22 | Apache-2.0 |
-| mg-chassis | 0.9.22 | Apache-2.0 |
-| mg-sparkle | 0.9.22 | Apache-2.0 |
+| mg-browser | 0.9.23 | Apache-2.0 |
+| mg-butane | 0.9.23 | Apache-2.0 |
+| mg-chassis | 0.9.23 | Apache-2.0 |
+| mg-sparkle | 0.9.23 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |

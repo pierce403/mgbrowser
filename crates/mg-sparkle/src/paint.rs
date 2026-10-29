@@ -190,6 +190,21 @@ impl Canvas {
         color: u32,
         alpha: f32,
     ) {
+        self.text_face_alpha(fonts, (x, y), text, size, color, false, false, alpha);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn text_face_alpha(
+        &mut self,
+        fonts: &mut Fonts,
+        (x, y): (i32, i32),
+        text: &str,
+        size: f32,
+        color: u32,
+        synth_bold: bool,
+        synth_italic: bool,
+        alpha: f32,
+    ) {
         if alpha <= 0.0 {
             return;
         }
@@ -205,29 +220,85 @@ impl Canvas {
             // the actual output resolution. Do not enlarge a 1x glyph bitmap.
             let cached = fonts.glyph(glyph.id, size * self.scale);
             let metrics = cached.0;
+            let baseline_phys = (baseline - glyph.y_offset) * self.scale;
             let left =
                 ((pen + glyph.x_offset) * self.scale).round() as i64 + i64::from(metrics.xmin);
-            let top = ((baseline - glyph.y_offset) * self.scale).round() as i64
-                - i64::from(metrics.ymin)
-                - metrics.height as i64;
-            let from_x = left.clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+            let top =
+                baseline_phys.round() as i64 - i64::from(metrics.ymin) - metrics.height as i64;
             let from_y = top.clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
-            let to_x = (left + metrics.width as i64)
-                .clamp(i64::from(self.clip.left), i64::from(self.clip.right));
             let to_y = (top + metrics.height as i64)
                 .clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
-            for screen_y in from_y..to_y {
-                let source_row = (screen_y - top) as usize * metrics.width;
-                let target_row = screen_y as usize * self.width as usize;
-                for screen_x in from_x..to_x {
-                    let raw = cached.1[source_row + (screen_x - left) as usize];
-                    let coverage = if alpha >= 1.0 {
-                        raw
+            if !synth_bold && !synth_italic {
+                let from_x = left.clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+                let to_x = (left + metrics.width as i64)
+                    .clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+                for screen_y in from_y..to_y {
+                    let source_row = (screen_y - top) as usize * metrics.width;
+                    let target_row = screen_y as usize * self.width as usize;
+                    for screen_x in from_x..to_x {
+                        let raw = cached.1[source_row + (screen_x - left) as usize];
+                        let coverage = if alpha >= 1.0 {
+                            raw
+                        } else {
+                            (f32::from(raw) * alpha.clamp(0.0, 1.0)).round() as u8
+                        };
+                        let target = &mut self.pixels[target_row + screen_x as usize];
+                        *target = blend(*target, color, coverage);
+                    }
+                }
+            } else {
+                let extra_bold = if synth_bold {
+                    ((size * self.scale) / 24.0).round().clamp(1.0, 3.0) as i64
+                } else {
+                    0
+                };
+                let left_base = left - extra_bold / 2;
+                let width_i64 = metrics.width as i64;
+                for screen_y in from_y..to_y {
+                    let source_row = (screen_y - top) as usize * metrics.width;
+                    let target_row = screen_y as usize * self.width as usize;
+                    let shear_x = if synth_italic {
+                        0.20 * (baseline_phys - (screen_y as f32 + 0.5))
                     } else {
-                        (f32::from(raw) * alpha.clamp(0.0, 1.0)).round() as u8
+                        0.0
                     };
-                    let target = &mut self.pixels[target_row + screen_x as usize];
-                    *target = blend(*target, color, coverage);
+                    let row_from_x = (left_base + shear_x.floor() as i64)
+                        .clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+                    let row_to_x = (left_base + width_i64 + extra_bold + shear_x.ceil() as i64 + 1)
+                        .clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+                    let dilated = |k: i64| -> u8 {
+                        let mut m = 0u8;
+                        for d in 0..=extra_bold {
+                            let sx = k - d;
+                            if sx >= 0 && sx < width_i64 {
+                                m = m.max(cached.1[source_row + sx as usize]);
+                            }
+                        }
+                        m
+                    };
+                    for screen_x in row_from_x..row_to_x {
+                        let raw = if synth_italic {
+                            let u = (screen_x - left_base) as f32 - shear_x;
+                            let u0 = u.floor();
+                            let frac = u - u0;
+                            let k0 = u0 as i64;
+                            (f32::from(dilated(k0)) * (1.0 - frac)
+                                + f32::from(dilated(k0 + 1)) * frac)
+                                .round() as u8
+                        } else {
+                            dilated(screen_x - left_base)
+                        };
+                        if raw == 0 {
+                            continue;
+                        }
+                        let coverage = if alpha >= 1.0 {
+                            raw
+                        } else {
+                            (f32::from(raw) * alpha.clamp(0.0, 1.0)).round() as u8
+                        };
+                        let target = &mut self.pixels[target_row + screen_x as usize];
+                        *target = blend(*target, color, coverage);
+                    }
                 }
             }
             pen += glyph.advance;
@@ -257,10 +328,46 @@ impl Canvas {
         bold: bool,
         alpha: f32,
     ) {
+        self.text_styled_alpha(fonts, position, text, size, color, bold, false, alpha);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_styled_alpha(
+        &mut self,
+        fonts: &mut Fonts,
+        position: (i32, i32),
+        text: &str,
+        size: f32,
+        color: u32,
+        bold: bool,
+        italic: bool,
+        alpha: f32,
+    ) {
         if bold && let Some(face) = fonts.bold.as_deref_mut() {
-            self.text_alpha(face, position.0, position.1, text, size, color, alpha);
+            let synth_italic = italic && face.synthetic_styles;
+            self.text_face_alpha(
+                face,
+                position,
+                text,
+                size,
+                color,
+                false,
+                synth_italic,
+                alpha,
+            );
         } else {
-            self.text_alpha(fonts, position.0, position.1, text, size, color, alpha);
+            let synth_bold = bold && fonts.synthetic_styles;
+            let synth_italic = italic && fonts.synthetic_styles;
+            self.text_face_alpha(
+                fonts,
+                position,
+                text,
+                size,
+                color,
+                synth_bold,
+                synth_italic,
+                alpha,
+            );
         }
     }
 
@@ -308,6 +415,7 @@ pub struct Fonts {
     shape_cache: HashMap<(u64, u32), (Box<str>, f32, Rc<[PositionedGlyph]>)>,
     shape_cached_bytes: usize,
     shaping_stats: ShapingCacheStats,
+    synthetic_styles: bool,
     bold: Option<Box<Fonts>>,
     families: HashMap<String, Box<Fonts>>,
 }
@@ -315,6 +423,7 @@ pub struct Fonts {
 impl Fonts {
     /// Parse caller-owned font data without selecting a platform font or doing I/O.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        let bytes = crate::woff::decode_font_bytes(bytes)?;
         let font = fontdue::Font::from_bytes(&*bytes, fontdue::FontSettings::default())
             .map_err(|error| format!("Cannot rasterize font: {error}"))?;
         rustybuzz::Face::from_slice(&bytes, 0).ok_or_else(|| "Cannot shape font".to_owned())?;
@@ -326,6 +435,7 @@ impl Fonts {
             shape_cache: HashMap::new(),
             shape_cached_bytes: 0,
             shaping_stats: Default::default(),
+            synthetic_styles: false,
             bold: None,
             families: HashMap::new(),
         })
@@ -373,7 +483,8 @@ impl Fonts {
         if key.is_empty() || self.families.contains_key(&key) {
             return;
         }
-        if let Ok(font) = Self::from_bytes(bytes) {
+        if let Ok(mut font) = Self::from_bytes(bytes) {
+            font.synthetic_styles = true;
             self.families.insert(key, Box::new(font));
         }
     }
@@ -902,5 +1013,36 @@ mod tests {
         assert_eq!(canvas.pixels, before);
         // Painting a partly visible glyph at a negative origin must also clip.
         canvas.text(&mut fonts, -8, -8, "Overflow", 32.0, 0);
+    }
+
+    #[test]
+    fn synthetic_bold_and_italic_apply_only_to_downloaded_families() {
+        let mut fonts = shaping_fonts();
+        fonts.register_family("WebMono", fonts.bytes.clone());
+
+        // System fonts without a bold face keep exact regular pixels.
+        let mut sys_reg = Canvas::new(160, 40, 0xffffff);
+        sys_reg.text_styled_alpha(&mut fonts, (4, 4), "Test", 24.0, 0, false, false, 1.0);
+        let mut sys_styled = Canvas::new(160, 40, 0xffffff);
+        sys_styled.text_styled_alpha(&mut fonts, (4, 4), "Test", 24.0, 0, true, true, 1.0);
+        assert_eq!(sys_reg.pixels, sys_styled.pixels);
+
+        // Registered @font-face families synthesize bolder and slanted strokes.
+        let web = fonts.select_family(&["WebMono".into()]);
+        let mut web_reg = Canvas::new(160, 40, 0xffffff);
+        web_reg.text_styled_alpha(web, (4, 4), "Test", 24.0, 0, false, false, 1.0);
+        let mut web_bold = Canvas::new(160, 40, 0xffffff);
+        web_bold.text_styled_alpha(web, (4, 4), "Test", 24.0, 0, true, false, 1.0);
+        let mut web_italic = Canvas::new(160, 40, 0xffffff);
+        web_italic.text_styled_alpha(web, (4, 4), "Test", 24.0, 0, false, true, 1.0);
+
+        let ink = |c: &Canvas| {
+            c.pixels
+                .iter()
+                .map(|&px| 255u64 - u64::from(px & 0xff))
+                .sum::<u64>()
+        };
+        assert!(ink(&web_bold) > ink(&web_reg));
+        assert_ne!(web_italic.pixels, web_reg.pixels);
     }
 }

@@ -231,10 +231,17 @@ pub fn load_with_profile(
         };
         if !matches!(
             mime(&response.content_type).as_str(),
-            "font/ttf"
+            "font/woff2"
+                | "font/woff"
+                | "font/ttf"
                 | "font/otf"
+                | "font/sfnt"
+                | "application/font-woff2"
+                | "application/font-woff"
                 | "application/font-sfnt"
+                | "application/x-font-woff"
                 | "application/x-font-ttf"
+                | "application/x-font-opentype"
                 | "application/octet-stream"
         ) {
             loader.warn(format!(
@@ -314,6 +321,16 @@ fn inert_script(nodes: &[Node], mut id: usize) -> bool {
         id = nodes[id].parent;
     }
     true
+}
+
+/// Check whether the document HTML and URL fit the isolated script worker's
+/// fixed 1 MiB source, 16 KiB URL and 2 MiB JSON frame admission bounds before
+/// spawning a worker session.
+pub fn script_document_admissible(page_url: &str, raw_html: &str) -> bool {
+    raw_html.len() <= MAX_SOURCE
+        && page_url.len() <= MAX_CLASSIC_SOURCE_URL_BYTES
+        && external_request_json_bytes(page_url, raw_html)
+            .is_ok_and(|bytes| bytes <= MAX_TYPED_REQUEST_BYTES)
 }
 
 /// Fetch only parser-discovered classic sources under the same resource ledger
@@ -1689,5 +1706,27 @@ mod tests {
                     .all(|warning| warning.starts_with("Earlier resource diagnostic "))
             );
         }
+    }
+
+    #[test]
+    fn script_document_admissible_enforces_source_url_and_wire_caps() {
+        let ok_url = "https://news.example/home";
+        assert!(script_document_admissible(ok_url, "<p>ok</p>"));
+        assert!(script_document_admissible(ok_url, &"a".repeat(MAX_SOURCE)));
+        assert!(!script_document_admissible(
+            ok_url,
+            &"a".repeat(MAX_SOURCE + 1)
+        ));
+        let oversize_url = format!(
+            "https://news.example/{}",
+            "u".repeat(MAX_CLASSIC_SOURCE_URL_BYTES)
+        );
+        assert!(!script_document_admissible(&oversize_url, "<p>ok</p>"));
+        // Control characters JSON-escape 6x (`\u0001`), exceeding the 2 MiB
+        // typed wire cap even while raw UTF-8 source stays within 1 MiB.
+        assert!(!script_document_admissible(
+            ok_url,
+            &"\x01".repeat(MAX_SOURCE)
+        ));
     }
 }

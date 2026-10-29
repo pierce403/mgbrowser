@@ -838,6 +838,11 @@ impl Browser {
             let mut script_fetch_profile = resources::ScriptFetchProfile::default();
             let mut script_worker_ms = 0.0;
             let mut external_scripts = None;
+            let observer_active = matches!(
+                pool.observer_expectation(),
+                mg_sparkle::page_session::observer::ObserverExpectation::WindowHarness { .. }
+            );
+            let mut decoded_script_html = None;
             let document = result
                 .as_ref()
                 .ok()
@@ -846,12 +851,12 @@ impl Browser {
                 })
                 .map(|response| {
                     let html = decode_text(&response.body, &response.content_type);
+                    let run_scripts = scripts_enabled
+                        && (observer_active
+                            || resources::script_document_admissible(response.url.as_str(), &html));
                     let parse_started = Instant::now();
-                    let mut document = document::parse_with_scripting(
-                        &html,
-                        response.url.as_str(),
-                        scripts_enabled,
-                    );
+                    let mut document =
+                        document::parse_with_scripting(&html, response.url.as_str(), run_scripts);
                     parse_html_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
                     let cancel = || resource_generation.load(Ordering::Relaxed) != generation;
                     resource_profile = resources::load_with_profile(
@@ -860,7 +865,7 @@ impl Browser {
                         response.url.as_str(),
                         cancel,
                     );
-                    if scripts_enabled {
+                    if run_scripts {
                         let (sources, profile) = resources::prepare_script_sources(
                             &session,
                             &mut document,
@@ -872,37 +877,30 @@ impl Browser {
                         );
                         external_scripts = Some(sources);
                         script_fetch_profile = profile;
+                        decoded_script_html = Some(html);
                     }
                     document
                 });
-            let script = if scripts_enabled {
-                result
-                    .as_ref()
-                    .ok()
-                    .filter(|response| {
-                        response.content_type.contains("html") || response.content_type.is_empty()
-                    })
-                    .map(|response| {
-                        let html = decode_text(&response.body, &response.content_type);
-                        let worker_started = Instant::now();
-                        let started = pool
-                            .start(
-                                mg_sparkle::js_browser::Request {
-                                    url: response.url.to_string(),
-                                    html,
-                                    external_scripts,
-                                },
-                                generation,
-                            )
-                            .map(|(session, reply)| ScriptLoad {
-                                session: Some(session),
-                                reply,
-                            });
-                        script_worker_ms = worker_started.elapsed().as_secs_f64() * 1000.0;
-                        started
-                    })
-            } else {
-                None
+            let script = match (result.as_ref().ok(), decoded_script_html) {
+                (Some(response), Some(html)) => {
+                    let worker_started = Instant::now();
+                    let started = pool
+                        .start(
+                            mg_sparkle::js_browser::Request {
+                                url: response.url.to_string(),
+                                html,
+                                external_scripts,
+                            },
+                            generation,
+                        )
+                        .map(|(session, reply)| ScriptLoad {
+                            session: Some(session),
+                            reply,
+                        });
+                    script_worker_ms = worker_started.elapsed().as_secs_f64() * 1000.0;
+                    Some(started)
+                }
+                _ => None,
             };
             let _ = tx.send(Loaded {
                 generation,
@@ -1013,6 +1011,7 @@ impl Browser {
                     let source = decode_text(&response.body, &response.content_type);
                     let mut scripting = false;
                     let mut projected = None;
+                    let loaded_script_attempted = loaded.script.is_some();
                     let script_status = match loaded.script {
                         Some(Ok(mut startup)) => {
                             let wake = self.validate_task_wake(&startup.reply, received);
@@ -1130,7 +1129,13 @@ impl Browser {
                                 .fail(InitialScriptFailure::Infrastructure, &error);
                             format!("JS worker failed: {error}")
                         }
-                        None => "JavaScript disabled".into(),
+                        None => {
+                            if self.scripts_enabled {
+                                "JavaScript skipped".into()
+                            } else {
+                                "JavaScript disabled".into()
+                            }
+                        }
                     };
                     self.document = if let Some(mut document) = projected {
                         if let Some(resources) = loaded.document {
@@ -1142,7 +1147,7 @@ impl Browser {
                     } else if response.content_type.contains("html")
                         || response.content_type.is_empty()
                     {
-                        if self.scripts_enabled && !scripting {
+                        if loaded_script_attempted && !scripting {
                             // Rejected workers retain the original no-script
                             // projection, while preserving fetched page resources.
                             let mut document = document::parse(&source, &self.address);
@@ -3767,6 +3772,88 @@ mod tests {
         assert_eq!(app.inflight, 0);
         assert!(!app.loading);
         assert!(app.script_blocked);
+    }
+
+    #[test]
+    fn oversize_script_document_skips_worker_without_errors_or_blocking_links() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let padding = "x".repeat(mg_sparkle::js_browser::MAX_SOURCE + 1024);
+        let home_body = format!(
+            "<title>News Home</title><script>throw new Error('skipped')</script><noscript><p>Noscript preserved</p></noscript><div style='height:2400px'></div><a id='topic' href='/topics/world'>Top stories</a><!--{padding}-->"
+        );
+        let topic_body = format!("<title>World Topic</title><p>Full coverage</p><!--{padding}-->");
+        let server = thread::spawn(move || {
+            for body in [home_body, topic_body] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" || header.is_empty() {
+                        break;
+                    }
+                }
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(body.as_bytes()).unwrap();
+            }
+        });
+
+        let mut app = test_app();
+        app.scripts_enabled = true;
+        app.navigate(format!("{origin}/"), None, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.loading && Instant::now() < deadline {
+            app.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.loading);
+        assert!(!app.script_blocked);
+        assert_eq!(
+            app.initial_script_outcome(),
+            &InitialScriptOutcome::new(false)
+        );
+        assert!(app.status.contains("JavaScript skipped"), "{}", app.status);
+        assert!(!app.document.scripting_enabled());
+        assert!(
+            app.document
+                .nodes
+                .iter()
+                .any(|node| node.text.contains("Noscript preserved"))
+        );
+
+        let _ = app.paint();
+        app.scroll_by(240);
+        assert!(app.scroll > 0);
+
+        let link = app.document.query_selector(0, "#topic").unwrap().unwrap();
+        app.activate(Action::Link {
+            node: link,
+            href: format!("{origin}/topics/world"),
+        });
+        assert!(app.loading, "status was: {}", app.status);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.loading && Instant::now() < deadline {
+            app.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.loading);
+        assert!(!app.script_blocked);
+        assert_eq!(
+            app.initial_script_outcome(),
+            &InitialScriptOutcome::new(false)
+        );
+        assert_eq!(app.document.title, "World Topic");
+        server.join().unwrap();
     }
 }
 

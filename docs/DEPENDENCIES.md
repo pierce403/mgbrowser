@@ -29,7 +29,7 @@ This browser is a testing and research project, not a production browser. The us
 | Component | Current configuration | Boundary |
 | --- | --- | --- |
 | TLS | rustls 0.23 with explicit rustls-rustcrypto provider; provider revision 70f76c039e587192688af18a80d5d6435dedaf22 | Defaults disabled; std, TLS 1.2 and provider zeroization selected. No ring, aws-lc-rs, OpenSSL or native-tls fallback. |
-| Font parsing/rasterization | fontdue 0.9, defaults disabled; Rust ttf-parser transitively | No FreeType, CoreText, DirectWrite or other native font backend. |
+| Font parsing/rasterization | fontdue 0.9, defaults disabled; Rust ttf-parser transitively; pure-Rust WOFF1 (`flate2` `rust_backend`) and WOFF2 (`brotli-decompressor` 5.0.3, defaults disabled, `#![forbid(unsafe_code)]`) SFNT reconstruction | No FreeType, CoreText, DirectWrite, `woff2` C++ or other native font backend. |
 | Text shaping | rustybuzz 0.20 with std and defaults disabled | Rust shaping implementation, no HarfBuzz C bindings. |
 | CSS computation | stylo 0.21.0, defaults disabled, servo feature only; imported as style | Rust selector/cascade/computed-value engine, with Mg DOM adapter. No Gecko, SpiderMonkey or Servo browser embedding. Python 3 is build-time code generation only. |
 | Flex/grid geometry | taffy 0.14.0, defaults disabled, std/flexbox/grid only | v0.9.0 Mg adapter borrows computed styles and document identities. No Taffy tree/parser, native layout backend or replacement browser engine. |
@@ -46,6 +46,20 @@ This browser is a testing and research project, not a production browser. The us
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### Pure-Rust WOFF1/WOFF2 web font decoding: v0.9.23
+
+`mg-sparkle` pins `brotli-decompressor = 5.0.3` with `default-features = false`
+(resolving only `alloc-no-stdlib = 2.0.4`, BSD-3-Clause, alongside
+`brotli-decompressor`'s BSD-3-Clause/MIT) and reuses workspace `flate2`
+(`default-features = false`, `rust_backend` only) to reconstruct uncompressed
+SFNT tables from WOFF 1.0 (`wOFF`) and WOFF 2.0 (`wOF2`) `@font-face`
+resources in `#![forbid(unsafe_code)]` Rust before `fontdue` and `rustybuzz`
+parse them. Neither crate introduces a build script, C/C++ binding, `libc` edge,
+or `unsafe` feature; `BrotliState::new_strict` runs with an 8 MiB `AllocU8`
+ringbuffer/context-map budget and a 4 MiB reconstructed SFNT cap, while font
+downloads continue to share the existing same-origin 512 KiB per-font and 2 MiB
+aggregate page resource ledger.
 
 ### Script admission and retained caches: v0.9.6
 

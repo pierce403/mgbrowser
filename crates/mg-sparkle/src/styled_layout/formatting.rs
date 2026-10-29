@@ -761,7 +761,7 @@ impl Adapter<'_, '_, '_> {
             };
             let cells = columns.checked_mul(rows)?;
             work = work
-                .checked_mul(columns.checked_add(rows)?)?
+                .checked_add(count.checked_mul(columns.checked_add(rows)?)?)?
                 .checked_add(cells.checked_mul(count.max(1))?)?;
             if work > MAX_GRID_WORK {
                 self.layout.fail(
@@ -1563,6 +1563,33 @@ mod tests {
                 assert_eq!(first_box.y, 0);
                 assert_eq!(second_box.y, 0);
                 assert_eq!(second_box.height, 50);
+            },
+        );
+    }
+
+    #[test]
+    fn twelve_column_dense_coverage_grid_stays_within_work_budget() {
+        with_layout(
+            &format!(
+                "<div id=root style='display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px'>{}</div>",
+                "<div style='grid-column:span 12;height:24px'>item</div>".repeat(51)
+            ),
+            |layout, id| {
+                assert!(
+                    run::<true>(
+                        layout,
+                        id,
+                        0.0,
+                        0.0,
+                        AvailableSpace::Definite(1112.0),
+                        None,
+                        0
+                    )
+                    .is_some(),
+                    "failure: {:?}",
+                    layout.failure
+                );
+                assert!(!layout.exhausted);
             },
         );
     }

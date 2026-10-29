@@ -10,6 +10,7 @@ pub mod paint;
 pub mod render;
 pub mod style;
 mod styled_layout;
+mod woff;
 
 pub const USER_AGENT: &str =
     "mgbrowser/0.1 (experimental Rust research browser; +https://mgbrowser.org)";

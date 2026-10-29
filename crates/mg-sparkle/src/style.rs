@@ -161,6 +161,14 @@ impl style::error_reporting::ParseErrorReporter for CssReporter<'_, '_> {
     }
 }
 
+/// Comparison operator applied after resolving `px + percent * basis`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalcOp {
+    Linear,
+    MinPx,
+    MaxPx,
+}
+
 /// A CSS length whose containing-block percentage is resolved during layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Length {
@@ -168,14 +176,19 @@ pub enum Length {
     Px(f32),
     /// A fraction: `0.85` represents `85%`.
     Percent(f32),
-    /// A linear `<length-percentage>` sum (`px + percent * basis`), clamped to
-    /// non-negative when `non_negative` is true (`width`, `height`, `padding`).
+    /// A linear `<length-percentage>` sum (`px + percent * basis`), optionally
+    /// bounded against a pixel value (`min`/`max`) and clamped to non-negative
+    /// when `non_negative` is true (`width`, `height`, `padding`).
     Calc {
         px: f32,
         percent: f32,
+        bound_px: f32,
+        op: CalcOp,
         non_negative: bool,
     },
 }
+
+const _: [(); 16] = [(); std::mem::size_of::<Length>()];
 
 impl Length {
     pub fn resolve(self, basis: f32) -> Option<f32> {
@@ -186,9 +199,16 @@ impl Length {
             Self::Calc {
                 px,
                 percent,
+                bound_px,
+                op,
                 non_negative,
             } => {
-                let value = px + percent * basis;
+                let linear = px + percent * basis;
+                let value = match op {
+                    CalcOp::Linear => linear,
+                    CalcOp::MinPx => linear.min(bound_px),
+                    CalcOp::MaxPx => linear.max(bound_px),
+                };
                 Some(if non_negative { value.max(0.0) } else { value })
             }
         }
@@ -535,6 +555,7 @@ pub struct ComputedStyle {
     pub svg_stroke: SvgPaint,
     pub font_size: f32,
     pub font_weight: u16,
+    pub italic: bool,
     pub font_families: Vec<String>,
     /// `None` means the font's normal line height.
     pub line_height: Option<f32>,
@@ -577,6 +598,7 @@ impl Default for ComputedStyle {
             svg_stroke: SvgPaint::None,
             font_size: 16.0,
             font_weight: 400,
+            italic: false,
             font_families: vec!["sans-serif".to_owned()],
             line_height: None,
             underline: false,
@@ -618,6 +640,7 @@ impl ComputedStyle {
             svg_stroke: self.svg_stroke,
             font_size: self.font_size,
             font_weight: self.font_weight,
+            italic: self.italic,
             font_families: self.font_families.clone(),
             line_height: self.line_height,
             underline: self.underline,
@@ -661,6 +684,7 @@ h1 { font-size: 2em; margin: .67em 0; font-weight: bold }
 h2 { font-size: 1.5em; margin: .83em 0; font-weight: bold }
 h3 { font-size: 1.17em; margin: 1em 0; font-weight: bold }
 b, strong, th { font-weight: bold }
+i, em, cite, dfn, var, address { font-style: italic }
 small { font-size: smaller }
 pre { white-space: pre; font-family: monospace }
 center { text-align: center }
@@ -1981,11 +2005,38 @@ fn report_unsupported(
     }
 }
 
+fn linear_calc_scalar(node: &style::values::specified::calc::CalcNode) -> Option<f32> {
+    use style::values::generics::calc::CalcNode;
+    use style::values::specified::calc::Leaf;
+    match node {
+        CalcNode::Leaf(Leaf::Number(n)) => n.get().is_finite().then_some(n.get()),
+        CalcNode::Negate(child) => linear_calc_scalar(child).map(|v| -v),
+        CalcNode::Invert(child) => linear_calc_scalar(child)
+            .map(|v| 1.0 / v)
+            .filter(|v| v.is_finite()),
+        CalcNode::Sum(children) => {
+            let mut sum = 0.0f32;
+            for child in children.iter() {
+                sum += linear_calc_scalar(child)?;
+            }
+            sum.is_finite().then_some(sum)
+        }
+        CalcNode::Product(children) => {
+            let mut prod = 1.0f32;
+            for child in children.iter() {
+                prod *= linear_calc_scalar(child)?;
+            }
+            prod.is_finite().then_some(prod)
+        }
+        _ => None,
+    }
+}
+
 fn linear_calc_sum(
     node: &style::values::specified::calc::CalcNode,
     sign: f32,
 ) -> Option<(f32, f32)> {
-    use style::values::generics::calc::CalcNode;
+    use style::values::generics::calc::{CalcNode, MinMaxOp};
     use style::values::specified::calc::Leaf;
     match node {
         CalcNode::Leaf(Leaf::Length(length)) => {
@@ -2007,6 +2058,46 @@ fn linear_calc_sum(
             }
             (total_px.is_finite() && total_percent.is_finite()).then_some((total_px, total_percent))
         }
+        CalcNode::Product(children) => {
+            let mut scale = sign;
+            let mut term: Option<(f32, f32)> = None;
+            for child in children.iter() {
+                if let Some(factor) = linear_calc_scalar(child) {
+                    scale *= factor;
+                } else if term.is_none() {
+                    term = Some(linear_calc_sum(child, 1.0)?);
+                } else {
+                    return None;
+                }
+            }
+            let (px, percent) = term?;
+            let (out_px, out_pct) = (px * scale, percent * scale);
+            (out_px.is_finite() && out_pct.is_finite()).then_some((out_px, out_pct))
+        }
+        CalcNode::MinMax(children, op) => {
+            let mut acc: Option<f32> = None;
+            for child in children.iter() {
+                let (px, percent) = linear_calc_sum(child, 1.0)?;
+                if percent != 0.0 {
+                    return None;
+                }
+                acc = Some(match (acc, op) {
+                    (None, _) => px,
+                    (Some(prev), MinMaxOp::Min) => prev.min(px),
+                    (Some(prev), MinMaxOp::Max) => prev.max(px),
+                });
+            }
+            acc.map(|px| (sign * px, 0.0))
+        }
+        CalcNode::Clamp { min, center, max } => {
+            let (min_px, min_pct) = linear_calc_sum(min, 1.0)?;
+            let (mid_px, mid_pct) = linear_calc_sum(center, 1.0)?;
+            let (max_px, max_pct) = linear_calc_sum(max, 1.0)?;
+            if min_pct != 0.0 || mid_pct != 0.0 || max_pct != 0.0 {
+                return None;
+            }
+            Some((sign * mid_px.min(max_px).max(min_px), 0.0))
+        }
         _ => None,
     }
 }
@@ -2015,20 +2106,56 @@ fn linear_calc_length(
     value: &style::values::computed::LengthPercentage,
     non_negative: bool,
 ) -> Option<Length> {
+    use style::values::generics::calc::{CalcNode, MinMaxOp};
     use style::values::{computed::ToComputedValue, specified::LengthPercentage as Specified};
     let Specified::Calc(calc) = Specified::from_computed_value(value) else {
         return None;
     };
-    let (px, percent) = linear_calc_sum(&calc.0.node, 1.0)?;
-    Some(Length::Calc {
-        px,
-        percent,
-        non_negative: non_negative
-            || matches!(
-                calc.0.clamping_mode,
-                style_traits::values::specified::AllowedNumericType::NonNegative
-            ),
-    })
+    let non_negative = non_negative
+        || matches!(
+            calc.0.clamping_mode,
+            style_traits::values::specified::AllowedNumericType::NonNegative
+        );
+    if let Some((px, percent)) = linear_calc_sum(&calc.0.node, 1.0) {
+        return Some(Length::Calc {
+            px,
+            percent,
+            bound_px: 0.0,
+            op: CalcOp::Linear,
+            non_negative,
+        });
+    }
+    if let CalcNode::MinMax(children, op) = &calc.0.node {
+        let mut pure_px: Option<f32> = None;
+        let mut linear_term: Option<(f32, f32)> = None;
+        for child in children.iter() {
+            let (px, percent) = linear_calc_sum(child, 1.0)?;
+            if percent == 0.0 {
+                pure_px = Some(match (pure_px, op) {
+                    (None, _) => px,
+                    (Some(prev), MinMaxOp::Min) => prev.min(px),
+                    (Some(prev), MinMaxOp::Max) => prev.max(px),
+                });
+            } else if linear_term.is_none() {
+                linear_term = Some((px, percent));
+            } else {
+                return None;
+            }
+        }
+        if let (Some(bound_px), Some((px, percent))) = (pure_px, linear_term) {
+            return Some(Length::Calc {
+                px,
+                percent,
+                bound_px,
+                op: match op {
+                    MinMaxOp::Min => CalcOp::MinPx,
+                    MinMaxOp::Max => CalcOp::MaxPx,
+                },
+                non_negative,
+            });
+        }
+    }
+    None
 }
 
 fn plain_length(value: &style::values::computed::LengthPercentage) -> Length {
@@ -2953,6 +3080,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         svg_stroke: svg_paint(&svg.stroke, svg.stroke_opacity),
         font_size,
         font_weight: font.font_weight.value().round() as u16,
+        italic: font.font_style != style::values::computed::FontStyle::NORMAL,
         font_families,
         line_height,
         underline: values

@@ -173,3 +173,9 @@
   eight native/CDP images and normal final browser exit. Curator records those
   source-specific diagnostic meanings in browser-check. Earlier failed owners
   stay ERROR; a repaired data-only audit is not a fresh native execution.
+- 2026-10-28: Explicit user instruction: always commit and push finished changes
+  immediately without waiting to be asked, and for every user-facing browser fix
+  tag and push the `v*` release so `.github/workflows/release.yml` updates
+  GitHub `releases/latest` (which `mgbrowser --update` queries) and verify live
+  delivery with `tools/public-release-smoke.py`. Pushing `main` alone does not
+  advance `releases/latest` or deliver updates to installed binaries.

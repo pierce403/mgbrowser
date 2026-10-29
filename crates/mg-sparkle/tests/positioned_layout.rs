@@ -416,3 +416,18 @@ fn outer_calc_width_passthrough_inset_zero_wrapper_and_opacity_zero_positioned_s
         Some("https://fixture.example/story")
     );
 }
+
+#[test]
+fn comparison_calc_outer_padding_and_positioned_touch_target_render_in_styled_layout() {
+    let doc = document(
+        "<div id=shell style='padding-left:max(16px, (100% - 200px) / 2);padding-right:max(16px, (100% - 200px) / 2)'>\
+           <div id=btn style='position:relative;width:40px;height:32px;background:#008800'>\
+             <span id=touch style='position:absolute;left:0;top:0;width:max(48px, 100%);height:max(48px, 100%)'></span>\
+           </div>\
+         </div>",
+    );
+    let rendered = frame(&doc, 0, 1.0);
+    styled(&rendered);
+    assert_eq!(geometry(rect(&doc, &rendered, "#btn")), (60, 0, 40, 32));
+    assert_eq!(geometry(rect(&doc, &rendered, "#touch")), (60, 0, 48, 48));
+}

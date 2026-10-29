@@ -660,19 +660,26 @@ pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
                         }
                     } else if prop.eq_ignore_ascii_case("src") {
                         let lower = val.to_ascii_lowercase();
-                        if let Some(u_pos) = lower.find("url(") {
+                        let mut search_from = 0usize;
+                        while let Some(rel) = lower[search_from..].find("url(") {
+                            let u_pos = search_from + rel;
                             let after_url = &val[u_pos + 4..];
-                            if let Some(close) = after_url.find(')') {
-                                let raw =
-                                    after_url[..close].trim().trim_matches(['\'', '"']).trim();
-                                let path = raw.split(['?', '#']).next().unwrap_or("");
-                                let path_lower = path.to_ascii_lowercase();
-                                if (path_lower.ends_with(".ttf") || path_lower.ends_with(".otf"))
-                                    && !raw.is_empty()
-                                    && raw.len() <= 4096
-                                {
-                                    src = Some(raw.to_owned());
-                                }
+                            let Some(close) = after_url.find(')') else {
+                                break;
+                            };
+                            search_from = u_pos + 4 + close + 1;
+                            let raw = after_url[..close].trim().trim_matches(['\'', '"']).trim();
+                            let path = raw.split(['?', '#']).next().unwrap_or("");
+                            let path_lower = path.to_ascii_lowercase();
+                            if (path_lower.ends_with(".woff2")
+                                || path_lower.ends_with(".woff")
+                                || path_lower.ends_with(".ttf")
+                                || path_lower.ends_with(".otf"))
+                                && !raw.is_empty()
+                                && raw.len() <= 4096
+                            {
+                                src = Some(raw.to_owned());
+                                break;
                             }
                         }
                     }
@@ -2134,6 +2141,37 @@ mod tests {
                 .query_selector(0, "body div.box")
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn font_face_rules_accept_woff2_woff_and_multi_url_fallbacks() {
+        let css = r#"
+            @font-face {
+                font-family: 'M Plus 1M';
+                src: url(mplus-1m-regular.woff2) format('woff2');
+            }
+            @font-face {
+                font-family: "mplus-1m";
+                src: local("M+ 1m"), url("legacy.eot?#iefix") format("embedded-opentype"),
+                     url("./mplus-1m-regular.woff2?v=1#font") format("woff2"),
+                     url("./mplus-1m-regular.woff") format("woff");
+            }
+            @font-face {
+                font-family: FallbackWoff;
+                src: url('/fonts/mono.woff') format('woff');
+            }
+        "#;
+        assert_eq!(
+            font_face_rules(css),
+            vec![
+                ("M Plus 1M".to_owned(), "mplus-1m-regular.woff2".to_owned()),
+                (
+                    "mplus-1m".to_owned(),
+                    "./mplus-1m-regular.woff2?v=1#font".to_owned()
+                ),
+                ("FallbackWoff".to_owned(), "/fonts/mono.woff".to_owned()),
+            ]
         );
     }
 }
