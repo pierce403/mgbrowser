@@ -2,25 +2,31 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.24 candidate: Six-panel Chromium-style DevTools workspace
+## Latest verified release: v0.9.24
 
-The next release expands the built-in DevTools workspace (`F12` / `Ctrl+Shift+I`
-/ right-click `Inspect`) into six panels — `Elements` (`Styles`, `Computed`,
-`Box Model`, live `element.style` DOM/CSS editing, `H` hide, `Delete` node),
-`Console` (`Ctrl+Shift+J`, 19-method WHATWG `console.*` API in the isolated Boa
-worker, interactive `>` JS REPL, Command Line API `$_`, `$0..$4`, `$()`, `$$()`,
-`keys()`, `values()`, `dir()`, `dirxml()`, `table()`, `clear()`, `copy()`,
-`inspect()`, inline `▶`/`▼` object trees, and on-demand worker startup on
-static/oversize pages), `Sources` (`[HTML]`/`[CSS]`/`[JS]` viewer + `Ctrl+F`),
-`Network` (`Ctrl+Shift+E`, 4-tab `Headers`/`Response`/`Preview`/`Timing` drawer
-with secret-header redaction, `Disable cache`, `Preserve log`, and DCL/Load
-waterfall markers), `Performance` (`Ctrl+Shift+P`, 64-frame 60 FPS sparkline),
-and `Application` (session `Cookies` with redacted byte sizes, `Security`, and
-`Resources`) — plus Right/Bottom docking (`⬓`/`◨`), draggable splitter resize,
-and interactive Element Picker (`↖` / `Ctrl+Shift+C`) with 4-layer Stylo
-box-model overlays. [Candidate notes](docs/RELEASE-v0.9.24.md).
+v0.9.24 expands the built-in DevTools workspace (`F12` / `Ctrl+Shift+I` /
+toolbar `</>` / right-click `Inspect`) into six Chromium-style panels —
+`Elements` (`Styles`, `Computed`, `Box Model`, live `element.style` DOM/CSS
+editing, `H` hide, `Delete` node), `Console` (`Ctrl+Shift+J`, 19-method WHATWG
+`console.*` API in the isolated Boa worker, interactive `>` JS REPL, Command
+Line API `$_`, `$0..$4`, `$()`, `$$()`, `keys()`, `values()`, `dir()`,
+`dirxml()`, `table()`, `clear()`, `copy()`, `inspect()`, inline `▶`/`▼` object
+trees, and on-demand worker startup on static/oversize pages), `Sources`
+(`[HTML]`/`[CSS]`/`[JS]` viewer + `Ctrl+F`), `Network` (`Ctrl+Shift+E`, 4-tab
+`Headers`/`Response`/`Preview`/`Timing` drawer with secret-header redaction,
+`Disable cache`, `Preserve log`, and DCL/Load waterfall markers), `Performance`
+(`Ctrl+Shift+P`, 64-frame 60 FPS sparkline), and `Application` (session
+`Cookies` with redacted byte sizes, `Security`, and `Resources`) — plus
+Right/Bottom docking, draggable splitter resize, and interactive Element Picker
+(`↖` / `Ctrl+Shift+C`) with 4-layer Stylo box-model overlays. Published as
+[v0.9.24](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.24) at
+`48d8e1e9e1d92bd099ea5e0a4c59d348a27f339f`, passing all eight exact-source
+CI/hosting checks, tagged release (`8,203,721`-byte archive), public installer
+smoke verification, native X11 DevTools smoke across light/dark 100%/200%, and
+live self-update (`v0.9.23` to `v0.9.24` + no-op recheck).
+[Release notes](docs/RELEASE-v0.9.24.md).
 
-## Latest verified release: v0.9.23
+## Previous release: v0.9.23
 
 v0.9.23 skips isolated script-worker startup cleanly (`JavaScript skipped`) when
 an ordinary browsing document exceeds the 1 MiB source, 16 KiB URL, or 2 MiB
