@@ -133,7 +133,9 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
         0xff57 => Key::End,
+        0xffc0 => Key::FindNext,
         0xffc2 => Key::Reload,
+        0xffc8 => Key::Fullscreen,
         0xffc9 => Key::DeveloperTools,
         _ => {
             let code = if sym & 0xff000000 == 0x01000000 {
@@ -200,6 +202,8 @@ mod tests {
         assert!(matches!(translate_keysym(0xff54), Some(Key::Down)));
         assert!(matches!(translate_keysym(0xff09), Some(Key::Tab)));
         assert!(matches!(translate_keysym(0xfe20), Some(Key::Tab)));
+        assert!(matches!(translate_keysym(0xffc0), Some(Key::FindNext)));
+        assert!(matches!(translate_keysym(0xffc8), Some(Key::Fullscreen)));
         assert!(matches!(
             translate_keysym(0xffc9),
             Some(Key::DeveloperTools)

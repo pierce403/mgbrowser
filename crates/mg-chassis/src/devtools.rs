@@ -7289,7 +7289,7 @@ mod tests {
         assert_eq!(app.hovered_link(), Some("https://example.com/stories/42"));
         let menu_canvas = app.paint();
         assert_ne!(bottom_left(&menu_canvas), baseline_footer);
-        assert_eq!(app.hits.len(), 4);
+        assert_eq!(app.hits.len(), 5);
         let open_new_tab_hit = app.hits[0].clone();
         let copy_link_hit = app.hits[1].clone();
         app.pointer_down(copy_link_hit.x + 4, copy_link_hit.y + 4);

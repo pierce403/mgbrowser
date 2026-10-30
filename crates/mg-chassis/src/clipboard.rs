@@ -437,7 +437,7 @@ impl Browser {
             self.selection.address_cursor = self.address.len();
             self.selection.address_anchor = None;
             self.select_all = false;
-            self.navigate(self.address.clone(), None, true);
+            self.submit_omnibox(&self.address.clone());
             return;
         }
         if bounded.is_empty() {
@@ -455,6 +455,9 @@ impl Browser {
                 let single = sanitize_single_line(&bounded);
                 self.address_insert_text(&single);
             }
+            Focus::FindInput if self.find.open && !self.modal_open() => {
+                self.find_insert_text(&bounded);
+            }
             Focus::Input(node) if !self.modal_open() => {
                 let single = sanitize_single_line(&bounded);
                 self.page_input_insert_text(node, &single);
@@ -469,12 +472,18 @@ impl Browser {
             && !self.about_open
             && !self.settings_open
             && !self.bookmarks_open
+            && !self.history_open
+            && !self.downloads_open
             && self.devtools.context.is_none()
             && matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_))
         {
             return true;
         }
-        !self.modal_open() && matches!(self.focus, Focus::Address | Focus::Input(_))
+        !self.modal_open()
+            && matches!(
+                self.focus,
+                Focus::Address | Focus::Input(_) | Focus::FindInput
+            )
     }
 
     pub(crate) fn sync_address_selection_flags(&mut self) {
@@ -595,12 +604,14 @@ impl Browser {
             self.selection.address_cursor = cursor;
             self.selection.address_anchor = anchor;
             self.select_all = false;
+            self.refresh_omnibox_suggestions();
             self.dirty = true;
         } else if self.select_all && text.is_empty() {
             self.address.clear();
             self.selection.address_cursor = 0;
             self.selection.address_anchor = None;
             self.select_all = false;
+            self.refresh_omnibox_suggestions();
             self.dirty = true;
         }
     }
@@ -695,6 +706,16 @@ impl Browser {
                 if !self.address.is_empty() {
                     self.selection.address_anchor = Some(0);
                     self.selection.address_cursor = self.address.len();
+                    self.select_all = true;
+                } else {
+                    self.select_all = true;
+                }
+                self.dirty = true;
+            }
+            Focus::FindInput => {
+                if !self.find.query.is_empty() {
+                    self.find.anchor = Some(0);
+                    self.find.cursor = self.find.query.len();
                     self.select_all = true;
                 } else {
                     self.select_all = true;
@@ -797,6 +818,13 @@ impl Browser {
                 self.write_clipboard(out.clone(), false);
                 Some(out)
             }
+            Focus::FindInput => {
+                let (b0, b1) =
+                    normalized_range(&self.find.query, self.find.cursor, self.find.anchor)?;
+                let out = self.find.query[b0..b1].to_owned();
+                self.write_clipboard(out.clone(), false);
+                Some(out)
+            }
             Focus::Input(node) => {
                 if self.is_password_input(node) {
                     return None;
@@ -889,6 +917,21 @@ impl Browser {
                 self.selection.address_cursor = b0;
                 self.selection.address_anchor = None;
                 self.select_all = false;
+                self.refresh_omnibox_suggestions();
+                self.write_clipboard(out.clone(), false);
+                self.dirty = true;
+                Some(out)
+            }
+            Focus::FindInput => {
+                let (b0, b1) =
+                    normalized_range(&self.find.query, self.find.cursor, self.find.anchor)?;
+                let out = self.find.query[b0..b1].to_owned();
+                self.find.query.drain(b0..b1);
+                self.find.cursor = b0;
+                self.find.anchor = None;
+                self.select_all = false;
+                self.find.active = 0;
+                self.recompute_find_matches(true);
                 self.write_clipboard(out.clone(), false);
                 self.dirty = true;
                 Some(out)
@@ -1196,21 +1239,44 @@ impl Browser {
             self.paste_from_source(PasteSource::Primary, false);
             return;
         }
+        if self.find.open
+            && let Some((fx, fy, fw, fh)) = self.find.input_rect
+            && x >= fx
+            && x < fx + fw as i32
+            && y >= fy
+            && y < fy + fh as i32
+        {
+            self.focus = Focus::FindInput;
+            self.find.cursor = self.find.query.len();
+            self.find.anchor = None;
+            self.select_all = false;
+            self.dirty = true;
+            self.paste_from_source(PasteSource::Primary, false);
+            return;
+        }
         if self.devtools.open && self.try_focus_devtools_editable_at(x, y) {
             self.paste_from_source(PasteSource::Primary, false);
             return;
         }
-        if let Some(idx) = self.topmost_hit(x, y)
-            && let Action::Input(node) = self.hits[idx].action
-        {
-            self.focus = Focus::Input(node);
-            self.ensure_input_range_synced(node);
-            let pos = self.hit_page_input_byte(node, x);
-            self.selection.input_cursor = pos;
-            self.selection.input_anchor = None;
-            self.select_all = false;
-            self.dirty = true;
-            self.paste_from_source(PasteSource::Primary, false);
+        if let Some(idx) = self.topmost_hit(x, y) {
+            match &self.hits[idx].action {
+                Action::Input(node) => {
+                    let node = *node;
+                    self.focus = Focus::Input(node);
+                    self.ensure_input_range_synced(node);
+                    let pos = self.hit_page_input_byte(node, x);
+                    self.selection.input_cursor = pos;
+                    self.selection.input_anchor = None;
+                    self.select_all = false;
+                    self.dirty = true;
+                    self.paste_from_source(PasteSource::Primary, false);
+                }
+                Action::Link { href, .. } => {
+                    let href = href.clone();
+                    self.request_new_tab(&href, true);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1257,6 +1323,7 @@ impl Browser {
         }
         match self.focus {
             Focus::Address => self.handle_address_edit_key(sym, ctrl, shift),
+            Focus::FindInput => self.handle_find_edit_key(sym, ctrl, shift),
             Focus::Input(node) => self.handle_page_input_edit_key(node, sym, ctrl, shift),
             _ => false,
         }
@@ -1272,6 +1339,7 @@ impl Browser {
                     self.selection.address_cursor = cur;
                     self.selection.address_anchor = anc;
                     self.sync_address_selection_flags();
+                    self.refresh_omnibox_suggestions();
                     self.dirty = true;
                 }
                 true
@@ -1281,6 +1349,7 @@ impl Browser {
                     self.selection.address_cursor = cur;
                     self.selection.address_anchor = anc;
                     self.sync_address_selection_flags();
+                    self.refresh_omnibox_suggestions();
                     self.dirty = true;
                 }
                 true
@@ -1450,6 +1519,15 @@ impl Browser {
                         Action::OpenLinkInNewTab(url.clone()),
                     ));
                     items.push(("Copy link address", Action::CopyText(url.clone())));
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        items.push((
+                            "Save link as...",
+                            Action::DownloadUrl {
+                                url: url.clone(),
+                                suggested: None,
+                            },
+                        ));
+                    }
                     items.push(("Inspect element", Action::InspectElement));
                     items.push(("Close", Action::CloseMenu));
                 } else if self.has_page_selection() {
@@ -1460,6 +1538,10 @@ impl Browser {
                 } else {
                     items.push(("Inspect element", Action::InspectElement));
                     items.push(("Select all", Action::ClipboardSelectAll));
+                    if self.height >= 360 && self.page_url != "about:blank" {
+                        items.push(("Save page as...", Action::SavePage));
+                        items.push(("View page source", Action::ViewPageSource));
+                    }
                     items.push(("Close", Action::CloseMenu));
                 }
                 items

@@ -33,6 +33,7 @@ pub struct Response {
     pub url: Url,
     pub status: u16,
     pub content_type: String,
+    pub content_disposition: Option<String>,
     pub body: Vec<u8>,
     /// Parent resource proof only: every visited URL stayed on the supplied
     /// document origin. False for non-resource/unknown provenance.
@@ -139,6 +140,15 @@ impl Session {
     }
 
     pub fn submit(&self, url: &str, body: Option<&str>) -> Result<Response, String> {
+        self.submit_with_cache_override(url, body, false)
+    }
+
+    pub fn submit_with_cache_override(
+        &self,
+        url: &str,
+        body: Option<&str>,
+        force_no_cache: bool,
+    ) -> Result<Response, String> {
         let roots =
             rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let mut config =
@@ -157,7 +167,7 @@ impl Session {
                 deadline: Instant::now() + REQUEST_TIMEOUT,
             },
             Some(&self.exchanges),
-            self.cache_disabled(),
+            force_no_cache || self.cache_disabled(),
             &mut |_, _| {},
         )
     }
@@ -489,10 +499,12 @@ fn submit_with_limits_recorded(
                 last.body_preview = Some(String::from_utf8_lossy(sample).into_owned());
             }
         }
+        let content_disposition = head.header("content-disposition").map(str::to_owned);
         return Ok(Response {
             url,
             status: head.status,
             content_type,
+            content_disposition,
             body: bytes,
             resource_same_origin_chain,
         });

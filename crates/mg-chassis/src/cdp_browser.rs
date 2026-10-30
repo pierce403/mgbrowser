@@ -3502,6 +3502,7 @@ mod tests {
                         url: url::Url::parse(url).unwrap(),
                         status: 200,
                         content_type: "text/html".into(),
+                        content_disposition: None,
                         body: html.as_bytes().to_vec(),
                     })
                 },

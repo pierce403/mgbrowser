@@ -1324,7 +1324,10 @@ impl Layout<'_, '_> {
                 let url = url::Url::parse(&self.document.base_url)
                     .and_then(|u| u.join(href))
                     .ok()?;
-                if matches!(url.scheme(), "http" | "https") {
+                let allow_chrome = self.document.base_url.starts_with("chrome://");
+                if matches!(url.scheme(), "http" | "https")
+                    || (allow_chrome && url.scheme() == "chrome")
+                {
                     return Some(Action::Link {
                         node: id,
                         href: url.to_string(),

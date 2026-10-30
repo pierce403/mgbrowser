@@ -53,7 +53,27 @@ struct Atoms {
     utf8: u32,
     icon: u32,
     icon_data: Vec<u32>,
+    wm_state: u32,
+    fullscreen: u32,
 }
+
+#[derive(Clone, Copy)]
+struct TabContextMenu {
+    window: WindowId,
+    pane: PaneId,
+    tab: TabId,
+    x: i32,
+    y: i32,
+}
+
+const TAB_MENU_ITEMS: [&str; 6] = [
+    "New tab",
+    "Duplicate tab",
+    "Reload",
+    "Close tab",
+    "Close other tabs",
+    "Reopen closed tab",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DropTarget {
@@ -91,6 +111,8 @@ struct Desktop {
     session: mg_chassis::net::Session,
     notice: Option<(String, Instant)>,
     titles: BTreeMap<TabId, String>,
+    closed_tabs: Vec<String>,
+    tab_menu: Option<TabContextMenu>,
 }
 
 enum TargetHostError {
@@ -360,10 +382,32 @@ impl Desktop {
         Ok(())
     }
 
+    fn record_closed_url(&mut self, url: &str) {
+        if (url.starts_with("http://") || url.starts_with("https://") || url.starts_with("chrome://"))
+            && url != "chrome://newtab"
+        {
+            if self.closed_tabs.len() >= 32 {
+                self.closed_tabs.remove(0);
+            }
+            self.closed_tabs.push(url.to_string());
+        }
+    }
+
     fn fresh_tab(
         &mut self,
         pane: PaneId,
         url: Option<String>,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        conn: &RustConnection,
+    ) -> Result<(), Box<dyn Error>> {
+        self.fresh_tab_with_focus(pane, url, true, bookmarks, conn)
+    }
+
+    fn fresh_tab_with_focus(
+        &mut self,
+        pane: PaneId,
+        url: Option<String>,
+        activate: bool,
         bookmarks: &crate::bookmarks::BookmarkStore,
         conn: &RustConnection,
     ) -> Result<(), Box<dyn Error>> {
@@ -379,10 +423,100 @@ impl Desktop {
             }
         };
         self.cancel_drag(conn)?;
-        match self.insert_tab(pane, app, url) {
+        match self.insert_tab_with_focus(pane, app, url, activate) {
             Ok(_) => self.sync_geometry(conn)?,
             Err(error) => self.notify(error.to_string()),
         }
+        Ok(())
+    }
+
+    fn fresh_window(
+        &mut self,
+        url: Option<String>,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        conn: &RustConnection,
+        atoms: &Atoms,
+        screen_num: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.space.tabs().count() >= self.space.limits().tabs {
+            self.notify("Maximum16 tabs reached; close a tab first");
+            return Ok(());
+        }
+        if self.space.windows().count() >= self.space.limits().windows {
+            self.notify("Maximum 4 windows reached; close a window first");
+            return Ok(());
+        }
+        let app = match self.tab_payload(bookmarks, false, false) {
+            Ok(app) => app,
+            Err(error) => {
+                self.notify(format!("Cannot create window: {error}"));
+                return Ok(());
+            }
+        };
+        self.cancel_drag(conn)?;
+        let size = self
+            .space
+            .focused_window()
+            .and_then(|w| self.native.get(&w))
+            .map(|n| (n.width, n.height))
+            .unwrap_or((1024, 720));
+        let native = self.create_native(conn, atoms, screen_num, size, (72, 72))?;
+        match self.space.open_window(app) {
+            Ok(opened) => {
+                if let Some(url) = url {
+                    self.space
+                        .get_mut(opened.tab)
+                        .unwrap()
+                        .navigate(url, None, true);
+                }
+                self.native.insert(opened.window, native);
+                self.sync_geometry(conn)?;
+            }
+            Err(rejected) => {
+                conn.destroy_window(native.xid)?;
+                conn.free_gc(native.gc)?;
+                self.notify(rejected.error.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn reopen_closed_tab(
+        &mut self,
+        pane: PaneId,
+        bookmarks: &crate::bookmarks::BookmarkStore,
+        conn: &RustConnection,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(url) = self.closed_tabs.pop() {
+            self.fresh_tab(pane, Some(url), bookmarks, conn)
+        } else {
+            self.notify("No recently closed tabs");
+            Ok(())
+        }
+    }
+
+    fn toggle_fullscreen(
+        &self,
+        window: WindowId,
+        conn: &RustConnection,
+        atoms: &Atoms,
+    ) -> Result<(), Box<dyn Error>> {
+        let Some(native) = self.native.get(&window) else {
+            return Ok(());
+        };
+        let event = ClientMessageEvent::new(
+            32,
+            native.xid,
+            atoms.wm_state,
+            [2, atoms.fullscreen, 0, 1, 0],
+        );
+        conn.send_event(
+            false,
+            self.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )?;
+        conn.flush()?;
         Ok(())
     }
 
@@ -407,6 +541,10 @@ impl Desktop {
         app.set_build_info(env!("CARGO_PKG_VERSION"), crate::COMPILED, crate::REVISION);
         app.set_theme_preference(active.theme_preference());
         app.set_scale_preference(active.scale_preference());
+        app.set_search_engine(active.search_engine());
+        app.set_bookmarks_bar(active.bookmarks_bar());
+        app.set_browsing_history(active.browsing_history().to_vec());
+        app.set_downloads(active.downloads().to_vec());
         app.set_system_theme(self.system_theme);
         app.set_system_scale(self.system_scale);
         app.set_scripts_enabled(self.scripts);
@@ -425,10 +563,22 @@ impl Desktop {
         app: App,
         url: Option<String>,
     ) -> Result<TabId, crate::workspace::Error> {
-        let tab = self
-            .space
-            .open_tab(pane, app)
-            .map_err(|error| error.error)?;
+        self.insert_tab_with_focus(pane, app, url, true)
+    }
+
+    fn insert_tab_with_focus(
+        &mut self,
+        pane: PaneId,
+        app: App,
+        url: Option<String>,
+        activate: bool,
+    ) -> Result<TabId, crate::workspace::Error> {
+        let tab = if activate {
+            self.space.open_tab(pane, app)
+        } else {
+            self.space.open_background_tab(pane, app)
+        }
+        .map_err(|error| error.error)?;
         // Ownership and permissions precede any request or worker startup.
         if let Some(url) = url {
             self.space.get_mut(tab).unwrap().navigate(url, None, true);
@@ -545,8 +695,10 @@ impl Desktop {
     }
 
     fn close_tab(&mut self, tab: TabId, conn: &RustConnection) -> Result<(), Box<dyn Error>> {
+        self.tab_menu = None;
         self.cancel_drag(conn)?;
         let closed = self.space.close_tab(tab)?;
+        self.record_closed_url(closed.payload.page_url());
         self.cleanup(closed.removed, conn)?;
         drop(closed.payload);
         if !self.space.is_empty() {
@@ -561,7 +713,19 @@ impl Desktop {
         destroyed: bool,
         conn: &RustConnection,
     ) -> Result<(), Box<dyn Error>> {
+        self.tab_menu = None;
         self.cancel_drag(conn)?;
+        if let Some(win) = self.space.window(id) {
+            let urls = win
+                .panes()
+                .iter()
+                .flat_map(|p| p.tabs().iter())
+                .filter_map(|&t| self.space.get(t).map(|a| a.page_url().to_string()))
+                .collect::<Vec<_>>();
+            for url in urls {
+                self.record_closed_url(&url);
+            }
+        }
         self.space.close_window(id)?;
         if let Some(window) = self.native.remove(&id) {
             if !destroyed {
@@ -731,40 +895,113 @@ impl Desktop {
         if self.drag.is_some() {
             self.cancel_drag(conn)?;
         }
-        if e.detail == 1
-            && let Some((pane, tab, close)) = self.strip_hit(window, e.event_x, e.event_y)
-        {
-            if let Some(tab) = tab {
-                if close {
+        if let Some(menu) = self.tab_menu.take() {
+            self.dirty_all();
+            if menu.window == window && e.detail == 1 {
+                let scale = self.native[&window].scale;
+                let lx = logical_coordinate(e.event_x, scale);
+                let ly = logical_coordinate(e.event_y, scale);
+                let menu_w = 176i32;
+                let menu_h = TAB_MENU_ITEMS.len() as i32 * 26 + 8;
+                if lx >= menu.x && lx < menu.x + menu_w && ly >= menu.y + 4 && ly < menu.y + menu_h - 4 {
+                    let item = ((ly - (menu.y + 4)) / 26) as usize;
+                    match item {
+                        0 => self.fresh_tab(menu.pane, None, bookmarks, conn)?,
+                        1 => {
+                            let url = self
+                                .space
+                                .get(menu.tab)
+                                .map(|a| a.page_url().to_string())
+                                .filter(|u| !u.is_empty());
+                            self.fresh_tab(menu.pane, url, bookmarks, conn)?;
+                        }
+                        2 => {
+                            if let Some(app) = self.space.get_mut(menu.tab) {
+                                app.reload();
+                            }
+                        }
+                        3 => self.close_tab(menu.tab, conn)?,
+                        4 => {
+                            if let Some(pane) = self.space.pane(menu.pane) {
+                                let others = pane
+                                    .tabs()
+                                    .iter()
+                                    .copied()
+                                    .filter(|&t| t != menu.tab)
+                                    .collect::<Vec<_>>();
+                                for other in others {
+                                    if self.space.location(other).is_some() {
+                                        self.close_tab(other, conn)?;
+                                    }
+                                }
+                            }
+                        }
+                        5 => self.reopen_closed_tab(menu.pane, bookmarks, conn)?,
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        if let Some((pane, tab, close)) = self.strip_hit(window, e.event_x, e.event_y) {
+            if e.detail == 2 {
+                if let Some(tab) = tab {
                     return self.close_tab(tab, conn);
                 }
-                self.select(tab)?;
-                let grab = conn
-                    .grab_pointer(
-                        false,
-                        self.native[&window].xid,
-                        EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
-                        GrabMode::ASYNC,
-                        GrabMode::ASYNC,
-                        x11rb::NONE,
-                        x11rb::NONE,
-                        e.time,
-                    )?
-                    .reply()?;
-                if grab.status == GrabStatus::SUCCESS {
-                    self.drag = Some(Drag {
-                        tab,
-                        start: (e.root_x, e.root_y),
-                        moving: false,
-                        target: None,
-                    });
-                } else {
-                    self.notify("Cannot capture pointer for tab drag; tab remains selected");
-                }
-            } else {
-                self.fresh_tab(pane, None, bookmarks, conn)?;
+                return Ok(());
             }
-            return Ok(());
+            if e.detail == 3 {
+                if let Some(tab) = tab {
+                    let scale = self.native[&window].scale;
+                    let max_x = ((u64::from(self.native[&window].width) * 100)
+                        .div_ceil(u64::from(scale)) as i32
+                        - 180)
+                        .max(0);
+                    let lx = logical_coordinate(e.event_x, scale).clamp(0, max_x);
+                    self.tab_menu = Some(TabContextMenu {
+                        window,
+                        pane,
+                        tab,
+                        x: lx,
+                        y: STRIP as i32,
+                    });
+                    self.dirty_all();
+                }
+                return Ok(());
+            }
+            if e.detail == 1 {
+                if let Some(tab) = tab {
+                    if close {
+                        return self.close_tab(tab, conn);
+                    }
+                    self.select(tab)?;
+                    let grab = conn
+                        .grab_pointer(
+                            false,
+                            self.native[&window].xid,
+                            EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                            GrabMode::ASYNC,
+                            GrabMode::ASYNC,
+                            x11rb::NONE,
+                            x11rb::NONE,
+                            e.time,
+                        )?
+                        .reply()?;
+                    if grab.status == GrabStatus::SUCCESS {
+                        self.drag = Some(Drag {
+                            tab,
+                            start: (e.root_x, e.root_y),
+                            moving: false,
+                            target: None,
+                        });
+                    } else {
+                        self.notify("Cannot capture pointer for tab drag; tab remains selected");
+                    }
+                } else {
+                    self.fresh_tab(pane, None, bookmarks, conn)?;
+                }
+                return Ok(());
+            }
         }
         if let Some((pane, tab, x, y)) = self.page_hit(window, e.event_x, e.event_y) {
             if self.space.active_tab() != Some(tab) {
@@ -785,6 +1022,8 @@ impl Desktop {
                     app.pointer_move(x, y);
                     app.wheel_scroll_by(100);
                 }
+                8 => app.back(),
+                9 => app.forward(),
                 _ => {}
             }
         }
@@ -934,6 +1173,7 @@ impl Desktop {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn key(
         &mut self,
         window: WindowId,
@@ -943,7 +1183,15 @@ impl Desktop {
         alt: bool,
         conn: &RustConnection,
         bookmarks: &crate::bookmarks::BookmarkStore,
+        atoms: &Atoms,
+        screen_num: usize,
     ) -> Result<(), Box<dyn Error>> {
+        if self.tab_menu.take().is_some() {
+            self.dirty_all();
+            if matches!(key, mg_chassis::Key::Escape) {
+                return Ok(());
+            }
+        }
         if matches!(key, mg_chassis::Key::Escape) && self.drag.take().is_some() {
             conn.ungrab_pointer(x11rb::CURRENT_TIME)?;
             self.cancel_input();
@@ -953,14 +1201,39 @@ impl Desktop {
         if self.drag.is_some() {
             self.cancel_drag(conn)?;
         }
+        if !ctrl && !alt && matches!(key, mg_chassis::Key::Fullscreen) {
+            return self.toggle_fullscreen(window, conn, atoms);
+        }
         let tab = self.active_in(window);
         let pane = self.space.location(tab).unwrap().pane;
         if ctrl && !alt {
             match key {
+                mg_chassis::Key::Character('t' | 'T') if shift => {
+                    return self.reopen_closed_tab(pane, bookmarks, conn);
+                }
                 mg_chassis::Key::Character('t' | 'T') => {
                     return self.fresh_tab(pane, None, bookmarks, conn);
                 }
+                mg_chassis::Key::Character('w' | 'W') if shift => {
+                    return self.close_window(window, false, conn);
+                }
                 mg_chassis::Key::Character('w' | 'W') => return self.close_tab(tab, conn),
+                mg_chassis::Key::Character('n' | 'N') if !shift => {
+                    return self.fresh_window(None, bookmarks, conn, atoms, screen_num);
+                }
+                mg_chassis::Key::Character(d @ '1'..='8') if !shift => {
+                    let index = (d as u8 - b'1') as usize;
+                    if let Some(&target) = self.space.pane(pane).unwrap().tabs().get(index) {
+                        return self.select(target);
+                    }
+                    return Ok(());
+                }
+                mg_chassis::Key::Character('9') if !shift => {
+                    if let Some(&target) = self.space.pane(pane).unwrap().tabs().last() {
+                        return self.select(target);
+                    }
+                    return Ok(());
+                }
                 mg_chassis::Key::Tab => {
                     let group = self.space.pane(pane).unwrap();
                     let index = group.tabs().iter().position(|&id| id == tab).unwrap();
@@ -1113,6 +1386,40 @@ impl Desktop {
                             depth,
                         )?;
                     }
+                }
+                if let Some(menu) = self.tab_menu
+                    && menu.window == id
+                {
+                    let dark = self.space.get(self.active_in(id)).unwrap().effective_theme()
+                        == ColorScheme::Dark;
+                    let (bg, border, ink) = if dark {
+                        (0x28312b, 0x455348, 0xe7eee6)
+                    } else {
+                        (0xffffff, 0xc9d2c5, 0x26342b)
+                    };
+                    let menu_w = 176u32;
+                    let menu_h = TAB_MENU_ITEMS.len() as u32 * 26 + 8;
+                    let mut canvas = Canvas::new_scaled(
+                        menu_w,
+                        menu_h,
+                        bg,
+                        f32::from(native.scale) / 100.,
+                    );
+                    canvas.rect(0, 0, menu_w, menu_h, border);
+                    canvas.rect(1, 1, menu_w - 2, menu_h - 2, bg);
+                    for (idx, item) in TAB_MENU_ITEMS.iter().enumerate() {
+                        canvas.text(&mut self.fonts, 12, 8 + idx as i32 * 26, item, 13., ink);
+                    }
+                    let px = scaled_dimension(menu.x.max(0) as u32, native.scale);
+                    let py = scaled_dimension(menu.y.max(0) as u32, native.scale);
+                    upload(
+                        conn,
+                        native,
+                        depth,
+                        &canvas,
+                        (px, py),
+                        (native.width.saturating_sub(px), native.height.saturating_sub(py)),
+                    )?;
                 }
                 self.native.get_mut(&id).unwrap().dirty = false;
             }
@@ -1337,14 +1644,21 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
     } = options;
     let settings = Settings::user();
     let bookmarks = crate::bookmarks::BookmarkStore::user();
+    let history = crate::history::HistoryStore::user();
+    let downloads = crate::downloads::DownloadStore::user();
     match bookmarks.load() {
         Ok(entries) => app.set_bookmarks(entries),
         Err(error) => app.set_bookmark_status(error),
+    }
+    if let Ok(entries) = history.load() {
+        app.set_browsing_history(entries);
     }
     match settings.load() {
         Ok(preferences) => {
             app.set_theme_preference(preferences.theme);
             app.set_scale_preference(preferences.scale);
+            app.set_search_engine(preferences.search_engine);
+            app.set_bookmarks_bar(preferences.bookmarks_bar);
         }
         Err(error) => {
             eprintln!("SETTINGS: {error}");
@@ -1469,6 +1783,11 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         &icon_data,
     )?;
     let close = conn.intern_atom(false, b"WM_DELETE_WINDOW")?.reply()?.atom;
+    let wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
+    let fullscreen = conn
+        .intern_atom(false, b"_NET_WM_STATE_FULLSCREEN")?
+        .reply()?
+        .atom;
     conn.change_property32(
         PropMode::REPLACE,
         window,
@@ -1494,6 +1813,8 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         utf8: utf8_atom,
         icon: icon_atom,
         icon_data,
+        wm_state,
+        fullscreen,
     };
     let mut desktop = Desktop {
         space,
@@ -1520,6 +1841,8 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         session,
         notice: None,
         titles: BTreeMap::new(),
+        closed_tabs: Vec::new(),
+        tab_menu: None,
     };
     for url in restore_tabs {
         desktop.fresh_tab(opened.pane, Some(url), &bookmarks, &conn)?;
@@ -1585,7 +1908,9 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                             sym = *mapping.keysyms.get(base).unwrap_or(&0);
                         }
                         if let Some(key) = platform::translate_keysym(sym) {
-                            desktop.key(id, key, ctrl, shift, alt, &conn, &bookmarks)?;
+                            desktop.key(
+                                id, key, ctrl, shift, alt, &conn, &bookmarks, &atoms, screen_num,
+                            )?;
                         }
                     }
                 }
@@ -1651,10 +1976,96 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         }
         let ids = desktop.space.tabs().map(|(id, _)| id).collect::<Vec<_>>();
         for id in ids {
-            if let Some(url) = desktop.space.get_mut(id).unwrap().take_new_tab_request()
+            if let Some(req) = desktop.space.get_mut(id).unwrap().take_new_tab_request_full()
                 && let Some(location) = desktop.space.location(id)
             {
-                desktop.fresh_tab(location.pane, Some(url), &bookmarks, &conn)?;
+                desktop.fresh_tab_with_focus(
+                    location.pane,
+                    Some(req.url),
+                    !req.background,
+                    &bookmarks,
+                    &conn,
+                )?;
+            }
+            if desktop.space.get_mut(id).unwrap().take_clear_browsing_data() {
+                let _ = history.apply_batch(&[mg_chassis::history::HistoryChange::ClearAll]);
+                for (_, app) in desktop.space.tabs_mut() {
+                    app.set_browsing_history(Vec::new());
+                    app.set_downloads(Vec::new());
+                    app.refresh_current_internal_page();
+                }
+                desktop.notify("Cleared browsing history, cookies, cache, and download list");
+            }
+            let hist_changes = desktop.space.get_mut(id).unwrap().take_history_changes();
+            if !hist_changes.is_empty() {
+                let updated = match history.apply_batch(&hist_changes) {
+                    Ok(entries) => entries,
+                    Err(_) => desktop
+                        .space
+                        .get(id)
+                        .map(|a| a.browsing_history().to_vec())
+                        .unwrap_or_default(),
+                };
+                for (_, app) in desktop.space.tabs_mut() {
+                    app.set_browsing_history(updated.clone());
+                    if matches!(
+                        app.page_url(),
+                        "chrome://history" | "chrome://newtab"
+                    ) {
+                        app.refresh_current_internal_page();
+                    }
+                }
+            }
+            let pending_downloads = desktop.space.get_mut(id).unwrap().take_pending_downloads();
+            for pending in pending_downloads {
+                match downloads.save(&pending) {
+                    Ok(saved_path) => {
+                        let name = saved_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(&pending.suggested_filename)
+                            .to_string();
+                        if let Some(app) = desktop.space.get_mut(id) {
+                            app.complete_download(
+                                pending.id,
+                                Ok(saved_path.display().to_string()),
+                            );
+                        }
+                        let list = desktop
+                            .space
+                            .get(id)
+                            .map(|a| a.downloads().to_vec())
+                            .unwrap_or_default();
+                        for (tid, app) in desktop.space.tabs_mut() {
+                            if tid != id {
+                                app.set_downloads(list.clone());
+                            }
+                            if app.page_url() == "chrome://downloads" {
+                                app.refresh_current_internal_page();
+                            }
+                        }
+                        desktop.notify(format!("Saved download: {name}"));
+                    }
+                    Err(error) => {
+                        if let Some(app) = desktop.space.get_mut(id) {
+                            app.complete_download(pending.id, Err(error.clone()));
+                        }
+                        let list = desktop
+                            .space
+                            .get(id)
+                            .map(|a| a.downloads().to_vec())
+                            .unwrap_or_default();
+                        for (tid, app) in desktop.space.tabs_mut() {
+                            if tid != id {
+                                app.set_downloads(list.clone());
+                            }
+                            if app.page_url() == "chrome://downloads" {
+                                app.refresh_current_internal_page();
+                            }
+                        }
+                        desktop.notify(format!("Download failed: {error}"));
+                    }
+                }
             }
             let refresh = desktop.space.get_mut(id).unwrap().take_bookmark_refresh();
             let change = desktop.space.get_mut(id).unwrap().take_bookmark_change();
@@ -1668,6 +2079,12 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                     Ok(entries) => {
                         for (_, app) in desktop.space.tabs_mut() {
                             app.set_bookmarks(entries.clone());
+                            if matches!(
+                                app.page_url(),
+                                "chrome://bookmarks" | "chrome://newtab"
+                            ) {
+                                app.refresh_current_internal_page();
+                            }
                         }
                         if let Some(change) = change {
                             desktop.space.get_mut(id).unwrap().set_bookmark_status(
@@ -1714,10 +2131,14 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         for (_, app) in desktop.space.tabs_mut() {
             let theme = app.take_theme_change().is_some();
             let scale = app.take_scale_change().is_some();
-            if theme || scale {
+            let search = app.take_search_engine_change().is_some();
+            let bar = app.take_bookmarks_bar_change().is_some();
+            if theme || scale || search || bar {
                 preferences = Some(Preferences {
                     theme: app.theme_preference(),
                     scale: app.scale_preference(),
+                    search_engine: app.search_engine(),
+                    bookmarks_bar: app.bookmarks_bar(),
                 });
                 geometry_changed |= scale;
             }
@@ -1733,7 +2154,12 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
             for (_, app) in desktop.space.tabs_mut() {
                 app.set_theme_preference(preferences.theme);
                 app.set_scale_preference(preferences.scale);
+                app.set_search_engine(preferences.search_engine);
+                app.set_bookmarks_bar(preferences.bookmarks_bar);
                 app.set_settings_status(status.clone());
+                if app.page_url() == "chrome://settings" {
+                    app.refresh_current_internal_page();
+                }
             }
             desktop.dirty_all();
         }
@@ -1981,6 +2407,8 @@ mod display_coordinate_tests {
             session: mg_chassis::net::Session::default(),
             notice: None,
             titles: BTreeMap::new(),
+            closed_tabs: Vec::new(),
+            tab_menu: None,
         };
         let first_app = desktop.space.get_mut(first.tab).unwrap();
         let baseline = first_app.paint().pixels;

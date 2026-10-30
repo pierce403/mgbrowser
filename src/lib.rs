@@ -1,6 +1,8 @@
 //! Platform host for the Mg browser components.
 pub mod bookmarks;
 pub mod desktop;
+pub mod downloads;
+pub mod history;
 pub mod platform;
 pub mod restart;
 pub mod settings;

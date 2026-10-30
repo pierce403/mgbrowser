@@ -2,7 +2,26 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.25
+## Latest verified release: v0.9.26
+
+v0.9.26 delivers Chromium-style desktop browser UX parity: Omnibox search & URL
+classification (`DuckDuckGo`, `Google`, `Wikipedia`) with live autocomplete
+dropdown across bookmarks, history, and internal pages; built-in
+`chrome://newtab`, `chrome://history`, `chrome://bookmarks`,
+`chrome://downloads`, `chrome://settings`, and `chrome://version` pages; Find in
+Page (`Ctrl+F` / `F3` / `Shift+F3`) with active/inactive match highlights and
+scroll-into-view; persistent user-local Browsing History (`Ctrl+H`,
+`history.json`) and Clear Browsing Data (`Ctrl+Shift+Delete`); pure-Rust File
+Downloads (`Content-Disposition: attachment`, `<a download>`, `Save link as...`,
+`Ctrl+S` Save Page, `Ctrl+J`, collision-numbered `~/Downloads`); toggleable
+Bookmarks Bar (`Ctrl+Shift+B`); Hard Reload (`Ctrl+Shift+R`), Stop Loading
+(`Escape` / toolbar `×`), and `Ctrl+U` View Page Source; plus `Ctrl+Shift+T`
+Reopen Closed Tab, `Ctrl+N` New Window, `Ctrl+Shift+W` Close Window,
+`Ctrl+1..9` tab jump, middle-click background link open & tab close, tab-strip
+context menu, mouse buttons 8/9 Back/Forward, and `F11` fullscreen.
+[Release notes](docs/RELEASE-v0.9.26.md).
+
+## Previous release: v0.9.25
 
 v0.9.25 adds pure-Rust native X11 `CLIPBOARD` and `PRIMARY` selection support
 (`x11rb`, zero new dependencies or external helpers) and full mouse selection +

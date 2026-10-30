@@ -6,8 +6,12 @@ mod cdp_browser;
 mod chrome;
 mod clipboard;
 mod devtools;
+pub mod downloads;
+mod find;
+pub mod history;
 mod initial_load;
 pub mod net;
+pub mod omnibox;
 pub mod resources;
 mod runtime_automation;
 mod scale;
@@ -17,6 +21,12 @@ mod theme;
 pub use cdp_browser::{BrowserCdp, TargetAction, TargetOutcome, TargetRequest};
 pub use clipboard::{ClipboardUpdate, MAX_CLIPBOARD_BYTES, PasteRequest, PasteSource};
 pub use initial_load::{InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewTabRequest {
+    pub url: String,
+    pub background: bool,
+}
 use mg_sparkle::{
     document::{self, Document, Item},
     page_session::{
@@ -120,6 +130,25 @@ enum Action {
     Back,
     Forward,
     Reload,
+    HardReload,
+    StopLoading,
+    History,
+    OpenHistory(usize),
+    RemoveHistory(usize),
+    HistoryPage(bool),
+    ClearBrowsingData,
+    Downloads,
+    DownloadPage(bool),
+    ClearDownloads,
+    DownloadUrl { url: String, suggested: Option<String> },
+    SavePage,
+    ViewPageSource,
+    ToggleBookmarksBar,
+    CycleSearchEngine,
+    OmniboxSelect(String),
+    FindBar,
+    FindStep(bool),
+    FindClose,
     Input(usize),
     Submit(usize),
     Link { node: usize, href: String },
@@ -182,6 +211,7 @@ impl Hit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Address,
+    FindInput,
     Input(usize),
     Page,
     DevTools,
@@ -272,6 +302,25 @@ pub struct Browser {
     bookmark_change: Option<bookmarks::BookmarkChange>,
     bookmark_refresh: bool,
     bookmark_status: String,
+    bookmarks_bar: bool,
+    bookmarks_bar_change: Option<bool>,
+    history_open: bool,
+    browsing_history: Vec<history::HistoryEntry>,
+    history_page: usize,
+    history_changes: Vec<history::HistoryChange>,
+    clear_browsing_data: bool,
+    downloads_open: bool,
+    downloads: Vec<downloads::DownloadEntry>,
+    download_page: usize,
+    pending_downloads: Vec<downloads::PendingDownload>,
+    dl_tx: mpsc::Sender<downloads::FetchedDownload>,
+    dl_rx: mpsc::Receiver<downloads::FetchedDownload>,
+    dl_inflight: usize,
+    next_download_id: u64,
+    omnibox: omnibox::OmniboxState,
+    search_engine: omnibox::SearchEngine,
+    search_engine_change: Option<omnibox::SearchEngine>,
+    find: find::FindState,
     modal_focus: usize,
     theme_preference: ThemePreference,
     system_theme: ColorScheme,
@@ -335,7 +384,7 @@ pub struct Browser {
     pointer_press_ctrl: bool,
     pointer_position: Option<(i32, i32)>,
     hovered_link: Option<String>,
-    new_tab_request: Option<String>,
+    new_tab_request: Option<NewTabRequest>,
     focus: Focus,
     select_all: bool,
     scroll: i32,
@@ -458,6 +507,8 @@ impl Browser {
             || self.about_open
             || self.settings_open
             || self.bookmarks_open
+            || self.history_open
+            || self.downloads_open
             || self.devtools.context.is_some()
             || (self.devtools.open && !self.devtools_is_docked())
     }
@@ -485,8 +536,44 @@ impl Browser {
             }
             actions.push(Action::CloseMenu);
             actions
+        } else if self.history_open {
+            let rows = self.bookmark_rows();
+            let start = self.history_page * rows;
+            let mut actions = Vec::new();
+            for i in start..(start + rows).min(self.browsing_history.len()) {
+                actions.push(Action::OpenHistory(i));
+                actions.push(Action::RemoveHistory(i));
+            }
+            if self.history_page > 0 {
+                actions.push(Action::HistoryPage(false));
+            }
+            if start + rows < self.browsing_history.len() {
+                actions.push(Action::HistoryPage(true));
+            }
+            let w = self.width.saturating_sub(40).min(760);
+            if !self.browsing_history.is_empty() && w >= 360 {
+                actions.push(Action::ClearBrowsingData);
+            }
+            actions.push(Action::CloseMenu);
+            actions
+        } else if self.downloads_open {
+            let rows = self.bookmark_rows();
+            let start = self.download_page * rows;
+            let mut actions = Vec::new();
+            if self.download_page > 0 {
+                actions.push(Action::DownloadPage(false));
+            }
+            if start + rows < self.downloads.len() {
+                actions.push(Action::DownloadPage(true));
+            }
+            let w = self.width.saturating_sub(40).min(760);
+            if !self.downloads.is_empty() && w >= 360 {
+                actions.push(Action::ClearDownloads);
+            }
+            actions.push(Action::CloseMenu);
+            actions
         } else if self.settings_open {
-            vec![
+            let mut actions = vec![
                 Action::Theme(ThemePreference::System),
                 Action::Theme(ThemePreference::Light),
                 Action::Theme(ThemePreference::Dark),
@@ -494,7 +581,13 @@ impl Browser {
                 Action::ScaleDown,
                 Action::ScaleUp,
                 Action::CloseMenu,
-            ]
+            ];
+            let w = self.width.saturating_sub(40).min(600);
+            if self.height >= 320 && w >= 560 {
+                actions.push(Action::CycleSearchEngine);
+                actions.push(Action::ToggleBookmarksBar);
+            }
+            actions
         } else if self.about_open {
             vec![self.update_button_action(), Action::CloseMenu]
         } else if self.menu_open {
@@ -504,7 +597,13 @@ impl Browser {
                 Action::Settings,
                 Action::Bookmarks,
             ];
-            if self.height >= 280 {
+            if self.height >= 450 {
+                items.push(Action::History);
+                items.push(Action::Downloads);
+                items.push(Action::FindBar);
+                items.push(Action::ClearBrowsingData);
+                items.push(Action::ToggleDevTools);
+            } else if self.height >= 280 {
                 items.push(Action::ToggleDevTools);
             }
             items.push(Action::CloseMenu);
@@ -535,7 +634,10 @@ impl Browser {
             | Action::ClipboardCopy
             | Action::ClipboardPaste { .. }
             | Action::ClipboardSelectAll
-            | Action::CopyText(_) => self.devtools.context.is_some(),
+            | Action::CopyText(_)
+            | Action::DownloadUrl { .. }
+            | Action::SavePage
+            | Action::ViewPageSource => self.devtools.context.is_some(),
             Action::DevToolsConsoleClear
             | Action::DevToolsConsoleCopySelected
             | Action::DevToolsConsoleCopyAll
@@ -576,13 +678,25 @@ impl Browser {
             | Action::InspectorScroll(_) => self.devtools.open,
             Action::ToggleDevTools => self.menu_open,
             Action::Menu | Action::CloseMenu => true,
-            Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
+            Action::About
+            | Action::Settings
+            | Action::Bookmarks
+            | Action::History
+            | Action::Downloads
+            | Action::FindBar => self.menu_open,
+            Action::ClearBrowsingData => self.menu_open || self.history_open,
             Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
                 self.bookmarks_open
             }
+            Action::OpenHistory(_) | Action::RemoveHistory(_) | Action::HistoryPage(_) => {
+                self.history_open
+            }
+            Action::DownloadPage(_) | Action::ClearDownloads => self.downloads_open,
             Action::Update => self.menu_open || self.about_open,
             Action::Restart => self.about_open && self.restart_available,
-            Action::Theme(_) => self.settings_open,
+            Action::Theme(_)
+            | Action::CycleSearchEngine
+            | Action::ToggleBookmarksBar => self.settings_open,
             Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
             _ => false,
         }
@@ -651,7 +765,21 @@ impl Browser {
     }
     /// Consume a user-initiated request to open a validated HTTP(S) link in a new tab.
     pub fn take_new_tab_request(&mut self) -> Option<String> {
+        self.new_tab_request.take().map(|r| r.url)
+    }
+    /// Consume a user-initiated new-tab request preserving foreground vs background intent.
+    pub fn take_new_tab_request_full(&mut self) -> Option<NewTabRequest> {
         self.new_tab_request.take()
+    }
+    pub(crate) fn request_new_tab(&mut self, url: &str, background: bool) {
+        if self.chrome
+            && url::Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+        {
+            self.new_tab_request = Some(NewTabRequest {
+                url: url.to_owned(),
+                background,
+            });
+        }
     }
     /// Host-supplied scope of a restart; no tab ownership belongs to Chassis.
     pub fn set_restart_tab_count(&mut self, count: usize) {
@@ -684,6 +812,7 @@ impl Browser {
         self.hits.clear();
         self.pointer_press = None;
         self.hovered_link = None;
+        self.refresh_current_internal_page();
         self.dirty = true;
     }
     pub fn take_bookmark_change(&mut self) -> Option<bookmarks::BookmarkChange> {
@@ -735,6 +864,7 @@ impl Browser {
         blank: bool,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
+        let (dl_tx, dl_rx) = mpsc::channel();
         Self {
             devtools: devtools::State::default(),
             selection: clipboard::SelectionState::default(),
@@ -748,6 +878,25 @@ impl Browser {
             bookmark_change: None,
             bookmark_refresh: false,
             bookmark_status: "Local bookmarks : Ctrl+D to save or remove this page".into(),
+            bookmarks_bar: false,
+            bookmarks_bar_change: None,
+            history_open: false,
+            browsing_history: Vec::new(),
+            history_page: 0,
+            history_changes: Vec::new(),
+            clear_browsing_data: false,
+            downloads_open: false,
+            downloads: Vec::new(),
+            download_page: 0,
+            pending_downloads: Vec::new(),
+            dl_tx,
+            dl_rx,
+            dl_inflight: 0,
+            next_download_id: 0,
+            omnibox: omnibox::OmniboxState::default(),
+            search_engine: omnibox::SearchEngine::default(),
+            search_engine_change: None,
+            find: find::FindState::default(),
             modal_focus: 0,
             theme_preference: ThemePreference::System,
             system_theme: ColorScheme::Light,
@@ -855,7 +1004,26 @@ impl Browser {
         add_history: bool,
         automatic: bool,
     ) {
+        self.navigate_with_options(target, body, add_history, automatic, false);
+    }
+    fn navigate_with_options(
+        &mut self,
+        target: String,
+        body: Option<String>,
+        add_history: bool,
+        automatic: bool,
+        force_no_cache: bool,
+    ) {
         self.stop_scroll();
+        self.omnibox.open = false;
+        self.omnibox.selected = None;
+        if body.is_none()
+            && !automatic
+            && let Some(internal) = omnibox::InternalPage::parse(&target)
+        {
+            self.load_internal_page(internal, add_history);
+            return;
+        }
         let target = if target.contains("://") {
             target
         } else {
@@ -959,7 +1127,7 @@ impl Browser {
             // not by blocking the window thread or creating per-event threads.
             drop(retired);
             let fetch_started = Instant::now();
-            let result = session.submit(&target, body.as_deref());
+            let result = session.submit_with_cache_override(&target, body.as_deref(), force_no_cache);
             let fetch_html_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
             let mut parse_html_ms = 0.0;
             let mut resource_profile = resources::ResourceLoadProfile::default();
@@ -1044,6 +1212,7 @@ impl Browser {
         });
     }
     pub fn poll(&mut self) {
+        self.poll_downloads();
         let was_loading = self.loading;
         while let Ok(mut loaded) = self.rx.try_recv() {
             let received = Instant::now();
@@ -1167,6 +1336,36 @@ impl Browser {
                                 response.body.len()
                             ),
                         );
+                    }
+
+                    if (200..300).contains(&response.status)
+                        && loaded.script.is_none()
+                        && downloads::should_download_response(
+                            &response.content_type,
+                            response.content_disposition.as_deref(),
+                        )
+                    {
+                        self.address = self.page_url.clone();
+                        self.selection.address_cursor = self.address.len();
+                        self.selection.address_anchor = None;
+                        if self.history.len() > 1
+                            && self.history_at + 1 == self.history.len()
+                            && self.history[self.history_at] != self.page_url
+                        {
+                            self.history.pop();
+                            self.history_at = self.history.len() - 1;
+                        }
+                        self.enqueue_loaded_download(
+                            response.url.as_str(),
+                            response.content_disposition.as_deref(),
+                            &response.content_type,
+                            response.body,
+                        );
+                        self.loading = false;
+                        self.last_load_ok = true;
+                        self.finish_initial_load(None);
+                        self.dirty = true;
+                        continue;
                     }
 
                     self.last_load_ok = (200..300).contains(&response.status);
@@ -1372,6 +1571,11 @@ impl Browser {
                     );
                     for warning in &self.document.resource_warnings {
                         self.devtools.record("Resource", warning);
+                    }
+                    if (200..400).contains(&response.status) {
+                        let visit_url = self.address.clone();
+                        let visit_title = self.document.title.clone();
+                        self.record_history_visit(&visit_url, &visit_title);
                     }
                     eprintln!(
                         "LOADED {} HTTP {} title={:?} items={} forms={}",
@@ -2437,14 +2641,29 @@ impl Browser {
                 | Action::ClipboardPaste { .. }
                 | Action::ClipboardSelectAll
                 | Action::CopyText(_)
+                | Action::DownloadUrl { .. }
+                | Action::SavePage
+                | Action::ViewPageSource
                 | Action::Bookmarks
                 | Action::OpenBookmark(_)
                 | Action::BookmarkPage(_)
+                | Action::History
+                | Action::OpenHistory(_)
+                | Action::HistoryPage(_)
+                | Action::ClearBrowsingData
+                | Action::Downloads
+                | Action::DownloadPage(_)
+                | Action::ClearDownloads
+                | Action::OmniboxSelect(_)
         ) {
             self.hits.clear();
             self.pointer_press = None;
             self.hovered_link = None;
             self.bookmarks_open = false;
+            self.history_open = false;
+            self.downloads_open = false;
+            self.omnibox.open = false;
+            self.omnibox.selected = None;
         }
         match action {
             Action::ClipboardCut => {
@@ -2478,12 +2697,25 @@ impl Browser {
                 if !self.devtools_is_docked() {
                     self.devtools.close();
                 }
-                if self.chrome
-                    && url::Url::parse(&url)
-                        .is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
-                {
-                    self.new_tab_request = Some(url);
-                }
+                self.request_new_tab(&url, false);
+            }
+            Action::DownloadUrl { url, suggested } => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.start_download(&url, suggested.as_deref());
+            }
+            Action::SavePage => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.save_current_page();
+            }
+            Action::ViewPageSource => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.menu_open = false;
+                self.devtools.selected_source = 0;
+                self.devtools.row = 0;
+                self.open_devtools_tab(devtools::Tab::Sources);
             }
             Action::ToggleDevTools => {
                 self.menu_open = false;
@@ -2845,11 +3077,15 @@ impl Browser {
                     || self.menu_open
                     || self.settings_open
                     || self.bookmarks_open
+                    || self.history_open
+                    || self.downloads_open
                 {
                     self.about_open = false;
                     self.menu_open = false;
                     self.settings_open = false;
                     self.bookmarks_open = false;
+                    self.history_open = false;
+                    self.downloads_open = false;
                 } else {
                     if self.devtools.open {
                         self.scroll_reflow_pending = true;
@@ -2898,9 +3134,133 @@ impl Browser {
                     self.focus = Focus::Page;
                 }
             }
+            Action::History => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
+                self.history_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.settings_open = false;
+                self.bookmarks_open = false;
+                self.downloads_open = false;
+                self.modal_focus = 0;
+            }
+            Action::OpenHistory(index) => {
+                if let Some(entry) = self.browsing_history.get(index) {
+                    let url = entry.url.clone();
+                    self.navigate(url, None, true);
+                }
+            }
+            Action::RemoveHistory(index) => {
+                self.history_open = true;
+                if let Some(entry) = self.browsing_history.get(index) {
+                    let url = entry.url.clone();
+                    let change = history::HistoryChange::Remove(url);
+                    history::apply_in_memory(&mut self.browsing_history, &change);
+                    self.history_changes.push(change);
+                    self.refresh_current_internal_page();
+                }
+            }
+            Action::HistoryPage(next) => {
+                self.history_open = true;
+                let last = self.browsing_history.len().saturating_sub(1) / self.bookmark_rows();
+                self.history_page = if next {
+                    (self.history_page + 1).min(last)
+                } else {
+                    self.history_page.saturating_sub(1)
+                };
+                self.modal_focus = 0;
+            }
+            Action::ClearBrowsingData => {
+                self.menu_open = false;
+                self.history_open = false;
+                self.session.clear_cookies();
+                self.session.clear_exchanges();
+                self.devtools.clear_network();
+                self.browsing_history.clear();
+                self.downloads.clear();
+                self.history_changes.push(history::HistoryChange::ClearAll);
+                self.clear_browsing_data = true;
+                self.refresh_current_internal_page();
+                self.status = "Cleared browsing history, cookies, network log, and downloads".into();
+            }
+            Action::Downloads => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
+                self.downloads_open = true;
+                self.menu_open = false;
+                self.about_open = false;
+                self.settings_open = false;
+                self.bookmarks_open = false;
+                self.history_open = false;
+                self.modal_focus = 0;
+            }
+            Action::DownloadPage(next) => {
+                self.downloads_open = true;
+                let last = self.downloads.len().saturating_sub(1) / self.bookmark_rows();
+                self.download_page = if next {
+                    (self.download_page + 1).min(last)
+                } else {
+                    self.download_page.saturating_sub(1)
+                };
+                self.modal_focus = 0;
+            }
+            Action::ClearDownloads => {
+                self.downloads.clear();
+                self.download_page = 0;
+                self.downloads_open = true;
+                self.modal_focus = 0;
+                self.refresh_current_internal_page();
+                self.status = "Cleared downloads list".into();
+            }
+            Action::ToggleBookmarksBar => {
+                let next = !self.bookmarks_bar;
+                self.set_bookmarks_bar(next);
+                self.bookmarks_bar_change = Some(next);
+                self.status = if next {
+                    "Bookmarks bar shown (Ctrl+Shift+B to hide)".into()
+                } else {
+                    "Bookmarks bar hidden".into()
+                };
+                if self.settings_open {
+                    self.modal_focus = 8;
+                }
+            }
+            Action::CycleSearchEngine => {
+                let next = match self.search_engine {
+                    omnibox::SearchEngine::DuckDuckGo => omnibox::SearchEngine::Google,
+                    omnibox::SearchEngine::Google => omnibox::SearchEngine::Wikipedia,
+                    omnibox::SearchEngine::Wikipedia => omnibox::SearchEngine::DuckDuckGo,
+                };
+                self.set_search_engine(next);
+                self.search_engine_change = Some(next);
+                self.status = format!("Default search engine: {}", next.label());
+                if self.settings_open {
+                    self.modal_focus = 7;
+                }
+            }
+            Action::OmniboxSelect(target) => {
+                self.submit_omnibox(&target);
+            }
+            Action::FindBar => {
+                self.menu_open = false;
+                self.open_find_bar();
+            }
+            Action::FindStep(forward) => {
+                self.step_find_match(forward);
+            }
+            Action::FindClose => {
+                self.close_find_bar();
+            }
             Action::Link { node, href } => {
                 if !self.dispatch_page(InputKind::Click { target: node })? {
-                    self.navigate(href, None, true);
+                    if let Some(dl_attr) = self.link_download_attribute(node) {
+                        self.start_download(&href, (!dl_attr.is_empty()).then_some(dl_attr.as_str()));
+                    } else {
+                        self.navigate(href, None, true);
+                    }
                 }
                 if matches!(
                     self.focus,
@@ -2910,6 +3270,28 @@ impl Browser {
                 }
             }
             Action::Reload => self.navigate(self.page_url.clone(), None, false),
+            Action::HardReload => {
+                self.style_cache.clear();
+                self.frame_cache = None;
+                self.navigate_with_options(self.page_url.clone(), None, false, false, true);
+            }
+            Action::StopLoading => {
+                if self.loading {
+                    self.generation += 1;
+                    self.resource_generation
+                        .store(self.generation, Ordering::Relaxed);
+                    let _ = self.child_pool.set_generation(self.generation);
+                    if let Some(session) = self.page_session.take() {
+                        session.cancel();
+                    }
+                    self.pending_transaction = None;
+                    self.task_wake = None;
+                    self.loading = false;
+                    self.fetching = false;
+                    self.finish_initial_load(Some("Navigation stopped by user".into()));
+                    self.status = "Stopped loading".into();
+                }
+            }
             Action::Back => {
                 if self.history_at > 0 && self.inflight < 2 {
                     self.history_at -= 1;
@@ -2954,6 +3336,8 @@ impl Browser {
             }
             self.activate_checked(hit.action.clone())?;
         } else if !self.modal_open() {
+            self.omnibox.open = false;
+            self.omnibox.selected = None;
             self.focus = Focus::Page;
             self.dirty = true;
         }
@@ -2965,6 +3349,8 @@ impl Browser {
             && !self.about_open
             && !self.settings_open
             && !self.bookmarks_open
+            && !self.history_open
+            && !self.downloads_open
             && self.devtools.context.is_none()
         {
             match self.focus {
@@ -3025,6 +3411,11 @@ impl Browser {
                 }
                 self.page_input_insert_text(node, text);
             }
+            Focus::FindInput => {
+                if self.find.open {
+                    self.find_insert_text(text);
+                }
+            }
             Focus::Page | Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_) => {}
         }
     }
@@ -3034,7 +3425,21 @@ impl Browser {
             return Ok(());
         }
         match self.focus {
-            Focus::Address => self.navigate(self.address.clone(), None, true),
+            Focus::Address => {
+                let target = if self.omnibox.open {
+                    self.omnibox
+                        .selected
+                        .and_then(|i| self.omnibox.suggestions.get(i))
+                        .map(|s| s.target.clone())
+                        .unwrap_or_else(|| self.address.clone())
+                } else {
+                    self.address.clone()
+                };
+                self.submit_omnibox(&target);
+            }
+            Focus::FindInput => {
+                self.step_find_match(true);
+            }
             Focus::Input(node) => {
                 if let Some(i) = self.input_item(node) {
                     if let Some(Item::Input { form, .. }) = self.document.items.get(i) {
@@ -3052,6 +3457,9 @@ impl Browser {
     }
     fn key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
         self.stop_scroll();
+        if self.chrome && sym == 0xffc8 {
+            return;
+        }
         if self.chrome && !alt && (sym == 0xffc9 || (ctrl && shift && matches!(sym, 0x69 | 0x49))) {
             self.toggle_devtools();
             return;
@@ -3220,13 +3628,93 @@ impl Browser {
             self.activate(Action::Address);
             return;
         }
-        if self.chrome && ctrl && !alt && (sym == b'd' as u32 || sym == b'D' as u32) {
+        if self.chrome && ctrl && !alt && !shift && (sym == b'd' as u32 || sym == b'D' as u32) {
             self.activate(Action::ToggleBookmark);
             return;
         }
         if self.chrome && ctrl && shift && !alt && (sym == b'o' as u32 || sym == b'O' as u32) {
             self.activate(Action::Bookmarks);
             return;
+        }
+        if self.chrome && ctrl && shift && !alt && (sym == b'b' as u32 || sym == b'B' as u32) {
+            self.activate(Action::ToggleBookmarksBar);
+            return;
+        }
+        if self.chrome && ctrl && shift && !alt && matches!(sym, 0xffff | 0xff9f) {
+            self.activate(Action::ClearBrowsingData);
+            return;
+        }
+        if self.chrome && ctrl && !shift && !alt && (sym == b'h' as u32 || sym == b'H' as u32) {
+            self.activate(Action::History);
+            return;
+        }
+        if self.chrome && ctrl && !shift && !alt && (sym == b'j' as u32 || sym == b'J' as u32) {
+            self.activate(Action::Downloads);
+            return;
+        }
+        if self.chrome && ctrl && !shift && !alt && (sym == b's' as u32 || sym == b'S' as u32) {
+            self.activate(Action::SavePage);
+            return;
+        }
+        if self.chrome && ctrl && !shift && !alt && (sym == b'u' as u32 || sym == b'U' as u32) {
+            self.activate(Action::ViewPageSource);
+            return;
+        }
+        if self.chrome && ctrl && !shift && !alt && (sym == b'f' as u32 || sym == b'F' as u32) {
+            self.open_find_bar();
+            return;
+        }
+        if self.chrome && !alt && (sym == 0xffc0 || (ctrl && matches!(sym, 0x67 | 0x47))) {
+            self.step_find_match(!shift);
+            return;
+        }
+        if self.focus == Focus::FindInput && self.find.open && !ctrl && !alt {
+            if sym == 0xff1b {
+                self.close_find_bar();
+                return;
+            }
+            if sym == 0xff0d {
+                self.step_find_match(!shift);
+                return;
+            }
+        }
+        if self.focus == Focus::Address && !ctrl && !alt {
+            if sym == 0xff1b {
+                if self.omnibox.open {
+                    self.omnibox.open = false;
+                    self.omnibox.selected = None;
+                } else {
+                    self.focus = Focus::Page;
+                    self.select_all = false;
+                }
+                self.dirty = true;
+                return;
+            }
+            if self.omnibox.open
+                && !self.omnibox.suggestions.is_empty()
+                && matches!(sym, 0xff52 | 0xff54)
+            {
+                let len = self.omnibox.suggestions.len();
+                self.omnibox.selected = match (self.omnibox.selected, sym == 0xff54) {
+                    (None, true) => Some(0),
+                    (None, false) => Some(len - 1),
+                    (Some(i), true) => (i + 1 < len).then_some(i + 1),
+                    (Some(0), false) => None,
+                    (Some(i), false) => Some(i - 1),
+                };
+                self.dirty = true;
+                return;
+            }
+        }
+        if sym == 0xff1b && !ctrl && !alt {
+            if self.find.open {
+                self.close_find_bar();
+                return;
+            }
+            if self.loading {
+                self.activate(Action::StopLoading);
+                return;
+            }
         }
         if self.handle_chrome_or_page_clipboard_key(sym, ctrl, shift, alt) {
             return;
@@ -3237,6 +3725,12 @@ impl Browser {
         }
         if alt && sym == 0xff53 {
             self.activate(Action::Forward);
+            return;
+        }
+        if (shift && sym == 0xffc2)
+            || (ctrl && shift && !alt && (sym == b'r' as u32 || sym == b'R' as u32))
+        {
+            self.activate(Action::HardReload);
             return;
         }
         if sym == 0xffc2 || (ctrl && (sym == b'r' as u32 || sym == b'R' as u32)) {
@@ -3271,6 +3765,7 @@ impl Browser {
                             self.edit_versions.insert(node, self.next_edit);
                         }
                         Focus::Page
+                        | Focus::FindInput
                         | Focus::DevTools
                         | Focus::ConsoleInput
                         | Focus::DevToolsField(_) => {}
@@ -3605,6 +4100,7 @@ impl Browser {
         let chrome_started = Instant::now();
         #[cfg(feature = "chrome")]
         if self.chrome {
+            self.paint_find_highlights(&mut canvas);
             self.paint_page_selection(&mut canvas);
             self.paint_docked_devtools(&mut canvas);
             self.paint_chrome(&mut canvas);
@@ -4184,6 +4680,7 @@ mod tests {
                         url: url::Url::parse(url).unwrap(),
                         status: 200,
                         content_type: "text/html".into(),
+                        content_disposition: None,
                         body: b"<title>Loaded page</title><p>Readable</p>".to_vec(),
                     }),
                     fetch_html_ms: 0.0,
@@ -4317,6 +4814,7 @@ mod tests {
                     url: url::Url::parse("https://example.org/").unwrap(),
                     status: 200,
                     content_type: "text/html".into(),
+                    content_disposition: None,
                     body: b"<p>new page</p>".to_vec(),
                 }),
                 fetch_html_ms: 0.0,
@@ -4420,6 +4918,7 @@ mod tests {
                         url: url::Url::parse("https://example.test/").unwrap(),
                         status: 200,
                         content_type: "text/html".into(),
+                        content_disposition: None,
                         body: html.as_bytes().to_vec(),
                     }),
                     fetch_html_ms: 0.0,
@@ -4498,6 +4997,7 @@ mod tests {
                     url: url::Url::parse("https://example.test/old").unwrap(),
                     status: 200,
                     content_type: "text/html".into(),
+                    content_disposition: None,
                     body: vec![],
                 }),
                 fetch_html_ms: 0.0,
@@ -4762,7 +5262,9 @@ pub enum Key {
     Down,
     PageUp,
     PageDown,
+    FindNext,
     Reload,
+    Fullscreen,
     DeveloperTools,
 }
 
@@ -4911,6 +5413,14 @@ impl Browser {
         self.bookmarks_open = false;
         self.bookmark_change = None;
         self.bookmark_refresh = false;
+        self.bookmarks_bar = false;
+        self.bookmarks_bar_change = None;
+        self.history_open = false;
+        self.downloads_open = false;
+        self.omnibox.open = false;
+        self.omnibox.selected = None;
+        self.find.open = false;
+        self.find.input_rect = None;
         self.hits.clear();
         self.boxes.clear();
         self.selection.page_runs.clear();
@@ -4930,7 +5440,13 @@ impl Browser {
         self.dirty = true;
     }
     fn page_top(&self) -> i32 {
-        if self.chrome { TOP } else { 0 }
+        if !self.chrome {
+            0
+        } else if self.bookmarks_bar && self.height >= 320 {
+            TOP + 28
+        } else {
+            TOP
+        }
     }
     fn page_footer(&self) -> u32 {
         if self.chrome { 29 } else { 0 }
@@ -5477,7 +5993,9 @@ impl Browser {
             Key::Down => 0xff54,
             Key::PageUp => 0xff55,
             Key::PageDown => 0xff56,
+            Key::FindNext => 0xffc0,
             Key::Reload => 0xffc2,
+            Key::Fullscreen => 0xffc8,
             Key::DeveloperTools => 0xffc9,
         };
         self.key(sym, ctrl, shift, alt);
@@ -6179,5 +6697,205 @@ mod scale_tests {
             }
             app.activate(Action::CloseMenu);
         }
+    }
+}
+
+#[cfg(all(test, feature = "chrome"))]
+mod chrome_ux_parity_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn omnibox_internal_pages_bookmarks_bar_and_history_work_end_to_end() {
+        let mut app = test_app();
+        for url in [
+            "chrome://newtab",
+            "chrome://history",
+            "chrome://bookmarks",
+            "chrome://downloads",
+            "chrome://settings",
+            "chrome://version",
+        ] {
+            app.handle_key(Key::Character('l'), true, false, false);
+            app.type_text(url);
+            app.handle_key(Key::Enter, false, false, false);
+            assert_eq!(app.page_url(), url);
+            let _ = app.paint();
+        }
+        assert!(!app.bookmarks_bar());
+        app.handle_key(Key::Character('B'), true, true, false);
+        assert!(app.bookmarks_bar());
+        assert_eq!(app.take_bookmarks_bar_change(), Some(true));
+        assert_eq!(app.page_top(), TOP + 28);
+
+        app.record_history_visit("https://example.org/guide", "Example Guide");
+        assert_eq!(app.browsing_history().len(), 1);
+        assert_eq!(app.take_history_changes().len(), 1);
+
+        app.handle_key(Key::Character('h'), true, false, false);
+        let _ = app.paint();
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(h.action, Action::OpenHistory(0)))
+        );
+        app.handle_key(Key::Escape, false, false, false);
+
+        app.resize(360, 240);
+        for action in [Action::History, Action::Downloads] {
+            app.activate(action);
+            app.paint();
+            for hit in &app.hits {
+                assert!(hit.x >= 0 && hit.y >= 0);
+                assert!(hit.x + hit.w as i32 <= 360);
+                assert!(hit.y + hit.h as i32 <= 240);
+            }
+            app.activate(Action::CloseMenu);
+        }
+
+        app.handle_key(Key::Delete, true, true, false);
+        assert!(app.take_clear_browsing_data());
+        assert!(app.browsing_history().is_empty());
+    }
+
+    #[test]
+    fn find_in_page_matches_highlights_and_steps_forward_backward() {
+        let mut app = test_app();
+        app.resize(800, 600);
+        let html =
+            "<html><body><p>Magnesium burns bright.</p><p>Pure magnesium browser.</p><p>MAGNESIUM oxide.</p></body></html>";
+        app.document = document::parse(html, "https://example.test/");
+        let _ = app.paint();
+
+        app.handle_key(Key::Character('f'), true, false, false);
+        assert!(app.find_bar_open());
+        app.type_text("magnesium");
+        let _ = app.paint();
+        assert_eq!(app.find_query(), "magnesium");
+        assert_eq!(app.find_match_count(), (1, 3));
+
+        app.handle_key(Key::FindNext, false, false, false);
+        assert_eq!(app.find_match_count(), (2, 3));
+        app.handle_key(Key::FindNext, false, true, false);
+        assert_eq!(app.find_match_count(), (1, 3));
+        let _ = app.paint();
+
+        app.handle_key(Key::Escape, false, false, false);
+        assert!(!app.find_bar_open());
+    }
+
+    #[test]
+    fn downloads_save_page_view_source_and_middle_click_background_link() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/");
+                if path == "/archive" {
+                    let payload = b"PK\x03\x04demo";
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Disposition: attachment; filename=\"bundle.zip\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    )
+                    .unwrap();
+                    stream.write_all(payload).unwrap();
+                } else if path == "/report.txt" {
+                    let payload = b"annual report";
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    )
+                    .unwrap();
+                    stream.write_all(payload).unwrap();
+                } else {
+                    let html = "<!doctype html><html><head><title>Portal</title></head><body><p><a href=\"/next\">Next Page</a></p><p><a href=\"/report.txt\" download=\"custom-report.txt\">Download Report</a></p></body></html>";
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+                        html.len()
+                    )
+                    .unwrap();
+                }
+            }
+        });
+
+        let mut app = test_app();
+        app.resize(800, 600);
+        let home = format!("http://{addr}/");
+        app.navigate(home.clone(), None, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.is_loading() && Instant::now() < deadline {
+            app.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = app.paint();
+        assert_eq!(app.page_url(), home);
+
+        // Middle-click /next opens a background tab request without leaving home.
+        let next_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(&h.action, Action::Link { href, .. } if href.ends_with("/next")))
+            .unwrap()
+            .clone();
+        app.middle_click_at(next_hit.x + 2, next_hit.y + 2);
+        let bg_req = app.take_new_tab_request_full().expect("background tab request");
+        assert!(bg_req.background);
+        assert!(bg_req.url.ends_with("/next"));
+
+        // Click <a download="custom-report.txt"> queues a download without navigating away!
+        let dl_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(&h.action, Action::Link { href, .. } if href.ends_with("/report.txt")))
+            .unwrap()
+            .clone();
+        app.pointer_down(dl_hit.x + 2, dl_hit.y + 2);
+        app.pointer_up(dl_hit.x + 2, dl_hit.y + 2);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.take_pending_downloads().is_empty() && Instant::now() < deadline {
+            app.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.page_url(), home);
+
+        // Navigating to Content-Disposition: attachment queues a download without replacing Portal!
+        app.navigate(format!("http://{addr}/archive"), None, true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut got_zip = None;
+        while Instant::now() < deadline {
+            app.poll();
+            let pending = app.take_pending_downloads();
+            if let Some(first) = pending.into_iter().next() {
+                got_zip = Some(first);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let zip = got_zip.expect("attachment download");
+        assert_eq!(zip.suggested_filename, "bundle.zip");
+        assert_eq!(zip.body, b"PK\x03\x04demo");
+        assert_eq!(app.page_url(), home);
+
+        // Ctrl+S saves current page HTML source!
+        app.handle_key(Key::Character('s'), true, false, false);
+        let saved = app.take_pending_downloads();
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].suggested_filename.ends_with(".html"));
+
+        // Ctrl+U opens View Page Source!
+        assert!(!app.devtools.open);
+        app.handle_key(Key::Character('u'), true, false, false);
+        assert!(app.devtools.open);
+
+        server.join().unwrap();
     }
 }

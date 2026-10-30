@@ -6,6 +6,43 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-029 : Desktop browser UX, Omnibox, Find, History & Downloads
+
+Stability: stable
+
+### Dependencies
+
+F-004 native input/navigation, F-013 optional Chassis chrome, F-019 toolbar,
+F-020 bookmarks, F-023 workspace tabs/windows, F-028 clipboard.
+
+### Properties
+
+Chromium-style desktop browser UX across `mg-chassis` and `mg-browser`: Omnibox
+URL/search classification (`DuckDuckGo`, `Google`, `Wikipedia`) with live
+autocomplete dropdown (`Up`/`Down`/`Enter`/click across bookmarks, history, and
+`chrome://` pages); built-in `chrome://newtab`, `chrome://history`,
+`chrome://bookmarks`, `chrome://downloads`, `chrome://settings`, and
+`chrome://version` pages; Find in Page (`Ctrl+F` / `F3` / `Shift+F3`) with live
+match counter, active/inactive highlights, and scroll-into-view; persistent
+user-local `$XDG_CONFIG_HOME/mgbrowser/history.json` (`O_NOFOLLOW`, `0o600`,
+advisory `flock`, 512 entries, `Ctrl+H`) and Clear Browsing Data
+(`Ctrl+Shift+Delete`); pure-Rust file downloads (`Content-Disposition:
+attachment`, `<a download>`, `Save link as...`, `Ctrl+S` Save Page, `Ctrl+J`,
+`~/Downloads` with `create_new(true)` + `(1)` collision numbering up to `8 MiB`);
+toggleable Bookmarks Bar (`Ctrl+Shift+B`); Hard Reload (`Ctrl+Shift+R`), Stop
+Loading (`Escape` / toolbar `×`), `Ctrl+U` View Page Source, `Ctrl+Shift+T`
+Reopen Closed Tab, `Ctrl+N` New Window, `Ctrl+Shift+W` Close Window, `Ctrl+1..9`
+tab switching, middle-click background link open & tab close, tab-strip
+right-click context menu, mouse buttons 8/9 Back/Forward, and `F11` fullscreen.
+See [docs/RELEASE-v0.9.26.md](docs/RELEASE-v0.9.26.md).
+
+### Test criteria
+
+- [x] Omnibox URL/search/internal resolution, autocomplete navigation, `chrome://` pages, and Bookmarks Bar pass unit and geometry checks (including `360x240` minimum popup bounds).
+- [x] Find in Page (`Ctrl+F`, `F3`, `Shift+F3`), persistent `HistoryStore`, `ClearBrowsingData`, and `DownloadStore` (`Content-Disposition: attachment`, `<a download>`, `Ctrl+S` Save Page) pass end-to-end tests.
+- [x] Background link opening (`open_background_tab`), `Ctrl+Shift+T` closed-tab stack, `Ctrl+1..9`, tab strip context menu, and `Settings` persistence (`search_engine`, `bookmarks_bar`) pass workspace and X11 smoke suites.
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, WPT, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-028 : Native X11 clipboard and app-wide text selection
 
 Stability: stable

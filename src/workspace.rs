@@ -322,6 +322,20 @@ impl<T> Workspace<T> {
 
     /// Append and select a tab in an existing group.
     pub fn open_tab(&mut self, pane: PaneId, payload: T) -> Result<TabId, Rejected<T>> {
+        self.open_tab_with_focus(pane, payload, true)
+    }
+
+    /// Append a tab in an existing group without changing the active tab or focused pane.
+    pub fn open_background_tab(&mut self, pane: PaneId, payload: T) -> Result<TabId, Rejected<T>> {
+        self.open_tab_with_focus(pane, payload, false)
+    }
+
+    fn open_tab_with_focus(
+        &mut self,
+        pane: PaneId,
+        payload: T,
+        activate: bool,
+    ) -> Result<TabId, Rejected<T>> {
         let check = self.check_ids(1).and_then(|()| {
             if self.tabs.len() >= self.limits.tabs {
                 Err(Error::TabLimit)
@@ -337,8 +351,10 @@ impl<T> Workspace<T> {
         self.tabs.insert(tab, payload);
         let group = self.pane_mut(window, pane);
         group.tabs.push(tab);
-        group.active = tab;
-        self.focus(window, pane);
+        if activate {
+            group.active = tab;
+            self.focus(window, pane);
+        }
         self.finish(1);
         Ok(tab)
     }
@@ -966,6 +982,16 @@ mod tests {
         let before = format!("{space:?}");
         assert_eq!(space.select_tab(second.tab), Err(Error::IdentityExhausted));
         assert_eq!(format!("{space:?}"), before);
+    }
+
+    #[test]
+    fn open_background_tab_preserves_active_tab_and_focused_pane() {
+        let mut space = workspace();
+        let first = space.open_window("a").unwrap();
+        let second = space.open_background_tab(first.pane, "b").unwrap();
+        assert_eq!(space.active_tab(), Some(first.tab));
+        assert_eq!(space.pane(first.pane).unwrap().tabs(), &[first.tab, second]);
+        invariant(&space);
     }
 
     #[test]

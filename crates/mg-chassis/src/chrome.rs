@@ -26,6 +26,7 @@ impl Browser {
                 ],
                 &[(27, 6), (27, 14), (19, 14)],
             ],
+            Action::StopLoading => &[&[(10, 9), (26, 25)], &[(26, 9), (10, 25)]],
             Action::ToggleBookmark => &[&[
                 (18, 5),
                 (22, 13),
@@ -139,7 +140,11 @@ impl Browser {
             Action::Forward,
             self.history_at + 1 < self.history.len() && self.inflight < 2,
         );
-        self.toolbar_button(c, 98, Action::Reload, self.page_url != "about:blank");
+        if self.loading {
+            self.toolbar_button(c, 98, Action::StopLoading, true);
+        } else {
+            self.toolbar_button(c, 98, Action::Reload, self.page_url != "about:blank");
+        }
         self.toolbar_button(
             c,
             142,
@@ -191,6 +196,9 @@ impl Browser {
             action: Action::Address,
         });
         c.rect(0, TOP - 1, self.width, 1, palette.border);
+        if self.bookmarks_bar && self.height >= 320 {
+            self.paint_bookmarks_bar(c);
+        }
         c.rect(
             0,
             self.height as i32 - 29,
@@ -216,18 +224,31 @@ impl Browser {
                 palette.muted
             },
         );
+        let ptop = self.page_top();
         let view_h = self.viewport_height() as i32;
-        if self.content_height > TOP + view_h + 29 {
+        if self.content_height > ptop + view_h + 29 {
             let area = view_h.saturating_sub(1).max(1);
-            let thumb = (area * area / (self.content_height - TOP).max(1)).max(20);
-            let sy = TOP + self.scroll * area / (self.content_height - TOP).max(1);
+            let thumb = (area * area / (self.content_height - ptop).max(1)).max(20);
+            let sy = ptop + self.scroll * area / (self.content_height - ptop).max(1);
             c.rect(
                 self.page_viewport_width() as i32 - 9,
-                sy.min(TOP + view_h - thumb.min(view_h)),
+                sy.min(ptop + view_h - thumb.min(view_h)),
                 6,
                 (thumb as u32).min(view_h.max(1) as u32),
                 palette.scrollbar,
             );
+        }
+        if !self.modal_open() {
+            if self.find.open {
+                self.paint_find_bar(c);
+            } else {
+                self.find.input_rect = None;
+            }
+            if self.omnibox.open && self.focus == Focus::Address && self.height >= 280 {
+                self.paint_omnibox_dropdown(c, 196, aw);
+            }
+        } else {
+            self.find.input_rect = None;
         }
         if self.modal_open() {
             // A popup cannot dispatch clicks into the covered page.
@@ -239,14 +260,16 @@ impl Browser {
         if self.menu_open {
             let x = self.width as i32 - 226;
             let y = 54;
+            let full_menu = self.height >= 450;
             let show_devtools = self.height >= 280;
-            c.rect(
-                x - 8,
-                y,
-                228,
-                if show_devtools { 216 } else { 182 },
-                palette.border,
-            );
+            let menu_h = if full_menu {
+                352
+            } else if show_devtools {
+                216
+            } else {
+                182
+            };
+            c.rect(x - 8, y, 228, menu_h, palette.border);
             self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
             self.dialog_button(
                 c,
@@ -262,7 +285,28 @@ impl Browser {
             );
             self.dialog_button(c, (x, y + 74), 212, "Settings", Action::Settings, 2);
             self.dialog_button(c, (x, y + 108), 212, "Bookmarks", Action::Bookmarks, 3);
-            if show_devtools {
+            if full_menu {
+                self.dialog_button(c, (x, y + 142), 212, "History", Action::History, 4);
+                self.dialog_button(c, (x, y + 176), 212, "Downloads", Action::Downloads, 5);
+                self.dialog_button(c, (x, y + 210), 212, "Find in page", Action::FindBar, 6);
+                self.dialog_button(
+                    c,
+                    (x, y + 244),
+                    212,
+                    "Clear browsing data",
+                    Action::ClearBrowsingData,
+                    7,
+                );
+                self.dialog_button(
+                    c,
+                    (x, y + 278),
+                    212,
+                    "Developer tools",
+                    Action::ToggleDevTools,
+                    8,
+                );
+                self.dialog_button(c, (x, y + 312), 212, "Close", Action::CloseMenu, 9);
+            } else if show_devtools {
                 self.dialog_button(
                     c,
                     (x, y + 142),
@@ -278,6 +322,12 @@ impl Browser {
         }
         if self.bookmarks_open {
             self.paint_bookmarks(c);
+        }
+        if self.history_open {
+            self.paint_history(c);
+        }
+        if self.downloads_open {
+            self.paint_downloads(c);
         }
         if self.about_open {
             let w = self.width.saturating_sub(40).min(700);
@@ -467,6 +517,30 @@ impl Browser {
                 palette.ink,
             );
             self.dialog_button(c, (x + 248, y + size_y), 34, "+", Action::ScaleUp, 5);
+            if !compact && w >= 560 {
+                let search_label = format!("Search: {}", self.search_engine.label());
+                self.dialog_button(
+                    c,
+                    (x + 296, y + size_y),
+                    152,
+                    &search_label,
+                    Action::CycleSearchEngine,
+                    7,
+                );
+                let bar_label = if self.bookmarks_bar {
+                    "Bar: Shown"
+                } else {
+                    "Bar: Hidden"
+                };
+                self.dialog_button(
+                    c,
+                    (x + 456, y + size_y),
+                    128,
+                    bar_label,
+                    Action::ToggleBookmarksBar,
+                    8,
+                );
+            }
             if !compact {
                 c.text(
                     &mut self.fonts,
@@ -583,6 +657,426 @@ impl Browser {
                 64,
                 "Next",
                 Action::BookmarkPage(true),
+                index,
+            );
+            index += 1;
+        }
+        self.dialog_button(
+            c,
+            (x + w as i32 - 88, fy),
+            74,
+            "Close",
+            Action::CloseMenu,
+            index,
+        );
+    }
+
+    fn paint_bookmarks_bar(&mut self, c: &mut Canvas) {
+        let p = self.effective_theme().palette();
+        c.rect(0, TOP, self.width, 28, p.background);
+        c.rect(0, TOP + 27, self.width, 1, p.border);
+        if self.bookmarks.is_empty() {
+            let hint = fit_head(
+                &mut self.fonts,
+                "Bookmarks bar · Press Ctrl+D to bookmark pages, or Ctrl+Shift+B to hide",
+                12.,
+                self.width as f32 - 24.,
+            );
+            c.text(&mut self.fonts, 12, TOP + 7, &hint, 12., p.muted);
+            return;
+        }
+        let mut bx = 10i32;
+        let max_x = self.width as i32 - 12;
+        for i in 0..self.bookmarks.len() {
+            if bx + 72 > max_x {
+                break;
+            }
+            let avail = (max_x - bx - 16).min(160) as f32;
+            let label = fit_head(&mut self.fonts, &self.bookmarks[i].title, 12., avail);
+            let bw = (self.fonts.width(&label, 12.).ceil() as u32 + 16).clamp(48, 176);
+            if bx + bw as i32 > max_x {
+                break;
+            }
+            c.rect(bx, TOP + 3, bw, 21, p.button);
+            c.text(&mut self.fonts, bx + 8, TOP + 6, &label, 12., p.ink);
+            self.hits.push(Hit {
+                x: bx,
+                y: TOP + 3,
+                w: bw,
+                h: 21,
+                action: Action::OpenBookmark(i),
+            });
+            bx += bw as i32 + 6;
+        }
+    }
+
+    fn paint_omnibox_dropdown(&mut self, c: &mut Canvas, x: i32, w: u32) {
+        if self.omnibox.suggestions.is_empty() || w < 120 {
+            return;
+        }
+        let p = self.effective_theme().palette();
+        let row_h = 30i32;
+        let max_rows = ((self.height as i32 - 90) / row_h).clamp(1, 6) as usize;
+        let count = self.omnibox.suggestions.len().min(max_rows);
+        if count == 0 {
+            return;
+        }
+        let y = 52;
+        let h = count as u32 * row_h as u32 + 4;
+        c.rect(x, y, w, h, p.border);
+        c.rect(x + 1, y + 1, w - 2, h - 2, p.panel);
+        for idx in 0..count {
+            let ry = y + 2 + idx as i32 * row_h;
+            let selected = self.omnibox.selected == Some(idx);
+            let suggestion = self.omnibox.suggestions[idx].clone();
+            if selected {
+                c.rect(x + 2, ry, w - 4, row_h as u32, p.selection);
+            }
+            let prefix = match suggestion.kind {
+                omnibox::SuggestionKind::Search => "? ",
+                omnibox::SuggestionKind::Navigate => "-> ",
+                omnibox::SuggestionKind::Bookmark => "* ",
+                omnibox::SuggestionKind::History => "H ",
+                omnibox::SuggestionKind::Internal => "mg ",
+            };
+            let full = format!("{prefix}{}", suggestion.label);
+            let shown = fit_head(&mut self.fonts, &full, 13., w as f32 - 20.);
+            c.text(&mut self.fonts, x + 10, ry + 7, &shown, 13., p.ink);
+            self.hits.push(Hit {
+                x: x + 2,
+                y: ry,
+                w: w - 4,
+                h: row_h as u32,
+                action: Action::OmniboxSelect(suggestion.target),
+            });
+        }
+    }
+
+    fn paint_find_bar(&mut self, c: &mut Canvas) {
+        let p = self.effective_theme().palette();
+        let page_w = self.page_viewport_width();
+        let w = page_w.saturating_sub(20).min(356);
+        if w < 160 {
+            self.find.input_rect = None;
+            return;
+        }
+        let h = 36u32;
+        let x = (page_w as i32 - w as i32 - 14).max(6);
+        let y = self.page_top() + 8;
+        c.rect(x, y, w, h, p.border);
+        c.rect(x + 1, y + 1, w - 2, h - 2, p.panel);
+
+        let btn_area = 94u32;
+        let count_str = if self.find.query.is_empty() {
+            String::new()
+        } else {
+            let (cur, total) = self.find_match_count();
+            format!("{cur}/{total}")
+        };
+        let count_w = if count_str.is_empty() {
+            0u32
+        } else {
+            (self.fonts.width(&count_str, 12.).ceil() as u32 + 10).min(64)
+        };
+        let input_w = w.saturating_sub(btn_area + count_w + 14).max(52);
+        let ix = x + 6;
+        let iy = y + 5;
+        let ih = 26u32;
+        c.rect(ix, iy, input_w, ih, p.field);
+        self.find.input_rect = Some((ix, iy, input_w, ih));
+
+        let avail = input_w as f32 - 12.;
+        if self.focus == Focus::FindInput && !self.select_all {
+            let cur_b = clipboard::clamp_utf8(&self.find.query, self.find.cursor);
+            let sel = clipboard::normalized_range(&self.find.query, cur_b, self.find.anchor);
+            let (shown, sx0, sx1, cx) = clipboard::slice_line_bytes(
+                &mut self.fonts,
+                &self.find.query,
+                13.,
+                avail,
+                sel,
+                cur_b,
+            );
+            if sx1 > sx0 {
+                let sw = ((sx1 - sx0) as u32 + 2).min(input_w.saturating_sub(8));
+                c.rect(ix + 5 + sx0, iy + 3, sw, 20, p.selection);
+            }
+            c.text(&mut self.fonts, ix + 6, iy + 5, &shown, 13., p.ink);
+            let caret_x = (ix + 6 + cx).min(ix + input_w as i32 - 4);
+            c.rect(caret_x, iy + 4, 2, 18, p.accent);
+        } else if self.find.query.is_empty() {
+            let ph = fit_head(&mut self.fonts, "Find in page...", 13., avail);
+            c.text(&mut self.fonts, ix + 6, iy + 5, &ph, 13., p.muted);
+            if self.focus == Focus::FindInput {
+                c.rect(ix + 6, iy + 4, 2, 18, p.accent);
+            }
+        } else {
+            let shown = fit_tail(&mut self.fonts, &self.find.query, 13., avail);
+            if self.focus == Focus::FindInput && self.select_all {
+                let sw =
+                    (self.fonts.width(&shown, 13.).ceil() as u32 + 4).min(input_w.saturating_sub(8));
+                c.rect(ix + 4, iy + 3, sw, 20, p.selection);
+            }
+            c.text(&mut self.fonts, ix + 6, iy + 5, &shown, 13., p.ink);
+        }
+        self.hits.push(Hit {
+            x: ix,
+            y: iy,
+            w: input_w,
+            h: ih,
+            action: Action::FindBar,
+        });
+
+        if !count_str.is_empty() {
+            let count_color = if self.find.matches.is_empty() {
+                HTTP_CHROME
+            } else {
+                p.muted
+            };
+            c.text(
+                &mut self.fonts,
+                ix + input_w as i32 + 4,
+                y + 11,
+                &count_str,
+                12.,
+                count_color,
+            );
+        }
+
+        let bx = x + w as i32 - 90;
+        for (idx, (lbl, act)) in [
+            ("<", Action::FindStep(false)),
+            (">", Action::FindStep(true)),
+            ("x", Action::FindClose),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let rx = bx + idx as i32 * 29;
+            c.rect(rx, iy, 26, ih, p.button);
+            c.text(&mut self.fonts, rx + 9, iy + 5, lbl, 13., p.ink);
+            self.hits.push(Hit {
+                x: rx,
+                y: iy,
+                w: 26,
+                h: ih,
+                action: act,
+            });
+        }
+    }
+
+    fn paint_history(&mut self, c: &mut Canvas) {
+        let p = self.effective_theme().palette();
+        let w = self.width.saturating_sub(40).min(760);
+        let h = self.height.saturating_sub(40).min(540);
+        let x = (self.width - w) as i32 / 2;
+        let y = (self.height - h) as i32 / 2;
+        let rows = self.bookmark_rows();
+        self.history_page = self
+            .history_page
+            .min(self.browsing_history.len().saturating_sub(1) / rows);
+        c.rect(x, y, w, h, p.border);
+        c.rect(x + 2, y + 2, w - 4, h - 4, p.panel);
+        c.text(
+            &mut self.fonts,
+            x + 14,
+            y + 12,
+            &format!("History ({})", self.browsing_history.len()),
+            18.,
+            p.ink,
+        );
+        let sub = fit_head(
+            &mut self.fonts,
+            "Recent HTTP(S) visits · Ctrl+H toggles · Clear browsing data wipes all",
+            12.,
+            w as f32 - 28.,
+        );
+        c.text(&mut self.fonts, x + 14, y + 38, &sub, 12., p.muted);
+        let start = self.history_page * rows;
+        let mut index = 0;
+        if self.browsing_history.is_empty() {
+            let hint = fit_head(
+                &mut self.fonts,
+                "No browsing history recorded yet.",
+                14.,
+                w as f32 - 28.,
+            );
+            c.text(&mut self.fonts, x + 14, y + 68, &hint, 14., p.ink);
+        }
+        for i in start..(start + rows).min(self.browsing_history.len()) {
+            let by = y + 64 + (i - start) as i32 * 48;
+            let title = fit_head(
+                &mut self.fonts,
+                &self.browsing_history[i].title,
+                15.,
+                w as f32 - 130.,
+            );
+            self.dialog_button(
+                c,
+                (x + 14, by),
+                w - 112,
+                &title,
+                Action::OpenHistory(i),
+                index,
+            );
+            index += 1;
+            self.dialog_button(
+                c,
+                (x + w as i32 - 88, by),
+                74,
+                "Remove",
+                Action::RemoveHistory(i),
+                index,
+            );
+            index += 1;
+            let detail = format!(
+                "{} · {} visit{}",
+                self.browsing_history[i].url,
+                self.browsing_history[i].visits,
+                if self.browsing_history[i].visits == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+            let url = fit_head(&mut self.fonts, &detail, 10., w as f32 - 32.);
+            c.text(&mut self.fonts, x + 16, by + 34, &url, 10., p.muted);
+        }
+        let fy = y + h as i32 - 46;
+        if self.history_page > 0 {
+            self.dialog_button(
+                c,
+                (x + 14, fy),
+                74,
+                "Previous",
+                Action::HistoryPage(false),
+                index,
+            );
+            index += 1;
+        }
+        if start + rows < self.browsing_history.len() {
+            self.dialog_button(
+                c,
+                (x + 100, fy),
+                64,
+                "Next",
+                Action::HistoryPage(true),
+                index,
+            );
+            index += 1;
+        }
+        if !self.browsing_history.is_empty() && w >= 360 {
+            self.dialog_button(
+                c,
+                (x + 176, fy),
+                96,
+                "Clear all",
+                Action::ClearBrowsingData,
+                index,
+            );
+            index += 1;
+        }
+        self.dialog_button(
+            c,
+            (x + w as i32 - 88, fy),
+            74,
+            "Close",
+            Action::CloseMenu,
+            index,
+        );
+    }
+
+    fn paint_downloads(&mut self, c: &mut Canvas) {
+        let p = self.effective_theme().palette();
+        let w = self.width.saturating_sub(40).min(760);
+        let h = self.height.saturating_sub(40).min(540);
+        let x = (self.width - w) as i32 / 2;
+        let y = (self.height - h) as i32 / 2;
+        let rows = self.bookmark_rows();
+        self.download_page = self
+            .download_page
+            .min(self.downloads.len().saturating_sub(1) / rows);
+        c.rect(x, y, w, h, p.border);
+        c.rect(x + 2, y + 2, w - 4, h - 4, p.panel);
+        c.text(
+            &mut self.fonts,
+            x + 14,
+            y + 12,
+            &format!("Downloads ({})", self.downloads.len()),
+            18.,
+            p.ink,
+        );
+        let sub = fit_head(
+            &mut self.fonts,
+            "Saved to Downloads directory · Ctrl+J toggles · Ctrl+S saves current page",
+            12.,
+            w as f32 - 28.,
+        );
+        c.text(&mut self.fonts, x + 14, y + 38, &sub, 12., p.muted);
+        let start = self.download_page * rows;
+        let total = self.downloads.len();
+        if total == 0 {
+            let hint = fit_head(
+                &mut self.fonts,
+                "No downloads yet in this session.",
+                14.,
+                w as f32 - 28.,
+            );
+            c.text(&mut self.fonts, x + 14, y + 68, &hint, 14., p.ink);
+        }
+        for offset in 0..rows.min(total.saturating_sub(start)) {
+            let dl_idx = total - 1 - (start + offset);
+            let dl = &self.downloads[dl_idx];
+            let by = y + 64 + offset as i32 * 48;
+            c.rect(x + 14, by, w - 28, 40, p.field);
+            let state_tag = match dl.state {
+                downloads::DownloadState::InProgress => "Downloading...".to_owned(),
+                downloads::DownloadState::Completed => format!(
+                    "Saved ({} B) -> {}",
+                    dl.bytes,
+                    dl.saved_path.as_deref().unwrap_or("Downloads")
+                ),
+                downloads::DownloadState::Failed => format!(
+                    "Failed: {}",
+                    dl.error.as_deref().unwrap_or("error")
+                ),
+            };
+            let title = fit_head(&mut self.fonts, &dl.filename, 14., w as f32 - 44.);
+            c.text(&mut self.fonts, x + 22, by + 5, &title, 14., p.ink);
+            let detail = fit_head(&mut self.fonts, &state_tag, 11., w as f32 - 44.);
+            c.text(&mut self.fonts, x + 22, by + 23, &detail, 11., p.muted);
+        }
+        let fy = y + h as i32 - 46;
+        let mut index = 0;
+        if self.download_page > 0 {
+            self.dialog_button(
+                c,
+                (x + 14, fy),
+                74,
+                "Previous",
+                Action::DownloadPage(false),
+                index,
+            );
+            index += 1;
+        }
+        if start + rows < total {
+            self.dialog_button(
+                c,
+                (x + 100, fy),
+                64,
+                "Next",
+                Action::DownloadPage(true),
+                index,
+            );
+            index += 1;
+        }
+        if !self.downloads.is_empty() && w >= 360 {
+            self.dialog_button(
+                c,
+                (x + 176, fy),
+                96,
+                "Clear list",
+                Action::ClearDownloads,
                 index,
             );
             index += 1;

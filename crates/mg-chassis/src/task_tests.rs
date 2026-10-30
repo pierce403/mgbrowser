@@ -543,6 +543,7 @@ fn stale_initial_success_charges_only_its_owned_session_then_cancels() {
                 url: url::Url::parse("https://example.test/stale").unwrap(),
                 status: 200,
                 content_type: "text/html".into(),
+                content_disposition: None,
                 body: b"<title>Stale</title>".to_vec(),
             }),
             script: Some(Ok(ScriptLoad {
@@ -628,6 +629,7 @@ fn committed_lifecycle(
                 url: url::Url::parse(&app.page_url).unwrap(),
                 status: 200,
                 content_type: "text/html".into(),
+                content_disposition: None,
                 body: b"<title>Retained</title>".to_vec(),
             }),
             script: Some(Ok(ScriptLoad {

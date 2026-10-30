@@ -1,5 +1,5 @@
 //! User-level appearance preferences. Desktop discovery stays in the platform host.
-use mg_chassis::{ScalePreference, ThemePreference};
+use mg_chassis::{ScalePreference, ThemePreference, omnibox::SearchEngine};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -16,6 +16,8 @@ static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 pub struct Preferences {
     pub theme: ThemePreference,
     pub scale: ScalePreference,
+    pub search_engine: SearchEngine,
+    pub bookmarks_bar: bool,
 }
 
 pub struct Settings {
@@ -104,7 +106,17 @@ impl Settings {
                 ScalePreference::System => "\"system\"".into(),
                 ScalePreference::Percent(value) => value.to_string(),
             };
-            writeln!(file, "{{\"theme\":\"{name}\",\"scale\":{scale}}}")?;
+            let search = match preferences.search_engine {
+                SearchEngine::DuckDuckGo => "",
+                SearchEngine::Google => ",\"search_engine\":\"google\"",
+                SearchEngine::Wikipedia => ",\"search_engine\":\"wikipedia\"",
+            };
+            let bar = if preferences.bookmarks_bar {
+                ",\"bookmarks_bar\":true"
+            } else {
+                ""
+            };
+            writeln!(file, "{{\"theme\":\"{name}\",\"scale\":{scale}{search}{bar}}}")?;
             file.sync_all()?;
             fs::rename(&temporary, path)
         })();
@@ -125,6 +137,14 @@ struct StoredPreferences {
     theme: String,
     #[serde(default)]
     scale: StoredScale,
+    #[serde(default = "default_search_engine")]
+    search_engine: String,
+    #[serde(default)]
+    bookmarks_bar: bool,
+}
+
+fn default_search_engine() -> String {
+    "duckduckgo".into()
 }
 
 #[derive(serde::Deserialize)]
@@ -162,7 +182,22 @@ fn parse(bytes: &[u8]) -> Result<Preferences, String> {
                 .into(),
         ),
     };
-    Ok(Preferences { theme, scale })
+    let search_engine = match value.search_engine.as_str() {
+        "duckduckgo" => SearchEngine::DuckDuckGo,
+        "google" => SearchEngine::Google,
+        "wikipedia" => SearchEngine::Wikipedia,
+        _ => {
+            return Err(
+                "Invalid search_engine; expected duckduckgo, google or wikipedia".into(),
+            );
+        }
+    };
+    Ok(Preferences {
+        theme,
+        scale,
+        search_engine,
+        bookmarks_bar: value.bookmarks_bar,
+    })
 }
 
 #[cfg(test)]
@@ -210,6 +245,7 @@ mod tests {
                 let preference = Preferences {
                     theme,
                     scale: ScalePreference::Percent(scale),
+                    ..Preferences::default()
                 };
                 settings.save(preference).unwrap();
                 let restarted = Settings::from_roots(Some(root.clone()), None);
@@ -218,6 +254,8 @@ mod tests {
             let preference = Preferences {
                 theme,
                 scale: ScalePreference::System,
+                search_engine: SearchEngine::Wikipedia,
+                bookmarks_bar: true,
             };
             settings.save(preference).unwrap();
             assert_eq!(settings.load().unwrap(), preference);
@@ -260,6 +298,7 @@ mod tests {
             Preferences {
                 theme: ThemePreference::Dark,
                 scale: ScalePreference::System,
+                ..Preferences::default()
             }
         );
         let root = scratch();
