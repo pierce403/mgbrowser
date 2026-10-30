@@ -202,12 +202,18 @@ pub(super) struct State {
     pub console_search_cursor: usize,
     pub console_input: String,
     pub console_cursor: usize,
+    pub console_anchor: Option<usize>,
+    pub field_anchor: Option<(FieldKind, usize)>,
+    pub console_sel: Option<(usize, usize)>,
+    pub sources_sel: Option<(usize, usize)>,
     pub console_history: Vec<String>,
     pub console_history_idx: Option<usize>,
     pub console_draft: String,
     pub preserve_log: bool,
     pub scroll_to_bottom: bool,
     pub clipboard: String,
+    pub pending_clipboard_sync: Option<String>,
+    pub copy_feedback: Option<String>,
     pub pending_inspect_node: Option<usize>,
     pub current_group_depth: u8,
     pub selected_source: usize,
@@ -225,6 +231,11 @@ pub(super) struct State {
     pub app_section: AppSection,
     pub context: Option<(i32, i32)>,
     pub context_link: Option<String>,
+    pub context_kind: crate::clipboard::ContextKind,
+    pub console_log_rect: Option<(i32, i32, u32, u32)>,
+    pub console_repl_rect: Option<(i32, i32, u32, u32)>,
+    pub sources_code_rect: Option<(i32, i32, u32, u32)>,
+    pub field_rects: Vec<(FieldKind, (i32, i32, u32, u32))>,
     pub row: usize,
     pub painted_epoch: u64,
     pub(super) selected: Option<(u64, usize)>,
@@ -251,6 +262,11 @@ impl State {
         self.split_dragging = false;
         self.context = None;
         self.context_link = None;
+        self.context_kind = crate::clipboard::ContextKind::Page;
+        self.console_log_rect = None;
+        self.console_repl_rect = None;
+        self.sources_code_rect = None;
+        self.field_rects.clear();
         self.row = 0;
     }
 
@@ -258,6 +274,7 @@ impl State {
     pub fn new_navigation(&mut self) {
         self.context = None;
         self.context_link = None;
+        self.context_kind = crate::clipboard::ContextKind::Page;
         self.pick_mode = false;
         self.hovered_inspect_node = None;
         self.pending_inspect_node = None;
@@ -268,6 +285,10 @@ impl State {
         self.collapsed_nodes.clear();
         self.inline_style_input.clear();
         self.inline_style_cursor = 0;
+        self.field_anchor = None;
+        self.console_sel = None;
+        self.sources_sel = None;
+        self.copy_feedback = None;
         self.elements_match_idx = 0;
         self.selected_source = 0;
         self.sources_match_line = None;
@@ -771,6 +792,7 @@ impl State {
                         &payload,
                         mg_sparkle::page_session::console::MAX_CONSOLE_WIRE_BYTES,
                     );
+                    self.pending_clipboard_sync = Some(self.clipboard.clone());
                     self.push_interactive_entry(ConsoleEntry {
                         level: ConsoleLevel::Info,
                         kind: ConsoleEntryKind::Diagnostic,
@@ -907,6 +929,7 @@ impl State {
         self.console.clear();
         self.omitted = 0;
         self.current_group_depth = 0;
+        self.console_sel = None;
         self.row = 0;
         self.scroll_to_bottom = false;
     }
@@ -1285,11 +1308,26 @@ struct ConsoleVisualRow {
     kind: ConsoleEntryKind,
     source: &'static str,
     text: String,
+    entry_idx: Option<usize>,
+    full_text: String,
     first_of_entry: bool,
     group_depth: u8,
     toggle_group: Option<usize>,
     toggle_object: Option<(usize, u64)>,
     inspect_node: Option<usize>,
+}
+
+#[cfg(feature = "chrome")]
+pub(crate) fn blend_rect_pub(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    rgb: u32,
+    alpha: u32,
+) {
+    blend_rect(canvas, x, y, w, h, rgb, alpha);
 }
 
 #[cfg(feature = "chrome")]
@@ -1684,30 +1722,199 @@ impl Browser {
         self.invalidate_live_dom_style(id, Some(&next));
     }
 
-    /// Open the native page context menu at logical browser-surface coordinates.
-    /// Only geometry from the currently painted document may identify a node.
+    /// Open a native context menu at logical browser-surface coordinates across
+    /// the address bar, DevTools panels/inputs, form `<input>` controls, or web page.
     /// Hosts must convert physical input using the current display scale.
     pub fn context_menu_at(&mut self, x: i32, y: i32) {
         if !self.chrome
-            || self.popup_modal_open()
-            || self.loading
+            || self.menu_open
+            || self.about_open
+            || self.settings_open
+            || self.bookmarks_open
+            || self.devtools.context.is_some()
             || x < 0
+            || y < 0
+            || x >= self.width as i32
+            || y >= self.height as i32
+        {
+            return;
+        }
+        // 1. Address bar right-click
+        if let Some((ax, ay, aw, ah)) = self.address_bar_rect()
+            && x >= ax
+            && x < ax + aw as i32
+            && y >= ay
+            && y < ay + ah as i32
+        {
+            self.cancel_pointer_input();
+            if self.focus != Focus::Address {
+                self.focus = Focus::Address;
+                if !self.address.is_empty() {
+                    self.selection.address_anchor = Some(0);
+                    self.selection.address_cursor = self.address.len();
+                    self.select_all = true;
+                }
+            }
+            self.devtools.context_link = None;
+            self.devtools.context_kind = crate::clipboard::ContextKind::AddressBar;
+            self.devtools.context = Some((x, y));
+            self.modal_focus = 0;
+            self.hits.clear();
+            self.dirty = true;
+            return;
+        }
+        // 2. Open DevTools panel right-click (docked or overlay)
+        if self.devtools.open {
+            let (px, py, pw, ph) = self.devtools_panel_rect();
+            if x >= px && x < px + pw as i32 && y >= py && y < py + ph as i32 {
+                let hit_action = self.topmost_hit(x, y).map(|i| self.hits[i].action.clone());
+                self.cancel_pointer_input();
+                self.devtools.context_link = None;
+                for &(kind, (fx, fy, fw, fh)) in &self.devtools.field_rects.clone() {
+                    if x >= fx && x < fx + fw as i32 && y >= fy && y < fy + fh as i32 {
+                        if self.focus != Focus::DevToolsField(kind) {
+                            self.focus_devtools_field(kind);
+                        }
+                        self.devtools.context_kind =
+                            crate::clipboard::ContextKind::DevToolsField(kind);
+                        self.devtools.context = Some((x, y));
+                        self.modal_focus = 0;
+                        self.hits.clear();
+                        self.dirty = true;
+                        return;
+                    }
+                }
+                if self.devtools.tab == Tab::Console
+                    && let Some((rx, ry, rw, rh)) = self.devtools.console_repl_rect
+                    && x >= rx
+                    && x < rx + rw as i32
+                    && y >= ry
+                    && y < ry + rh as i32
+                {
+                    self.focus = Focus::ConsoleInput;
+                    self.devtools.context_kind = crate::clipboard::ContextKind::ConsoleRepl;
+                    self.devtools.context = Some((x, y));
+                    self.modal_focus = 0;
+                    self.hits.clear();
+                    self.dirty = true;
+                    return;
+                }
+                self.focus = Focus::DevTools;
+                self.devtools.context_kind = match self.devtools.tab {
+                    Tab::Console => {
+                        if let Some(vrow) = self.console_row_at_point(x, y) {
+                            let inside = self
+                                .devtools
+                                .console_sel
+                                .is_some_and(|(a, b)| vrow >= a.min(b) && vrow <= a.max(b));
+                            if !inside {
+                                self.devtools.console_sel = Some((vrow, vrow));
+                            }
+                        }
+                        crate::clipboard::ContextKind::ConsoleLog
+                    }
+                    Tab::Elements => {
+                        if let Some(Action::DevToolsSelectNode(nid)) = hit_action {
+                            self.select_devtools_node(nid);
+                        }
+                        crate::clipboard::ContextKind::Elements
+                    }
+                    Tab::Sources => {
+                        if let Some(line) = self.sources_line_at_point(x, y) {
+                            let inside = self
+                                .devtools
+                                .sources_sel
+                                .is_some_and(|(a, b)| line >= a.min(b) && line <= a.max(b));
+                            if !inside {
+                                self.devtools.sources_sel = Some((line, line));
+                            }
+                        }
+                        crate::clipboard::ContextKind::Sources
+                    }
+                    Tab::Network => {
+                        if let Some(Action::DevToolsNetSelect(Some(idx))) = hit_action {
+                            self.devtools.selected_request = Some(idx);
+                        }
+                        crate::clipboard::ContextKind::Network
+                    }
+                    Tab::Performance => crate::clipboard::ContextKind::Performance,
+                    Tab::Application => crate::clipboard::ContextKind::Application,
+                };
+                self.devtools.context = Some((x, y));
+                self.modal_focus = 0;
+                self.hits.clear();
+                self.dirty = true;
+                return;
+            }
+        }
+        // 3. Page surface right-click
+        if self.popup_modal_open()
+            || self.loading
             || x >= self.page_viewport_width() as i32
             || y < self.page_top()
             || y >= self.page_top() + self.viewport_height() as i32
         {
             return;
         }
-        let context_link = self.link_at(x, y);
+        let hit_action = self.topmost_hit(x, y).map(|i| self.hits[i].action.clone());
+        let inspected = self.inspected_node_at(x, y);
+        let input_target = match hit_action {
+            Some(Action::Input(node)) => Some(node),
+            _ => inspected.filter(|&node| self.input_item(node).is_some()),
+        };
+        let context_link = self.link_at(x, y).or_else(|| {
+            let mut cur = inspected?;
+            for _ in 0..256 {
+                let node = self.document.nodes.get(cur)?;
+                if node.tag == "a"
+                    && let Some(raw) = node.attr("href")
+                    && !raw.trim().is_empty()
+                {
+                    let resolved = url::Url::parse(&self.page_url)
+                        .and_then(|base| base.join(raw.trim()))
+                        .or_else(|_| url::Url::parse(raw.trim()))
+                        .ok()?;
+                    if matches!(resolved.scheme(), "http" | "https") {
+                        return Some(resolved.into());
+                    }
+                }
+                if cur == 0 || node.parent == cur {
+                    break;
+                }
+                cur = node.parent;
+            }
+            None
+        });
         self.cancel_pointer_input();
+        if let Some(node) = input_target {
+            if self.focus != Focus::Input(node) {
+                self.focus = Focus::Input(node);
+                let len = self.current_input_value(node).map_or(0, |v| v.len());
+                self.selection.input_node = Some(node);
+                if len > 0 {
+                    self.selection.input_anchor = Some(0);
+                    self.selection.input_cursor = len;
+                    self.select_all = true;
+                }
+            }
+            self.select_devtools_node(node);
+            self.devtools.context_link = None;
+            self.devtools.context_kind = crate::clipboard::ContextKind::PageInput(node);
+            self.devtools.context = Some((x, y));
+            self.modal_focus = 0;
+            self.hits.clear();
+            self.dirty = true;
+            return;
+        }
         self.select_all = false;
         self.focus = Focus::Page;
-        if let Some(node) = self.inspected_node_at(x, y) {
+        if let Some(node) = inspected {
             self.select_devtools_node(node);
         } else {
             self.devtools.selected = None;
         }
         self.devtools.context_link = context_link;
+        self.devtools.context_kind = crate::clipboard::ContextKind::Page;
         self.devtools.context = Some((x, y));
         self.modal_focus = 0;
         self.hits.clear();
@@ -1775,6 +1982,7 @@ impl Browser {
         self.stop_scroll();
         self.pointer_press = None;
         self.pointer_position = None;
+        self.selection.active_drag = None;
         self.devtools.split_dragging = false;
         if self.hovered_link.take().is_some() {
             self.dirty = true;
@@ -1831,6 +2039,7 @@ impl Browser {
     }
 
     pub(super) fn focus_devtools_field(&mut self, kind: FieldKind) {
+        self.devtools.field_anchor = None;
         match kind {
             FieldKind::ConsoleFilter => {
                 self.devtools.console_search_cursor = self.devtools.console_search.len();
@@ -1859,7 +2068,7 @@ impl Browser {
         self.dirty = true;
     }
 
-    fn field_state_mut(&mut self, kind: FieldKind) -> (&mut String, &mut usize, usize) {
+    pub(crate) fn field_state_mut(&mut self, kind: FieldKind) -> (&mut String, &mut usize, usize) {
         match kind {
             FieldKind::ConsoleFilter => (
                 &mut self.devtools.console_search,
@@ -1897,15 +2106,19 @@ impl Browser {
         if filtered.is_empty() {
             return;
         }
-        {
+        let mut anc = self
+            .devtools
+            .field_anchor
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, a)| a);
+        let changed = {
             let (buf, cur, cap) = self.field_state_mut(kind);
-            if buf.len().saturating_add(filtered.len()) > cap {
-                return;
-            }
-            let pos = (*cur).min(buf.len());
-            buf.insert_str(pos, &filtered);
-            *cur = pos + filtered.len();
+            crate::clipboard::edit_replace_selection_or_insert(buf, cur, &mut anc, &filtered, cap)
+        };
+        if !changed {
+            return;
         }
+        self.devtools.field_anchor = None;
         match kind {
             FieldKind::ConsoleFilter | FieldKind::NetworkFilter => {
                 self.devtools.row = 0;
@@ -1930,27 +2143,26 @@ impl Browser {
         if filtered.is_empty() {
             return;
         }
-        if self
-            .devtools
-            .console_input
-            .len()
-            .saturating_add(filtered.len())
-            > MAX_CONSOLE_INPUT_BYTES
-        {
-            return;
+        let mut cur = self.devtools.console_cursor;
+        let mut anc = self.devtools.console_anchor;
+        if crate::clipboard::edit_replace_selection_or_insert(
+            &mut self.devtools.console_input,
+            &mut cur,
+            &mut anc,
+            &filtered,
+            MAX_CONSOLE_INPUT_BYTES,
+        ) {
+            self.devtools.console_cursor = cur;
+            self.devtools.console_anchor = anc;
+            self.devtools.console_history_idx = None;
+            self.dirty = true;
         }
-        let pos = self
-            .devtools
-            .console_cursor
-            .min(self.devtools.console_input.len());
-        self.devtools.console_input.insert_str(pos, &filtered);
-        self.devtools.console_cursor = pos + filtered.len();
-        self.devtools.console_history_idx = None;
-        self.dirty = true;
     }
 
     fn console_completion_suffix(&self) -> Option<&'static str> {
-        if self.devtools.console_cursor != self.devtools.console_input.len() {
+        if self.devtools.console_cursor != self.devtools.console_input.len()
+            || self.devtools.console_anchor.is_some()
+        {
             return None;
         }
         let bytes = self.devtools.console_input.as_bytes();
@@ -1974,6 +2186,30 @@ impl Browser {
     }
 
     pub(super) fn handle_console_key(&mut self, sym: u32, ctrl: bool, shift: bool, alt: bool) {
+        if !alt {
+            let is_copy = (ctrl && !shift && matches!(sym, 0x63 | 0x43))
+                || (ctrl && !shift && matches!(sym, 0xff63 | 0xff9e));
+            let is_cut = (ctrl && !shift && matches!(sym, 0x78 | 0x58))
+                || (!ctrl && shift && matches!(sym, 0xffff | 0xff9f));
+            let is_paste = (ctrl && !shift && matches!(sym, 0x76 | 0x56))
+                || (!ctrl && shift && matches!(sym, 0xff63 | 0xff9e));
+            if is_copy {
+                let _ = self.copy_selection();
+                return;
+            }
+            if is_cut {
+                let _ = self.cut_selection();
+                return;
+            }
+            if is_paste {
+                self.paste_from_source(crate::clipboard::PasteSource::Clipboard, false);
+                return;
+            }
+            if ctrl && !shift && matches!(sym, 0x61 | 0x41) {
+                self.select_all_active();
+                return;
+            }
+        }
         if let Focus::DevToolsField(kind) = self.focus {
             self.handle_devtools_field_key(kind, sym, ctrl, shift, alt);
             return;
@@ -1986,6 +2222,7 @@ impl Browser {
         if ctrl && !alt && (sym == u32::from(b'u') || sym == u32::from(b'U')) {
             self.devtools.console_input.clear();
             self.devtools.console_cursor = 0;
+            self.devtools.console_anchor = None;
             self.devtools.console_history_idx = None;
             self.dirty = true;
             return;
@@ -1995,6 +2232,7 @@ impl Browser {
                 if shift {
                     self.console_insert_text("\n");
                 } else {
+                    self.devtools.console_anchor = None;
                     self.submit_console_input();
                 }
             }
@@ -2008,70 +2246,118 @@ impl Browser {
                 }
             }
             0xff08 => {
-                let cur = self
-                    .devtools
-                    .console_cursor
-                    .min(self.devtools.console_input.len());
-                if cur > 0 {
-                    let prev = self.devtools.console_input[..cur]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(idx, _)| idx);
-                    self.devtools.console_input.drain(prev..cur);
-                    self.devtools.console_cursor = prev;
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                if crate::clipboard::edit_delete_backward(
+                    &mut self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    ctrl,
+                ) {
+                    self.devtools.console_cursor = cur;
+                    self.devtools.console_anchor = anc;
                     self.devtools.console_history_idx = None;
                     self.dirty = true;
                 }
             }
-            0xffff => {
-                let cur = self
-                    .devtools
-                    .console_cursor
-                    .min(self.devtools.console_input.len());
-                if cur < self.devtools.console_input.len() {
-                    let next = self.devtools.console_input[cur..]
-                        .chars()
-                        .next()
-                        .map_or(cur, |ch| cur + ch.len_utf8());
-                    self.devtools.console_input.drain(cur..next);
+            0xffff | 0xff9f => {
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                if crate::clipboard::edit_delete_forward(
+                    &mut self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    ctrl,
+                ) {
+                    self.devtools.console_cursor = cur;
+                    self.devtools.console_anchor = anc;
                     self.dirty = true;
                 }
             }
             0xff51 => {
-                let cur = self
-                    .devtools
-                    .console_cursor
-                    .min(self.devtools.console_input.len());
-                if cur > 0 {
-                    self.devtools.console_cursor = self.devtools.console_input[..cur]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(idx, _)| idx);
-                    self.dirty = true;
-                }
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                let target = if !shift
+                    && let Some((b0, _)) =
+                        crate::clipboard::normalized_range(&self.devtools.console_input, cur, anc)
+                {
+                    b0
+                } else if ctrl {
+                    crate::clipboard::prev_word_boundary(&self.devtools.console_input, cur)
+                } else {
+                    crate::clipboard::prev_char_boundary(&self.devtools.console_input, cur)
+                };
+                crate::clipboard::edit_move_cursor(
+                    &self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    target,
+                    shift,
+                );
+                self.devtools.console_cursor = cur;
+                self.devtools.console_anchor = anc;
+                self.dirty = true;
             }
             0xff53 => {
-                let cur = self
-                    .devtools
-                    .console_cursor
-                    .min(self.devtools.console_input.len());
-                if cur < self.devtools.console_input.len() {
-                    self.devtools.console_cursor = self.devtools.console_input[cur..]
-                        .chars()
-                        .next()
-                        .map_or(cur, |ch| cur + ch.len_utf8());
-                    self.dirty = true;
-                } else if let Some(rest) = self.console_completion_suffix() {
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                if !shift
+                    && anc.is_none()
+                    && cur >= self.devtools.console_input.len()
+                    && let Some(rest) = self.console_completion_suffix()
+                {
                     let owned = rest.to_owned();
                     self.console_insert_text(&owned);
+                    return;
                 }
+                let target = if !shift
+                    && let Some((_, b1)) =
+                        crate::clipboard::normalized_range(&self.devtools.console_input, cur, anc)
+                {
+                    b1
+                } else if ctrl {
+                    crate::clipboard::next_word_boundary(&self.devtools.console_input, cur)
+                } else {
+                    crate::clipboard::next_char_boundary(&self.devtools.console_input, cur)
+                };
+                crate::clipboard::edit_move_cursor(
+                    &self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    target,
+                    shift,
+                );
+                self.devtools.console_cursor = cur;
+                self.devtools.console_anchor = anc;
+                self.dirty = true;
             }
             0xff50 => {
-                self.devtools.console_cursor = 0;
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                crate::clipboard::edit_move_cursor(
+                    &self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    0,
+                    shift,
+                );
+                self.devtools.console_cursor = cur;
+                self.devtools.console_anchor = anc;
                 self.dirty = true;
             }
             0xff57 => {
-                self.devtools.console_cursor = self.devtools.console_input.len();
+                let end = self.devtools.console_input.len();
+                let mut cur = self.devtools.console_cursor;
+                let mut anc = self.devtools.console_anchor;
+                crate::clipboard::edit_move_cursor(
+                    &self.devtools.console_input,
+                    &mut cur,
+                    &mut anc,
+                    end,
+                    shift,
+                );
+                self.devtools.console_cursor = cur;
+                self.devtools.console_anchor = anc;
                 self.dirty = true;
             }
             0xff52 => {
@@ -2086,6 +2372,7 @@ impl Browser {
                     self.devtools.console_history_idx = Some(next_idx);
                     self.devtools.console_input = self.devtools.console_history[next_idx].clone();
                     self.devtools.console_cursor = self.devtools.console_input.len();
+                    self.devtools.console_anchor = None;
                     self.dirty = true;
                 }
             }
@@ -2101,6 +2388,7 @@ impl Browser {
                             std::mem::take(&mut self.devtools.console_draft);
                     }
                     self.devtools.console_cursor = self.devtools.console_input.len();
+                    self.devtools.console_anchor = None;
                     self.dirty = true;
                 }
             }
@@ -2136,9 +2424,15 @@ impl Browser {
             let (buf, cur, _) = self.field_state_mut(kind);
             buf.clear();
             *cur = 0;
+            self.devtools.field_anchor = None;
             self.dirty = true;
             return;
         }
+        let mut anc = self
+            .devtools
+            .field_anchor
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, a)| a);
         match sym {
             0xff0d => {
                 match kind {
@@ -2156,67 +2450,80 @@ impl Browser {
                 self.dirty = true;
             }
             0xff08 => {
-                {
+                let changed = {
                     let (buf, cur, _) = self.field_state_mut(kind);
-                    let pos = (*cur).min(buf.len());
-                    if pos > 0 {
-                        let prev = buf[..pos]
-                            .char_indices()
-                            .next_back()
-                            .map_or(0, |(idx, _)| idx);
-                        buf.drain(prev..pos);
-                        *cur = prev;
+                    crate::clipboard::edit_delete_backward(buf, cur, &mut anc, ctrl)
+                };
+                if changed {
+                    self.devtools.field_anchor = anc.map(|a| (kind, a));
+                    if matches!(kind, FieldKind::ConsoleFilter | FieldKind::NetworkFilter) {
+                        self.devtools.row = 0;
                     }
+                    self.dirty = true;
                 }
-                if matches!(kind, FieldKind::ConsoleFilter | FieldKind::NetworkFilter) {
-                    self.devtools.row = 0;
-                }
-                self.dirty = true;
             }
-            0xffff => {
-                {
+            0xffff | 0xff9f => {
+                let changed = {
                     let (buf, cur, _) = self.field_state_mut(kind);
-                    let pos = (*cur).min(buf.len());
-                    if pos < buf.len() {
-                        let next = buf[pos..]
-                            .chars()
-                            .next()
-                            .map_or(pos, |ch| pos + ch.len_utf8());
-                        buf.drain(pos..next);
+                    crate::clipboard::edit_delete_forward(buf, cur, &mut anc, ctrl)
+                };
+                if changed {
+                    self.devtools.field_anchor = anc.map(|a| (kind, a));
+                    if matches!(kind, FieldKind::ConsoleFilter | FieldKind::NetworkFilter) {
+                        self.devtools.row = 0;
                     }
+                    self.dirty = true;
                 }
-                self.dirty = true;
             }
             0xff51 => {
-                let (buf, cur, _) = self.field_state_mut(kind);
-                let pos = (*cur).min(buf.len());
-                if pos > 0 {
-                    *cur = buf[..pos]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(idx, _)| idx);
-                    self.dirty = true;
+                {
+                    let (buf, cur, _) = self.field_state_mut(kind);
+                    let target = if !shift
+                        && let Some((b0, _)) = crate::clipboard::normalized_range(buf, *cur, anc)
+                    {
+                        b0
+                    } else if ctrl {
+                        crate::clipboard::prev_word_boundary(buf, *cur)
+                    } else {
+                        crate::clipboard::prev_char_boundary(buf, *cur)
+                    };
+                    crate::clipboard::edit_move_cursor(buf, cur, &mut anc, target, shift);
                 }
+                self.devtools.field_anchor = anc.map(|a| (kind, a));
+                self.dirty = true;
             }
             0xff53 => {
-                let (buf, cur, _) = self.field_state_mut(kind);
-                let pos = (*cur).min(buf.len());
-                if pos < buf.len() {
-                    *cur = buf[pos..]
-                        .chars()
-                        .next()
-                        .map_or(pos, |ch| pos + ch.len_utf8());
-                    self.dirty = true;
+                {
+                    let (buf, cur, _) = self.field_state_mut(kind);
+                    let target = if !shift
+                        && let Some((_, b1)) = crate::clipboard::normalized_range(buf, *cur, anc)
+                    {
+                        b1
+                    } else if ctrl {
+                        crate::clipboard::next_word_boundary(buf, *cur)
+                    } else {
+                        crate::clipboard::next_char_boundary(buf, *cur)
+                    };
+                    crate::clipboard::edit_move_cursor(buf, cur, &mut anc, target, shift);
                 }
+                self.devtools.field_anchor = anc.map(|a| (kind, a));
+                self.dirty = true;
             }
             0xff50 => {
-                let (_, cur, _) = self.field_state_mut(kind);
-                *cur = 0;
+                {
+                    let (buf, cur, _) = self.field_state_mut(kind);
+                    crate::clipboard::edit_move_cursor(buf, cur, &mut anc, 0, shift);
+                }
+                self.devtools.field_anchor = anc.map(|a| (kind, a));
                 self.dirty = true;
             }
             0xff57 => {
-                let (buf, cur, _) = self.field_state_mut(kind);
-                *cur = buf.len();
+                {
+                    let (buf, cur, _) = self.field_state_mut(kind);
+                    let end = buf.len();
+                    crate::clipboard::edit_move_cursor(buf, cur, &mut anc, end, shift);
+                }
+                self.devtools.field_anchor = anc.map(|a| (kind, a));
                 self.dirty = true;
             }
             _ => {
@@ -2531,9 +2838,20 @@ impl Browser {
         self.page_revision = reply.revision;
         self.replace_task_wake(wake);
         self.script_blocked = false;
-        self.devtools.ingest_wire_console(init_console, !detached);
+        self.ingest_wire_console_and_sync(init_console, !detached);
         self.page_session = Some(session);
         Ok(())
+    }
+
+    pub(crate) fn ingest_wire_console_and_sync(
+        &mut self,
+        entries: Vec<mg_sparkle::page_session::console::ConsoleWireEntry>,
+        allow_dom_links: bool,
+    ) {
+        self.devtools.ingest_wire_console(entries, allow_dom_links);
+        if let Some(txt) = self.devtools.pending_clipboard_sync.take() {
+            self.write_clipboard(txt, false);
+        }
     }
 
     fn enqueue_console_command(&mut self, cmd: ConsoleCommand, target: ConsoleTarget) {
@@ -2598,6 +2916,9 @@ impl Browser {
         terminal: bool,
     ) {
         use mg_sparkle::page_session::console::ConsoleValueKind;
+        if let Some(txt) = self.devtools.pending_clipboard_sync.take() {
+            self.write_clipboard(txt, false);
+        }
         if let Some(nid) = self.devtools.pending_inspect_node.take()
             && !self.console_detached_dom
             && nid < self.document.nodes.len()
@@ -3502,6 +3823,7 @@ impl Browser {
             } else {
                 String::new()
             };
+            let full_entry_text = Self::format_console_entry_for_copy(entry);
             let head = format!("{arrow}{count_prefix}{}", entry.message);
             let wrapped = self.wrap_lines(&[head], text_w);
             for (wi, line) in wrapped.into_iter().enumerate() {
@@ -3513,6 +3835,8 @@ impl Browser {
                     kind: entry.kind,
                     source: entry.source,
                     text: line,
+                    entry_idx: Some(entry_idx),
+                    full_text: full_entry_text.clone(),
                     first_of_entry: wi == 0,
                     group_depth: entry.group_depth,
                     toggle_group: (wi == 0 && matches!(entry.kind, ConsoleEntryKind::Group { .. }))
@@ -3533,6 +3857,8 @@ impl Browser {
                     kind: entry.kind,
                     source: entry.source,
                     text: extra.clone(),
+                    entry_idx: Some(entry_idx),
+                    full_text: full_entry_text.clone(),
                     first_of_entry: false,
                     group_depth: entry.group_depth,
                     toggle_group: None,
@@ -3553,6 +3879,8 @@ impl Browser {
                         kind: ConsoleEntryKind::Result,
                         source: "Prop",
                         text: format!("  {}: {}{marker}", prop.name, prop.value),
+                        entry_idx: Some(entry_idx),
+                        full_text: full_entry_text.clone(),
                         first_of_entry: false,
                         group_depth: entry.group_depth.saturating_add(1),
                         toggle_group: None,
@@ -3564,7 +3892,7 @@ impl Browser {
         }
 
         if matches!(filter, ConsoleFilter::All | ConsoleFilter::Warnings) {
-            for entry in &rendering_snapshot.entries {
+            for (css_idx, entry) in rendering_snapshot.entries.iter().enumerate() {
                 let location = match (entry.line, entry.column) {
                     (Some(line), Some(column)) => format!(":{line}:{column}"),
                     _ => String::new(),
@@ -3583,6 +3911,7 @@ impl Browser {
                 if !matches_console_search(&search, "CSS", &formatted, &[]) {
                     continue;
                 }
+                let full_css = format!("[WRN CSS] {formatted}");
                 for (wi, line) in self
                     .wrap_lines(&[formatted], text_w)
                     .into_iter()
@@ -3596,6 +3925,8 @@ impl Browser {
                         kind: ConsoleEntryKind::Diagnostic,
                         source: "CSS",
                         text: line,
+                        entry_idx: Some(1_000_000 + css_idx),
+                        full_text: full_css.clone(),
                         first_of_entry: wi == 0,
                         group_depth: 0,
                         toggle_group: None,
@@ -3606,11 +3937,14 @@ impl Browser {
             }
         }
         if omitted_count > 0 && rows.len() < 768 {
+            let sys_txt = format!("{omitted_count} additional diagnostics omitted by bounds");
             rows.push(ConsoleVisualRow {
                 level: ConsoleLevel::Info,
                 kind: ConsoleEntryKind::Diagnostic,
                 source: "Sys",
-                text: format!("{omitted_count} additional diagnostics omitted by bounds"),
+                text: sys_txt.clone(),
+                entry_idx: Some(2_000_000),
+                full_text: sys_txt,
                 first_of_entry: true,
                 group_depth: 0,
                 toggle_group: None,
@@ -3619,6 +3953,444 @@ impl Browser {
             });
         }
         rows
+    }
+
+    fn format_console_entry_for_copy(entry: &ConsoleEntry) -> String {
+        let mut out = String::new();
+        let indent = "  ".repeat(entry.group_depth.min(6) as usize);
+        let count_prefix = if entry.count > 1 {
+            format!("(×{}) ", entry.count)
+        } else {
+            String::new()
+        };
+        match entry.kind {
+            ConsoleEntryKind::Command => {
+                out.push_str(&format!("{indent}{}", entry.message));
+            }
+            ConsoleEntryKind::Result if entry.level != ConsoleLevel::Error => {
+                out.push_str(&format!("{indent}{}", entry.message));
+            }
+            ConsoleEntryKind::NavMarker => {
+                out.push_str(&entry.message);
+            }
+            _ => {
+                let lvl = match entry.level {
+                    ConsoleLevel::Error => "ERR",
+                    ConsoleLevel::Warning => "WRN",
+                    ConsoleLevel::Verbose => "DBG",
+                    ConsoleLevel::Info => "LOG",
+                };
+                out.push_str(&format!(
+                    "{indent}[{lvl} {}] {count_prefix}{}",
+                    entry.source, entry.message
+                ));
+            }
+        }
+        for extra in &entry.extra_lines {
+            out.push('\n');
+            out.push_str(&indent);
+            out.push_str("  ");
+            out.push_str(extra);
+        }
+        if let Some(props) = &entry.properties {
+            for prop in props.iter().take(48) {
+                let marker = if prop.enumerable { "" } else { " [non-enum]" };
+                out.push('\n');
+                out.push_str(&indent);
+                out.push_str(&format!("  {}: {}{marker}", prop.name, prop.value));
+            }
+        }
+        out
+    }
+
+    pub(crate) fn console_visual_row_count(&mut self) -> usize {
+        let (_, _, pw, _) = self.devtools_panel_rect();
+        let text_w = pw.saturating_sub(96).max(80) as f32;
+        self.build_console_visual_rows(text_w).len()
+    }
+
+    pub(crate) fn active_source_line_count(&self) -> usize {
+        let sources = self.collect_sources();
+        let idx = self
+            .devtools
+            .selected_source
+            .min(sources.len().saturating_sub(1));
+        sources
+            .get(idx)
+            .map_or(0, |(_, _, body)| body.lines().take(4096).count())
+    }
+
+    pub(crate) fn console_row_at_point(&mut self, x: i32, y: i32) -> Option<usize> {
+        let (lx, ly, lw, lh) = self.devtools.console_log_rect?;
+        if x < lx || x >= lx + lw as i32 || y < ly || y >= ly + lh as i32 {
+            return None;
+        }
+        let total = self.console_visual_row_count();
+        if total == 0 {
+            return None;
+        }
+        let rel = ((y - ly).max(0) / 20) as usize;
+        Some((self.devtools.row + rel).min(total - 1))
+    }
+
+    pub(crate) fn sources_line_at_point(&self, x: i32, y: i32) -> Option<usize> {
+        let (sx, sy, sw, sh) = self.devtools.sources_code_rect?;
+        if x < sx || x >= sx + sw as i32 || y < sy || y >= sy + sh as i32 {
+            return None;
+        }
+        let total = self.active_source_line_count();
+        if total == 0 {
+            return None;
+        }
+        let rel = ((y - sy).max(0) / 18) as usize;
+        Some((self.devtools.row + rel).min(total - 1))
+    }
+
+    pub(crate) fn try_focus_devtools_editable_at(&mut self, x: i32, y: i32) -> bool {
+        for &(kind, (fx, fy, fw, fh)) in &self.devtools.field_rects.clone() {
+            if x >= fx && x < fx + fw as i32 && y >= fy && y < fy + fh as i32 {
+                self.focus_devtools_field(kind);
+                let byte = self.hit_devtools_field_byte(kind, x);
+                let (_, cur, _) = self.field_state_mut(kind);
+                *cur = byte;
+                self.devtools.field_anchor = None;
+                self.dirty = true;
+                return true;
+            }
+        }
+        if self.devtools.tab == Tab::Console
+            && let Some((rx, ry, rw, rh)) = self.devtools.console_repl_rect
+            && x >= rx
+            && x < rx + rw as i32
+            && y >= ry
+            && y < ry + rh as i32
+        {
+            self.focus = Focus::ConsoleInput;
+            let byte = self.hit_console_repl_byte(x, y);
+            self.devtools.console_cursor = byte;
+            self.devtools.console_anchor = None;
+            self.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn hit_devtools_field_byte(&mut self, kind: FieldKind, x: i32) -> usize {
+        let rect = self
+            .devtools
+            .field_rects
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, r)| *r);
+        let (val, cur) = {
+            let (buf, cur, _) = self.field_state_mut(kind);
+            (buf.clone(), *cur)
+        };
+        let Some((fx, _, fw, _)) = rect else {
+            return val.len();
+        };
+        crate::clipboard::hit_byte_in_line(
+            &mut self.fonts,
+            &val,
+            11.5,
+            fw.saturating_sub(12) as f32,
+            cur,
+            (x - (fx + 5)) as f32,
+        )
+    }
+
+    pub(crate) fn hit_console_repl_byte(&mut self, x: i32, y: i32) -> usize {
+        let Some((rx, ry, rw, _)) = self.devtools.console_repl_rect else {
+            return self.devtools.console_input.len();
+        };
+        let input = self.devtools.console_input.clone();
+        if input.is_empty() {
+            return 0;
+        }
+        let target_line = ((y - (ry + 5)).max(0) / 16) as usize;
+        let mut line_start = 0usize;
+        for (li, raw_line) in input.split('\n').take(3).enumerate() {
+            if li == target_line || !input[line_start + raw_line.len()..].starts_with('\n') {
+                let cur_in_line = self
+                    .devtools
+                    .console_cursor
+                    .saturating_sub(line_start)
+                    .min(raw_line.len());
+                let rel = crate::clipboard::hit_byte_in_line(
+                    &mut self.fonts,
+                    raw_line,
+                    12.5,
+                    rw.saturating_sub(32) as f32,
+                    cur_in_line,
+                    (x - (rx + 20)) as f32,
+                );
+                return (line_start + rel).min(input.len());
+            }
+            line_start += raw_line.len() + 1;
+        }
+        input.len()
+    }
+
+    pub(crate) fn copy_console_rows(&mut self, range: Option<(usize, usize)>) -> Option<String> {
+        let (_, _, pw, _) = self.devtools_panel_rect();
+        let text_w = pw.saturating_sub(96).max(80) as f32;
+        let visual = self.build_console_visual_rows(text_w);
+        if visual.is_empty() {
+            return None;
+        }
+        let (r0, r1) = match range {
+            Some((a, b)) => (
+                a.min(b).min(visual.len() - 1),
+                a.max(b).min(visual.len() - 1),
+            ),
+            None => (0, visual.len() - 1),
+        };
+        let mut seen_entries = HashSet::new();
+        let mut blocks = Vec::new();
+        for vrow in &visual[r0..=r1] {
+            if let Some(eid) = vrow.entry_idx {
+                if seen_entries.insert(eid) && !vrow.full_text.is_empty() {
+                    blocks.push(vrow.full_text.clone());
+                }
+            } else if !vrow.full_text.is_empty() {
+                blocks.push(vrow.full_text.clone());
+            }
+        }
+        if blocks.is_empty() {
+            None
+        } else {
+            let count = blocks.len();
+            let joined = crate::clipboard::bounded_clipboard(&blocks.join("\n"));
+            self.devtools.copy_feedback = Some(format!(
+                "Copied {count} console {} ({} B)",
+                if count == 1 { "entry" } else { "entries" },
+                joined.len()
+            ));
+            Some(joined)
+        }
+    }
+
+    pub(crate) fn serialize_outer_html(&self, root_id: usize) -> String {
+        fn rec(doc: &Document, id: usize, depth: usize, out: &mut String, budget: &mut usize) {
+            if *budget == 0 || depth > 64 {
+                return;
+            }
+            *budget -= 1;
+            let Some(node) = doc.nodes.get(id) else {
+                return;
+            };
+            if node.tag == "#document" {
+                for &child in &node.children {
+                    rec(doc, child, depth, out, budget);
+                }
+                return;
+            }
+            if node.tag == "#text" {
+                out.push_str(&node.text);
+                return;
+            }
+            out.push('<');
+            out.push_str(&node.tag);
+            for (k, v) in &node.attributes {
+                out.push(' ');
+                out.push_str(k);
+                out.push_str("=\"");
+                out.push_str(&v.replace('"', "&quot;"));
+                out.push('"');
+            }
+            out.push('>');
+            let is_void = matches!(
+                node.tag.as_str(),
+                "area"
+                    | "base"
+                    | "br"
+                    | "col"
+                    | "embed"
+                    | "hr"
+                    | "img"
+                    | "input"
+                    | "link"
+                    | "meta"
+                    | "source"
+                    | "track"
+                    | "wbr"
+            );
+            if !is_void {
+                for &child in &node.children {
+                    if out.len() >= crate::clipboard::MAX_CLIPBOARD_BYTES {
+                        break;
+                    }
+                    rec(doc, child, depth + 1, out, budget);
+                }
+                out.push_str("</");
+                out.push_str(&node.tag);
+                out.push('>');
+            }
+        }
+        let mut out = String::new();
+        let mut budget = 8192usize;
+        rec(&self.document, root_id, 0, &mut out, &mut budget);
+        crate::clipboard::bounded_clipboard(&out)
+    }
+
+    pub(crate) fn css_selector_for_node(&self, mut cur: usize) -> String {
+        let mut parts = Vec::new();
+        for _ in 0..16 {
+            let Some(node) = self.document.nodes.get(cur) else {
+                break;
+            };
+            if node.tag == "#document" || cur == 0 {
+                break;
+            }
+            if let Some(id_attr) = node.attr("id").filter(|s| !s.trim().is_empty()) {
+                parts.push(format!("#{}", id_attr.trim()));
+                break;
+            }
+            let mut seg = if node.tag == "#text" {
+                "text()".into()
+            } else {
+                node.tag.clone()
+            };
+            if let Some(cls) = node.attr("class").filter(|s| !s.trim().is_empty()) {
+                for token in cls.split_whitespace().take(2) {
+                    seg.push('.');
+                    seg.push_str(token);
+                }
+            }
+            parts.push(seg);
+            if node.parent == cur {
+                break;
+            }
+            cur = node.parent;
+        }
+        parts.reverse();
+        if parts.is_empty() {
+            "html".into()
+        } else {
+            parts.join(" > ")
+        }
+    }
+
+    pub(crate) fn styles_summary_for_node(&self, id: usize) -> String {
+        let mut lines = Vec::new();
+        if let Some(node) = self.document.nodes.get(id)
+            && let Some(inline) = node.attr("style").filter(|s| !s.trim().is_empty())
+        {
+            lines.push(format!("element.style {{ {} }}", inline.trim()));
+        }
+        for (sel, decls, origin) in self.matched_css_rules_for(id) {
+            lines.push(format!("{sel} {{ {decls} }} /* {origin} */"));
+        }
+        for (name, val, _) in self.computed_style_pairs(id) {
+            lines.push(format!("{name}: {val};"));
+        }
+        crate::clipboard::bounded_clipboard(&lines.join("\n"))
+    }
+
+    pub(crate) fn network_copy_url(&self) -> Option<String> {
+        let idx = self
+            .devtools
+            .selected_request
+            .or_else(|| self.filtered_network_indices().into_iter().next())?;
+        let entry = self.devtools.network.get(idx)?;
+        Some(entry.url.clone())
+    }
+
+    pub(crate) fn network_copy_details(&self) -> Option<String> {
+        let idx = self
+            .devtools
+            .selected_request
+            .or_else(|| self.filtered_network_indices().into_iter().next())?;
+        let entry = self.devtools.network.get(idx)?;
+        let mut lines = vec![format!(
+            "{} {} -> {}",
+            entry.method,
+            entry.url,
+            entry.status.map_or_else(
+                || entry.error.clone().unwrap_or_else(|| "pending".into()),
+                |s| s.to_string()
+            )
+        )];
+        lines.push(format!(
+            "MIME: {} · Bytes: {} · Start: +{:.1} ms · Duration: {:.1} ms",
+            entry.mime, entry.bytes, entry.start_ms, entry.duration_ms
+        ));
+        if !entry.request_headers.is_empty() {
+            lines.push("Request Headers:".into());
+            for (k, v) in &entry.request_headers {
+                lines.push(format!("  {k}: {v}"));
+            }
+        }
+        if !entry.response_headers.is_empty() {
+            lines.push("Response Headers:".into());
+            for (k, v) in &entry.response_headers {
+                lines.push(format!("  {k}: {v}"));
+            }
+        }
+        if let Some(body) = &entry.body_preview {
+            lines.push("Response Preview:".into());
+            lines.push(body.clone());
+        }
+        Some(crate::clipboard::bounded_clipboard(&lines.join("\n")))
+    }
+
+    pub(crate) fn network_copy_all_urls(&self) -> Option<String> {
+        let indices = self.filtered_network_indices();
+        if indices.is_empty() {
+            return None;
+        }
+        let urls: Vec<&str> = indices
+            .into_iter()
+            .filter_map(|i| self.devtools.network.get(i).map(|e| e.url.as_str()))
+            .collect();
+        (!urls.is_empty()).then(|| crate::clipboard::bounded_clipboard(&urls.join("\n")))
+    }
+
+    pub(crate) fn devtools_copy_current_tab(&mut self) -> Option<String> {
+        match self.devtools.tab {
+            Tab::Console => {
+                let sel = self.devtools.console_sel;
+                self.copy_console_rows(sel)
+            }
+            Tab::Elements => {
+                let id = self
+                    .devtools
+                    .selected
+                    .filter(|(epoch, _)| *epoch == self.dom_epoch)
+                    .map_or(0, |(_, id)| id);
+                let html = self.serialize_outer_html(id);
+                (!html.is_empty()).then_some(html)
+            }
+            Tab::Sources => {
+                let sources = self.collect_sources();
+                let idx = self
+                    .devtools
+                    .selected_source
+                    .min(sources.len().saturating_sub(1));
+                let (_, _, content) = sources.get(idx)?;
+                if let Some((a, b)) = self.devtools.sources_sel {
+                    let all: Vec<&str> = content.lines().take(4096).collect();
+                    if all.is_empty() {
+                        return None;
+                    }
+                    let l0 = a.min(b).min(all.len() - 1);
+                    let l1 = a.max(b).min(all.len() - 1);
+                    Some(crate::clipboard::bounded_clipboard(
+                        &all[l0..=l1].join("\n"),
+                    ))
+                } else {
+                    (!content.is_empty()).then(|| crate::clipboard::bounded_clipboard(content))
+                }
+            }
+            Tab::Network => self
+                .network_copy_url()
+                .or_else(|| self.network_copy_all_urls()),
+            Tab::Performance => Some(self.performance_report()),
+            Tab::Application => {
+                let out = self.inspector_lines().join("\n");
+                (!out.is_empty()).then_some(out)
+            }
+        }
     }
 
     fn inspector_lines(&self) -> Vec<String> {
@@ -3873,52 +4645,21 @@ impl Browser {
         let palette = self.effective_theme().palette();
         if let Some((x, y)) = self.devtools.context {
             self.hits.clear();
+            let items = self.context_menu_items();
+            let h = items.len() as u32 * 38 + 4;
             let width = self.width.saturating_sub(12).min(226);
-            let x = x.clamp(6, self.width.saturating_sub(width + 6) as i32);
-            if let Some(url) = self.devtools.context_link.clone() {
-                let y = y.clamp(6, self.height.saturating_sub(124) as i32);
-                canvas.rect(x, y, width, 118, palette.border);
+            let max_x = (self.width.saturating_sub(width + 6) as i32).max(6);
+            let max_y = (self.height.saturating_sub(h + 6) as i32).max(6);
+            let x = x.clamp(6, max_x);
+            let y = y.clamp(6, max_y);
+            canvas.rect(x, y, width, h, palette.border);
+            for (idx, (label, action)) in items.into_iter().enumerate() {
                 self.inspector_button(
                     canvas,
-                    (x + 4, y + 4, width - 8, 34),
-                    "Open link in new tab",
-                    Action::OpenLinkInNewTab(url),
-                    Some(0),
-                    false,
-                );
-                self.inspector_button(
-                    canvas,
-                    (x + 4, y + 42, width - 8, 34),
-                    "Inspect element",
-                    Action::InspectElement,
-                    Some(1),
-                    false,
-                );
-                self.inspector_button(
-                    canvas,
-                    (x + 4, y + 80, width - 8, 34),
-                    "Close",
-                    Action::CloseMenu,
-                    Some(2),
-                    false,
-                );
-            } else {
-                let y = y.clamp(6, self.height.saturating_sub(86) as i32);
-                canvas.rect(x, y, width, 80, palette.border);
-                self.inspector_button(
-                    canvas,
-                    (x + 4, y + 4, width - 8, 34),
-                    "Inspect element",
-                    Action::InspectElement,
-                    Some(0),
-                    false,
-                );
-                self.inspector_button(
-                    canvas,
-                    (x + 4, y + 42, width - 8, 34),
-                    "Close",
-                    Action::CloseMenu,
-                    Some(1),
+                    (x + 4, y + 4 + idx as i32 * 38, width - 8, 34),
+                    label,
+                    action,
+                    Some(idx),
                     false,
                 );
             }
@@ -3932,6 +4673,10 @@ impl Browser {
 
     #[cfg(feature = "chrome")]
     fn paint_devtools_panel(&mut self, canvas: &mut Canvas, docked: bool) {
+        self.devtools.field_rects.clear();
+        self.devtools.console_log_rect = None;
+        self.devtools.console_repl_rect = None;
+        self.devtools.sources_code_rect = None;
         let palette = self.effective_theme().palette();
         let dark = self.effective_theme() == ColorScheme::Dark;
         let (x, y, width, height) = self.devtools_panel_rect();
@@ -4471,11 +5216,13 @@ impl Browser {
                 }
                 let right_end = x + width as i32;
                 let clear_w = 42u32;
-                let pres_w = if width >= 430 { 66u32 } else { 0u32 };
+                let copy_w = if width >= 220 { 40u32 } else { 0u32 };
+                let pres_w = if width >= 460 { 64u32 } else { 0u32 };
                 let clear_x = right_end - clear_w as i32;
-                let pres_x = clear_x - if pres_w > 0 { pres_w as i32 + 3 } else { 0 };
+                let copy_x = clear_x - if copy_w > 0 { copy_w as i32 + 3 } else { 0 };
+                let pres_x = copy_x - if pres_w > 0 { pres_w as i32 + 3 } else { 0 };
                 let filter_avail = (pres_x - cx - 4).max(0) as u32;
-                if filter_avail >= 64 {
+                if filter_avail >= 52 {
                     self.paint_field_input(
                         canvas,
                         (cx, y + 1, filter_avail, 20),
@@ -4495,6 +5242,21 @@ impl Browser {
                         pres_lbl,
                         Action::DevToolsConsolePreserve,
                         self.devtools.preserve_log,
+                        dark,
+                    );
+                }
+                if copy_w > 0 {
+                    let has_sel = self.devtools.console_sel.is_some();
+                    self.pill_button(
+                        canvas,
+                        (copy_x, y + 1, copy_w, 20),
+                        "Copy",
+                        if has_sel {
+                            Action::DevToolsConsoleCopySelected
+                        } else {
+                            Action::DevToolsConsoleCopyAll
+                        },
+                        has_sel,
                         dark,
                     );
                 }
@@ -5090,6 +5852,9 @@ impl Browser {
         let line_count = self.devtools.console_input.lines().count().clamp(1, 3) as u32;
         let repl_h = (line_count * 16 + 10).min(height.saturating_sub(24).max(26));
         let log_h = height.saturating_sub(repl_h + 4);
+        let repl_y = y + height as i32 - repl_h as i32;
+        self.devtools.console_log_rect = Some((x, y, width, log_h));
+        self.devtools.console_repl_rect = Some((x, repl_y, width, repl_h));
         let text_w = width.saturating_sub(84).max(80) as f32;
         let visual = self.build_console_visual_rows(text_w);
         let rows = (log_h / 20).max(1) as usize;
@@ -5116,6 +5881,7 @@ impl Browser {
             );
         } else {
             for (i, vrow) in visual.iter().skip(self.devtools.row).take(rows).enumerate() {
+                let row_idx = self.devtools.row + i;
                 let ry = y + i as i32 * 20;
                 let (bg, stripe, ink) = match vrow.kind {
                     ConsoleEntryKind::Command => (
@@ -5146,7 +5912,24 @@ impl Browser {
                     },
                 };
                 canvas.rect(x, ry, width, 19, bg);
-                canvas.rect(x, ry, 3, 19, stripe);
+                let is_sel = self
+                    .devtools
+                    .console_sel
+                    .is_some_and(|(a, b)| row_idx >= a.min(b) && row_idx <= a.max(b));
+                if is_sel {
+                    blend_rect(
+                        canvas,
+                        x,
+                        ry,
+                        width,
+                        19,
+                        0x2563eb,
+                        if dark { 84 } else { 56 },
+                    );
+                    canvas.rect(x, ry, 3, 19, palette.accent);
+                } else {
+                    canvas.rect(x, ry, 3, 19, stripe);
+                }
                 canvas.rect(x, ry + 19, width, 1, palette.border);
 
                 let indent = (vrow.group_depth as i32 * 10).min(60);
@@ -5204,6 +5987,14 @@ impl Browser {
                             object_id,
                         },
                     });
+                } else {
+                    self.hits.push(Hit {
+                        x,
+                        y: ry,
+                        w: width.saturating_sub(inspect_w),
+                        h: 19,
+                        action: Action::DevToolsConsoleSelectRow(row_idx),
+                    });
                 }
                 if let Some(nid) = vrow.inspect_node {
                     self.pill_button(
@@ -5219,7 +6010,6 @@ impl Browser {
         }
 
         // Interactive JS REPL prompt bar at bottom of Console body
-        let repl_y = y + height as i32 - repl_h as i32;
         let focused = self.focus == Focus::ConsoleInput;
         canvas.rect(
             x,
@@ -5252,24 +6042,57 @@ impl Browser {
                 palette.muted,
             );
         } else {
-            let ghost = if focused {
+            let ghost = if focused
+                && self.devtools.console_anchor.is_none()
+                && self.devtools.console_cursor >= self.devtools.console_input.len()
+            {
                 self.console_completion_suffix().unwrap_or("").to_owned()
             } else {
                 String::new()
             };
             let input_snapshot = self.devtools.console_input.clone();
+            let cur_global =
+                crate::clipboard::clamp_utf8(&input_snapshot, self.devtools.console_cursor);
+            let sel_global = if focused {
+                crate::clipboard::normalized_range(
+                    &input_snapshot,
+                    cur_global,
+                    self.devtools.console_anchor,
+                )
+            } else {
+                None
+            };
+            let avail_w = width.saturating_sub(32) as f32;
+            let mut line_start = 0usize;
             for (li, raw_line) in input_snapshot.split('\n').take(3).enumerate() {
+                let line_end = line_start + raw_line.len();
                 let ly = repl_y + 5 + li as i32 * 16;
-                let shown = fit_tail(
+                let is_caret_line = (cur_global >= line_start && cur_global <= line_end)
+                    || (li == 2 && cur_global > line_end);
+                let cur_in_line = if is_caret_line {
+                    cur_global.saturating_sub(line_start).min(raw_line.len())
+                } else {
+                    raw_line.len()
+                };
+                let line_sel = sel_global.and_then(|(s0, s1)| {
+                    let l0 = s0.max(line_start).min(line_end) - line_start;
+                    let l1 = s1.max(line_start).min(line_end) - line_start;
+                    (l1 > l0).then_some((l0, l1))
+                });
+                let (shown, sx0, sx1, cx_rel) = crate::clipboard::slice_line_bytes(
                     &mut self.fonts,
                     raw_line,
                     12.5,
-                    width.saturating_sub(32) as f32,
+                    avail_w,
+                    line_sel,
+                    cur_in_line,
                 );
+                if focused && sx1 > sx0 {
+                    canvas.rect(x + 20 + sx0, ly, (sx1 - sx0) as u32, 15, palette.selection);
+                }
                 canvas.text(&mut self.fonts, x + 20, ly, &shown, 12.5, palette.ink);
-                if focused && li + 1 == line_count as usize {
-                    let tw = self.fonts.width(&shown, 12.5).ceil() as i32;
-                    let cx_pos = (x + 20 + tw).min(x + width as i32 - 8);
+                if focused && is_caret_line {
+                    let cx_pos = (x + 20 + cx_rel).min(x + width as i32 - 8);
                     canvas.rect(cx_pos, ly + 1, 2, 14, palette.accent);
                     if !ghost.is_empty() && cx_pos + 16 < x + width as i32 {
                         self.inspector_text(
@@ -5283,6 +6106,7 @@ impl Browser {
                         );
                     }
                 }
+                line_start = line_end + 1;
             }
         }
         self.hits.push(Hit {
@@ -5347,6 +6171,7 @@ impl Browser {
 
         let code_x = x + nav_w as i32 + 4;
         let code_w = width.saturating_sub(nav_w + 4);
+        self.devtools.sources_code_rect = Some((code_x, y, code_w, height));
         let Some((kind, _, content)) = sources.get(self.devtools.selected_source) else {
             return;
         };
@@ -5367,8 +6192,14 @@ impl Browser {
         {
             let line_no = i;
             let ry = y + (i - self.devtools.row) as i32 * 18;
+            let is_sel = self
+                .devtools
+                .sources_sel
+                .is_some_and(|(a, b)| line_no >= a.min(b) && line_no <= a.max(b));
             let is_hit = !query.is_empty() && raw_line.to_ascii_lowercase().contains(&query);
-            if is_hit {
+            if is_sel {
+                canvas.rect(code_x, ry, code_w, 17, palette.selection);
+            } else if is_hit {
                 canvas.rect(
                     code_x,
                     ry,
@@ -5410,6 +6241,13 @@ impl Browser {
                 11.5,
                 syntax_col,
             );
+            self.hits.push(Hit {
+                x: code_x,
+                y: ry,
+                w: code_w,
+                h: 18,
+                action: Action::DevToolsSourceSelectLine(line_no),
+            });
         }
     }
 
@@ -6018,6 +6856,7 @@ impl Browser {
         if width < 24 || height < 14 {
             return;
         }
+        self.devtools.field_rects.push((kind, area));
         let palette = self.effective_theme().palette();
         let focused = self.focus == Focus::DevToolsField(kind);
         canvas.rect(
@@ -6038,10 +6877,15 @@ impl Browser {
             height.saturating_sub(2),
             palette.field,
         );
-        let value = {
-            let (buf, _, _) = self.field_state_mut(kind);
-            buf.clone()
+        let (value, cur_b) = {
+            let (buf, cur, _) = self.field_state_mut(kind);
+            (buf.clone(), *cur)
         };
+        let anc = self
+            .devtools
+            .field_anchor
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, a)| a);
         let pad_y = (height.saturating_sub(14) / 2) as i32;
         if value.is_empty() && !focused {
             self.inspector_text(
@@ -6054,16 +6898,32 @@ impl Browser {
                 palette.muted,
             );
         } else {
-            let shown = fit_tail(
+            let sel = if focused {
+                crate::clipboard::normalized_range(&value, cur_b, anc)
+            } else {
+                None
+            };
+            let caret_b = if focused { cur_b } else { value.len() };
+            let (shown, sx0, sx1, cx_rel) = crate::clipboard::slice_line_bytes(
                 &mut self.fonts,
                 &value,
                 11.5,
                 width.saturating_sub(12) as f32,
+                sel,
+                caret_b,
             );
+            if focused && sx1 > sx0 {
+                canvas.rect(
+                    x + 5 + sx0,
+                    y + 2,
+                    (sx1 - sx0) as u32,
+                    height.saturating_sub(4),
+                    palette.selection,
+                );
+            }
             canvas.text(&mut self.fonts, x + 5, y + pad_y, &shown, 11.5, palette.ink);
             if focused {
-                let tw = self.fonts.width(&shown, 11.5).ceil() as i32;
-                let cx_pos = (x + 5 + tw).min(x + width as i32 - 4);
+                let cx_pos = (x + 5 + cx_rel).min(x + width as i32 - 4);
                 canvas.rect(cx_pos, y + 3, 2, height.saturating_sub(6), palette.accent);
             }
         }
@@ -6104,6 +6964,9 @@ impl Browser {
 
     #[cfg(feature = "chrome")]
     fn footer_summary(&self) -> String {
+        if let Some(msg) = &self.devtools.copy_feedback {
+            return format!("✓ {msg}");
+        }
         match self.devtools.tab {
             Tab::Elements => {
                 if self.devtools.pick_mode {
@@ -6426,8 +7289,16 @@ mod tests {
         assert_eq!(app.hovered_link(), Some("https://example.com/stories/42"));
         let menu_canvas = app.paint();
         assert_ne!(bottom_left(&menu_canvas), baseline_footer);
-        assert_eq!(app.hits.len(), 3);
+        assert_eq!(app.hits.len(), 4);
         let open_new_tab_hit = app.hits[0].clone();
+        let copy_link_hit = app.hits[1].clone();
+        app.pointer_down(copy_link_hit.x + 4, copy_link_hit.y + 4);
+        app.pointer_up(copy_link_hit.x + 4, copy_link_hit.y + 4);
+        assert!(!app.popup_modal_open());
+        assert_eq!(app.clipboard_text(), "https://example.com/stories/42");
+
+        app.context_menu_at(link_hit.x + 2, link_hit.y + 2);
+        app.paint();
         app.pointer_down(open_new_tab_hit.x + 4, open_new_tab_hit.y + 4);
         app.pointer_up(open_new_tab_hit.x + 4, open_new_tab_hit.y + 4);
         assert!(!app.popup_modal_open());

@@ -455,6 +455,7 @@ pub(crate) fn render_scaled_profiled(
     let paint_ops = layout.scene.paints.len();
     let paint_started = std::time::Instant::now();
     let mut canvas = Canvas::new_scaled(viewport.width, viewport.height, background.rgb, scale);
+    let mut text_runs = Vec::new();
     let mut decoded = HashMap::new();
     let mut decoded_bytes = 0usize;
     let full_clip = canvas.intersect_clip(0, 0, viewport.width, viewport.height);
@@ -512,10 +513,31 @@ pub(crate) fn render_scaled_profiled(
                 viewport.scroll,
             ),
             Paint::Text(rect, node, text) => {
+                let style = &layout.styles[*node];
+                if text_runs.len() < super::render::MAX_TEXT_RUNS && !text.is_empty() {
+                    let clipped_out = layout.scene.clips[index].is_some_and(|clip| {
+                        clip.w <= 0.0
+                            || clip.h <= 0.0
+                            || rect.x + rect.w <= clip.x
+                            || rect.x >= clip.x + clip.w
+                            || rect.y + rect.h <= clip.y
+                            || rect.y >= clip.y + clip.h
+                    });
+                    if !clipped_out && rect.w > 0.0 && rect.h > 0.0 {
+                        text_runs.push(super::render::TextRun {
+                            node: *node,
+                            x: rect.x.round() as i32,
+                            y: rect.y.round() as i32 - viewport.scroll,
+                            width: rect.w.ceil().max(1.0) as u32,
+                            height: rect.h.ceil().max(1.0) as u32,
+                            font_size: style.font_size,
+                            text: text.clone(),
+                        });
+                    }
+                }
                 if !visible(*rect, viewport) {
                     continue;
                 }
-                let style = &layout.styles[*node];
                 canvas.text_styled_alpha(
                     layout.fonts.select_family(&style.font_families),
                     (
@@ -674,21 +696,43 @@ pub(crate) fn render_scaled_profiled(
                         if *submit { 0xeeeeee } else { 0xffffff },
                     );
                 }
-                let shown = super::render::fit_tail(
-                    layout.fonts,
-                    text,
-                    style.font_size,
-                    rect.w - if borderless { 0.0 } else { 8.0 },
-                );
-                if focused && controls.select_all {
-                    canvas.rect(
-                        rect.x.round() as i32 + 3,
-                        y + 2,
-                        layout.fonts.width(&shown, style.font_size).ceil() as u32,
-                        (rect.h - 4.0).max(0.0) as u32,
-                        0xc6dfed,
+                let avail = rect.w - if borderless { 0.0 } else { 8.0 };
+                let (shown, caret_x) = if focused
+                    && !*submit
+                    && let Some((sa, sb, caret)) = controls.input_selection
+                {
+                    let (shown, sx0, sx1, cx) = super::render::slice_visible_input(
+                        layout.fonts,
+                        text,
+                        style.font_size,
+                        avail,
+                        sa,
+                        sb,
+                        caret,
                     );
-                }
+                    if sx1 > sx0 {
+                        canvas.rect(
+                            rect.x.round() as i32 + if borderless { 0 } else { 3 } + sx0,
+                            y + 2,
+                            (sx1 - sx0) as u32 + 1,
+                            (rect.h - 4.0).max(0.0) as u32,
+                            0xc6dfed,
+                        );
+                    }
+                    (shown, Some(cx))
+                } else {
+                    let shown = super::render::fit_tail(layout.fonts, text, style.font_size, avail);
+                    if focused && controls.select_all {
+                        canvas.rect(
+                            rect.x.round() as i32 + 3,
+                            y + 2,
+                            layout.fonts.width(&shown, style.font_size).ceil() as u32,
+                            (rect.h - 4.0).max(0.0) as u32,
+                            0xc6dfed,
+                        );
+                    }
+                    (shown, None)
+                };
                 if borderless {
                     let line_h = layout
                         .fonts
@@ -714,6 +758,12 @@ pub(crate) fn render_scaled_profiled(
                         style.color.rgb,
                         style.font_weight >= 600,
                     );
+                }
+                if let Some(cx) = caret_x {
+                    let base_x = rect.x.round() as i32 + if borderless { 0 } else { 3 };
+                    let draw_x =
+                        (base_x + cx).min(rect.x.round() as i32 + rect.w.ceil() as i32 - 3);
+                    canvas.rect(draw_x, y + 2, 2, (rect.h - 4.0).max(2.0) as u32, 0x277453);
                 }
             }
         }
@@ -747,6 +797,7 @@ pub(crate) fn render_scaled_profiled(
             canvas,
             hits,
             boxes: layout.scene.boxes,
+            text_runs,
             content_height: height.ceil().max(0.0) as i32,
             diagnostics: layout.diagnostics,
         },

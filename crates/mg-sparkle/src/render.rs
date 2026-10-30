@@ -33,6 +33,17 @@ pub struct LayoutBox {
     pub width: u32,
     pub height: u32,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRun {
+    pub node: usize,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub font_size: f32,
+    pub text: String,
+}
+pub(crate) const MAX_TEXT_RUNS: usize = 25_000;
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport {
     pub width: u32,
@@ -44,12 +55,15 @@ pub struct Controls<'a> {
     pub values: Option<&'a HashMap<usize, String>>,
     pub focused_input: Option<usize>,
     pub select_all: bool,
+    /// Optional `(sel_start_chars, sel_end_chars, caret_chars)` for `focused_input`.
+    pub input_selection: Option<(usize, usize, usize)>,
 }
 #[derive(Clone)]
 pub struct Frame {
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
     pub boxes: Vec<LayoutBox>,
+    pub text_runs: Vec<TextRun>,
     pub content_height: i32,
     /// Bounded diagnostics from this frame's actual style/layout pass. Resource
     /// loading and script execution have separate reports owned by their callers.
@@ -74,12 +88,23 @@ impl Frame {
                     .saturating_mul(std::mem::size_of::<LayoutBox>()),
             )
             .saturating_add(
+                self.text_runs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<TextRun>()),
+            )
+            .saturating_add(
                 self.hits
                     .iter()
                     .map(|hit| match &hit.action {
                         Action::Link { href, .. } => href.capacity(),
                         _ => 0,
                     })
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.text_runs
+                    .iter()
+                    .map(|run| run.text.capacity())
                     .sum::<usize>(),
             )
             .saturating_add(diagnostic_payload_bytes(&self.diagnostics))
@@ -321,8 +346,10 @@ pub fn render_scaled_cached(
         values: controls.values,
         focused_input: controls.focused_input,
         select_all: controls.select_all,
+        input_selection: controls.input_selection,
         hits: Vec::new(),
         boxes: Vec::new(),
+        text_runs: Vec::new(),
         scale,
     }
     .paint();
@@ -341,8 +368,10 @@ struct Renderer<'a> {
     values: Option<&'a HashMap<usize, String>>,
     focused_input: Option<usize>,
     select_all: bool,
+    input_selection: Option<(usize, usize, usize)>,
     hits: Vec<Hit>,
     boxes: Vec<LayoutBox>,
+    text_runs: Vec<TextRun>,
     scale: f32,
 }
 impl Renderer<'_> {
@@ -381,6 +410,17 @@ impl Renderer<'_> {
                             y += row;
                         }
                         self.layout_box(i, x, y, ww.max(1) as u32, row as u32);
+                        if self.text_runs.len() < MAX_TEXT_RUNS && !word.is_empty() {
+                            self.text_runs.push(TextRun {
+                                node,
+                                x,
+                                y,
+                                width: ww.max(1) as u32,
+                                height: row as u32,
+                                font_size: size,
+                                text: word.to_owned(),
+                            });
+                        }
                         if y + row > 0 && y < self.height as i32 - 1 {
                             c.text(
                                 self.fonts,
@@ -434,17 +474,31 @@ impl Renderer<'_> {
                         if kind == "password" {
                             value = "•".repeat(value.chars().count());
                         }
-                        let value = fit_tail(self.fonts, &value, 17., w as f32 - 22.);
-                        if self.focused_input == Some(node) && self.select_all {
-                            c.rect(
-                                x + 7,
-                                y + 7,
-                                self.fonts.width(&value, 17.) as u32 + 2,
-                                25,
-                                0xc6dfed,
-                            );
+                        let avail = w as f32 - 22.;
+                        if self.focused_input == Some(node)
+                            && let Some((sa, sb, caret)) = self.input_selection
+                        {
+                            let (shown, sx0, sx1, cx) =
+                                slice_visible_input(self.fonts, &value, 17., avail, sa, sb, caret);
+                            if sx1 > sx0 {
+                                c.rect(x + 8 + sx0, y + 7, (sx1 - sx0) as u32 + 1, 25, 0xc6dfed);
+                            }
+                            c.text(self.fonts, x + 9, y + 8, &shown, 17., INK);
+                            let caret_x = (x + 9 + cx).min(x + w as i32 - 6);
+                            c.rect(caret_x, y + 8, 2, 23, 0x277453);
+                        } else {
+                            let value = fit_tail(self.fonts, &value, 17., avail);
+                            if self.focused_input == Some(node) && self.select_all {
+                                c.rect(
+                                    x + 7,
+                                    y + 7,
+                                    self.fonts.width(&value, 17.) as u32 + 2,
+                                    25,
+                                    0xc6dfed,
+                                );
+                            }
+                            c.text(self.fonts, x + 9, y + 8, &value, 17., INK);
                         }
-                        c.text(self.fonts, x + 9, y + 8, &value, 17., INK);
                         self.hit(x, y, w, 40, Action::Input(node));
                     }
                     y += 50;
@@ -490,6 +544,7 @@ impl Renderer<'_> {
             canvas: c,
             hits: self.hits,
             boxes: self.boxes,
+            text_runs: self.text_runs,
             content_height,
             diagnostics: Default::default(),
         }
@@ -535,6 +590,57 @@ pub(crate) fn fit_tail(fonts: &mut Fonts, text: &str, size: f32, width: f32) -> 
         }
     }
     chars[..low].iter().rev().collect()
+}
+
+pub(crate) fn slice_visible_input(
+    fonts: &mut Fonts,
+    text: &str,
+    size: f32,
+    width: f32,
+    sel_a: usize,
+    sel_b: usize,
+    caret: usize,
+) -> (String, i32, i32, i32) {
+    let chars: Vec<char> = text.chars().take(4096).collect();
+    let len = chars.len();
+    let caret = caret.min(len);
+    let (s0, s1) = (sel_a.min(sel_b).min(len), sel_a.max(sel_b).min(len));
+    let width = width.max(4.0);
+    let mut start = 0usize;
+    if fonts.width(text, size) > width {
+        start = caret;
+        while start > 0 {
+            let cand: String = chars[start - 1..caret].iter().collect();
+            if fonts.width(&cand, size) <= width {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+    let mut end = caret;
+    while end < len {
+        let cand: String = chars[start..=end].iter().collect();
+        if fonts.width(&cand, size) <= width {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    let shown: String = chars[start..end].iter().collect();
+    let measure = |to: usize, fonts: &mut Fonts| -> i32 {
+        let to = to.clamp(start, end);
+        if to <= start {
+            0
+        } else {
+            let sub: String = chars[start..to].iter().collect();
+            fonts.width(&sub, size).round() as i32
+        }
+    };
+    let sx0 = measure(s0, fonts);
+    let sx1 = measure(s1, fonts);
+    let cx = measure(caret, fonts);
+    (shown, sx0, sx1, cx)
 }
 
 #[cfg(test)]

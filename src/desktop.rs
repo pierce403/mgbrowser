@@ -411,6 +411,7 @@ impl Desktop {
         app.set_system_scale(self.system_scale);
         app.set_scripts_enabled(self.scripts);
         app.set_debugging(debugging);
+        app.set_host_clipboard_enabled(true);
         match bookmarks.load() {
             Ok(entries) => app.set_bookmarks(entries),
             Err(error) => app.set_bookmark_status(error),
@@ -774,6 +775,7 @@ impl Desktop {
             let app = self.space.get_mut(tab).unwrap();
             match e.detail {
                 1 => app.pointer_down_with_modifiers(x, y, e.state.contains(KeyButMask::CONTROL)),
+                2 => app.middle_click_at(x, y),
                 3 => app.context_menu_at(x, y),
                 4 => {
                     app.pointer_move(x, y);
@@ -1367,6 +1369,8 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
     })?;
     let screen = &conn.setup().roots[screen_num];
+    let mut x11_clipboard = platform::clipboard::X11Clipboard::<TabId>::new(&conn, screen.root)?;
+    app.set_host_clipboard_enabled(true);
     let system_scale = platform::scaling::read_scale(&conn, screen_num).unwrap_or(100);
     app.set_system_scale(system_scale);
     let applied_scale = app.effective_scale_percent();
@@ -1550,20 +1554,26 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                     }
                 }
                 Event::ButtonPress(e) => {
+                    x11_clipboard.note_timestamp(e.time);
                     if let Some(id) = desktop.window_id(e.event) {
                         desktop.press(id, e, &conn, &bookmarks)?;
                     }
                 }
                 Event::ButtonRelease(e) => {
+                    x11_clipboard.note_timestamp(e.time);
                     if let Some(id) = desktop.window_id(e.event) {
                         desktop.release(id, e, &conn, &atoms, screen_num)?;
                     }
                 }
-                Event::MotionNotify(e) => desktop.pointer_motion(e, &conn)?,
+                Event::MotionNotify(e) => {
+                    x11_clipboard.note_timestamp(e.time);
+                    desktop.pointer_motion(e, &conn)?;
+                }
                 Event::LeaveNotify(e) if e.mode == NotifyMode::NORMAL && desktop.drag.is_none() => {
                     desktop.clear_hover();
                 }
                 Event::KeyPress(e) => {
+                    x11_clipboard.note_timestamp(e.time);
                     if let Some(id) = desktop.window_id(e.event) {
                         let shift = e.state.contains(KeyButMask::SHIFT);
                         let ctrl = e.state.contains(KeyButMask::CONTROL);
@@ -1577,6 +1587,28 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                         if let Some(key) = platform::translate_keysym(sym) {
                             desktop.key(id, key, ctrl, shift, alt, &conn, &bookmarks)?;
                         }
+                    }
+                }
+                Event::SelectionRequest(e) => {
+                    x11_clipboard.handle_selection_request(&conn, e)?;
+                }
+                Event::SelectionClear(e) => {
+                    x11_clipboard.handle_selection_clear(e);
+                }
+                Event::SelectionNotify(e) => {
+                    if let Some((tab, text, and_go)) =
+                        x11_clipboard.handle_selection_notify(&conn, e)?
+                        && let Some(app) = desktop.space.get_mut(tab)
+                    {
+                        app.complete_paste(&text, and_go);
+                    }
+                }
+                Event::PropertyNotify(e) => {
+                    if let Some((tab, text, and_go)) =
+                        x11_clipboard.handle_property_notify(&conn, e)?
+                        && let Some(app) = desktop.space.get_mut(tab)
+                    {
+                        app.complete_paste(&text, and_go);
                     }
                 }
                 Event::ClientMessage(e) if e.data.as_data32()[0] == close => {
@@ -1602,6 +1634,20 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         }
         for (_, app) in desktop.space.tabs_mut() {
             app.poll();
+        }
+        x11_clipboard.expire_stale(Instant::now());
+        let clip_tabs = desktop.space.tabs().map(|(id, _)| id).collect::<Vec<_>>();
+        for id in clip_tabs {
+            if let Some(update) = desktop.space.get_mut(id).unwrap().take_clipboard_update() {
+                x11_clipboard.apply_update(&conn, update)?;
+            }
+            if let Some(req) = desktop.space.get_mut(id).unwrap().take_paste_request()
+                && let Some((target_tab, text, and_go)) =
+                    x11_clipboard.request_paste(&conn, id, req)?
+                && let Some(app) = desktop.space.get_mut(target_tab)
+            {
+                app.complete_paste(&text, and_go);
+            }
         }
         let ids = desktop.space.tabs().map(|(id, _)| id).collect::<Vec<_>>();
         for id in ids {

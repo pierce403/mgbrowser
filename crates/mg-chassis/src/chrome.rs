@@ -153,13 +153,36 @@ impl Browser {
             .width
             .saturating_sub(if self.width >= 480 { 296 } else { 252 });
         c.rect(196, 12, aw, 39, palette.field);
-        let address = fit_tail(&mut self.fonts, &self.address, 16., aw as f32 - 20.);
-        if self.focus == Focus::Address && self.select_all && !address.is_empty() {
-            let width =
-                (self.fonts.width(&address, 16.).ceil() as u32 + 4).min(aw.saturating_sub(14));
-            c.rect(204, 20, width, 25, palette.selection);
+        let avail_addr = aw as f32 - 20.;
+        if self.focus == Focus::Address && !self.select_all {
+            self.ensure_address_range_synced();
+            let cur_b = clipboard::clamp_utf8(&self.address, self.selection.address_cursor);
+            let sel =
+                clipboard::normalized_range(&self.address, cur_b, self.selection.address_anchor);
+            let (shown, sx0, sx1, cx) = clipboard::slice_line_bytes(
+                &mut self.fonts,
+                &self.address,
+                16.,
+                avail_addr,
+                sel,
+                cur_b,
+            );
+            if sx1 > sx0 {
+                let sw = ((sx1 - sx0) as u32 + 2).min(aw.saturating_sub(14));
+                c.rect(205 + sx0, 20, sw, 25, palette.selection);
+            }
+            c.text(&mut self.fonts, 206, 22, &shown, 16., palette.ink);
+            let caret_x = (206 + cx).min(196 + aw as i32 - 6);
+            c.rect(caret_x, 21, 2, 22, palette.accent);
+        } else {
+            let address = fit_tail(&mut self.fonts, &self.address, 16., avail_addr);
+            if self.focus == Focus::Address && self.select_all && !address.is_empty() {
+                let width =
+                    (self.fonts.width(&address, 16.).ceil() as u32 + 4).min(aw.saturating_sub(14));
+                c.rect(204, 20, width, 25, palette.selection);
+            }
+            c.text(&mut self.fonts, 206, 22, &address, 16., palette.ink);
         }
-        c.text(&mut self.fonts, 206, 22, &address, 16., palette.ink);
         self.hits.push(Hit {
             x: 196,
             y: 12,

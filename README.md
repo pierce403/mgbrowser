@@ -2,7 +2,22 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.24
+## Latest verified release: v0.9.25
+
+v0.9.25 adds pure-Rust native X11 `CLIPBOARD` and `PRIMARY` selection support
+(`x11rb`, zero new dependencies or external helpers) and full mouse selection +
+Cut / Copy / Paste / Select All across the entire browser: click/drag or `Ctrl+C`
+/ `Copy` / right-click on DevTools `Console` rows to copy full untruncated JS
+errors, stack traces, and expanded objects (plus `copy()` sync to the system
+clipboard); full selection and Cut/Copy/Paste + middle-click `PRIMARY` paste in
+the `>` Console REPL, all DevTools filter/style inputs, the Address bar (including
+`Paste and go`), and page `<input>` fields (with strict `<input type="password">`
+plaintext protection); click-and-drag, double-click word, `Ctrl+A`, `Ctrl+C`, and
+right-click `Copy` / `Copy link address` on read-only web page prose; and `Ctrl+C`
+/ context-menu copy across `Elements`, `Sources`, `Network`, `Performance`,
+`Application`, and `About`. [Release notes](docs/RELEASE-v0.9.25.md).
+
+## Previous release: v0.9.24
 
 v0.9.24 expands the built-in DevTools workspace (`F12` / `Ctrl+Shift+I` /
 toolbar `</>` / right-click `Inspect`) into six Chromium-style panels —

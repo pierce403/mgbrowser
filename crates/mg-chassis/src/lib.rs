@@ -4,6 +4,7 @@ pub mod cdp;
 mod cdp_browser;
 #[cfg(feature = "chrome")]
 mod chrome;
+mod clipboard;
 mod devtools;
 mod initial_load;
 pub mod net;
@@ -14,6 +15,7 @@ pub mod scripts;
 mod scroll;
 mod theme;
 pub use cdp_browser::{BrowserCdp, TargetAction, TargetOutcome, TargetRequest};
+pub use clipboard::{ClipboardUpdate, MAX_CLIPBOARD_BYTES, PasteRequest, PasteSource};
 pub use initial_load::{InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus};
 use mg_sparkle::{
     document::{self, Document, Item},
@@ -71,6 +73,11 @@ enum Action {
     Restart,
     CloseMenu,
     OpenLinkInNewTab(String),
+    ClipboardCut,
+    ClipboardCopy,
+    ClipboardPaste { and_go: bool },
+    ClipboardSelectAll,
+    CopyText(String),
     ToggleDevTools,
     InspectElement,
     DevToolsTab(devtools::Tab),
@@ -79,21 +86,31 @@ enum Action {
     DevToolsSelectNode(usize),
     DevToolsToggleExpandNode(usize),
     DevToolsElementsSubTab(devtools::ElementsSubTab),
+    DevToolsElementsCopyHtml,
+    DevToolsElementsCopySelector,
+    DevToolsElementsCopyStyles,
     DevToolsSelectConsoleNode(usize),
     DevToolsConsoleFilter(devtools::ConsoleFilter),
     DevToolsConsoleClear,
+    DevToolsConsoleSelectRow(usize),
+    DevToolsConsoleCopySelected,
+    DevToolsConsoleCopyAll,
     DevToolsConsoleInput,
     DevToolsField(devtools::FieldKind),
     DevToolsConsolePreserve,
     DevToolsConsoleToggleGroup(usize),
     DevToolsConsoleToggleObject { entry_idx: usize, object_id: u64 },
     DevToolsSourceSelect(usize),
+    DevToolsSourceSelectLine(usize),
     DevToolsNetFilter(devtools::NetFilter),
     DevToolsNetClear,
     DevToolsNetPreserve,
     DevToolsNetDisableCache,
     DevToolsNetSelect(Option<usize>),
     DevToolsNetSubTab(devtools::NetworkSubTab),
+    DevToolsNetCopyUrl,
+    DevToolsNetCopyDetails,
+    DevToolsNetCopyAllUrls,
     DevToolsPerfReload,
     DevToolsPerfClear,
     DevToolsAppSection(devtools::AppSection),
@@ -146,6 +163,7 @@ struct FrameCacheKey {
     scale_percent: u16,
     focused_input: Option<usize>,
     select_all: bool,
+    input_selection: Option<(usize, usize, usize)>,
     controls_hash: u64,
 }
 #[derive(Clone)]
@@ -244,6 +262,7 @@ pub enum ScriptWorkStatus {
 }
 pub struct Browser {
     devtools: devtools::State,
+    selection: clipboard::SelectionState,
     menu_open: bool,
     about_open: bool,
     settings_open: bool,
@@ -447,13 +466,10 @@ impl Browser {
     }
     fn modal_actions(&self) -> Vec<Action> {
         if self.devtools.context.is_some() {
-            let mut actions = Vec::new();
-            if let Some(url) = &self.devtools.context_link {
-                actions.push(Action::OpenLinkInNewTab(url.clone()));
-            }
-            actions.push(Action::InspectElement);
-            actions.push(Action::CloseMenu);
-            actions
+            self.context_menu_items()
+                .into_iter()
+                .map(|(_, action)| action)
+                .collect()
         } else if self.bookmarks_open {
             let start = self.bookmark_page * self.bookmark_rows();
             let mut actions = Vec::new();
@@ -514,7 +530,23 @@ impl Browser {
             Action::OpenLinkInNewTab(_) => {
                 self.devtools.context.is_some() && self.devtools.context_link.is_some()
             }
-            Action::InspectElement => self.devtools.context.is_some(),
+            Action::InspectElement
+            | Action::ClipboardCut
+            | Action::ClipboardCopy
+            | Action::ClipboardPaste { .. }
+            | Action::ClipboardSelectAll
+            | Action::CopyText(_) => self.devtools.context.is_some(),
+            Action::DevToolsConsoleClear
+            | Action::DevToolsConsoleCopySelected
+            | Action::DevToolsConsoleCopyAll
+            | Action::DevToolsElementsCopyHtml
+            | Action::DevToolsElementsCopySelector
+            | Action::DevToolsElementsCopyStyles
+            | Action::DevToolsNetCopyUrl
+            | Action::DevToolsNetCopyDetails
+            | Action::DevToolsNetCopyAllUrls => {
+                self.devtools.context.is_some() || self.devtools.open
+            }
             Action::DevToolsTab(_)
             | Action::DevToolsTogglePicker
             | Action::DevToolsToggleDock
@@ -523,13 +555,14 @@ impl Browser {
             | Action::DevToolsElementsSubTab(_)
             | Action::DevToolsSelectConsoleNode(_)
             | Action::DevToolsConsoleFilter(_)
-            | Action::DevToolsConsoleClear
+            | Action::DevToolsConsoleSelectRow(_)
             | Action::DevToolsConsoleInput
             | Action::DevToolsField(_)
             | Action::DevToolsConsolePreserve
             | Action::DevToolsConsoleToggleGroup(_)
             | Action::DevToolsConsoleToggleObject { .. }
             | Action::DevToolsSourceSelect(_)
+            | Action::DevToolsSourceSelectLine(_)
             | Action::DevToolsNetFilter(_)
             | Action::DevToolsNetClear
             | Action::DevToolsNetPreserve
@@ -704,6 +737,7 @@ impl Browser {
         let (tx, rx) = mpsc::channel();
         Self {
             devtools: devtools::State::default(),
+            selection: clipboard::SelectionState::default(),
             chrome: cfg!(feature = "chrome"),
             menu_open: false,
             about_open: false,
@@ -887,6 +921,10 @@ impl Browser {
         }
         self.inflight += 1;
         self.address = target.clone();
+        self.selection.address_cursor = self.address.len();
+        self.selection.address_anchor = None;
+        self.selection.page_sel = None;
+        self.selection.active_drag = None;
         if !self.devtools.open
             || !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_))
         {
@@ -1070,6 +1108,11 @@ impl Browser {
                 self.focus = Focus::Page;
             }
             self.select_all = false;
+            self.selection.page_sel = None;
+            self.selection.input_node = None;
+            self.selection.input_anchor = None;
+            self.selection.input_cursor = 0;
+            self.selection.active_drag = None;
             self.last_load_ok = false;
             let mut load_error = None;
             let mut script_navigation = None;
@@ -1128,6 +1171,8 @@ impl Browser {
 
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
+                    self.selection.address_cursor = self.address.len();
+                    self.selection.address_anchor = None;
                     self.page_mime = response
                         .content_type
                         .split(';')
@@ -1216,7 +1261,7 @@ impl Browser {
                                     if let Some(staged) = observation {
                                         staged.commit();
                                     }
-                                    self.devtools.ingest_wire_console(init_console, true);
+                                    self.ingest_wire_console_and_sync(init_console, true);
                                     projected = document;
                                     scripting = projected.is_some();
                                     self.lifecycle = lifecycle;
@@ -2163,8 +2208,7 @@ impl Browser {
         }
         self.accept_lifecycle(lifecycle, received);
         let _ = self.script_summary(&reply);
-        self.devtools
-            .ingest_wire_console(wire_console, !self.console_detached_dom);
+        self.ingest_wire_console_and_sync(wire_console, !self.console_detached_dom);
         if let Some(target) = console_target
             && let Some(result) = wire_console_result
         {
@@ -2279,10 +2323,13 @@ impl Browser {
             if !editable.contains(&node) {
                 self.focus = Focus::Page;
                 self.select_all = false;
+                self.selection.input_node = None;
+                self.selection.input_anchor = None;
             }
         }
         // Pointer-down coordinates belong to the old accepted layout.
         self.pointer_press = None;
+        self.selection.active_drag = None;
     }
     fn field_value(&self, i: usize, default: &str) -> String {
         self.values
@@ -2366,7 +2413,17 @@ impl Browser {
     }
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
         self.stop_scroll();
-        self.select_all = false;
+        if !matches!(
+            action,
+            Action::ClipboardCut
+                | Action::ClipboardCopy
+                | Action::ClipboardPaste { .. }
+                | Action::ClipboardSelectAll
+                | Action::CopyText(_)
+                | Action::Input(_)
+        ) {
+            self.select_all = false;
+        }
         if matches!(
             action,
             Action::Menu
@@ -2375,6 +2432,11 @@ impl Browser {
                 | Action::Update
                 | Action::CloseMenu
                 | Action::OpenLinkInNewTab(_)
+                | Action::ClipboardCut
+                | Action::ClipboardCopy
+                | Action::ClipboardPaste { .. }
+                | Action::ClipboardSelectAll
+                | Action::CopyText(_)
                 | Action::Bookmarks
                 | Action::OpenBookmark(_)
                 | Action::BookmarkPage(_)
@@ -2385,6 +2447,31 @@ impl Browser {
             self.bookmarks_open = false;
         }
         match action {
+            Action::ClipboardCut => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                let _ = self.cut_selection();
+            }
+            Action::ClipboardCopy => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                let _ = self.copy_selection();
+            }
+            Action::ClipboardPaste { and_go } => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.paste_from_source(PasteSource::Clipboard, and_go);
+            }
+            Action::ClipboardSelectAll => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.select_all_active();
+            }
+            Action::CopyText(text) => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.write_clipboard(text, false);
+            }
             Action::OpenLinkInNewTab(url) => {
                 self.devtools.context = None;
                 self.devtools.context_link = None;
@@ -2404,6 +2491,7 @@ impl Browser {
             }
             Action::InspectElement => self.open_inspector(),
             Action::DevToolsTab(tab) => {
+                self.devtools.copy_feedback = None;
                 self.open_devtools_tab(tab);
             }
             Action::DevToolsTogglePicker => {
@@ -2429,6 +2517,52 @@ impl Browser {
                 self.devtools.elements_subtab = sub;
                 self.focus = Focus::DevTools;
             }
+            Action::DevToolsElementsCopyHtml => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                let id = self
+                    .devtools
+                    .selected
+                    .filter(|(epoch, _)| *epoch == self.dom_epoch)
+                    .map_or(0, |(_, id)| id);
+                let html = self.serialize_outer_html(id);
+                if !html.is_empty() {
+                    self.devtools.copy_feedback =
+                        Some(format!("Copied outerHTML ({} B)", html.len()));
+                    self.write_clipboard(html, false);
+                }
+            }
+            Action::DevToolsElementsCopySelector => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                let id = self
+                    .devtools
+                    .selected
+                    .filter(|(epoch, _)| *epoch == self.dom_epoch)
+                    .map_or(0, |(_, id)| id);
+                let sel = self.css_selector_for_node(id);
+                if !sel.is_empty() {
+                    self.devtools.copy_feedback = Some(format!("Copied selector: {sel}"));
+                    self.write_clipboard(sel, false);
+                }
+            }
+            Action::DevToolsElementsCopyStyles => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                let id = self
+                    .devtools
+                    .selected
+                    .filter(|(epoch, _)| *epoch == self.dom_epoch)
+                    .map_or(0, |(_, id)| id);
+                let css = self.styles_summary_for_node(id);
+                if !css.is_empty() {
+                    self.devtools.copy_feedback = Some(format!("Copied styles ({} B)", css.len()));
+                    self.write_clipboard(css, false);
+                }
+            }
             Action::DevToolsSelectConsoleNode(node) => {
                 if node < self.document.nodes.len() {
                     self.select_devtools_node(node);
@@ -2437,14 +2571,39 @@ impl Browser {
             }
             Action::DevToolsConsoleFilter(filter) => {
                 self.devtools.console_filter = filter;
+                self.devtools.console_sel = None;
                 self.devtools.row = 0;
                 self.devtools.scroll_to_bottom = false;
                 self.focus = Focus::DevTools;
             }
             Action::DevToolsConsoleClear => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
                 self.clear_console_and_worker_objects();
                 if !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_)) {
                     self.focus = Focus::DevTools;
+                }
+            }
+            Action::DevToolsConsoleSelectRow(row) => {
+                self.devtools.console_sel = Some((row, row));
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsConsoleCopySelected => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                let sel = self.devtools.console_sel;
+                if let Some(txt) = self.copy_console_rows(sel) {
+                    self.write_clipboard(txt, false);
+                }
+            }
+            Action::DevToolsConsoleCopyAll => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                if let Some(txt) = self.copy_console_rows(None) {
+                    self.write_clipboard(txt, false);
                 }
             }
             Action::DevToolsConsoleInput => {
@@ -2470,7 +2629,12 @@ impl Browser {
             }
             Action::DevToolsSourceSelect(idx) => {
                 self.devtools.selected_source = idx;
+                self.devtools.sources_sel = None;
                 self.devtools.row = 0;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsSourceSelectLine(line) => {
+                self.devtools.sources_sel = Some((line, line));
                 self.focus = Focus::DevTools;
             }
             Action::DevToolsNetFilter(filter) => {
@@ -2501,6 +2665,34 @@ impl Browser {
             Action::DevToolsNetSubTab(sub) => {
                 self.devtools.net_subtab = sub;
                 self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetCopyUrl => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                if let Some(url) = self.network_copy_url() {
+                    self.devtools.copy_feedback = Some(format!("Copied URL ({} B)", url.len()));
+                    self.write_clipboard(url, false);
+                }
+            }
+            Action::DevToolsNetCopyDetails => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                if let Some(det) = self.network_copy_details() {
+                    self.devtools.copy_feedback =
+                        Some(format!("Copied request details ({} B)", det.len()));
+                    self.write_clipboard(det, false);
+                }
+            }
+            Action::DevToolsNetCopyAllUrls => {
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                self.hits.clear();
+                if let Some(urls) = self.network_copy_all_urls() {
+                    self.devtools.copy_feedback = Some(format!("Copied URLs ({} B)", urls.len()));
+                    self.write_clipboard(urls, false);
+                }
             }
             Action::DevToolsPerfReload => {
                 self.devtools.clear_performance_metrics();
@@ -2674,10 +2866,20 @@ impl Browser {
             Action::Address => {
                 self.focus = Focus::Address;
                 self.select_all = true;
+                self.selection.page_sel = None;
+                if !self.address.is_empty() {
+                    self.selection.address_anchor = Some(0);
+                    self.selection.address_cursor = self.address.len();
+                } else {
+                    self.selection.address_anchor = None;
+                    self.selection.address_cursor = 0;
+                }
             }
             Action::Input(node) => {
                 if self.input_item(node).is_some() {
                     self.focus = Focus::Input(node);
+                    self.ensure_input_range_synced(node);
+                    self.sync_input_selection_flags(node);
                     self.dispatch_page(InputKind::Click { target: node })?;
                 }
             }
@@ -2780,49 +2982,51 @@ impl Browser {
         if self.modal_open() || self.focus == Focus::DevTools {
             return;
         }
-        if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
-            return;
+        match self.focus {
+            Focus::Address => {
+                self.ensure_address_range_synced();
+                let (r0, r1) = clipboard::normalized_range(
+                    &self.address,
+                    self.selection.address_cursor,
+                    self.selection.address_anchor,
+                )
+                .unwrap_or((self.selection.address_cursor, self.selection.address_cursor));
+                let retained = if self.select_all {
+                    0
+                } else {
+                    self.address.len().saturating_sub(r1 - r0)
+                };
+                if retained.saturating_add(text.len()) > MAX_EDIT_BYTES {
+                    return;
+                }
+                self.address_insert_text(text);
+            }
+            Focus::Input(node) => {
+                if self.next_edit == u64::MAX {
+                    return;
+                }
+                let Some(val) = self.current_input_value(node) else {
+                    return;
+                };
+                self.ensure_input_range_synced(node);
+                let (r0, r1) = clipboard::normalized_range(
+                    &val,
+                    self.selection.input_cursor,
+                    self.selection.input_anchor,
+                )
+                .unwrap_or((self.selection.input_cursor, self.selection.input_cursor));
+                let retained = if self.select_all {
+                    0
+                } else {
+                    val.len().saturating_sub(r1 - r0)
+                };
+                if retained.saturating_add(text.len()) > MAX_EDIT_BYTES {
+                    return;
+                }
+                self.page_input_insert_text(node, text);
+            }
+            Focus::Page | Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_) => {}
         }
-        let default = if let Focus::Input(node) = self.focus {
-            self.input_item(node)
-                .and_then(|i| self.document.items.get(i))
-                .and_then(|item| {
-                    if let Item::Input { value, .. } = item {
-                        Some(value.clone())
-                    } else {
-                        None
-                    }
-                })
-        } else {
-            None
-        };
-        let dest = match self.focus {
-            Focus::Address => Some(&mut self.address),
-            Focus::Input(node) if default.is_some() => {
-                Some(self.values.entry(node).or_insert(default.unwrap()))
-            }
-            Focus::Input(_)
-            | Focus::Page
-            | Focus::DevTools
-            | Focus::ConsoleInput
-            | Focus::DevToolsField(_) => None,
-        };
-        if let Some(dest) = dest {
-            let retained = if self.select_all { 0 } else { dest.len() };
-            if retained.saturating_add(text.len()) > MAX_EDIT_BYTES {
-                return;
-            }
-            if self.select_all {
-                dest.clear();
-            }
-            dest.push_str(text);
-            if let Focus::Input(node) = self.focus {
-                self.next_edit = self.next_edit.saturating_add(1);
-                self.edit_versions.insert(node, self.next_edit);
-            }
-        }
-        self.select_all = false;
-        self.dirty = true;
     }
     fn enter_checked(&mut self) -> Result<(), String> {
         if self.modal_open() || (self.devtools.open && self.focus == Focus::DevTools) {
@@ -2926,6 +3130,17 @@ impl Browser {
                 self.dirty = true;
                 return;
             }
+            if self.focus == Focus::DevTools && !alt && ctrl && !shift {
+                if matches!(sym, 0x63 | 0x43 | 0xff63 | 0xff9e) {
+                    let _ = self.copy_selection();
+                    self.dirty = true;
+                    return;
+                }
+                if matches!(sym, 0x61 | 0x41) {
+                    self.select_all_active();
+                    return;
+                }
+            }
             if self.devtools.tab == devtools::Tab::Elements
                 && self.focus == Focus::DevTools
                 && !ctrl
@@ -2957,6 +3172,17 @@ impl Browser {
             return;
         }
         if self.devtools.open && !self.devtools_is_docked() && !self.menu_open {
+            if !alt && ctrl && !shift {
+                if matches!(sym, 0x63 | 0x43 | 0xff63 | 0xff9e) {
+                    let _ = self.copy_selection();
+                    self.dirty = true;
+                    return;
+                }
+                if matches!(sym, 0x61 | 0x41) {
+                    self.select_all_active();
+                    return;
+                }
+            }
             if matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
                 self.inspector_scroll(match sym {
                     0xff52 => -1,
@@ -2981,6 +3207,11 @@ impl Browser {
                 return;
             }
         }
+        if self.about_open && !alt && ctrl && !shift && matches!(sym, 0x63 | 0x43 | 0xff63 | 0xff9e)
+        {
+            let _ = self.copy_selection();
+            return;
+        }
         if self.modal_open() {
             self.modal_key(sym, shift);
             return;
@@ -2997,9 +3228,7 @@ impl Browser {
             self.activate(Action::Bookmarks);
             return;
         }
-        if ctrl && (sym == b'a' as u32 || sym == b'A' as u32) {
-            self.select_all = true;
-            self.dirty = true;
+        if self.handle_chrome_or_page_clipboard_key(sym, ctrl, shift, alt) {
             return;
         }
         if alt && sym == 0xff51 {
@@ -3076,6 +3305,7 @@ impl Browser {
                     };
                     self.focus = Focus::Input(fields[next]);
                     self.select_all = true;
+                    self.ensure_input_range_synced(fields[next]);
                     self.dirty = true;
                 }
             }
@@ -3194,6 +3424,14 @@ impl Browser {
         } else {
             None
         };
+        if let Some(node) = focused_input {
+            self.ensure_input_range_synced(node);
+        }
+        let input_selection = if self.chrome {
+            focused_input.and_then(|node| self.spark_input_selection(node))
+        } else {
+            None
+        };
         let viewport_height = self.viewport_height();
         let page_width = self.page_viewport_width();
         let doc_key = self.document_cache_key();
@@ -3205,6 +3443,7 @@ impl Browser {
             scale_percent,
             focused_input,
             select_all: self.select_all,
+            input_selection,
             controls_hash: self.controls_cache_hash(),
         };
         let (frame, mut timings) = if let Some((cached_key, cached_frame, cached_timings)) =
@@ -3230,6 +3469,7 @@ impl Browser {
                 values: Some(&self.values),
                 focused_input,
                 select_all: self.select_all,
+                input_selection,
             };
             let viewport = mg_sparkle::render::Viewport {
                 width: page_width,
@@ -3277,6 +3517,25 @@ impl Browser {
                 rect
             })
             .collect();
+        if self.chrome {
+            let max_x = page_width as i32;
+            self.selection.page_runs = frame
+                .text_runs
+                .iter()
+                .filter(|r| r.x < max_x && !r.text.is_empty())
+                .map(|r| clipboard::DocTextRun {
+                    node: r.node,
+                    x: r.x,
+                    doc_y: r.y + self.scroll,
+                    width: r.width,
+                    height: r.height,
+                    font_size: r.font_size,
+                    text: r.text.clone(),
+                })
+                .collect();
+        } else {
+            self.selection.page_runs.clear();
+        }
         self.devtools.painted_epoch = self.dom_epoch;
         self.devtools.invalidate_selection(self.dom_epoch);
         self.hits = frame
@@ -3346,6 +3605,7 @@ impl Browser {
         let chrome_started = Instant::now();
         #[cfg(feature = "chrome")]
         if self.chrome {
+            self.paint_page_selection(&mut canvas);
             self.paint_docked_devtools(&mut canvas);
             self.paint_chrome(&mut canvas);
             self.paint_devtools_overlay(&mut canvas);
@@ -3615,6 +3875,43 @@ impl Browser {
         self.smoke_stage = 3;
         self.smoke = None;
         self.dirty = true;
+    }
+}
+
+fn word_bounds_in_text(s: &str, pos: usize) -> (usize, usize) {
+    if s.is_empty() {
+        return (0, 0);
+    }
+    let p = clipboard::clamp_utf8(s, pos);
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let idx = chars
+        .iter()
+        .position(|(b, _)| *b >= p)
+        .unwrap_or(chars.len().saturating_sub(1));
+    let is_word = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '-';
+    if !chars[idx].1.is_whitespace() {
+        let want_word = is_word(chars[idx].1);
+        let mut s_idx = idx;
+        while s_idx > 0
+            && !chars[s_idx - 1].1.is_whitespace()
+            && (is_word(chars[s_idx - 1].1) == want_word)
+        {
+            s_idx -= 1;
+        }
+        let mut e_idx = idx + 1;
+        while e_idx < chars.len()
+            && !chars[e_idx].1.is_whitespace()
+            && (is_word(chars[e_idx].1) == want_word)
+        {
+            e_idx += 1;
+        }
+        let b0 = chars[s_idx].0;
+        let b1 = chars.get(e_idx).map_or(s.len(), |(b, _)| *b);
+        (b0, b1)
+    } else {
+        let b0 = chars[idx].0;
+        let b1 = chars.get(idx + 1).map_or(s.len(), |(b, _)| *b);
+        (b0, b1)
     }
 }
 
@@ -4454,6 +4751,7 @@ pub enum Key {
     Character(char),
     Enter,
     Backspace,
+    Insert,
     Delete,
     Tab,
     Home,
@@ -4615,6 +4913,12 @@ impl Browser {
         self.bookmark_refresh = false;
         self.hits.clear();
         self.boxes.clear();
+        self.selection.page_runs.clear();
+        self.selection.page_sel = None;
+        self.selection.active_drag = None;
+        self.selection.input_node = None;
+        self.selection.input_anchor = None;
+        self.selection.address_anchor = None;
         self.focus = Focus::Page;
         self.select_all = false;
         self.pointer_press = None;
@@ -4655,15 +4959,121 @@ impl Browser {
             self.dirty = true;
         }
     }
-    /// Update the logical pointer position for link destination previews.
+    /// Update the logical pointer position for link destination previews and drag selection.
     pub fn pointer_move(&mut self, x: i32, y: i32) {
         if !self.chrome {
+            return;
+        }
+        if x < 0 || y < 0 {
+            self.pointer_position = None;
+            self.refresh_hovered_link();
             return;
         }
         self.pointer_position = Some((x, y));
         if self.devtools.split_dragging && self.devtools.open && self.devtools_is_docked() {
             self.drag_devtools_splitter(x, y);
             return;
+        }
+        if let Some(drag) = self.selection.active_drag {
+            match drag {
+                clipboard::DragTarget::Page {
+                    start_x,
+                    start_y,
+                    mut moved,
+                } => {
+                    if !moved && ((x - start_x).abs() >= 6 || (y - start_y).abs() >= 6) {
+                        moved = true;
+                        self.selection.active_drag = Some(clipboard::DragTarget::Page {
+                            start_x,
+                            start_y,
+                            moved: true,
+                        });
+                    }
+                    if moved {
+                        if let (Some(anchor), Some(focus)) = (
+                            self.hit_page_text_pos(start_x, start_y),
+                            self.hit_page_text_pos(x, y),
+                        ) {
+                            self.focus = Focus::Page;
+                            self.selection.page_sel = Some(clipboard::PageSelection {
+                                epoch: self.dom_epoch,
+                                anchor,
+                                focus,
+                            });
+                            self.dirty = true;
+                        }
+                    }
+                }
+                clipboard::DragTarget::Address {
+                    start_byte,
+                    first_focus,
+                    mut moved,
+                } => {
+                    let start_x = self.selection.last_click.map_or(x, |(_, lx, _)| lx);
+                    if !first_focus || moved || (x - start_x).abs() >= 5 {
+                        moved = true;
+                        self.selection.active_drag = Some(clipboard::DragTarget::Address {
+                            start_byte,
+                            first_focus,
+                            moved,
+                        });
+                        let cur = self.hit_address_byte(x);
+                        self.selection.address_cursor = cur;
+                        self.selection.address_anchor = (cur != start_byte).then_some(start_byte);
+                        self.sync_address_selection_flags();
+                        self.dirty = true;
+                    }
+                }
+                clipboard::DragTarget::PageInput {
+                    node,
+                    start_x,
+                    start_byte,
+                    mut moved,
+                } => {
+                    if !moved && (x - start_x).abs() >= 3 {
+                        moved = true;
+                    }
+                    if moved {
+                        let cur = self.hit_page_input_byte(node, x);
+                        self.selection.input_node = Some(node);
+                        self.selection.input_cursor = cur;
+                        self.selection.input_anchor = (cur != start_byte).then_some(start_byte);
+                        self.sync_input_selection_flags(node);
+                        self.dirty = true;
+                    }
+                    self.selection.active_drag = Some(clipboard::DragTarget::PageInput {
+                        node,
+                        start_x,
+                        start_byte,
+                        moved,
+                    });
+                }
+                clipboard::DragTarget::ConsoleLog { anchor_row } => {
+                    if let Some(row) = self.console_row_at_point(x, y) {
+                        self.devtools.console_sel = Some((anchor_row, row));
+                        self.dirty = true;
+                    }
+                }
+                clipboard::DragTarget::ConsoleRepl { start_byte } => {
+                    let cur = self.hit_console_repl_byte(x, y);
+                    self.devtools.console_cursor = cur;
+                    self.devtools.console_anchor = (cur != start_byte).then_some(start_byte);
+                    self.dirty = true;
+                }
+                clipboard::DragTarget::DevToolsField { kind, start_byte } => {
+                    let cur = self.hit_devtools_field_byte(kind, x);
+                    let (_, c, _) = self.field_state_mut(kind);
+                    *c = cur;
+                    self.devtools.field_anchor = (cur != start_byte).then_some((kind, start_byte));
+                    self.dirty = true;
+                }
+                clipboard::DragTarget::SourcesCode { anchor_line } => {
+                    if let Some(line) = self.sources_line_at_point(x, y) {
+                        self.devtools.sources_sel = Some((anchor_line, line));
+                        self.dirty = true;
+                    }
+                }
+            }
         }
         if self.devtools.open && self.devtools.pick_mode && !self.popup_modal_open() {
             self.update_picker_hover(x, y);
@@ -4682,6 +5092,7 @@ impl Browser {
     }
     pub fn pointer_down_with_modifiers(&mut self, x: i32, y: i32, ctrl: bool) {
         self.stop_scroll();
+        self.selection.active_drag = None;
         if self.devtools.open
             && self.devtools_is_docked()
             && !self.popup_modal_open()
@@ -4690,6 +5101,250 @@ impl Browser {
             self.devtools.split_dragging = true;
             self.pointer_press = None;
             return;
+        }
+        if self.chrome && !ctrl {
+            let now = Instant::now();
+            let is_double_click = self.selection.last_click.is_some_and(|(prev_t, px, py)| {
+                now.saturating_duration_since(prev_t) <= Duration::from_millis(420)
+                    && (x - px).abs() <= 6
+                    && (y - py).abs() <= 6
+            });
+            self.selection.last_click = Some((now, x, y));
+
+            let no_dialog = !self.menu_open
+                && !self.about_open
+                && !self.settings_open
+                && !self.bookmarks_open
+                && self.devtools.context.is_none();
+
+            if !self.popup_modal_open()
+                && let Some((ax, ay, aw, ah)) = self.address_bar_rect()
+                && x >= ax
+                && x < ax + aw as i32
+                && y >= ay
+                && y < ay + ah as i32
+                && self
+                    .topmost_hit(x, y)
+                    .is_some_and(|i| matches!(self.hits[i].action, Action::Address))
+            {
+                let first_focus = self.focus != Focus::Address;
+                self.focus = Focus::Address;
+                self.selection.page_sel = None;
+                let clicked_byte = self.hit_address_byte(x);
+                if is_double_click || first_focus {
+                    self.select_all = true;
+                    if !self.address.is_empty() {
+                        self.selection.address_anchor = Some(0);
+                        self.selection.address_cursor = self.address.len();
+                    } else {
+                        self.selection.address_anchor = None;
+                        self.selection.address_cursor = 0;
+                    }
+                    self.selection.active_drag =
+                        (!is_double_click).then_some(clipboard::DragTarget::Address {
+                            start_byte: clicked_byte,
+                            first_focus: true,
+                            moved: false,
+                        });
+                } else {
+                    self.selection.address_cursor = clicked_byte;
+                    self.selection.address_anchor = None;
+                    self.select_all = false;
+                    self.selection.active_drag = Some(clipboard::DragTarget::Address {
+                        start_byte: clicked_byte,
+                        first_focus: false,
+                        moved: false,
+                    });
+                }
+                self.pointer_press = None;
+                self.dirty = true;
+                return;
+            }
+
+            if self.devtools.open && no_dialog {
+                let (dx, dy, dw, dh) = self.devtools_panel_rect();
+                if x >= dx && x < dx + dw as i32 && y >= dy && y < dy + dh as i32 {
+                    for &(kind, (fx, fy, fw, fh)) in &self.devtools.field_rects.clone() {
+                        if x >= fx && x < fx + fw as i32 && y >= fy && y < fy + fh as i32 {
+                            self.focus_devtools_field(kind);
+                            if is_double_click {
+                                let len = {
+                                    let (buf, cur, _) = self.field_state_mut(kind);
+                                    let len = buf.len();
+                                    *cur = len;
+                                    len
+                                };
+                                self.devtools.field_anchor = (len > 0).then_some((kind, 0));
+                            } else {
+                                let byte = self.hit_devtools_field_byte(kind, x);
+                                let (_, cur, _) = self.field_state_mut(kind);
+                                *cur = byte;
+                                self.devtools.field_anchor = None;
+                                self.selection.active_drag =
+                                    Some(clipboard::DragTarget::DevToolsField {
+                                        kind,
+                                        start_byte: byte,
+                                    });
+                            }
+                            self.pointer_press = None;
+                            self.dirty = true;
+                            return;
+                        }
+                    }
+                    if self.devtools.tab == devtools::Tab::Console
+                        && let Some((rx, ry, rw, rh)) = self.devtools.console_repl_rect
+                        && x >= rx
+                        && x < rx + rw as i32
+                        && y >= ry
+                        && y < ry + rh as i32
+                    {
+                        self.focus = Focus::ConsoleInput;
+                        if is_double_click {
+                            let byte = self.hit_console_repl_byte(x, y);
+                            let (b0, b1) = word_bounds_in_text(&self.devtools.console_input, byte);
+                            self.devtools.console_anchor = (b1 > b0).then_some(b0);
+                            self.devtools.console_cursor = b1;
+                        } else {
+                            let byte = self.hit_console_repl_byte(x, y);
+                            self.devtools.console_cursor = byte;
+                            self.devtools.console_anchor = None;
+                            self.selection.active_drag =
+                                Some(clipboard::DragTarget::ConsoleRepl { start_byte: byte });
+                        }
+                        self.pointer_press = None;
+                        self.dirty = true;
+                        return;
+                    }
+                    if self.devtools.tab == devtools::Tab::Console
+                        && let Some((lx, ly, lw, lh)) = self.devtools.console_log_rect
+                        && x >= lx
+                        && x < lx + lw as i32
+                        && y >= ly
+                        && y < ly + lh as i32
+                    {
+                        let hit_action =
+                            self.topmost_hit(x, y).map(|i| self.hits[i].action.clone());
+                        if !matches!(
+                            hit_action,
+                            Some(
+                                Action::DevToolsSelectConsoleNode(_)
+                                    | Action::DevToolsConsoleToggleGroup(_)
+                                    | Action::DevToolsConsoleToggleObject { .. }
+                            )
+                        ) && let Some(row) = self.console_row_at_point(x, y)
+                        {
+                            self.focus = Focus::DevTools;
+                            self.devtools.console_sel = Some((row, row));
+                            self.selection.active_drag =
+                                Some(clipboard::DragTarget::ConsoleLog { anchor_row: row });
+                            self.pointer_press = None;
+                            self.dirty = true;
+                            return;
+                        }
+                    }
+                    if self.devtools.tab == devtools::Tab::Sources
+                        && let Some((sx, sy, sw, sh)) = self.devtools.sources_code_rect
+                        && x >= sx
+                        && x < sx + sw as i32
+                        && y >= sy
+                        && y < sy + sh as i32
+                        && let Some(line) = self.sources_line_at_point(x, y)
+                    {
+                        self.focus = Focus::DevTools;
+                        self.devtools.sources_sel = Some((line, line));
+                        self.selection.active_drag =
+                            Some(clipboard::DragTarget::SourcesCode { anchor_line: line });
+                        self.pointer_press = None;
+                        self.dirty = true;
+                        return;
+                    }
+                }
+            }
+
+            if !self.popup_modal_open() && !(self.devtools.open && self.devtools.pick_mode) {
+                if let Some(hidx) = self.topmost_hit(x, y)
+                    && let Action::Input(node) = self.hits[hidx].action
+                {
+                    self.selection.page_sel = None;
+                    self.ensure_input_range_synced(node);
+                    if is_double_click {
+                        let raw = self.current_input_value(node).unwrap_or_default();
+                        if self.is_password_input(node) {
+                            self.selection.input_anchor = (!raw.is_empty()).then_some(0);
+                            self.selection.input_cursor = raw.len();
+                            self.select_all = !raw.is_empty();
+                        } else {
+                            let byte = self.hit_page_input_byte(node, x);
+                            let (b0, b1) = word_bounds_in_text(&raw, byte);
+                            self.selection.input_anchor = (b1 > b0).then_some(b0);
+                            self.selection.input_cursor = b1;
+                            self.sync_input_selection_flags(node);
+                        }
+                    } else {
+                        let byte = self.hit_page_input_byte(node, x);
+                        let end_len = self.current_input_value(node).map_or(0, |v| v.len());
+                        self.selection.input_cursor = end_len;
+                        self.selection.input_anchor = None;
+                        self.select_all = false;
+                        self.selection.active_drag = Some(clipboard::DragTarget::PageInput {
+                            node,
+                            start_x: x,
+                            start_byte: byte,
+                            moved: false,
+                        });
+                    }
+                    self.dirty = true;
+                } else if x >= 0
+                    && x < self.page_viewport_width() as i32
+                    && y >= self.page_top()
+                    && y < self.page_top() + self.viewport_height() as i32
+                    && !matches!(
+                        self.topmost_hit(x, y).map(|i| &self.hits[i].action),
+                        Some(Action::Submit(_))
+                    )
+                {
+                    let on_link = matches!(
+                        self.topmost_hit(x, y).map(|i| &self.hits[i].action),
+                        Some(Action::Link { .. })
+                    );
+                    if is_double_click && !on_link {
+                        if let Some(pos) = self.hit_page_text_pos(x, y)
+                            && let Some(run) = self.selection.page_runs.get(pos.run)
+                        {
+                            let (b0, b1) = word_bounds_in_text(&run.text, pos.byte);
+                            if b1 > b0 {
+                                self.focus = Focus::Page;
+                                self.selection.page_sel = Some(clipboard::PageSelection {
+                                    epoch: self.dom_epoch,
+                                    anchor: clipboard::TextPos {
+                                        run: pos.run,
+                                        byte: b0,
+                                    },
+                                    focus: clipboard::TextPos {
+                                        run: pos.run,
+                                        byte: b1,
+                                    },
+                                });
+                                if let Some(txt) = self.selected_page_text() {
+                                    self.write_primary(txt);
+                                }
+                                self.pointer_press = None;
+                                self.dirty = true;
+                                return;
+                            }
+                        }
+                    } else {
+                        if self.selection.page_sel.take().is_some() {
+                            self.dirty = true;
+                        }
+                        self.selection.active_drag = Some(clipboard::DragTarget::Page {
+                            start_x: x,
+                            start_y: y,
+                            moved: false,
+                        });
+                    }
+                }
+            }
         }
         self.pointer_press = Some((x, y));
         self.pointer_press_ctrl = ctrl;
@@ -4701,6 +5356,83 @@ impl Browser {
         if self.devtools.split_dragging {
             self.devtools.split_dragging = false;
             return;
+        }
+        if let Some(drag) = self.selection.active_drag.take() {
+            match drag {
+                clipboard::DragTarget::Page { moved: true, .. } if self.has_page_selection() => {
+                    if let Some(txt) = self.selected_page_text() {
+                        self.write_primary(txt);
+                    }
+                    self.pointer_press = None;
+                    self.pointer_press_ctrl = false;
+                    return;
+                }
+                clipboard::DragTarget::Address { .. } => {
+                    if let Some((b0, b1)) = clipboard::normalized_range(
+                        &self.address,
+                        self.selection.address_cursor,
+                        self.selection.address_anchor,
+                    ) {
+                        self.write_primary(self.address[b0..b1].to_owned());
+                    }
+                }
+                clipboard::DragTarget::PageInput { node, moved, .. } => {
+                    if moved && self.input_item(node).is_some() {
+                        self.focus = Focus::Input(node);
+                    }
+                    if !self.is_password_input(node)
+                        && let Some(val) = self.current_input_value(node)
+                        && let Some((b0, b1)) = clipboard::normalized_range(
+                            &val,
+                            self.selection.input_cursor,
+                            self.selection.input_anchor,
+                        )
+                    {
+                        self.write_primary(val[b0..b1].to_owned());
+                    }
+                }
+                clipboard::DragTarget::ConsoleRepl { .. } => {
+                    if let Some((b0, b1)) = clipboard::normalized_range(
+                        &self.devtools.console_input,
+                        self.devtools.console_cursor,
+                        self.devtools.console_anchor,
+                    ) {
+                        self.write_primary(self.devtools.console_input[b0..b1].to_owned());
+                    }
+                }
+                clipboard::DragTarget::DevToolsField { kind, .. } => {
+                    let anc = self
+                        .devtools
+                        .field_anchor
+                        .filter(|(k, _)| *k == kind)
+                        .map(|(_, a)| a);
+                    let out = {
+                        let (buf, cur, _) = self.field_state_mut(kind);
+                        clipboard::normalized_range(buf, *cur, anc)
+                            .map(|(b0, b1)| buf[b0..b1].to_owned())
+                    };
+                    if let Some(s) = out {
+                        self.write_primary(s);
+                    }
+                }
+                clipboard::DragTarget::ConsoleLog { .. } => {
+                    if let Some((a, b)) = self.devtools.console_sel
+                        && a != b
+                        && let Some(s) = self.copy_console_rows(Some((a, b)))
+                    {
+                        self.write_primary(s);
+                    }
+                }
+                clipboard::DragTarget::SourcesCode { .. } => {
+                    if let Some((a, b)) = self.devtools.sources_sel
+                        && a != b
+                        && let Some(s) = self.devtools_copy_current_tab()
+                    {
+                        self.write_primary(s);
+                    }
+                }
+                _ => {}
+            }
         }
         let press_ctrl = std::mem::replace(&mut self.pointer_press_ctrl, false);
         if let Some((px, py)) = self.pointer_press.take() {
@@ -4734,6 +5466,7 @@ impl Browser {
             Key::Character(ch) => ch as u32,
             Key::Enter => 0xff0d,
             Key::Backspace => 0xff08,
+            Key::Insert => 0xff63,
             Key::Delete => 0xffff,
             Key::Tab => 0xff09,
             Key::Home => 0xff50,

@@ -1,5 +1,6 @@
 //! Linux/X11 host facilities. Engines do not depend on this crate.
 pub mod appearance;
+pub mod clipboard;
 pub mod scaling;
 pub mod script_worker;
 pub mod worker_memory;
@@ -120,7 +121,8 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff1b => Key::Escape,
         0xff0d => Key::Enter,
         0xff08 => Key::Backspace,
-        0xffff => Key::Delete,
+        0xff63 | 0xff9e => Key::Insert,
+        0xffff | 0xff9f => Key::Delete,
         // X11 commonly supplies ISO_Left_Tab for Shift+Tab, not the Tab keysym.
         0xff09 | 0xfe20 => Key::Tab,
         0xff50 => Key::Home,

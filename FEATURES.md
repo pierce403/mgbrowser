@@ -6,6 +6,33 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-028 : Native X11 clipboard and app-wide text selection
+
+Stability: stable
+
+### Dependencies
+
+F-004 native input/navigation, F-013 optional Chassis chrome, F-019 toolbar, F-022 DevTools.
+
+### Properties
+
+Pure-Rust X11 `CLIPBOARD` and `PRIMARY` selection ownership and retrieval (`x11rb`
+only, zero C/C++ bindings or external clipboard helpers) on a dedicated unmapped
+root child window, paired with mouse drag/double-click text selection, keyboard
+range editing, context-menu clipboard actions, and middle-click `PRIMARY` paste
+across DevTools Console logs/errors/REPL, all six DevTools panels and inputs, the
+Address bar, HTML `<input>` controls (blocking `Cut`/`Copy`/`PRIMARY` export on
+`<input type="password">`), and read-only web page prose. Plain text up to 256 KiB;
+JavaScript `navigator.clipboard` / `ClipboardEvent` and rich MIME formats are not
+claimed. See [docs/RELEASE-v0.9.25.md](docs/RELEASE-v0.9.25.md).
+
+### Test criteria
+
+- [x] Pure-Rust X11 `CLIPBOARD` and `PRIMARY` two-client roundtrip (`SelectionRequest`, `SelectionNotify`, `SelectionClear`) passes under Xvfb.
+- [x] DevTools Console row drag/Ctrl+C/Copy button/context menu copies full untruncated error + stack frames; REPL & DevTools fields support Cut/Copy/Paste/PRIMARY.
+- [x] Address bar, `<input>` controls (with strict password plaintext protection), and read-only page `TextRun` prose selection pass unit and visual pixel checks.
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, WPT, packaged smoke, versioned release, and public installer/updater checks pass.
+
 ## F-026 : Upstream Web Platform Tests coverage
 
 Stability: in-progress
