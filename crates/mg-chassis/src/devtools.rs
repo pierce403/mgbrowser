@@ -4027,19 +4027,22 @@ impl Browser {
             }
         }
 
-        let dock_icon = if self.devtools.dock == DockSide::Right {
-            "⬓"
-        } else {
-            "◨"
-        };
+        let dock_x = x + width as i32 - 52;
         self.inspector_button(
             canvas,
-            (x + width as i32 - 52, y + 4, 20, 28),
-            dock_icon,
+            (dock_x, y + 4, 20, 28),
+            "",
             Action::DevToolsToggleDock,
             Some(7),
             false,
         );
+        canvas.rect(dock_x + 4, y + 13, 12, 10, palette.ink);
+        canvas.rect(dock_x + 5, y + 14, 10, 8, palette.button);
+        if self.devtools.dock == DockSide::Right {
+            canvas.rect(dock_x + 5, y + 19, 10, 3, palette.accent);
+        } else {
+            canvas.rect(dock_x + 11, y + 14, 4, 8, palette.accent);
+        }
         self.inspector_button(
             canvas,
             (x + width as i32 - 30, y + 4, 26, 28),

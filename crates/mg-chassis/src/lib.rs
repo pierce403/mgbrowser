@@ -482,14 +482,17 @@ impl Browser {
         } else if self.about_open {
             vec![self.update_button_action(), Action::CloseMenu]
         } else if self.menu_open {
-            vec![
+            let mut items = vec![
                 Action::About,
                 Action::Update,
                 Action::Settings,
                 Action::Bookmarks,
-                Action::ToggleDevTools,
-                Action::CloseMenu,
-            ]
+            ];
+            if self.height >= 280 {
+                items.push(Action::ToggleDevTools);
+            }
+            items.push(Action::CloseMenu);
+            items
         } else {
             vec![
                 Action::DevToolsTab(devtools::Tab::Elements),

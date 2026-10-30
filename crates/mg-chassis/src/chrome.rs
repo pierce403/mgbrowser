@@ -215,21 +215,19 @@ impl Browser {
         }
         if self.menu_open {
             let x = self.width as i32 - 226;
-            let compact = self.height < 280;
-            let y = if compact { 28 } else { 54 };
-            let first = if compact { 4 } else { 6 };
-            let step = 34;
+            let y = 54;
+            let show_devtools = self.height >= 280;
             c.rect(
                 x - 8,
                 y,
                 228,
-                if compact { 210 } else { 216 },
+                if show_devtools { 216 } else { 182 },
                 palette.border,
             );
-            self.dialog_button(c, (x, y + first), 212, "About mgbrowser", Action::About, 0);
+            self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
             self.dialog_button(
                 c,
-                (x, y + first + step),
+                (x, y + 40),
                 212,
                 if self.restart_available {
                     "Update ready: restart..."
@@ -239,38 +237,21 @@ impl Browser {
                 Action::Update,
                 1,
             );
-            self.dialog_button(
-                c,
-                (x, y + first + step * 2),
-                212,
-                "Settings",
-                Action::Settings,
-                2,
-            );
-            self.dialog_button(
-                c,
-                (x, y + first + step * 3),
-                212,
-                "Bookmarks",
-                Action::Bookmarks,
-                3,
-            );
-            self.dialog_button(
-                c,
-                (x, y + first + step * 4),
-                212,
-                "Developer tools",
-                Action::ToggleDevTools,
-                4,
-            );
-            self.dialog_button(
-                c,
-                (x, y + first + step * 5),
-                212,
-                "Close",
-                Action::CloseMenu,
-                5,
-            );
+            self.dialog_button(c, (x, y + 74), 212, "Settings", Action::Settings, 2);
+            self.dialog_button(c, (x, y + 108), 212, "Bookmarks", Action::Bookmarks, 3);
+            if show_devtools {
+                self.dialog_button(
+                    c,
+                    (x, y + 142),
+                    212,
+                    "Developer tools",
+                    Action::ToggleDevTools,
+                    4,
+                );
+                self.dialog_button(c, (x, y + 176), 212, "Close", Action::CloseMenu, 5);
+            } else {
+                self.dialog_button(c, (x, y + 142), 212, "Close", Action::CloseMenu, 4);
+            }
         }
         if self.bookmarks_open {
             self.paint_bookmarks(c);
