@@ -813,8 +813,8 @@ impl Browser {
         } else {
             let shown = fit_tail(&mut self.fonts, &self.find.query, 13., avail);
             if self.focus == Focus::FindInput && self.select_all {
-                let sw =
-                    (self.fonts.width(&shown, 13.).ceil() as u32 + 4).min(input_w.saturating_sub(8));
+                let sw = (self.fonts.width(&shown, 13.).ceil() as u32 + 4)
+                    .min(input_w.saturating_sub(8));
                 c.rect(ix + 4, iy + 3, sw, 20, p.selection);
             }
             c.text(&mut self.fonts, ix + 6, iy + 5, &shown, 13., p.ink);
@@ -1036,10 +1036,9 @@ impl Browser {
                     dl.bytes,
                     dl.saved_path.as_deref().unwrap_or("Downloads")
                 ),
-                downloads::DownloadState::Failed => format!(
-                    "Failed: {}",
-                    dl.error.as_deref().unwrap_or("error")
-                ),
+                downloads::DownloadState::Failed => {
+                    format!("Failed: {}", dl.error.as_deref().unwrap_or("error"))
+                }
             };
             let title = fit_head(&mut self.fonts, &dl.filename, 14., w as f32 - 44.);
             c.text(&mut self.fonts, x + 22, by + 5, &title, 14., p.ink);

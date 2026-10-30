@@ -97,12 +97,8 @@ impl HistoryStore {
         }
         let mut result = Vec::with_capacity(stored.entries.len());
         for entry in stored.entries {
-            let item = HistoryEntry::new(
-                &entry.url,
-                &entry.title,
-                entry.timestamp_secs,
-                entry.visits,
-            )?;
+            let item =
+                HistoryEntry::new(&entry.url, &entry.title, entry.timestamp_secs, entry.visits)?;
             if result.iter().any(|h: &HistoryEntry| h.url == item.url) {
                 continue;
             }
@@ -120,8 +116,7 @@ impl HistoryStore {
             .as_ref()
             .ok_or("No absolute HOME or XDG_CONFIG_HOME; history cannot be saved")?;
         let parent = path.parent().ok_or("Invalid history path")?;
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Cannot create history directory: {e}"))?;
+        fs::create_dir_all(parent).map_err(|e| format!("Cannot create history directory: {e}"))?;
         let lock = OpenOptions::new()
             .read(true)
             .write(true)

@@ -139,7 +139,11 @@ pub fn should_download_response(content_type: &str, content_disposition: Option<
 }
 
 /// Sanitize an untrusted filename into a safe, non-hidden basename (`<= 120` UTF-8 bytes).
-pub fn sanitize_download_filename(preferred: Option<&str>, fallback_url: &str, mime: &str) -> String {
+pub fn sanitize_download_filename(
+    preferred: Option<&str>,
+    fallback_url: &str,
+    mime: &str,
+) -> String {
     let candidate = preferred
         .filter(|s| !s.trim().is_empty())
         .map(str::to_owned)
@@ -211,7 +215,12 @@ pub fn sanitize_download_filename(preferred: Option<&str>, fallback_url: &str, m
 }
 
 fn default_extension_for_mime(mime: &str) -> Option<&'static str> {
-    let base = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let base = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     match base.as_str() {
         "text/html" | "application/xhtml+xml" => Some("html"),
         "text/plain" => Some("txt"),
@@ -452,7 +461,8 @@ impl crate::Browser {
                                 mime,
                                 body: resp.body,
                             });
-                            self.status = format!("Downloaded {filename} ({len} bytes) · saving...");
+                            self.status =
+                                format!("Downloaded {filename} ({len} bytes) · saving...");
                         }
                     }
                     self.devtools
@@ -521,7 +531,11 @@ mod tests {
             "bashrc.txt"
         );
         assert_eq!(
-            sanitize_download_filename(None, "https://example.com/files/archive.tar.gz?x=1", "application/gzip"),
+            sanitize_download_filename(
+                None,
+                "https://example.com/files/archive.tar.gz?x=1",
+                "application/gzip"
+            ),
             "archive.tar.gz"
         );
         assert_eq!(

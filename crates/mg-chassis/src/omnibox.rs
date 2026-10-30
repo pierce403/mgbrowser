@@ -24,7 +24,8 @@ impl SearchEngine {
     }
 
     pub fn search_url(self, query: &str) -> String {
-        let encoded: String = url::form_urlencoded::byte_serialize(query.trim().as_bytes()).collect();
+        let encoded: String =
+            url::form_urlencoded::byte_serialize(query.trim().as_bytes()).collect();
         match self {
             Self::DuckDuckGo => format!("https://html.duckduckgo.com/html/?q={encoded}"),
             Self::Google => format!("https://www.google.com/search?q={encoded}"),
@@ -422,10 +423,9 @@ pub fn render_internal_html(
                             dl.bytes,
                             dl.saved_path.as_deref().unwrap_or("(in-memory)")
                         ),
-                        DownloadState::Failed => format!(
-                            "Failed: {}",
-                            dl.error.as_deref().unwrap_or("unknown error")
-                        ),
+                        DownloadState::Failed => {
+                            format!("Failed: {}", dl.error.as_deref().unwrap_or("unknown error"))
+                        }
                     };
                     body.push_str(&format!(
                         "<div class=\"card\"><strong>{}</strong> <span class=\"badge\">{}</span>\
@@ -453,7 +453,11 @@ pub fn render_internal_html(
             html_escape(theme_summary),
             scale_percent,
             html_escape(engine.label()),
-            if scripts_enabled { "Enabled" } else { "Disabled" }
+            if scripts_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
         ),
         InternalPage::Version => {
             let mut body = format!(
@@ -677,7 +681,9 @@ mod tests {
         );
         assert_eq!(
             resolve_omnibox_input("news.ycombinator.com", SearchEngine::DuckDuckGo),
-            Some(OmniboxResolution::Url("https://news.ycombinator.com".into()))
+            Some(OmniboxResolution::Url(
+                "https://news.ycombinator.com".into()
+            ))
         );
         assert_eq!(
             resolve_omnibox_input("rust browser engine", SearchEngine::DuckDuckGo),

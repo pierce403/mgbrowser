@@ -145,8 +145,7 @@ impl Browser {
     }
 
     pub(crate) fn recompute_find_matches(&mut self, scroll_to_active: bool) {
-        self.find.matches =
-            scan_runs_case_insensitive(&self.selection.page_runs, &self.find.query);
+        self.find.matches = scan_runs_case_insensitive(&self.selection.page_runs, &self.find.query);
         self.find.matched_epoch = self.dom_epoch;
         self.find.matched_geometry = self.geometry_revision;
         if self.find.matches.is_empty() {

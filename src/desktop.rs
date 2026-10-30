@@ -383,7 +383,9 @@ impl Desktop {
     }
 
     fn record_closed_url(&mut self, url: &str) {
-        if (url.starts_with("http://") || url.starts_with("https://") || url.starts_with("chrome://"))
+        if (url.starts_with("http://")
+            || url.starts_with("https://")
+            || url.starts_with("chrome://"))
             && url != "chrome://newtab"
         {
             if self.closed_tabs.len() >= 32 {
@@ -903,7 +905,11 @@ impl Desktop {
                 let ly = logical_coordinate(e.event_y, scale);
                 let menu_w = 176i32;
                 let menu_h = TAB_MENU_ITEMS.len() as i32 * 26 + 8;
-                if lx >= menu.x && lx < menu.x + menu_w && ly >= menu.y + 4 && ly < menu.y + menu_h - 4 {
+                if lx >= menu.x
+                    && lx < menu.x + menu_w
+                    && ly >= menu.y + 4
+                    && ly < menu.y + menu_h - 4
+                {
                     let item = ((ly - (menu.y + 4)) / 26) as usize;
                     match item {
                         0 => self.fresh_tab(menu.pane, None, bookmarks, conn)?,
@@ -1390,7 +1396,11 @@ impl Desktop {
                 if let Some(menu) = self.tab_menu
                     && menu.window == id
                 {
-                    let dark = self.space.get(self.active_in(id)).unwrap().effective_theme()
+                    let dark = self
+                        .space
+                        .get(self.active_in(id))
+                        .unwrap()
+                        .effective_theme()
                         == ColorScheme::Dark;
                     let (bg, border, ink) = if dark {
                         (0x28312b, 0x455348, 0xe7eee6)
@@ -1399,12 +1409,8 @@ impl Desktop {
                     };
                     let menu_w = 176u32;
                     let menu_h = TAB_MENU_ITEMS.len() as u32 * 26 + 8;
-                    let mut canvas = Canvas::new_scaled(
-                        menu_w,
-                        menu_h,
-                        bg,
-                        f32::from(native.scale) / 100.,
-                    );
+                    let mut canvas =
+                        Canvas::new_scaled(menu_w, menu_h, bg, f32::from(native.scale) / 100.);
                     canvas.rect(0, 0, menu_w, menu_h, border);
                     canvas.rect(1, 1, menu_w - 2, menu_h - 2, bg);
                     for (idx, item) in TAB_MENU_ITEMS.iter().enumerate() {
@@ -1418,7 +1424,10 @@ impl Desktop {
                         depth,
                         &canvas,
                         (px, py),
-                        (native.width.saturating_sub(px), native.height.saturating_sub(py)),
+                        (
+                            native.width.saturating_sub(px),
+                            native.height.saturating_sub(py),
+                        ),
                     )?;
                 }
                 self.native.get_mut(&id).unwrap().dirty = false;
@@ -1976,7 +1985,11 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         }
         let ids = desktop.space.tabs().map(|(id, _)| id).collect::<Vec<_>>();
         for id in ids {
-            if let Some(req) = desktop.space.get_mut(id).unwrap().take_new_tab_request_full()
+            if let Some(req) = desktop
+                .space
+                .get_mut(id)
+                .unwrap()
+                .take_new_tab_request_full()
                 && let Some(location) = desktop.space.location(id)
             {
                 desktop.fresh_tab_with_focus(
@@ -1987,7 +2000,12 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                     &conn,
                 )?;
             }
-            if desktop.space.get_mut(id).unwrap().take_clear_browsing_data() {
+            if desktop
+                .space
+                .get_mut(id)
+                .unwrap()
+                .take_clear_browsing_data()
+            {
                 let _ = history.apply_batch(&[mg_chassis::history::HistoryChange::ClearAll]);
                 for (_, app) in desktop.space.tabs_mut() {
                     app.set_browsing_history(Vec::new());
@@ -2008,10 +2026,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                 };
                 for (_, app) in desktop.space.tabs_mut() {
                     app.set_browsing_history(updated.clone());
-                    if matches!(
-                        app.page_url(),
-                        "chrome://history" | "chrome://newtab"
-                    ) {
+                    if matches!(app.page_url(), "chrome://history" | "chrome://newtab") {
                         app.refresh_current_internal_page();
                     }
                 }
@@ -2026,10 +2041,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                             .unwrap_or(&pending.suggested_filename)
                             .to_string();
                         if let Some(app) = desktop.space.get_mut(id) {
-                            app.complete_download(
-                                pending.id,
-                                Ok(saved_path.display().to_string()),
-                            );
+                            app.complete_download(pending.id, Ok(saved_path.display().to_string()));
                         }
                         let list = desktop
                             .space
@@ -2079,10 +2091,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                     Ok(entries) => {
                         for (_, app) in desktop.space.tabs_mut() {
                             app.set_bookmarks(entries.clone());
-                            if matches!(
-                                app.page_url(),
-                                "chrome://bookmarks" | "chrome://newtab"
-                            ) {
+                            if matches!(app.page_url(), "chrome://bookmarks" | "chrome://newtab") {
                                 app.refresh_current_internal_page();
                             }
                         }

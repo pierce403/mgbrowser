@@ -85,7 +85,9 @@ enum Action {
     OpenLinkInNewTab(String),
     ClipboardCut,
     ClipboardCopy,
-    ClipboardPaste { and_go: bool },
+    ClipboardPaste {
+        and_go: bool,
+    },
     ClipboardSelectAll,
     CopyText(String),
     ToggleDevTools,
@@ -109,7 +111,10 @@ enum Action {
     DevToolsField(devtools::FieldKind),
     DevToolsConsolePreserve,
     DevToolsConsoleToggleGroup(usize),
-    DevToolsConsoleToggleObject { entry_idx: usize, object_id: u64 },
+    DevToolsConsoleToggleObject {
+        entry_idx: usize,
+        object_id: u64,
+    },
     DevToolsSourceSelect(usize),
     DevToolsSourceSelectLine(usize),
     DevToolsNetFilter(devtools::NetFilter),
@@ -140,7 +145,10 @@ enum Action {
     Downloads,
     DownloadPage(bool),
     ClearDownloads,
-    DownloadUrl { url: String, suggested: Option<String> },
+    DownloadUrl {
+        url: String,
+        suggested: Option<String>,
+    },
     SavePage,
     ViewPageSource,
     ToggleBookmarksBar,
@@ -151,7 +159,10 @@ enum Action {
     FindClose,
     Input(usize),
     Submit(usize),
-    Link { node: usize, href: String },
+    Link {
+        node: usize,
+        href: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -694,9 +705,9 @@ impl Browser {
             Action::DownloadPage(_) | Action::ClearDownloads => self.downloads_open,
             Action::Update => self.menu_open || self.about_open,
             Action::Restart => self.about_open && self.restart_available,
-            Action::Theme(_)
-            | Action::CycleSearchEngine
-            | Action::ToggleBookmarksBar => self.settings_open,
+            Action::Theme(_) | Action::CycleSearchEngine | Action::ToggleBookmarksBar => {
+                self.settings_open
+            }
             Action::Scale(_) | Action::ScaleDown | Action::ScaleUp => self.settings_open,
             _ => false,
         }
@@ -1127,7 +1138,8 @@ impl Browser {
             // not by blocking the window thread or creating per-event threads.
             drop(retired);
             let fetch_started = Instant::now();
-            let result = session.submit_with_cache_override(&target, body.as_deref(), force_no_cache);
+            let result =
+                session.submit_with_cache_override(&target, body.as_deref(), force_no_cache);
             let fetch_html_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
             let mut parse_html_ms = 0.0;
             let mut resource_profile = resources::ResourceLoadProfile::default();
@@ -3183,7 +3195,8 @@ impl Browser {
                 self.history_changes.push(history::HistoryChange::ClearAll);
                 self.clear_browsing_data = true;
                 self.refresh_current_internal_page();
-                self.status = "Cleared browsing history, cookies, network log, and downloads".into();
+                self.status =
+                    "Cleared browsing history, cookies, network log, and downloads".into();
             }
             Action::Downloads => {
                 if !self.devtools_is_docked() {
@@ -3257,7 +3270,10 @@ impl Browser {
             Action::Link { node, href } => {
                 if !self.dispatch_page(InputKind::Click { target: node })? {
                     if let Some(dl_attr) = self.link_download_attribute(node) {
-                        self.start_download(&href, (!dl_attr.is_empty()).then_some(dl_attr.as_str()));
+                        self.start_download(
+                            &href,
+                            (!dl_attr.is_empty()).then_some(dl_attr.as_str()),
+                        );
                     } else {
                         self.navigate(href, None, true);
                     }
@@ -6764,8 +6780,7 @@ mod chrome_ux_parity_tests {
     fn find_in_page_matches_highlights_and_steps_forward_backward() {
         let mut app = test_app();
         app.resize(800, 600);
-        let html =
-            "<html><body><p>Magnesium burns bright.</p><p>Pure magnesium browser.</p><p>MAGNESIUM oxide.</p></body></html>";
+        let html = "<html><body><p>Magnesium burns bright.</p><p>Pure magnesium browser.</p><p>MAGNESIUM oxide.</p></body></html>";
         app.document = document::parse(html, "https://example.test/");
         let _ = app.paint();
 
@@ -6847,7 +6862,9 @@ mod chrome_ux_parity_tests {
             .unwrap()
             .clone();
         app.middle_click_at(next_hit.x + 2, next_hit.y + 2);
-        let bg_req = app.take_new_tab_request_full().expect("background tab request");
+        let bg_req = app
+            .take_new_tab_request_full()
+            .expect("background tab request");
         assert!(bg_req.background);
         assert!(bg_req.url.ends_with("/next"));
 
@@ -6855,7 +6872,9 @@ mod chrome_ux_parity_tests {
         let dl_hit = app
             .hits
             .iter()
-            .find(|h| matches!(&h.action, Action::Link { href, .. } if href.ends_with("/report.txt")))
+            .find(
+                |h| matches!(&h.action, Action::Link { href, .. } if href.ends_with("/report.txt")),
+            )
             .unwrap()
             .clone();
         app.pointer_down(dl_hit.x + 2, dl_hit.y + 2);

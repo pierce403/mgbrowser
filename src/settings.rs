@@ -116,7 +116,10 @@ impl Settings {
             } else {
                 ""
             };
-            writeln!(file, "{{\"theme\":\"{name}\",\"scale\":{scale}{search}{bar}}}")?;
+            writeln!(
+                file,
+                "{{\"theme\":\"{name}\",\"scale\":{scale}{search}{bar}}}"
+            )?;
             file.sync_all()?;
             fs::rename(&temporary, path)
         })();
@@ -187,9 +190,7 @@ fn parse(bytes: &[u8]) -> Result<Preferences, String> {
         "google" => SearchEngine::Google,
         "wikipedia" => SearchEngine::Wikipedia,
         _ => {
-            return Err(
-                "Invalid search_engine; expected duckduckgo, google or wikipedia".into(),
-            );
+            return Err("Invalid search_engine; expected duckduckgo, google or wikipedia".into());
         }
     };
     Ok(Preferences {
