@@ -5,6 +5,7 @@ use mg_butane::runtime::AllocationReport;
 use serde::{Deserialize, Serialize};
 
 pub mod automation;
+pub mod console;
 pub mod observer;
 
 pub const MAX_EDITS: usize = 128;

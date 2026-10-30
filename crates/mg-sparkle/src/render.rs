@@ -144,6 +144,10 @@ impl StyleCache {
         self.payload_bytes
     }
 
+    pub fn style_for(&self, node: usize) -> Option<&crate::style::ComputedStyle> {
+        self.styles.get(node)
+    }
+
     fn retain(
         &mut self,
         key: (u64, u32, u32),

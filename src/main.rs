@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Toolbar: Back, Forward, Refresh, Bookmark, URL, Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nHover a link for its URL; Ctrl+click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: inspector.\nCtrl+Shift+P: performance dashboard (load, script, style, layout & paint timings).\n"
+                "Toolbar: Back, Forward, Refresh, Bookmark, URL, DevTools (</>), Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh loaded page.\nCtrl+D: toggle bookmark; Ctrl+Shift+O: saved bookmarks.\nHover a link for its URL; Ctrl+click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: DevTools side panel.\nCtrl+Shift+C/J/E/P: Elements, Console, Network & Performance tabs.\n"
             );
             println!(
                 "Ctrl+T: new tab; Ctrl+W: close tab; Ctrl+Tab / Ctrl+Shift+Tab: switch tabs.\nDrag tabs to reorder, detach into windows or split left/right.\nMenu > Settings: theme and browser size (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"

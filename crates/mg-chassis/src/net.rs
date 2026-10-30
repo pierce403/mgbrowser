@@ -4,9 +4,14 @@
 //! Cookies stay in memory for one browser session. There is no authentication,
 //! proxy, or HTTP/2 support.
 
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant, SystemTime};
 
 use url::Url;
@@ -34,10 +39,36 @@ pub struct Response {
     pub resource_same_origin_chain: bool,
 }
 
+const MAX_EXCHANGES: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExchangeRecord {
+    pub method: &'static str,
+    pub url: String,
+    pub status: u16,
+    pub request_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, String)>,
+    pub body_preview: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CookieSummary {
+    pub name: String,
+    pub value_bytes: usize,
+    pub domain: String,
+    pub host_only: bool,
+    pub path: String,
+    pub secure: bool,
+    pub session_only: bool,
+    pub ttl_secs: Option<u64>,
+}
+
 /// Shared, memory-only browser session. Clones share the same bounded cookie jar.
 #[derive(Clone, Default)]
 pub struct Session {
     cookies: Arc<Mutex<CookieJar>>,
+    exchanges: Arc<Mutex<VecDeque<ExchangeRecord>>>,
+    disable_cache: Arc<AtomicBool>,
 }
 
 /// Automatic resource authority, separate from top-level navigation and updates.
@@ -53,6 +84,56 @@ impl Session {
         Self::default()
     }
 
+    pub fn set_disable_cache(&self, disabled: bool) {
+        self.disable_cache.store(disabled, Ordering::Relaxed);
+    }
+
+    pub fn cache_disabled(&self) -> bool {
+        self.disable_cache.load(Ordering::Relaxed)
+    }
+
+    pub fn recent_exchanges(&self) -> Vec<ExchangeRecord> {
+        self.exchanges
+            .lock()
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn clear_exchanges(&self) {
+        if let Ok(mut q) = self.exchanges.lock() {
+            q.clear();
+        }
+    }
+
+    pub fn cookies_snapshot(&self) -> Vec<CookieSummary> {
+        let Ok(mut jar) = self.cookies.lock() else {
+            return Vec::new();
+        };
+        jar.prune();
+        let now = SystemTime::now();
+        jar.cookies
+            .iter()
+            .map(|c| CookieSummary {
+                name: c.name.clone(),
+                value_bytes: c.value.len(),
+                domain: c.domain.clone(),
+                host_only: c.host_only,
+                path: c.path.clone(),
+                secure: c.secure,
+                session_only: c.expires.is_none(),
+                ttl_secs: c
+                    .expires
+                    .and_then(|exp| exp.duration_since(now).ok().map(|d| d.as_secs())),
+            })
+            .collect()
+    }
+
+    pub fn clear_cookies(&self) {
+        if let Ok(mut jar) = self.cookies.lock() {
+            jar.cookies.clear();
+        }
+    }
+
     pub fn fetch(&self, url: &str) -> Result<Response, String> {
         self.submit(url, None)
     }
@@ -63,7 +144,22 @@ impl Session {
         let mut config =
             crate::tls_client_config(roots).map_err(|e| format!("TLS configuration: {e}"))?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        submit_with_config_policy(url, body, Arc::new(config), &self.cookies, false)
+        submit_with_limits_recorded(
+            url,
+            body,
+            Arc::new(config),
+            &self.cookies,
+            RequestLimits {
+                https_only: false,
+                origin: None,
+                resource_kind: ResourceKind::Stylesheet,
+                max_body: MAX_BODY,
+                deadline: Instant::now() + REQUEST_TIMEOUT,
+            },
+            Some(&self.exchanges),
+            self.cache_disabled(),
+            &mut |_, _| {},
+        )
     }
 
     /// Bounded automatic request. Stylesheets stay same-origin; images may use
@@ -82,7 +178,7 @@ impl Session {
             rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let mut config = crate::tls_client_config(roots).map_err(|e| e.to_string())?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        submit_with_limits(
+        submit_with_limits_recorded(
             url,
             None,
             Arc::new(config),
@@ -94,6 +190,9 @@ impl Session {
                 max_body: max_body.min(MAX_BODY),
                 deadline,
             },
+            Some(&self.exchanges),
+            self.cache_disabled(),
+            &mut |_, _| {},
         )
     }
 }
@@ -148,6 +247,7 @@ pub fn fetch_release_with_progress(
     )
 }
 
+#[cfg(test)]
 fn submit_with_config_policy(
     url: &str,
     body: Option<&str>,
@@ -178,6 +278,7 @@ struct RequestLimits {
     deadline: Instant,
 }
 
+#[cfg(test)]
 fn submit_with_limits(
     url: &str,
     body: Option<&str>,
@@ -194,6 +295,20 @@ fn submit_with_limits_progress(
     config: Arc<rustls::ClientConfig>,
     cookies: &Mutex<CookieJar>,
     limits: RequestLimits,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<Response, String> {
+    submit_with_limits_recorded(url, body, config, cookies, limits, None, false, progress)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_with_limits_recorded(
+    url: &str,
+    body: Option<&str>,
+    config: Arc<rustls::ClientConfig>,
+    cookies: &Mutex<CookieJar>,
+    limits: RequestLimits,
+    exchanges: Option<&Mutex<VecDeque<ExchangeRecord>>>,
+    no_cache: bool,
     progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<Response, String> {
     let mut url = Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
@@ -254,9 +369,75 @@ fn submit_with_limits_progress(
             config.clone(),
             limits.deadline,
             &cookie_header,
+            no_cache,
             limits.max_body,
             progress,
         )?;
+        if let Some(exchanges) = exchanges
+            && let Ok(mut log) = exchanges.lock()
+        {
+            let method = if body.is_some() { "POST" } else { "GET" };
+            let mut req_headers = Vec::with_capacity(9);
+            if let Some(h) = url.host() {
+                let mut host_val = h.to_string();
+                if let Some(p) = url.port() {
+                    host_val.push_str(&format!(":{p}"));
+                }
+                req_headers.push(("host".into(), host_val));
+            }
+            req_headers.push(("user-agent".into(), USER_AGENT.to_owned()));
+            req_headers.push((
+                "accept".into(),
+                "text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5".into(),
+            ));
+            req_headers.push(("accept-language".into(), "en-US,en;q=0.8".into()));
+            req_headers.push(("accept-encoding".into(), "identity".into()));
+            req_headers.push(("connection".into(), "close".into()));
+            if no_cache {
+                req_headers.push(("cache-control".into(), "no-cache".into()));
+                req_headers.push(("pragma".into(), "no-cache".into()));
+            }
+            if !cookie_header.is_empty() {
+                req_headers.push((
+                    "cookie".into(),
+                    format!("<redacted {} bytes>", cookie_header.len()),
+                ));
+            }
+            if let Some(b) = body {
+                req_headers.push((
+                    "content-type".into(),
+                    "application/x-www-form-urlencoded".into(),
+                ));
+                req_headers.push(("content-length".into(), b.len().to_string()));
+            }
+            let resp_headers = head
+                .headers
+                .iter()
+                .take(32)
+                .map(|(k, v)| {
+                    let val = if matches!(
+                        k.as_str(),
+                        "set-cookie" | "authorization" | "proxy-authorization" | "www-authenticate"
+                    ) {
+                        format!("<redacted {} bytes>", v.len())
+                    } else {
+                        v.chars().take(256).collect()
+                    };
+                    (k.clone(), val)
+                })
+                .collect();
+            if log.len() >= MAX_EXCHANGES {
+                log.pop_front();
+            }
+            log.push_back(ExchangeRecord {
+                method,
+                url: url.as_str().chars().take(512).collect(),
+                status: head.status,
+                request_headers: req_headers,
+                response_headers: resp_headers,
+                body_preview: None,
+            });
+        }
         if credentials_allowed {
             let mut jar = cookies.lock().map_err(|_| "Cookie session lock failed")?;
             for (_, value) in head.headers.iter().filter(|(name, _)| name == "set-cookie") {
@@ -292,6 +473,22 @@ fn submit_with_limits_progress(
             .to_owned();
         let bytes =
             decode_content_limited(bytes, head.header("content-encoding"), limits.max_body)?;
+        if let Some(exchanges) = exchanges
+            && let Ok(mut log) = exchanges.lock()
+            && let Some(last) = log.back_mut()
+        {
+            let ct = content_type.to_ascii_lowercase();
+            let textual = ct.starts_with("text/")
+                || ct.contains("javascript")
+                || ct.contains("ecmascript")
+                || ct.contains("json")
+                || ct.contains("xml")
+                || ct.contains("svg");
+            if textual && !bytes.is_empty() {
+                let sample = &bytes[..bytes.len().min(32 * 1024)];
+                last.body_preview = Some(String::from_utf8_lossy(sample).into_owned());
+            }
+        }
         return Ok(Response {
             url,
             status: head.status,
@@ -634,16 +831,18 @@ fn connect(url: &Url, deadline: Instant) -> Result<TimedSocket, String> {
     Err(format!("Connection failed: {last_error}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn request(
     url: &Url,
     body: Option<&str>,
     config: Arc<rustls::ClientConfig>,
     deadline: Instant,
     cookie_header: &str,
+    no_cache: bool,
     max_body: usize,
     progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(Head, Vec<u8>), String> {
-    let request = request_bytes_with_cookies(url, body, cookie_header)?;
+    let request = request_bytes_with_options(url, body, cookie_header, no_cache)?;
     let socket = connect(url, deadline)?;
     let mut stream: Box<dyn Transport> = if url.scheme() == "https" {
         let hostname = match url.host().ok_or("URL has no host")? {
@@ -670,13 +869,24 @@ fn request(
 
 #[cfg(test)]
 fn request_bytes(url: &Url, body: Option<&str>) -> Result<Vec<u8>, String> {
-    request_bytes_with_cookies(url, body, "")
+    request_bytes_with_options(url, body, "", false)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn request_bytes_with_cookies(
     url: &Url,
     body: Option<&str>,
     cookie_header: &str,
+) -> Result<Vec<u8>, String> {
+    request_bytes_with_options(url, body, cookie_header, false)
+}
+
+fn request_bytes_with_options(
+    url: &Url,
+    body: Option<&str>,
+    cookie_header: &str,
+    no_cache: bool,
 ) -> Result<Vec<u8>, String> {
     let mut target = url.path().to_owned();
     if target.is_empty() {
@@ -694,6 +904,9 @@ fn request_bytes_with_cookies(
     let mut request = format!(
         "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: identity\r\nConnection: close\r\n"
     );
+    if no_cache {
+        request.push_str("Cache-Control: no-cache\r\nPragma: no-cache\r\n");
+    }
     if !cookie_header.is_empty() {
         request.push_str("Cookie: ");
         request.push_str(cookie_header);

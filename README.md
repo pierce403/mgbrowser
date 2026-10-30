@@ -2,12 +2,30 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## v0.9.23 candidate: Google News default-mode browsing and WOFF1/WOFF2 web fonts
+## v0.9.24 candidate: Six-panel Chromium-style DevTools workspace
 
-The next release skips isolated script-worker startup cleanly (`JavaScript
-skipped`) when an ordinary browsing document exceeds the 1 MiB source, 16 KiB
-URL, or 2 MiB JSON wire admission caps, eliminating script-rejection errors and
-`"Page activation unavailable while loading or after script failure"` on
+The next release expands the built-in DevTools workspace (`F12` / `Ctrl+Shift+I`
+/ right-click `Inspect`) into six panels — `Elements` (`Styles`, `Computed`,
+`Box Model`, live `element.style` DOM/CSS editing, `H` hide, `Delete` node),
+`Console` (`Ctrl+Shift+J`, 19-method WHATWG `console.*` API in the isolated Boa
+worker, interactive `>` JS REPL, Command Line API `$_`, `$0..$4`, `$()`, `$$()`,
+`keys()`, `values()`, `dir()`, `dirxml()`, `table()`, `clear()`, `copy()`,
+`inspect()`, inline `▶`/`▼` object trees, and on-demand worker startup on
+static/oversize pages), `Sources` (`[HTML]`/`[CSS]`/`[JS]` viewer + `Ctrl+F`),
+`Network` (`Ctrl+Shift+E`, 4-tab `Headers`/`Response`/`Preview`/`Timing` drawer
+with secret-header redaction, `Disable cache`, `Preserve log`, and DCL/Load
+waterfall markers), `Performance` (`Ctrl+Shift+P`, 64-frame 60 FPS sparkline),
+and `Application` (session `Cookies` with redacted byte sizes, `Security`, and
+`Resources`) — plus Right/Bottom docking (`⬓`/`◨`), draggable splitter resize,
+and interactive Element Picker (`↖` / `Ctrl+Shift+C`) with 4-layer Stylo
+box-model overlays. [Candidate notes](docs/RELEASE-v0.9.24.md).
+
+## Latest verified release: v0.9.23
+
+v0.9.23 skips isolated script-worker startup cleanly (`JavaScript skipped`) when
+an ordinary browsing document exceeds the 1 MiB source, 16 KiB URL, or 2 MiB
+JSON wire admission caps, eliminating script-rejection errors and `"Page
+activation unavailable while loading or after script failure"` on
 `news.google.com` with default flags (`--enable-scripts`) while keeping `< 1 MiB`
 closed-realm protection and `WindowHarness` observation intact. It also adds
 bounded `min`/`max` outer-calc comparisons and linear CSS grid preflight work
@@ -15,10 +33,13 @@ charging for `Full coverage` (`/stories/...`) pages, plus pure-Rust WOFF1/WOFF2
 (`wOFF`/`wOF2`) `@font-face` SFNT reconstruction (`brotli-decompressor = 5.0.3`,
 `default-features = false`, `#![forbid(unsafe_code)]`) and synthetic
 bold/oblique styling for downloaded web fonts (`badge.nyx.ms`, `sl.ush.fund`).
-[Contract](docs/GOOGLE_NEWS.md), [dependencies](docs/DEPENDENCIES.md), and
-[candidate notes](docs/RELEASE-v0.9.23.md).
+Published as [v0.9.23](https://github.com/pierce403/mgbrowser/releases/tag/v0.9.23)
+at `db7c2116f49ed7c8e30f8a545e6b68f591eb0bff`, passing CI, tagged release,
+public installer smoke verification, and live self-update (`v0.9.22` to
+`v0.9.23`). [Contract](docs/GOOGLE_NEWS.md), [dependencies](docs/DEPENDENCIES.md),
+and [release notes](docs/RELEASE-v0.9.23.md).
 
-## Latest verified release: v0.9.22
+## Previous release: v0.9.22
 
 v0.9.22 adds outer-box linear `calc(percent + px)` (`Length::Calc` with
 `outer_calc_only` gating), empty-element `:before` `background-image` and

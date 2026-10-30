@@ -1116,7 +1116,11 @@ impl Host for BrowserHost {
         }
         if object == "console" {
             return Ok(match key {
-                "log" | "warn" | "error" | "info" => Value::Native("host.console.log".into()),
+                "log" | "info" | "debug" | "warn" | "error" | "assert" | "clear" | "count"
+                | "countReset" | "time" | "timeLog" | "timeEnd" | "group" | "groupCollapsed"
+                | "groupEnd" | "dir" | "dirxml" | "table" | "trace" => {
+                    Value::Native(format!("host.console.{key}"))
+                }
                 _ => Value::Undefined,
             });
         }
@@ -1528,7 +1532,7 @@ impl Host for BrowserHost {
         } else {
             String::new()
         };
-        if name == "host.console.log" {
+        if name.starts_with("host.console.") {
             return Ok(Value::Undefined);
         }
         if name == "host.location.toString" {

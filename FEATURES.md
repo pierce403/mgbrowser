@@ -344,6 +344,20 @@ Public native Performance light/dark 100/200% and compact checks pass in
 tmp/inspector-smoke.CHpyvr; public profiling/external-source evidence is in
 tmp/page-services-smoke-z5up3vks. Images inspected; see the 2026-10-21 log.
 
+v0.9.24 expands the built-in DevTools workspace into six panels (`Elements`,
+`Console`, `Sources`, `Network`, `Performance`, `Application`) with Right/Bottom
+docking (`⬓`/`◨`), draggable splitter resize, interactive Element Picker
+(`↖` / `Ctrl+Shift+C`) with 4-layer Stylo box-model overlays, live `element.style`
+DOM/CSS editing, isolated Boa worker 19-method `console.*` API + interactive `>`
+JS REPL and Command Line API (`$_`, `$0..$4`, `$()`, `$$()`, `keys()`, `values()`,
+`dir()`, `dirxml()`, `table()`, `clear()`, `copy()`, `inspect()`, inline `▶`/`▼`
+object trees, on-demand worker startup on static/oversize pages), 4-tab Network
+request inspection (`Headers` / `Response` / `Preview` / `Timing` with secret
+header redaction, `Disable cache`, `Preserve log`), 64-frame 60 FPS render
+sparkline, and session `Cookies` / `Security` / `Resources` inspection.
+Breakpoint stepping, heap snapshots and persistent Web Storage remain outside
+this bounded increment; see [docs/RELEASE-v0.9.24.md](docs/RELEASE-v0.9.24.md).
+
 ## F-021 : Smooth wheel scrolling
 
 Stability: stable

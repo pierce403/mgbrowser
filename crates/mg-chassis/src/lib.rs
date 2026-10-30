@@ -21,6 +21,7 @@ use mg_sparkle::{
         AccountingSnapshot, ControlEdit, DefaultAction, InputKind, LifecyclePhase,
         LifecycleProgress, RealmState, SessionInput, SessionReply, TaskPump, TaskWake,
         automation::{AutomationRequest, AutomationResult},
+        console::{ConsoleCommand, ConsoleResult},
         observer::{ObserverLedger, ObserverParentFailure, ObserverProgress},
     },
     paint::{Canvas, Fonts},
@@ -32,7 +33,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
     sync::mpsc,
     thread,
@@ -70,9 +71,33 @@ enum Action {
     Restart,
     CloseMenu,
     OpenLinkInNewTab(String),
+    ToggleDevTools,
     InspectElement,
-    InspectorSection(bool),
-    InspectorPerformance,
+    DevToolsTab(devtools::Tab),
+    DevToolsTogglePicker,
+    DevToolsToggleDock,
+    DevToolsSelectNode(usize),
+    DevToolsToggleExpandNode(usize),
+    DevToolsElementsSubTab(devtools::ElementsSubTab),
+    DevToolsSelectConsoleNode(usize),
+    DevToolsConsoleFilter(devtools::ConsoleFilter),
+    DevToolsConsoleClear,
+    DevToolsConsoleInput,
+    DevToolsField(devtools::FieldKind),
+    DevToolsConsolePreserve,
+    DevToolsConsoleToggleGroup(usize),
+    DevToolsConsoleToggleObject { entry_idx: usize, object_id: u64 },
+    DevToolsSourceSelect(usize),
+    DevToolsNetFilter(devtools::NetFilter),
+    DevToolsNetClear,
+    DevToolsNetPreserve,
+    DevToolsNetDisableCache,
+    DevToolsNetSelect(Option<usize>),
+    DevToolsNetSubTab(devtools::NetworkSubTab),
+    DevToolsPerfReload,
+    DevToolsPerfClear,
+    DevToolsAppSection(devtools::AppSection),
+    DevToolsAppClearCookies,
     InspectorScroll(bool),
     Address,
     Back,
@@ -136,11 +161,14 @@ impl Hit {
         x >= self.x && y >= self.y && x < self.x + self.w as i32 && y < self.y + self.h as i32
     }
 }
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Address,
     Input(usize),
     Page,
+    DevTools,
+    ConsoleInput,
+    DevToolsField(devtools::FieldKind),
 }
 struct Loaded {
     generation: u64,
@@ -164,6 +192,12 @@ struct TransactionIdentity {
     sequence: u64,
     revision: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConsoleTarget {
+    Repl,
+    InspectEntry { entry_idx: usize, object_id: u64 },
+    Clear,
+}
 enum PendingTransaction {
     Activation {
         identity: TransactionIdentity,
@@ -176,6 +210,10 @@ enum PendingTransaction {
     Automation {
         identity: TransactionIdentity,
         request: AutomationRequest,
+    },
+    Console {
+        identity: TransactionIdentity,
+        target: ConsoleTarget,
     },
 }
 /// Owned default selected from the validated candidate, never looked up again
@@ -261,6 +299,8 @@ pub struct Browser {
     automation_waiting: Option<u64>,
     automation_completion: Option<AutomationCompletion>,
     automation_session: Option<(u64, u64)>,
+    console_detached_dom: bool,
+    queued_console: VecDeque<(ConsoleCommand, ConsoleTarget)>,
     task_wake: Option<ScheduledTaskWake>,
     last_task_wake_token: u64,
     script_blocked: bool,
@@ -394,12 +434,16 @@ impl Browser {
         self.settings_status = status;
         self.dirty = true;
     }
-    fn modal_open(&self) -> bool {
+    pub(crate) fn popup_modal_open(&self) -> bool {
         self.menu_open
             || self.about_open
             || self.settings_open
             || self.bookmarks_open
-            || self.devtools.visible()
+            || self.devtools.context.is_some()
+            || (self.devtools.open && !self.devtools_is_docked())
+    }
+    fn modal_open(&self) -> bool {
+        self.popup_modal_open()
     }
     fn modal_actions(&self) -> Vec<Action> {
         if self.devtools.context.is_some() {
@@ -410,15 +454,6 @@ impl Browser {
             actions.push(Action::InspectElement);
             actions.push(Action::CloseMenu);
             actions
-        } else if self.devtools.open {
-            vec![
-                Action::InspectorSection(false),
-                Action::InspectorSection(true),
-                Action::InspectorPerformance,
-                Action::CloseMenu,
-                Action::InspectorScroll(false),
-                Action::InspectorScroll(true),
-            ]
         } else if self.bookmarks_open {
             let start = self.bookmark_page * self.bookmark_rows();
             let mut actions = Vec::new();
@@ -446,13 +481,28 @@ impl Browser {
             ]
         } else if self.about_open {
             vec![self.update_button_action(), Action::CloseMenu]
-        } else {
+        } else if self.menu_open {
             vec![
                 Action::About,
                 Action::Update,
                 Action::Settings,
                 Action::Bookmarks,
+                Action::ToggleDevTools,
                 Action::CloseMenu,
+            ]
+        } else {
+            vec![
+                Action::DevToolsTab(devtools::Tab::Elements),
+                Action::DevToolsTab(devtools::Tab::Console),
+                Action::DevToolsTab(devtools::Tab::Sources),
+                Action::DevToolsTab(devtools::Tab::Network),
+                Action::DevToolsTab(devtools::Tab::Performance),
+                Action::DevToolsTab(devtools::Tab::Application),
+                Action::DevToolsTogglePicker,
+                Action::DevToolsToggleDock,
+                Action::CloseMenu,
+                Action::InspectorScroll(false),
+                Action::InspectorScroll(true),
             ]
         }
     }
@@ -462,9 +512,33 @@ impl Browser {
                 self.devtools.context.is_some() && self.devtools.context_link.is_some()
             }
             Action::InspectElement => self.devtools.context.is_some(),
-            Action::InspectorSection(_)
-            | Action::InspectorPerformance
+            Action::DevToolsTab(_)
+            | Action::DevToolsTogglePicker
+            | Action::DevToolsToggleDock
+            | Action::DevToolsSelectNode(_)
+            | Action::DevToolsToggleExpandNode(_)
+            | Action::DevToolsElementsSubTab(_)
+            | Action::DevToolsSelectConsoleNode(_)
+            | Action::DevToolsConsoleFilter(_)
+            | Action::DevToolsConsoleClear
+            | Action::DevToolsConsoleInput
+            | Action::DevToolsField(_)
+            | Action::DevToolsConsolePreserve
+            | Action::DevToolsConsoleToggleGroup(_)
+            | Action::DevToolsConsoleToggleObject { .. }
+            | Action::DevToolsSourceSelect(_)
+            | Action::DevToolsNetFilter(_)
+            | Action::DevToolsNetClear
+            | Action::DevToolsNetPreserve
+            | Action::DevToolsNetDisableCache
+            | Action::DevToolsNetSelect(_)
+            | Action::DevToolsNetSubTab(_)
+            | Action::DevToolsPerfReload
+            | Action::DevToolsPerfClear
+            | Action::DevToolsAppSection(_)
+            | Action::DevToolsAppClearCookies
             | Action::InspectorScroll(_) => self.devtools.open,
+            Action::ToggleDevTools => self.menu_open,
             Action::Menu | Action::CloseMenu => true,
             Action::About | Action::Settings | Action::Bookmarks => self.menu_open,
             Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
@@ -686,6 +760,8 @@ impl Browser {
             automation_waiting: None,
             automation_completion: None,
             automation_session: None,
+            console_detached_dom: false,
+            queued_console: VecDeque::new(),
             task_wake: None,
             last_task_wake_token: 0,
             script_blocked: false,
@@ -781,7 +857,12 @@ impl Browser {
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::Started);
         }
-        self.devtools.new_navigation();
+        if !self.devtools_is_docked() {
+            self.devtools.close();
+        }
+        self.devtools.new_navigation_to(&target);
+        self.devtools
+            .start_document_request(if body.is_some() { "POST" } else { "GET" }, &target);
         self.resource_generation
             .store(self.generation, Ordering::Relaxed);
         if let Err(error) = self.child_pool.set_generation(self.generation) {
@@ -793,6 +874,8 @@ impl Browser {
             session.cancel();
         }
         self.pending_transaction = None;
+        self.console_detached_dom = false;
+        self.queued_console.clear();
         self.task_wake = None;
         self.last_task_wake_token = 0;
         self.pointer_press = None;
@@ -801,7 +884,11 @@ impl Browser {
         }
         self.inflight += 1;
         self.address = target.clone();
-        self.focus = Focus::Page;
+        if !self.devtools.open
+            || !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_))
+        {
+            self.focus = Focus::Page;
+        }
         self.status = format!("Loading {target}");
         self.dirty = true;
         if !automatic {
@@ -968,11 +1055,17 @@ impl Browser {
             self.values.clear();
             self.edit_versions.clear();
             self.pending_transaction = None;
+            self.console_detached_dom = false;
+            self.queued_console.clear();
             self.task_wake = None;
             self.last_task_wake_token = 0;
             self.page_revision = 0;
             self.script_blocked = loaded.script.is_some();
-            self.focus = Focus::Page;
+            if !self.devtools.open
+                || !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_))
+            {
+                self.focus = Focus::Page;
+            }
             self.select_all = false;
             self.last_load_ok = false;
             let mut load_error = None;
@@ -988,6 +1081,9 @@ impl Browser {
             self.devtools.performance.external_scripts_loaded = loaded.script_fetch_profile.loaded;
             self.devtools.performance.external_scripts_bytes = loaded.script_fetch_profile.bytes;
             self.devtools.performance.script_worker_ms = loaded.script_worker_ms;
+            let resource_timings = loaded.resource_profile.timings.clone();
+            let resources_total_ms = loaded.resource_profile.total_ms;
+            let script_timings = loaded.script_fetch_profile.timings.clone();
             let mut slowest = loaded.resource_profile.timings;
             slowest.extend(loaded.script_fetch_profile.timings);
             slowest.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
@@ -996,6 +1092,36 @@ impl Browser {
             match loaded.result {
                 Ok(response) => {
                     self.devtools.performance.html_bytes = response.body.len();
+                    self.devtools.finish_network_load(
+                        response.url.as_str(),
+                        Some(response.status),
+                        &response.content_type,
+                        response.body.len(),
+                        loaded.fetch_html_ms,
+                        loaded.parse_html_ms,
+                        None,
+                        &resource_timings,
+                        resources_total_ms,
+                        &script_timings,
+                    );
+                    self.devtools
+                        .sync_network_exchanges(&self.session.recent_exchanges());
+                    if response.status >= 400 {
+                        self.devtools.record(
+                            "Network",
+                            &format!("HTTP {} loading {}", response.status, response.url),
+                        );
+                    } else {
+                        self.devtools.record_info(
+                            "Page",
+                            &format!(
+                                "Loaded {} (HTTP {}, {} B)",
+                                response.url,
+                                response.status,
+                                response.body.len()
+                            ),
+                        );
+                    }
 
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
@@ -1009,6 +1135,7 @@ impl Browser {
                         self.history[self.history_at] = self.address.clone();
                     }
                     let source = decode_text(&response.body, &response.content_type);
+                    self.devtools.set_page_source(&source);
                     let mut scripting = false;
                     let mut projected = None;
                     let loaded_script_attempted = loaded.script.is_some();
@@ -1042,7 +1169,18 @@ impl Browser {
                                     })
                                 })
                             };
+                            let (init_console, init_console_result) = startup
+                                .session
+                                .as_mut()
+                                .map(|session| session.take_console())
+                                .unwrap_or_default();
                             let validation = validation.and_then(|(document, wake, lifecycle)| {
+                                if init_console_result.is_some() {
+                                    return Err("Initial reply carried Console result".into());
+                                }
+                                for entry in &init_console {
+                                    entry.validate()?;
+                                }
                                 if self.observer_ledger.is_some() {
                                     startup
                                         .reply
@@ -1075,6 +1213,7 @@ impl Browser {
                                     if let Some(staged) = observation {
                                         staged.commit();
                                     }
+                                    self.devtools.ingest_wire_console(init_console, true);
                                     projected = document;
                                     scripting = projected.is_some();
                                     self.lifecycle = lifecycle;
@@ -1196,6 +1335,18 @@ impl Browser {
                     );
                 }
                 Err(error) => {
+                    self.devtools.finish_network_load(
+                        &self.address,
+                        None,
+                        "text/html",
+                        0,
+                        loaded.fetch_html_ms,
+                        loaded.parse_html_ms,
+                        Some(&error),
+                        &resource_timings,
+                        resources_total_ms,
+                        &script_timings,
+                    );
                     self.devtools.record("Navigation", &error);
                     load_error = Some(error.clone());
                     self.initial_script
@@ -1215,6 +1366,12 @@ impl Browser {
             self.page_url = self.address.clone();
             self.page_loader = loaded.generation;
             self.dom_epoch += 1;
+            if self.devtools.open
+                && self.devtools.selected.is_none()
+                && !self.document.nodes.is_empty()
+            {
+                self.devtools.selected = Some((self.dom_epoch, 0));
+            }
             self.frame_cache = None;
             self.style_cache.clear();
             if self.cdp_enabled {
@@ -1365,6 +1522,34 @@ impl Browser {
         }
         document::project_nodes(snapshot.nodes, url)
     }
+    fn validate_detached_reply(reply: &mut SessionReply) -> Result<(), String> {
+        if reply.errors.len() > 64
+            || reply.errors.iter().any(|error| error.len() > 4096)
+            || reply.scripts_executed > 32
+            || reply.acknowledgements.len() > 128
+            || !reply.accounting_valid()
+        {
+            return Err("Invalid script session report limits".into());
+        }
+        if let Some(target) = &reply.navigation {
+            Self::checked_navigation(target)?;
+        }
+        if (reply.state != RealmState::Ready
+            || reply.outcome.click_canceled == Some(true)
+            || reply.outcome.submit_canceled == Some(true))
+            && reply.default_action != DefaultAction::None
+        {
+            return Err("Invalid default action for canceled/closed event".into());
+        }
+        if reply.state != RealmState::Ready && reply.navigation.is_some() {
+            return Err("Closed script session proposed navigation".into());
+        }
+        let _ = reply
+            .snapshot
+            .take()
+            .ok_or("Script session has no accepted snapshot")?;
+        Ok(())
+    }
     fn connected(document: &Document, mut node: usize) -> bool {
         for _ in 0..=256 {
             if node == 0 {
@@ -1396,6 +1581,7 @@ impl Browser {
         }
         self.finish_automation(Err(error.into()), scripts::SessionContinuation::Terminal);
         self.pending_transaction = None;
+        self.queued_console.clear();
         self.task_wake = None;
         self.script_blocked = true;
         self.fetching = false;
@@ -1693,6 +1879,11 @@ impl Browser {
         // Receipt precedes projection/validation. Worker delay is rounded up;
         // scheduling from here may be late, but never moves a task earlier.
         let received = Instant::now();
+        let (wire_console, wire_console_result) = self
+            .page_session
+            .as_mut()
+            .map(|session| session.take_console())
+            .unwrap_or_default();
         let mut reply = match update.reply {
             Ok(reply) => reply,
             Err(error) => {
@@ -1715,8 +1906,10 @@ impl Browser {
                 .pending_transaction
                 .take()
                 .ok_or("Script session expired or sent an unsolicited completion")?;
-            let (identity, activation, automation) = match pending {
-                PendingTransaction::Activation { identity, input } => (identity, Some(input), None),
+            let (identity, activation, automation, console_target) = match pending {
+                PendingTransaction::Activation { identity, input } => {
+                    (identity, Some(input), None, None)
+                }
                 PendingTransaction::TaskPump {
                     identity,
                     wake_token,
@@ -1724,10 +1917,13 @@ impl Browser {
                     if wake_token == 0 || wake_token != self.last_task_wake_token {
                         return Err("Invalid pending task wake identity".into());
                     }
-                    (identity, None, None)
+                    (identity, None, None, None)
                 }
                 PendingTransaction::Automation { identity, request } => {
-                    (identity, None, Some(request))
+                    (identity, None, Some(request), None)
+                }
+                PendingTransaction::Console { identity, target } => {
+                    (identity, None, None, Some(target))
                 }
             };
             if identity.generation != self.generation
@@ -1764,6 +1960,14 @@ impl Browser {
                 (None, None) => {}
                 _ => return Err("Script completion has mismatched Runtime result authority".into()),
             }
+            match (&console_target, &wire_console_result) {
+                (Some(_), Some(result)) => result.validate()?,
+                (None, None) => {}
+                _ => return Err("Script completion has mismatched Console result authority".into()),
+            }
+            for entry in &wire_console {
+                entry.validate()?;
+            }
             if activation.is_none()
                 && (reply.default_action != DefaultAction::None
                     || reply.outcome.click_canceled.is_some()
@@ -1777,7 +1981,7 @@ impl Browser {
             let wake = self.validate_task_wake(&reply, received)?;
             let lifecycle = self.validate_lifecycle_reply(
                 &reply,
-                Some(activation.is_none() && automation.is_none()),
+                Some(activation.is_none() && automation.is_none() && console_target.is_none()),
             )?;
             if self
                 .last_accounting
@@ -1788,12 +1992,21 @@ impl Browser {
                     "Script session cumulative accounting moved backward or changed profile".into(),
                 );
             }
-            let document = Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
-            let default = match &activation {
-                Some(input) => {
-                    Self::validate_default(&document, &input.kind, &reply.default_action)?
+            let document = if self.console_detached_dom {
+                Self::validate_detached_reply(&mut reply)?;
+                None
+            } else {
+                Some(Self::project_reply(
+                    &mut reply,
+                    &self.page_url,
+                    Some(&self.document),
+                )?)
+            };
+            let default = match (&activation, &document) {
+                (Some(input), Some(doc)) => {
+                    Self::validate_default(doc, &input.kind, &reply.default_action)?
                 }
-                None => StagedDefault::None,
+                _ => StagedDefault::None,
             };
             // Validate identity even when explicit navigation takes precedence,
             // but apply final URL policy only to a selected link destination.
@@ -1819,6 +2032,7 @@ impl Browser {
                 identity,
                 activation.is_some(),
                 automation.is_some(),
+                console_target,
                 ack,
                 default,
             ))
@@ -1841,7 +2055,17 @@ impl Browser {
             Ok(None)
         };
         let projection = projection.and_then(
-            |(document, wake, lifecycle, identity, activation, automation, ack, default)| {
+            |(
+                document,
+                wake,
+                lifecycle,
+                identity,
+                activation,
+                automation,
+                console_target,
+                ack,
+                default,
+            )| {
                 observation.map(|observation| {
                     (
                         document,
@@ -1850,6 +2074,7 @@ impl Browser {
                         identity,
                         activation,
                         automation,
+                        console_target,
                         ack,
                         default,
                         observation,
@@ -1873,6 +2098,7 @@ impl Browser {
             identity,
             activation,
             automation,
+            console_target,
             ack,
             default,
             observation,
@@ -1902,7 +2128,10 @@ impl Browser {
             self.block_session("Realm became fatal or closed; previous page retained");
             return;
         }
-        self.acknowledge_projection(document, &ack);
+        let had_projection = document.is_some();
+        if let Some(document) = document {
+            self.acknowledge_projection(document, &ack);
+        }
         self.last_accounting = Some(reply.accounting_snapshot());
         let terminal = update.continuation == scripts::SessionContinuation::Terminal;
         self.replace_task_wake(if terminal { None } else { wake });
@@ -1918,12 +2147,26 @@ impl Browser {
             }
         }
         self.page_revision = reply.revision;
-        self.dom_epoch += 1;
-        if self.cdp_enabled {
-            self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
+        if had_projection {
+            let old_epoch = self.dom_epoch;
+            self.dom_epoch += 1;
+            if !activation && !automation {
+                self.devtools
+                    .carry_epoch(old_epoch, self.dom_epoch, &self.document);
+            }
+            if self.cdp_enabled {
+                self.cdp_events.push(cdp_browser::Event::DocumentUpdated);
+            }
         }
         self.accept_lifecycle(lifecycle, received);
         let _ = self.script_summary(&reply);
+        self.devtools
+            .ingest_wire_console(wire_console, !self.console_detached_dom);
+        if let Some(target) = console_target
+            && let Some(result) = wire_console_result
+        {
+            self.finish_console_transaction(target, result, terminal);
+        }
         if automation {
             let result = update.automation.ok_or("Runtime result missing after validation".to_string())
                 .and_then(|result| {
@@ -1937,6 +2180,7 @@ impl Browser {
         }
         if terminal {
             self.script_blocked = true;
+            self.queued_console.clear();
             self.task_wake = None;
             if let Some(session) = &self.page_session {
                 session.cancel();
@@ -1946,6 +2190,8 @@ impl Browser {
             "Page {} completed · {} diagnostics{}",
             if automation {
                 "Runtime transaction"
+            } else if console_target.is_some() {
+                "Console evaluation"
             } else if activation {
                 "event"
             } else {
@@ -1971,6 +2217,11 @@ impl Browser {
                 "PAGE_AUTOMATION_APPLIED sequence={} revision={} terminal={}",
                 identity.sequence, reply.revision, terminal
             );
+        } else if console_target.is_some() {
+            eprintln!(
+                "PAGE_CONSOLE_APPLIED sequence={} revision={} terminal={}",
+                identity.sequence, reply.revision, terminal
+            );
         } else {
             eprintln!(
                 "PAGE_TASK_APPLIED sequence={} revision={}",
@@ -1988,7 +2239,11 @@ impl Browser {
             return;
         }
         match default {
-            StagedDefault::None => {}
+            StagedDefault::None => {
+                if !terminal && !self.script_blocked {
+                    self.pump_queued_console();
+                }
+            }
             StagedDefault::FollowLink(target) => self.navigate(target, None, true),
             StagedDefault::SubmitForm { form, submitter } => {
                 self.submit_default(form, submitter, false)
@@ -2128,7 +2383,11 @@ impl Browser {
         }
         match action {
             Action::OpenLinkInNewTab(url) => {
-                self.devtools.close();
+                self.devtools.context = None;
+                self.devtools.context_link = None;
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
                 if self.chrome
                     && url::Url::parse(&url)
                         .is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
@@ -2136,19 +2395,142 @@ impl Browser {
                     self.new_tab_request = Some(url);
                 }
             }
+            Action::ToggleDevTools => {
+                self.menu_open = false;
+                self.toggle_devtools();
+            }
             Action::InspectElement => self.open_inspector(),
-            Action::InspectorSection(diagnostics) => {
-                self.devtools.diagnostics = diagnostics;
-                self.devtools.performance_tab = false;
-                self.devtools.row = 0;
+            Action::DevToolsTab(tab) => {
+                self.open_devtools_tab(tab);
             }
-            Action::InspectorPerformance => {
-                self.devtools.performance_tab = true;
-                self.devtools.diagnostics = false;
-                self.devtools.row = 0;
+            Action::DevToolsTogglePicker => {
+                self.toggle_element_picker();
             }
-            Action::InspectorScroll(next) => self.inspector_scroll(if next { 6 } else { -6 }),
+            Action::DevToolsToggleDock => {
+                self.toggle_devtools_dock();
+            }
+            Action::DevToolsSelectNode(node) => {
+                if node < self.document.nodes.len() {
+                    self.select_devtools_node(node);
+                    self.focus = Focus::DevTools;
+                }
+            }
+            Action::DevToolsToggleExpandNode(node) => {
+                if node < self.document.nodes.len() {
+                    self.devtools.toggle_node_expanded(self.dom_epoch, node);
+                    self.select_devtools_node(node);
+                    self.focus = Focus::DevTools;
+                }
+            }
+            Action::DevToolsElementsSubTab(sub) => {
+                self.devtools.elements_subtab = sub;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsSelectConsoleNode(node) => {
+                if node < self.document.nodes.len() {
+                    self.select_devtools_node(node);
+                    self.open_devtools_tab(devtools::Tab::Elements);
+                }
+            }
+            Action::DevToolsConsoleFilter(filter) => {
+                self.devtools.console_filter = filter;
+                self.devtools.row = 0;
+                self.devtools.scroll_to_bottom = false;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsConsoleClear => {
+                self.clear_console_and_worker_objects();
+                if !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_)) {
+                    self.focus = Focus::DevTools;
+                }
+            }
+            Action::DevToolsConsoleInput => {
+                self.focus = Focus::ConsoleInput;
+            }
+            Action::DevToolsField(kind) => {
+                self.focus_devtools_field(kind);
+            }
+            Action::DevToolsConsolePreserve => {
+                self.devtools.preserve_log = !self.devtools.preserve_log;
+                if !matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_)) {
+                    self.focus = Focus::DevTools;
+                }
+            }
+            Action::DevToolsConsoleToggleGroup(entry_idx) => {
+                self.devtools.toggle_console_group(entry_idx);
+            }
+            Action::DevToolsConsoleToggleObject {
+                entry_idx,
+                object_id,
+            } => {
+                self.toggle_console_object(entry_idx, object_id);
+            }
+            Action::DevToolsSourceSelect(idx) => {
+                self.devtools.selected_source = idx;
+                self.devtools.row = 0;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetFilter(filter) => {
+                self.devtools.net_filter = filter;
+                self.devtools.selected_request = None;
+                self.devtools.row = 0;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetClear => {
+                self.devtools.clear_network();
+                self.session.clear_exchanges();
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetPreserve => {
+                self.devtools.net_preserve_log = !self.devtools.net_preserve_log;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetDisableCache => {
+                let next = !self.session.cache_disabled();
+                self.session.set_disable_cache(next);
+                self.devtools.disable_cache = next;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetSelect(sel) => {
+                self.devtools.selected_request = sel;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsNetSubTab(sub) => {
+                self.devtools.net_subtab = sub;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsPerfReload => {
+                self.devtools.clear_performance_metrics();
+                if self.page_url != "about:blank" {
+                    self.navigate(self.page_url.clone(), None, false);
+                } else {
+                    self.frame_cache = None;
+                    self.style_cache.clear();
+                }
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsPerfClear => {
+                self.devtools.clear_performance_metrics();
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsAppSection(sec) => {
+                self.devtools.app_section = sec;
+                self.devtools.row = 0;
+                self.focus = Focus::DevTools;
+            }
+            Action::DevToolsAppClearCookies => {
+                self.session.clear_cookies();
+                self.status = "Cleared session cookies".into();
+                self.focus = Focus::DevTools;
+            }
+            Action::InspectorScroll(next) => {
+                self.focus = Focus::DevTools;
+                self.inspector_scroll(if next { 6 } else { -6 });
+            }
             Action::Bookmarks => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
                 self.bookmarks_open = true;
                 self.menu_open = false;
                 self.about_open = false;
@@ -2191,18 +2573,27 @@ impl Browser {
                 self.modal_focus = 0;
             }
             Action::Menu => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
                 self.menu_open = !self.menu_open;
                 self.about_open = false;
                 self.settings_open = false;
                 self.modal_focus = 0;
             }
             Action::About => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
                 self.about_open = true;
                 self.menu_open = false;
                 self.settings_open = false;
                 self.modal_focus = 0;
             }
             Action::Settings => {
+                if !self.devtools_is_docked() {
+                    self.devtools.close();
+                }
                 self.settings_open = true;
                 self.menu_open = false;
                 self.about_open = false;
@@ -2252,10 +2643,30 @@ impl Browser {
                 }
             }
             Action::CloseMenu => {
-                self.devtools.close();
-                self.about_open = false;
-                self.menu_open = false;
-                self.settings_open = false;
+                if self.devtools.context.is_some() {
+                    self.devtools.context = None;
+                    self.devtools.context_link = None;
+                } else if self.about_open
+                    || self.menu_open
+                    || self.settings_open
+                    || self.bookmarks_open
+                {
+                    self.about_open = false;
+                    self.menu_open = false;
+                    self.settings_open = false;
+                    self.bookmarks_open = false;
+                } else {
+                    if self.devtools.open {
+                        self.scroll_reflow_pending = true;
+                    }
+                    self.devtools.close();
+                    if matches!(
+                        self.focus,
+                        Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                    ) {
+                        self.focus = Focus::Page;
+                    }
+                }
             }
             Action::Address => {
                 self.focus = Focus::Address;
@@ -2275,10 +2686,22 @@ impl Browser {
                         }
                     }
                 }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
+                }
             }
             Action::Link { node, href } => {
                 if !self.dispatch_page(InputKind::Click { target: node })? {
                     self.navigate(href, None, true);
+                }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
                 }
             }
             Action::Reload => self.navigate(self.page_url.clone(), None, false),
@@ -2306,6 +2729,17 @@ impl Browser {
     }
     fn click_checked(&mut self, x: i32, y: i32) -> Result<(), String> {
         self.stop_scroll();
+        if self.devtools.open
+            && self.devtools.pick_mode
+            && !self.popup_modal_open()
+            && x >= 0
+            && x < self.page_viewport_width() as i32
+            && y >= self.page_top()
+            && y < self.page_top() + self.viewport_height() as i32
+        {
+            self.pick_element_at(x, y);
+            return Ok(());
+        }
         if let Some(index) = self.topmost_hit(x, y) {
             let hit = &self.hits[index];
             // Input may arrive between opening a popup and its first paint.
@@ -2321,7 +2755,26 @@ impl Browser {
         Ok(())
     }
     pub fn type_text(&mut self, text: &str) {
-        if self.modal_open() {
+        if self.devtools.open
+            && !self.menu_open
+            && !self.about_open
+            && !self.settings_open
+            && !self.bookmarks_open
+            && self.devtools.context.is_none()
+        {
+            match self.focus {
+                Focus::ConsoleInput => {
+                    self.console_insert_text(text);
+                    return;
+                }
+                Focus::DevToolsField(kind) => {
+                    self.devtools_field_insert_text(kind, text);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.modal_open() || self.focus == Focus::DevTools {
             return;
         }
         if matches!(self.focus, Focus::Input(_)) && self.next_edit == u64::MAX {
@@ -2345,8 +2798,11 @@ impl Browser {
             Focus::Input(node) if default.is_some() => {
                 Some(self.values.entry(node).or_insert(default.unwrap()))
             }
-            Focus::Input(_) => None,
-            Focus::Page => None,
+            Focus::Input(_)
+            | Focus::Page
+            | Focus::DevTools
+            | Focus::ConsoleInput
+            | Focus::DevToolsField(_) => None,
         };
         if let Some(dest) = dest {
             let retained = if self.select_all { 0 } else { dest.len() };
@@ -2366,7 +2822,7 @@ impl Browser {
         self.dirty = true;
     }
     fn enter_checked(&mut self) -> Result<(), String> {
-        if self.modal_open() {
+        if self.modal_open() || (self.devtools.open && self.focus == Focus::DevTools) {
             self.modal_key(0xff0d, false);
             return Ok(());
         }
@@ -2383,7 +2839,7 @@ impl Browser {
                     }
                 }
             }
-            Focus::Page => {}
+            Focus::Page | Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_) => {}
         }
         Ok(())
     }
@@ -2393,12 +2849,112 @@ impl Browser {
             self.toggle_devtools();
             return;
         }
-        if self.chrome && !alt && ctrl && shift && matches!(sym, 0x70 | 0x50) {
-            self.toggle_performance_dashboard();
+        if self.chrome && !alt && ctrl && shift && matches!(sym, 0x63 | 0x43) {
+            self.toggle_element_picker();
             return;
         }
-        if self.devtools.visible() {
-            if self.devtools.open && matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
+        if self.chrome && !alt && ctrl && shift {
+            let tab = match sym {
+                0x6a | 0x4a => Some(devtools::Tab::Console),
+                0x65 | 0x45 => Some(devtools::Tab::Network),
+                0x70 | 0x50 => Some(devtools::Tab::Performance),
+                _ => None,
+            };
+            if let Some(tab) = tab {
+                self.toggle_devtools_tab(tab);
+                if tab == devtools::Tab::Console && self.devtools.open {
+                    self.focus = Focus::ConsoleInput;
+                    self.dirty = true;
+                }
+                return;
+            }
+        }
+        if self.devtools.context.is_some() {
+            self.modal_key(sym, shift);
+            return;
+        }
+        if self.devtools.open
+            && !self.menu_open
+            && !self.about_open
+            && !self.settings_open
+            && !self.bookmarks_open
+            && ctrl
+            && !shift
+            && !alt
+            && (sym == u32::from(b'f') || sym == u32::from(b'F'))
+            && matches!(
+                self.focus,
+                Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+            )
+        {
+            if let Some(kind) = self.devtools_search_field_for_tab() {
+                self.focus_devtools_field(kind);
+                self.dirty = true;
+                return;
+            }
+        }
+        if self.devtools.open
+            && !self.menu_open
+            && !self.about_open
+            && !self.settings_open
+            && !self.bookmarks_open
+            && matches!(self.focus, Focus::ConsoleInput | Focus::DevToolsField(_))
+        {
+            if sym == 0xff1b {
+                if self.devtools.pick_mode {
+                    self.devtools.pick_mode = false;
+                    self.devtools.hovered_inspect_node = None;
+                    self.dirty = true;
+                } else {
+                    self.activate(Action::CloseMenu);
+                }
+            } else {
+                self.handle_console_key(sym, ctrl, shift, alt);
+            }
+            return;
+        }
+        if self.devtools.open
+            && !self.popup_modal_open()
+            && (self.focus == Focus::DevTools || sym == 0xff1b)
+        {
+            if sym == 0xff1b && self.devtools.pick_mode {
+                self.devtools.pick_mode = false;
+                self.devtools.hovered_inspect_node = None;
+                self.dirty = true;
+                return;
+            }
+            if self.devtools.tab == devtools::Tab::Elements
+                && self.focus == Focus::DevTools
+                && !ctrl
+                && !alt
+            {
+                if sym == u32::from(b'h') || sym == u32::from(b'H') {
+                    self.toggle_selected_node_visibility();
+                    return;
+                }
+                if sym == 0xffff {
+                    self.delete_selected_node();
+                    return;
+                }
+                if matches!(sym, 0xff51 | 0xff53) {
+                    self.expand_or_collapse_selected_node(sym == 0xff53);
+                    return;
+                }
+            }
+            if matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
+                self.inspector_scroll(match sym {
+                    0xff52 => -1,
+                    0xff54 => 1,
+                    0xff55 => -6,
+                    _ => 6,
+                });
+            } else {
+                self.modal_key(sym, shift);
+            }
+            return;
+        }
+        if self.devtools.open && !self.devtools_is_docked() && !self.menu_open {
+            if matches!(sym, 0xff52 | 0xff54 | 0xff55 | 0xff56) {
                 self.inspector_scroll(match sym {
                     0xff52 => -1,
                     0xff54 => 1,
@@ -2482,7 +3038,10 @@ impl Browser {
                             self.next_edit = self.next_edit.saturating_add(1);
                             self.edit_versions.insert(node, self.next_edit);
                         }
-                        Focus::Page => {}
+                        Focus::Page
+                        | Focus::DevTools
+                        | Focus::ConsoleInput
+                        | Focus::DevToolsField(_) => {}
                     }
                 }
                 self.dirty = true;
@@ -2633,10 +3192,11 @@ impl Browser {
             None
         };
         let viewport_height = self.viewport_height();
+        let page_width = self.page_viewport_width();
         let doc_key = self.document_cache_key();
         let cache_key = FrameCacheKey {
             doc_key,
-            width: self.width,
+            width: page_width,
             viewport_height,
             scroll: self.scroll,
             scale_percent,
@@ -2669,7 +3229,7 @@ impl Browser {
                 select_all: self.select_all,
             };
             let viewport = mg_sparkle::render::Viewport {
-                width: self.width,
+                width: page_width,
                 height: viewport_height,
                 scroll: self.scroll,
             };
@@ -2691,7 +3251,8 @@ impl Browser {
         let composition_started = Instant::now();
         self.devtools.rendering = frame.diagnostics.clone();
         self.content_height = frame.content_height + top;
-        let max_scroll = (self.content_height - self.height as i32 + 40).max(0);
+        let bottom_dock = self.devtools_bottom_height().unwrap_or(0) as i32;
+        let max_scroll = (self.content_height - (self.height as i32 - bottom_dock) + 40).max(0);
         if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
             self.stop_scroll();
             self.scroll = max_scroll;
@@ -2753,27 +3314,38 @@ impl Browser {
             .min(i64::from(canvas.height)) as u32;
         let page_rows = physical_bottom.saturating_sub(physical_top);
         let rows = frame.canvas.height.min(page_rows);
-        let offset = physical_top as usize * canvas.width as usize;
-        let length = rows as usize * canvas.width as usize;
-        canvas.pixels[offset..offset + length].copy_from_slice(&frame.canvas.pixels[..length]);
+        let src_w = frame.canvas.width.min(canvas.width) as usize;
+        let dst_stride = canvas.width as usize;
+        let src_stride = frame.canvas.width as usize;
+        if src_stride == dst_stride {
+            let offset = physical_top as usize * dst_stride;
+            let length = rows as usize * dst_stride;
+            canvas.pixels[offset..offset + length].copy_from_slice(&frame.canvas.pixels[..length]);
+        } else {
+            for row in 0..rows as usize {
+                let dst_off = (physical_top as usize + row) * dst_stride;
+                let src_off = row * src_stride;
+                canvas.pixels[dst_off..dst_off + src_w]
+                    .copy_from_slice(&frame.canvas.pixels[src_off..src_off + src_w]);
+            }
+        }
         // Independent rounding of the page height and its translated bottom
         // edge can differ by one physical row. Extend only that terminal row,
         // without stretching text or allocating a second resampled surface.
-        if rows > 0 {
-            let last = offset + (rows as usize - 1) * canvas.width as usize;
+        if rows > 0 && src_w > 0 {
+            let last = (physical_top as usize + rows as usize - 1) * dst_stride;
             for row in rows..page_rows {
-                canvas.pixels.copy_within(
-                    last..last + canvas.width as usize,
-                    offset + row as usize * canvas.width as usize,
-                );
+                let dst_off = (physical_top as usize + row as usize) * dst_stride;
+                canvas.pixels.copy_within(last..last + src_w, dst_off);
             }
         }
         timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
         let chrome_started = Instant::now();
         #[cfg(feature = "chrome")]
         if self.chrome {
+            self.paint_docked_devtools(&mut canvas);
             self.paint_chrome(&mut canvas);
-            self.paint_devtools(&mut canvas);
+            self.paint_devtools_overlay(&mut canvas);
         }
         timings.chrome_ms = chrome_started.elapsed().as_secs_f64() * 1000.0;
         self.dirty = false;
@@ -3879,7 +4451,10 @@ pub enum Key {
     Character(char),
     Enter,
     Backspace,
+    Delete,
     Tab,
+    Home,
+    End,
     Left,
     Right,
     Up,
@@ -4059,7 +4634,7 @@ impl Browser {
             || self.loading
             || self.devtools.painted_epoch != self.dom_epoch
             || x < 0
-            || x >= self.width as i32
+            || x >= self.page_viewport_width() as i32
             || y < self.page_top()
             || y >= self.page_top() + self.viewport_height() as i32
         {
@@ -4083,6 +4658,13 @@ impl Browser {
             return;
         }
         self.pointer_position = Some((x, y));
+        if self.devtools.split_dragging && self.devtools.open && self.devtools_is_docked() {
+            self.drag_devtools_splitter(x, y);
+            return;
+        }
+        if self.devtools.open && self.devtools.pick_mode && !self.popup_modal_open() {
+            self.update_picker_hover(x, y);
+        }
         self.refresh_hovered_link();
     }
     /// The destination URL of the currently hovered or context-targeted page link.
@@ -4097,6 +4679,15 @@ impl Browser {
     }
     pub fn pointer_down_with_modifiers(&mut self, x: i32, y: i32, ctrl: bool) {
         self.stop_scroll();
+        if self.devtools.open
+            && self.devtools_is_docked()
+            && !self.popup_modal_open()
+            && self.on_devtools_splitter(x, y)
+        {
+            self.devtools.split_dragging = true;
+            self.pointer_press = None;
+            return;
+        }
         self.pointer_press = Some((x, y));
         self.pointer_press_ctrl = ctrl;
     }
@@ -4104,11 +4695,21 @@ impl Browser {
         self.pointer_up_with_modifiers(x, y, false);
     }
     pub fn pointer_up_with_modifiers(&mut self, x: i32, y: i32, ctrl: bool) {
+        if self.devtools.split_dragging {
+            self.devtools.split_dragging = false;
+            return;
+        }
         let press_ctrl = std::mem::replace(&mut self.pointer_press_ctrl, false);
         if let Some((px, py)) = self.pointer_press.take() {
             let press = self.topmost_hit(px, py);
             let release = self.topmost_hit(x, y);
-            if press.is_some() && press == release {
+            let picker_page_click = press.is_none()
+                && release.is_none()
+                && self.chrome
+                && self.devtools.open
+                && self.devtools.pick_mode
+                && !self.popup_modal_open();
+            if (press.is_some() && press == release) || picker_page_click {
                 if (press_ctrl || ctrl)
                     && self.chrome
                     && !self.modal_open()
@@ -4130,7 +4731,10 @@ impl Browser {
             Key::Character(ch) => ch as u32,
             Key::Enter => 0xff0d,
             Key::Backspace => 0xff08,
+            Key::Delete => 0xffff,
             Key::Tab => 0xff09,
+            Key::Home => 0xff50,
+            Key::End => 0xff57,
             Key::Left => 0xff51,
             Key::Right => 0xff53,
             Key::Up => 0xff52,

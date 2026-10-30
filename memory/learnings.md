@@ -179,3 +179,10 @@
   GitHub `releases/latest` (which `mgbrowser --update` queries) and verify live
   delivery with `tools/public-release-smoke.py`. Pushing `main` alone does not
   advance `releases/latest` or deliver updates to installed binaries.
+- 2026-10-29: When running local smoke scripts that wrap `xvfb-run` inside
+  `timeout` from a PTY-backed harness, redirect stdin from `/dev/null`
+  (`< /dev/null`) or pass `--foreground` to `timeout`; otherwise `timeout`
+  places `/usr/bin/xvfb-run` (`stty size`) into a non-foreground process group
+  and the kernel stops it with `SIGTTIN` (`do_signal_stop`). Keep
+  `[profile.release]` `lto = "thin"` enabled so `mgbrowser-linux-x86_64.tar.gz`
+  stays well below the 8 MiB (`8,388,608`-byte) self-updater download ceiling.

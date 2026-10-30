@@ -16,8 +16,15 @@ impl Browser {
             return;
         }
         if self.devtools.open {
-            self.inspector_scroll(amount.signum() * 3);
-            return;
+            let (dx, dy, dw, dh) = self.devtools_panel_rect();
+            let over_devtools = !self.devtools_is_docked()
+                || self.pointer_position.is_none_or(|(px, py)| {
+                    px >= dx && px < dx + dw as i32 && py >= dy && py < dy + dh as i32
+                });
+            if over_devtools {
+                self.inspector_scroll(amount.signum() * 3);
+                return;
+            }
         }
         self.wheel_scroll_at(amount, Instant::now());
     }
@@ -86,8 +93,9 @@ impl Browser {
     }
 
     pub(super) fn max_scroll(&self) -> i32 {
+        let bottom_dock = self.devtools_bottom_height().unwrap_or(0) as i32;
         self.content_height
-            .saturating_sub(self.height as i32)
+            .saturating_sub(self.height as i32 - bottom_dock)
             .saturating_add(40)
             .max(0)
     }

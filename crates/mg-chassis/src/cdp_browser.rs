@@ -1333,8 +1333,11 @@ impl App {
         }
     }
     pub(crate) fn viewport_height(&self) -> u32 {
-        self.height
-            .saturating_sub(self.page_top() as u32 + self.page_footer())
+        self.height.saturating_sub(
+            self.page_top() as u32
+                + self.page_footer()
+                + self.devtools_bottom_height().unwrap_or(0),
+        )
     }
     fn node_id(&self, index: usize) -> u64 {
         self.dom_epoch * NODE_STRIDE + index as u64 + 1
@@ -1385,16 +1388,17 @@ impl App {
         result
     }
     fn metrics(&self) -> Value {
-        let layout = json!({"pageX":0,"pageY":self.scroll,"clientWidth":self.width,"clientHeight":self.viewport_height()});
-        let visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":self.scroll,"clientWidth":self.width,"clientHeight":self.viewport_height(),"scale":1,"zoom":1});
-        let content = json!({"x":0,"y":0,"width":self.width,"height":(self.content_height-self.page_top()).max(self.viewport_height() as i32)});
+        let page_width = self.page_viewport_width();
+        let layout = json!({"pageX":0,"pageY":self.scroll,"clientWidth":page_width,"clientHeight":self.viewport_height()});
+        let visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":self.scroll,"clientWidth":page_width,"clientHeight":self.viewport_height(),"scale":1,"zoom":1});
+        let content = json!({"x":0,"y":0,"width":page_width,"height":(self.content_height-self.page_top()).max(self.viewport_height() as i32)});
         let physical =
             |value: i64| (value as f64 * f64::from(self.effective_scale())).round() as i64;
         let height = physical(i64::from(self.page_top()) + i64::from(self.viewport_height()))
             - physical(i64::from(self.page_top()));
-        let device_layout = json!({"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(self.width)),"clientHeight":height});
-        let device_visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(self.width)),"clientHeight":height,"scale":1,"zoom":1});
-        let device_content = json!({"x":0,"y":0,"width":physical(i64::from(self.width)),"height":physical(i64::from((self.content_height-self.page_top()).max(self.viewport_height() as i32)))});
+        let device_layout = json!({"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(page_width)),"clientHeight":height});
+        let device_visual = json!({"offsetX":0,"offsetY":0,"pageX":0,"pageY":physical(i64::from(self.scroll)),"clientWidth":physical(i64::from(page_width)),"clientHeight":height,"scale":1,"zoom":1});
+        let device_content = json!({"x":0,"y":0,"width":physical(i64::from(page_width)),"height":physical(i64::from((self.content_height-self.page_top()).max(self.viewport_height() as i32)))});
         json!({"layoutViewport":device_layout,"visualViewport":device_visual,"contentSize":device_content,"cssLayoutViewport":layout,"cssVisualViewport":visual,"cssContentSize":content})
     }
     fn box_model(&self, node: usize) -> Reply {
@@ -1432,7 +1436,10 @@ impl App {
         }
         let (x, y, right, bottom) = bounds
             .ok_or_else(|| failed("Node has no rendered layout box in this browser subset"))?;
-        if right <= 0 || x >= self.width as i32 || bottom <= 0 || y >= self.viewport_height() as i32
+        if right <= 0
+            || x >= self.page_viewport_width() as i32
+            || bottom <= 0
+            || y >= self.viewport_height() as i32
         {
             return Err(failed("Node is outside the current viewport; scroll first"));
         }

@@ -81,6 +81,21 @@ impl ScriptSession for script_worker::Session {
     fn try_automation(&mut self, request: AutomationRequest, revision: u64) -> Result<u64, String> {
         self.try_automation(request, revision)
     }
+    fn try_console(
+        &mut self,
+        command: mg_sparkle::page_session::console::ConsoleCommand,
+        revision: u64,
+    ) -> Result<u64, String> {
+        self.try_console(command, revision)
+    }
+    fn take_console(
+        &mut self,
+    ) -> (
+        Vec<mg_sparkle::page_session::console::ConsoleWireEntry>,
+        Option<mg_sparkle::page_session::console::ConsoleResult>,
+    ) {
+        self.take_console()
+    }
     fn try_recv(&mut self) -> Option<SessionUpdate> {
         self.try_recv().map(|update| SessionUpdate {
             generation: update.generation,
@@ -105,14 +120,17 @@ pub fn translate_keysym(sym: u32) -> Option<Key> {
         0xff1b => Key::Escape,
         0xff0d => Key::Enter,
         0xff08 => Key::Backspace,
+        0xffff => Key::Delete,
         // X11 commonly supplies ISO_Left_Tab for Shift+Tab, not the Tab keysym.
         0xff09 | 0xfe20 => Key::Tab,
+        0xff50 => Key::Home,
         0xff51 => Key::Left,
         0xff52 => Key::Up,
         0xff53 => Key::Right,
         0xff54 => Key::Down,
         0xff55 => Key::PageUp,
         0xff56 => Key::PageDown,
+        0xff57 => Key::End,
         0xffc2 => Key::Reload,
         0xffc9 => Key::DeveloperTools,
         _ => {

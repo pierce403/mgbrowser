@@ -419,47 +419,70 @@ impl Browser {
         })?;
         Ok(previous)
     }
+    fn panel_rect(&self, frame: &Frame) -> (i32, i32, i32, i32) {
+        let w = i32::from(frame.width) * 100 / self.scale;
+        let h = i32::from(frame.height) * 100 / self.scale - self.surface_top;
+        if w >= 680 && h >= 320 {
+            let side_w = (w * 44 / 100).clamp(352, 540);
+            (
+                w - side_w,
+                self.surface_top + 64,
+                side_w,
+                (h - 64 - 29).max(1),
+            )
+        } else {
+            (4, self.surface_top + 4, (w - 8).max(1), (h - 8).max(1))
+        }
+    }
     fn expect_panel(&self, theme: &str) -> Result<Frame> {
         wait("Inspector panel pixels", || {
             let frame = self.frame()?;
-            let logical_width = i32::from(frame.width) * 100 / self.scale;
-            let panel_x = (logical_width - (logical_width - 16).min(860)) / 2;
+            let (panel_x, panel_y, panel_w, _) = self.panel_rect(&frame);
             let panel = frame.pixel(
-                self.physical(panel_x + 6) as usize,
-                self.physical(self.surface_top + 20) as usize,
+                self.physical(panel_x + 4) as usize,
+                self.physical(panel_y + 38) as usize,
             );
-            let control = frame.pixel(
-                self.physical(panel_x + 14) as usize,
-                self.physical(self.surface_top + 50) as usize,
+            let close_btn = frame.pixel(
+                self.physical(panel_x + panel_w - 28) as usize,
+                self.physical(panel_y + 8) as usize,
             );
             Ok(panel == if theme == "dark" { 0x252e28 } else { 0xfafbf8 }
-                && control == if theme == "dark" { 0x323c35 } else { 0xe3e9df })
+                && close_btn == if theme == "dark" { 0x323c35 } else { 0xe3e9df })
         })?;
         self.settled()
     }
-    fn expect_performance(&self, theme: &str) -> Result<Frame> {
-        wait("Performance selection and body text", || {
+    fn expect_tab(&self, tab_index: i32, theme: &str) -> Result<Frame> {
+        let label = format!("DevTools tab {tab_index} ({theme} {}%)", self.scale);
+        wait(&label, || {
             let frame = self.frame()?;
-            let width = i32::from(frame.width) * 100 / self.scale;
-            let panel_width = (width - 16).min(860);
-            let panel_x = (width - panel_width) / 2;
-            let button_width = (panel_width - 48) / 4;
-            let x = panel_x + 26 + 2 * (button_width + 8);
+            let (panel_x, panel_y, panel_w, panel_h) = self.panel_rect(&frame);
+            let tabs_avail = (panel_w - 82).max(0);
+            let tab_w = ((tabs_avail - 10).max(0) / 6).clamp(40, 108);
+            let tx = panel_x + 28 + tab_index * (tab_w + 2);
             let underline = frame.pixel(
-                self.physical(x) as usize,
-                self.physical(self.surface_top + 79) as usize,
+                self.physical(tx + 8) as usize,
+                self.physical(panel_y + 31) as usize,
             );
             if underline != if theme == "dark" { 0xa7dba6 } else { 0x345c36 } {
                 return Ok(false);
             }
-            let ink = if theme == "dark" { 0xe7eee6 } else { 0x26342b };
+            let scan_bottom = (panel_y + panel_h - 32).max(panel_y + 70);
             let mut text_pixels = 0;
-            for y in self.physical(self.surface_top + 94)..self.physical(self.surface_top + 130) {
-                for x in self.physical(panel_x + 12)..self.physical(panel_x + panel_width - 12) {
-                    text_pixels += usize::from(frame.pixel(x as usize, y as usize) == ink);
+            for y in self.physical(panel_y + 66)..self.physical(scan_bottom) {
+                for x in self.physical(panel_x + 8)..self.physical(panel_x + panel_w - 8) {
+                    let px = frame.pixel(x as usize, y as usize);
+                    let r = (px >> 16) & 0xff;
+                    let g = (px >> 8) & 0xff;
+                    let b = px & 0xff;
+                    let is_glyph = if theme == "dark" {
+                        r.max(g).max(b) > 160
+                    } else {
+                        r < 140 && g < 140
+                    };
+                    text_pixels += usize::from(is_glyph);
                 }
             }
-            Ok(text_pixels > 40)
+            Ok(text_pixels > 25)
         })?;
         self.settled()
     }
@@ -499,7 +522,7 @@ fn exercise(
         .expect_context(x, y, theme)?
         .save(&dir.join("context-menu.png"))?;
     browser.button(x + 70, y + 21, 1)?;
-    let elements = browser.expect_panel(theme)?;
+    let elements = browser.expect_tab(0, theme)?;
     elements.save(&dir.join("elements.png"))?;
     let requests = fixture.requests.lock().unwrap().len();
     let scroll_before =
@@ -518,35 +541,40 @@ fn exercise(
         scroll_before,
         "Inspector wheel scrolled page"
     );
-    // Elements has focus initially; the first Tab selects Diagnostics.
+    // Elements has focus initially; the first Tab selects Console.
     browser.key(0xff09, false)?;
     browser.key(0xff0d, false)?;
-    wait("Diagnostics selected underline", || {
-        Ok(browser.frame()?.pixel(
-            browser.physical(280) as usize,
-            browser.physical(79 + browser.surface_top) as usize,
-        ) == if theme == "dark" { 0xa7dba6 } else { 0x345c36 })
-    })?;
-    let diagnostics = browser.expect_panel(theme)?;
+    let diagnostics = browser.expect_tab(1, theme)?;
     assert!(
         elements.bytes != diagnostics.bytes,
-        "Diagnostics tab did not change"
+        "Console tab did not change"
     );
     diagnostics.save(&dir.join("diagnostics.png"))?;
     browser.key(0xff56, false)?;
     browser.settled()?.save(&dir.join("diagnostics-next.png"))?;
+    // Advance one more Tab to Sources (index 2).
+    browser.key(0xff09, false)?;
+    browser.key(0xff0d, false)?;
+    let sources = browser.expect_tab(2, theme)?;
+    assert_ne!(sources.bytes, diagnostics.bytes);
+    sources.save(&dir.join("sources.png"))?;
+    // Open the Network tab via Ctrl+Shift+E (index 3).
+    browser.key(b'E' as u32, true)?;
+    let network = browser.expect_tab(3, theme)?;
+    assert_ne!(network.bytes, diagnostics.bytes);
+    network.save(&dir.join("network.png"))?;
     browser.resize(400, 240)?;
     browser
         .expect_panel(theme)?
         .save(&dir.join("compact-diagnostics.png"))?;
-    // Open the real Performance section using the native shortcut. Require its
-    // selected underline and visible body text, not only an unchanged panel
-    // background after a compact resize.
+    // Open the real Performance section using the native shortcut (index 4).
+    // Require its selected underline and visible body text, not only an unchanged
+    // panel background after a compact resize.
     browser.key(b'P' as u32, true)?;
-    let performance = browser.expect_performance(theme)?;
+    let performance = browser.expect_tab(4, theme)?;
     performance.save(&dir.join("compact-performance.png"))?;
     browser.resize(800, 600)?;
-    let performance = browser.expect_performance(theme)?;
+    let performance = browser.expect_tab(4, theme)?;
     assert_ne!(performance.bytes, diagnostics.bytes);
     performance.save(&dir.join("performance.png"))?;
     browser.button(760, 500, 5)?;
@@ -557,14 +585,22 @@ fn exercise(
         scroll_before,
         "Performance panel input scrolled the document"
     );
-    browser.key(b'P' as u32, true)?;
-    // Reopening through F12 and keyboard tabs must reach Performance too.
+    // Advance one more Tab to Application (index 5).
+    browser.key(0xff09, false)?;
+    browser.key(0xff0d, false)?;
+    let application = browser.expect_tab(5, theme)?;
+    assert_ne!(application.bytes, performance.bytes);
+    application.save(&dir.join("application.png"))?;
+    // Close DevTools via F12, then reopen through F12 and keyboard tabs to reach Performance.
     browser.key(0xffc9, false)?;
-    browser.expect_panel(theme)?;
+    browser.key(0xffc9, false)?;
+    browser.expect_tab(0, theme)?;
+    browser.key(0xff09, false)?;
+    browser.key(0xff09, false)?;
     browser.key(0xff09, false)?;
     browser.key(0xff09, false)?;
     browser.key(0xff0d, false)?;
-    browser.expect_performance(theme)?;
+    browser.expect_tab(4, theme)?;
     browser.key(0xff1b, false)?;
     browser.resize(800, 600)?;
     let before_form = fixture.requests.lock().unwrap().len();
@@ -588,22 +624,20 @@ fn exercise(
     let (x, y) = browser.locate("#chosen")?;
     browser.button(x, y, 3)?;
     browser.button(x + 70, y + 21, 1)?;
-    browser.expect_panel(theme)?;
+    let before_replacement = browser.expect_tab(0, theme)?;
     browser.navigate(&format!("{}/replacement", fixture.base))?;
-    // Navigation must dismiss the old inspector and old selection. F12 now
-    // opens the replacement document root, not the previously selected node.
-    let closed = browser.settled()?;
+    // Docked DevTools stays open across navigation while invalidating the old
+    // node selection and selecting the replacement document root.
+    let replacement = browser.expect_tab(0, theme)?;
+    assert_ne!(replacement.bytes, before_replacement.bytes);
     assert_eq!(
-        closed.pixel(0, browser.physical(browser.surface_top) as usize),
+        replacement.pixel(0, browser.physical(browser.surface_top) as usize),
         0x9f202b
     );
-    browser.key(0xffc9, false)?;
-    browser
-        .expect_panel(theme)?
-        .save(&dir.join("replacement-elements.png"))?;
+    replacement.save(&dir.join("replacement-elements.png"))?;
     browser.key(0xffc9, false)?;
     browser.key(b'I' as u32, true)?;
-    browser.expect_panel(theme)?;
+    browser.expect_tab(0, theme)?;
     browser.key(0xff1b, false)?;
     println!("NATIVE_INSPECTOR_OK {theme} {scale}% {}", dir.display());
     Ok(())

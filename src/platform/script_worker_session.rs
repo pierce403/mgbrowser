@@ -94,6 +94,8 @@ pub struct SessionUpdate {
     pub sequence: Option<u64>,
     pub reply: Result<SessionReply, String>,
     pub automation: Option<AutomationResult>,
+    pub console: Vec<mg_sparkle::page_session::console::ConsoleWireEntry>,
+    pub console_result: Option<mg_sparkle::page_session::console::ConsoleResult>,
     pub continuation: SessionContinuation,
 }
 
@@ -142,6 +144,21 @@ impl Session {
         _: u64,
     ) -> Result<u64, String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
+    pub fn try_console(
+        &mut self,
+        _: mg_sparkle::page_session::console::ConsoleCommand,
+        _: u64,
+    ) -> Result<u64, String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
+    pub fn take_console(
+        &mut self,
+    ) -> (
+        Vec<mg_sparkle::page_session::console::ConsoleWireEntry>,
+        Option<mg_sparkle::page_session::console::ConsoleResult>,
+    ) {
+        (Vec::new(), None)
     }
     pub fn cancel(&self) {}
     pub fn charge_active(&mut self, _: std::time::Duration) -> Result<(), String> {

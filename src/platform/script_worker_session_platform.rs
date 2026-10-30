@@ -5,6 +5,7 @@ use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdat
 use mg_butane::runtime::AllocationReport;
 use mg_chassis::scripts::SessionContinuation;
 use mg_sparkle::page_session::automation::{AutomationRequest, AutomationResult};
+use mg_sparkle::page_session::console::{ConsoleCommand, ConsoleResult, ConsoleWireEntry};
 use mg_sparkle::page_session::observer::{ObserverInit, ObserverReply};
 use mg_sparkle::page_session::{
     ArenaSnapshot, ControlAck, DefaultAction, EventOutcome, LifecycleProgress, MAX_EDIT_BYTES,
@@ -41,21 +42,34 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RequestFrame<I = Request, E = SessionInput, T = TaskPump, A = AutomationRequest> {
+struct RequestFrame<
+    I = Request,
+    E = SessionInput,
+    T = TaskPump,
+    A = AutomationRequest,
+    C = ConsoleCommand,
+> {
     version: u8,
     generation: u64,
     session_id: u64,
     sequence: u64,
     expected_revision: u64,
-    command: FrameCommand<I, E, T, A>,
+    command: FrameCommand<I, E, T, A, C>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", deny_unknown_fields)]
-enum FrameCommand<I = Request, E = SessionInput, T = TaskPump, A = AutomationRequest> {
+enum FrameCommand<
+    I = Request,
+    E = SessionInput,
+    T = TaskPump,
+    A = AutomationRequest,
+    C = ConsoleCommand,
+> {
     Init(I),
     Event(E),
     TaskPump(T),
     Automation(A),
+    Console(C),
 }
 
 // This historical command vocabulary must never deserialize Automation, even
@@ -136,6 +150,7 @@ fn decode_request_frame(
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
             FrameCommand::Automation(request) => FrameCommand::Automation(request),
+            FrameCommand::Console(command) => FrameCommand::Console(command),
         };
         Ok((
             RequestFrame {
@@ -172,6 +187,7 @@ fn encode_request_frame_observed(
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
             FrameCommand::Automation(request) => FrameCommand::Automation(request),
+            FrameCommand::Console(command) => FrameCommand::Console(command),
         };
         return encode(
             &RequestFrame {
@@ -195,6 +211,7 @@ fn encode_request_frame_observed(
         FrameCommand::Event(input) => LegacyFrameCommand::Event(input),
         FrameCommand::TaskPump(pump) => LegacyFrameCommand::TaskPump(pump),
         FrameCommand::Automation(_) => return Err("Legacy v1 cannot carry automation".into()),
+        FrameCommand::Console(_) => return Err("Legacy v1 cannot carry console".into()),
     };
     encode(
         &LegacyRequestFrame {
@@ -208,6 +225,10 @@ fn encode_request_frame_observed(
         limit,
     )
 }
+fn console_slice_empty<C: AsRef<[ConsoleWireEntry]>>(entries: &C) -> bool {
+    entries.as_ref().is_empty()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplyFrame<R = SessionReply> {
@@ -219,6 +240,8 @@ struct ReplyFrame<R = SessionReply> {
     reply: R,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     result: Option<ModernResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    console: Vec<ConsoleWireEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +249,7 @@ struct ReplyFrame<R = SessionReply> {
 enum ModernResult {
     Page,
     Automation(AutomationResult),
+    Console(ConsoleResult),
 }
 impl<'de> Deserialize<'de> for ModernResult {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -236,16 +260,19 @@ impl<'de> Deserialize<'de> for ModernResult {
         enum StrictResult {
             Page {},
             Automation { payload: AutomationResult },
+            Console { payload: ConsoleResult },
         }
         Ok(match StrictResult::deserialize(deserializer)? {
             StrictResult::Page {} => Self::Page,
             StrictResult::Automation { payload } => Self::Automation(payload),
+            StrictResult::Console { payload } => Self::Console(payload),
         })
     }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ModernReplyFrame<R = SessionReply, M = ModernResult> {
+#[serde(bound(serialize = "R: Serialize, M: Serialize, C: Serialize + AsRef<[ConsoleWireEntry]>"))]
+struct ModernReplyFrame<R = SessionReply, M = ModernResult, C = Vec<ConsoleWireEntry>> {
     version: u8,
     generation: u64,
     session_id: u64,
@@ -253,6 +280,8 @@ struct ModernReplyFrame<R = SessionReply, M = ModernResult> {
     expected_revision: u64,
     reply: R,
     result: M,
+    #[serde(default, skip_serializing_if = "console_slice_empty")]
+    console: C,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -321,6 +350,7 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
             sequence: frame.sequence,
             expected_revision: frame.expected_revision,
             result: None,
+            console: Vec::new(),
             reply: SessionReply {
                 revision: old.revision,
                 snapshot: old.snapshot,
@@ -355,6 +385,7 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
             expected_revision: frame.expected_revision,
             reply: frame.reply,
             result: Some(frame.result),
+            console: frame.console,
         })
     }
 }
@@ -373,8 +404,13 @@ fn write_reply_frame(
             .result
             .as_ref()
             .ok_or("Modern v8 reply requires a command result")?;
-        if let ModernResult::Automation(result) = result {
-            result.validate()?;
+        match result {
+            ModernResult::Automation(result) => result.validate()?,
+            ModernResult::Console(result) => result.validate()?,
+            ModernResult::Page => {}
+        }
+        for entry in &frame.console {
+            entry.validate()?;
         }
         return write_frame(
             writer,
@@ -386,12 +422,17 @@ fn write_reply_frame(
                 expected_revision: frame.expected_revision,
                 reply: &frame.reply,
                 result,
+                console: frame.console.as_slice(),
             },
             total,
         );
     }
     let reply = &frame.reply;
-    if reply.lifecycle.is_some() || reply.observer.is_some() || frame.result.is_some() {
+    if reply.lifecycle.is_some()
+        || reply.observer.is_some()
+        || frame.result.is_some()
+        || !frame.console.is_empty()
+    {
         return Err("Legacy v1 reply forbids lifecycle and observer progress".into());
     }
     write_frame(
@@ -500,6 +541,7 @@ enum TransactionCommand {
     Event(SessionInput),
     TaskPump(TaskPump),
     Automation(AutomationRequest),
+    Console(ConsoleCommand),
 }
 enum Control {
     Transaction {
@@ -527,6 +569,8 @@ pub struct Session {
     pool: ChildPool,
     automation_enabled: bool,
     lifecycle: Option<LifecycleProgress>,
+    pending_console: Vec<ConsoleWireEntry>,
+    last_console_result: Option<ConsoleResult>,
 }
 impl Session {
     pub fn start(
@@ -590,6 +634,8 @@ impl Session {
             pool,
             automation_enabled,
             lifecycle: None,
+            pending_console: Vec::new(),
+            last_console_result: None,
         };
         let left = WALL_LIMIT.saturating_sub(started.elapsed());
         let update = session.rx.recv_timeout(left).map_err(|_| {
@@ -600,9 +646,10 @@ impl Session {
             return Err("Invalid initial script-session completion".into());
         }
         let reply = update.reply?;
-        if update.automation.is_some() {
+        if update.automation.is_some() || update.console_result.is_some() {
             return Err("Initial completion cannot carry an automation result".into());
         }
+        session.pending_console = update.console;
         session.revision = reply.revision;
         session.lifecycle = reply.lifecycle;
         session.task_wake = reply.task_wake.clone();
@@ -667,6 +714,27 @@ impl Session {
         }
         self.try_submit(TransactionCommand::Automation(request), expected_revision)
     }
+    pub fn try_console(
+        &mut self,
+        command: ConsoleCommand,
+        expected_revision: u64,
+    ) -> Result<u64, String> {
+        if !self.automation_enabled {
+            return Err("Console requires a modern Disabled-observer session".into());
+        }
+        if !self.lifecycle.is_some_and(|progress| {
+            progress.phase == mg_sparkle::page_session::LifecyclePhase::LoadComplete
+        }) {
+            return Err("Console requires completed initial load".into());
+        }
+        self.try_submit(TransactionCommand::Console(command), expected_revision)
+    }
+    pub fn take_console(&mut self) -> (Vec<ConsoleWireEntry>, Option<ConsoleResult>) {
+        (
+            std::mem::take(&mut self.pending_console),
+            self.last_console_result.take(),
+        )
+    }
     fn try_submit(
         &mut self,
         command: TransactionCommand,
@@ -694,7 +762,10 @@ impl Session {
             }
             // Public automation preflight is nonmutating and consumes no slot.
             // The same validation on untrusted child wire remains terminal.
-            if matches!(command, TransactionCommand::Automation(_)) {
+            if matches!(
+                command,
+                TransactionCommand::Automation(_) | TransactionCommand::Console(_)
+            ) {
                 return Err(error);
             }
             self.shared.fail(error.clone());
@@ -740,6 +811,8 @@ impl Session {
                 {
                     update.reply = Err(error);
                     update.automation = None;
+                    update.console.clear();
+                    update.console_result = None;
                     update.continuation = SessionContinuation::Terminal;
                 }
                 if let Ok(reply) = &update.reply {
@@ -747,6 +820,9 @@ impl Session {
                     self.lifecycle = reply.lifecycle;
                     self.validation_pending = true;
                     self.task_wake = reply.task_wake.clone();
+                    self.pending_console
+                        .extend(std::mem::take(&mut update.console));
+                    self.last_console_result = update.console_result.take();
                 } else {
                     self.validation_pending = false;
                     self.task_wake = None;
@@ -764,6 +840,8 @@ impl Session {
                         session_id: self.id,
                         sequence: self.pending.take(),
                         automation: None,
+                        console: Vec::new(),
+                        console_result: None,
                         continuation: SessionContinuation::Terminal,
                         reply: Err(self
                             .shared
@@ -929,9 +1007,19 @@ impl Worker {
         request: &RequestFrame,
         shared: &Shared,
         started: Instant,
-    ) -> Result<(SessionReply, Option<AutomationResult>), String> {
-        if matches!(request.command, FrameCommand::Automation(_))
-            && (self.legacy || !matches!(self.observer, ObserverInit::Disabled))
+    ) -> Result<
+        (
+            SessionReply,
+            Option<AutomationResult>,
+            Vec<ConsoleWireEntry>,
+            Option<ConsoleResult>,
+        ),
+        String,
+    > {
+        if matches!(
+            request.command,
+            FrameCommand::Automation(_) | FrameCommand::Console(_)
+        ) && (self.legacy || !matches!(self.observer, ObserverInit::Disabled))
         {
             return Err("Automation requires a modern Disabled-observer session".into());
         }
@@ -1064,11 +1152,12 @@ impl Worker {
                 if let Some(wake) = &frame.reply.task_wake {
                     self.last_wake_token = wake.token;
                 }
-                let automation = match frame.result {
-                    Some(ModernResult::Automation(result)) => Some(result),
-                    Some(ModernResult::Page) | None => None,
+                let (automation, console_result) = match frame.result {
+                    Some(ModernResult::Automation(result)) => (Some(result), None),
+                    Some(ModernResult::Console(result)) => (None, Some(result)),
+                    Some(ModernResult::Page) | None => (None, None),
                 };
-                return Ok((frame.reply, automation));
+                return Ok((frame.reply, automation, frame.console, console_result));
             }
             if !progressed {
                 thread::sleep(TICK);
@@ -1104,6 +1193,8 @@ fn update(
         sequence,
         reply,
         automation: None,
+        console: Vec::new(),
+        console_result: None,
         continuation: SessionContinuation::Terminal,
     }
 }
@@ -1148,7 +1239,7 @@ fn manage(
     let elapsed = shared.charge(started.elapsed());
     let result = result.and_then(|reply| elapsed.map(|_| reply));
     let mut revision = match result {
-        Ok((reply, automation)) => {
+        Ok((reply, automation, console, console_result)) => {
             let revision = reply.revision;
             let terminal = reply.state != RealmState::Ready;
             if terminal && !worker.stop() {
@@ -1158,6 +1249,8 @@ fn manage(
             }
             let mut completion = update(generation, id, Some(0), Ok(reply));
             completion.automation = automation;
+            completion.console = console;
+            completion.console_result = console_result;
             completion.continuation = if terminal {
                 SessionContinuation::Terminal
             } else {
@@ -1220,13 +1313,14 @@ fn manage(
                             TransactionCommand::Automation(request) => {
                                 FrameCommand::Automation(request)
                             }
+                            TransactionCommand::Console(command) => FrameCommand::Console(command),
                         },
                     };
                     worker.transaction(&request, &shared, started)
                 })();
                 let elapsed = shared.charge(started.elapsed());
                 match result.and_then(|reply| elapsed.map(|_| reply)) {
-                    Ok((reply, automation)) => {
+                    Ok((reply, automation, console, console_result)) => {
                         next_sequence += 1;
                         revision = reply.revision;
                         let terminal =
@@ -1244,6 +1338,8 @@ fn manage(
                         }
                         let mut completion = update(generation, id, Some(sequence), Ok(reply));
                         completion.automation = automation;
+                        completion.console = console;
+                        completion.console_result = console_result;
                         completion.continuation = if terminal {
                             SessionContinuation::Terminal
                         } else {
@@ -1304,6 +1400,7 @@ fn validate_command(command: &TransactionCommand) -> Result<(), String> {
         TransactionCommand::TaskPump(pump) if pump.wake_token != 0 => Ok(()),
         TransactionCommand::TaskPump(_) => Err("Task wake token must be nonzero".into()),
         TransactionCommand::Automation(request) => request.validate(),
+        TransactionCommand::Console(command) => command.validate(),
     }
 }
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
@@ -1312,7 +1409,7 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     if matches!(
         request.command,
-        FrameCommand::TaskPump(_) | FrameCommand::Automation(_)
+        FrameCommand::TaskPump(_) | FrameCommand::Automation(_) | FrameCommand::Console(_)
     ) && request.version != VERSION
     {
         return Err("Legacy script session does not support tasks or automation".into());
@@ -1325,6 +1422,12 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Script-session reply identity or sequence mismatch".into());
     }
+    if frame.console.len() > mg_sparkle::page_session::console::MAX_CONSOLE_ENTRIES_PER_TX {
+        return Err("Console reply exceeds entry limit".into());
+    }
+    for entry in &frame.console {
+        entry.validate()?;
+    }
     let reply = &frame.reply;
     match (&request.command, &frame.result) {
         (FrameCommand::Automation(input), Some(ModernResult::Automation(result))) => {
@@ -1332,6 +1435,10 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
         }
         (FrameCommand::Automation(_), _) => {
             return Err("Automation reply omitted its matching result".into());
+        }
+        (FrameCommand::Console(_), Some(ModernResult::Console(result))) => result.validate()?,
+        (FrameCommand::Console(_), _) => {
+            return Err("Console reply omitted its matching result".into());
         }
         (_, Some(ModernResult::Page)) if request.version == VERSION => {}
         (_, None) if request.version == 1 => {}
@@ -1434,11 +1541,13 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     {
         return Err("Task pump returned activation effects or startup-script counts".into());
     }
-    if matches!(request.command, FrameCommand::Automation(_))
-        && (reply.default_action != DefaultAction::None
-            || reply.outcome.click_canceled.is_some()
-            || reply.outcome.submit_canceled.is_some()
-            || reply.scripts_executed != 0)
+    if matches!(
+        request.command,
+        FrameCommand::Automation(_) | FrameCommand::Console(_)
+    ) && (reply.default_action != DefaultAction::None
+        || reply.outcome.click_canceled.is_some()
+        || reply.outcome.submit_canceled.is_some()
+        || reply.scripts_executed != 0)
     {
         return Err("Automation returned activation effects or startup counts".into());
     }
@@ -1688,6 +1797,23 @@ impl PageEngine {
             Self::Legacy(_) => Err("Legacy v1 cannot execute automation".into()),
         }
     }
+    fn console_command(
+        &mut self,
+        command: ConsoleCommand,
+    ) -> Result<(SessionReply, ConsoleResult), String> {
+        match self {
+            Self::Boa(realm) => Ok(realm.console_command(command)),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(_) => Err("Legacy v1 cannot execute console".into()),
+        }
+    }
+    fn take_console_entries(&mut self) -> Vec<ConsoleWireEntry> {
+        match self {
+            Self::Boa(realm) => realm.take_console_entries(),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(_) => Vec::new(),
+        }
+    }
 }
 fn attach_memory(reply: &mut SessionReply) {
     if let Some(report) = &mut reply.boa {
@@ -1717,6 +1843,14 @@ fn child_loop_for(
     };
     let automation_enabled = !legacy && matches!(observer, ObserverInit::Disabled);
     let (mut realm, mut reply) = PageEngine::start(initial, legacy, observer);
+    let initial_console = if !legacy && matches!(observer, ObserverInit::Disabled) {
+        realm
+            .as_mut()
+            .map(PageEngine::take_console_entries)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     attach_memory(&mut reply);
     let mut revision = reply.revision;
     let mut lifecycle = reply.lifecycle;
@@ -1730,6 +1864,7 @@ fn child_loop_for(
             sequence: 0,
             expected_revision: 0,
             result: (!legacy).then_some(ModernResult::Page),
+            console: initial_console,
             reply,
         },
         &mut wire,
@@ -1773,7 +1908,22 @@ fn child_loop_for(
                 let (reply, result) = realm.automation(input)?;
                 (reply, Some(ModernResult::Automation(result)))
             }
+            FrameCommand::Console(command)
+                if automation_enabled
+                    && lifecycle.is_some_and(|progress| {
+                        progress.phase == mg_sparkle::page_session::LifecyclePhase::LoadComplete
+                    }) =>
+            {
+                command.validate()?;
+                let (reply, result) = realm.console_command(command)?;
+                (reply, Some(ModernResult::Console(result)))
+            }
             _ => return Err("Repeated initialization or unsupported task command".into()),
+        };
+        let tx_console = if automation_enabled {
+            realm.take_console_entries()
+        } else {
+            Vec::new()
         };
         attach_memory(&mut reply);
         revision = reply.revision;
@@ -1788,6 +1938,7 @@ fn child_loop_for(
                 sequence,
                 expected_revision: event.expected_revision,
                 result,
+                console: tx_console,
                 reply,
             },
             &mut wire,
@@ -2349,6 +2500,7 @@ mod tests {
             sequence: request.sequence,
             expected_revision: request.expected_revision,
             result: None,
+            console: Vec::new(),
             reply: SessionReply {
                 revision: request.sequence,
                 snapshot: Some(ArenaSnapshot { nodes: Vec::new() }),

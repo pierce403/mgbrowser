@@ -775,8 +775,14 @@ impl Desktop {
             match e.detail {
                 1 => app.pointer_down_with_modifiers(x, y, e.state.contains(KeyButMask::CONTROL)),
                 3 => app.context_menu_at(x, y),
-                4 => app.wheel_scroll_by(-100),
-                5 => app.wheel_scroll_by(100),
+                4 => {
+                    app.pointer_move(x, y);
+                    app.wheel_scroll_by(-100);
+                }
+                5 => {
+                    app.pointer_move(x, y);
+                    app.wheel_scroll_by(100);
+                }
                 _ => {}
             }
         }

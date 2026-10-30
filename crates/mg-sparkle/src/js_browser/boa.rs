@@ -36,6 +36,7 @@ use std::{
 };
 
 mod automation;
+mod console;
 mod cssom;
 mod dom_exception;
 #[cfg(test)]
@@ -220,6 +221,7 @@ struct State {
     #[unsafe_ignore_trace]
     reporting_error: bool,
     observer: Option<observer::Capture>,
+    console: console::ConsoleState,
     #[cfg(test)]
     #[unsafe_ignore_trace]
     test_now: Option<Instant>,
@@ -258,6 +260,7 @@ impl State {
         Option<JsWeakMap>,
     ) {
         self.armed_wake = None;
+        self.console.clear_roots();
         (
             std::mem::take(&mut self.timers),
             std::mem::take(&mut self.rejections),
@@ -656,7 +659,9 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     if let Some(function) = shared.borrow().methods.get(name).cloned() {
         return Ok(function);
     }
-    let (public_name, arity) = cssom::method_metadata(name).unwrap_or((name, 1));
+    let (public_name, arity) = cssom::method_metadata(name)
+        .or_else(|| console::method_metadata(name))
+        .unwrap_or((name, 1));
     let function: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
@@ -1111,8 +1116,8 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
     if name.ends_with("addEventListener") || name.ends_with("removeEventListener") {
         return listener_call(name, this, args, context);
     }
-    if name == "host.console.log" {
-        return Ok(JsValue::undefined());
+    if let Some(method) = name.strip_prefix("host.console.") {
+        return console::call(method, this, args, context);
     }
     let strings = state(context).borrow().host.string_arguments(name);
     let mut converted = Vec::new();
@@ -1423,6 +1428,7 @@ impl BoaPageRealm {
             error_exposure_allowed,
             reporting_error: false,
             observer: None,
+            console: console::ConsoleState::default(),
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -2883,6 +2889,17 @@ impl BoaPageRealm {
         request: page_session::automation::AutomationRequest,
     ) -> (SessionReply, page_session::automation::AutomationResult) {
         automation::run(self, request)
+    }
+
+    pub fn console_command(
+        &mut self,
+        command: page_session::console::ConsoleCommand,
+    ) -> (SessionReply, page_session::console::ConsoleResult) {
+        console::run(self, command)
+    }
+
+    pub fn take_console_entries(&mut self) -> Vec<page_session::console::ConsoleWireEntry> {
+        std::mem::take(&mut self.state.borrow_mut().console.entries)
     }
 
     pub fn dispatch(&mut self, input: SessionInput) -> SessionReply {

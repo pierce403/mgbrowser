@@ -33,8 +33,11 @@ pub struct ResourceTiming {
     pub kind: &'static str,
     pub url: String,
     pub status: Option<u16>,
+    pub content_type: String,
     pub bytes: usize,
+    pub start_ms: f64,
     pub duration_ms: f64,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -88,6 +91,7 @@ pub fn load_with_profile(
         session,
         page_url,
         cancelled: &cancelled,
+        started,
         deadline: started + RESOURCE_TIMEOUT,
         requests: 0,
         bytes: 0,
@@ -139,7 +143,8 @@ pub fn load_with_profile(
                         media,
                     }
                 } else {
-                    let Some(response) = loader.fetch(&url, MAX_CSS, ResourceKind::Stylesheet)
+                    let Some(response) =
+                        loader.fetch(&url, MAX_CSS, ResourceKind::Stylesheet, "stylesheet")
                     else {
                         continue;
                     };
@@ -226,7 +231,7 @@ pub fn load_with_profile(
         if !seen.insert(url.clone()) {
             continue;
         }
-        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Stylesheet) else {
+        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Stylesheet, "font") else {
             continue;
         };
         if !matches!(
@@ -276,7 +281,7 @@ pub fn load_with_profile(
         if !seen.insert(url.clone()) {
             continue;
         }
-        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Image) else {
+        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Image, "image") else {
             continue;
         };
         if !matches!(
@@ -362,6 +367,7 @@ pub fn prepare_script_sources(
         session,
         page_url,
         cancelled: &cancelled,
+        started,
         deadline: resources.deadline.unwrap_or(started + RESOURCE_TIMEOUT),
         requests: resources.requests,
         bytes: resources.bytes,
@@ -458,7 +464,7 @@ pub fn prepare_script_sources(
             continue;
         }
         let limit = MAX_EXTERNAL_SOURCE.min(MAX_SOURCE.saturating_sub(source_bytes));
-        let Some(response) = loader.fetch(&url, limit, ResourceKind::Script) else {
+        let Some(response) = loader.fetch(&url, limit, ResourceKind::Script, "script") else {
             continue;
         };
         // A conservative MIME policy also refuses text/plain + nosniff without
@@ -580,6 +586,7 @@ struct Loader<'a, F: Fn() -> bool> {
     session: &'a Session,
     page_url: &'a str,
     cancelled: &'a F,
+    started: Instant,
     deadline: Instant,
     requests: usize,
     bytes: usize,
@@ -636,7 +643,13 @@ impl<F: Fn() -> bool> Loader<'_, F> {
         }
     }
 
-    fn fetch(&mut self, url: &str, limit: usize, kind: ResourceKind) -> Option<Response> {
+    fn fetch(
+        &mut self,
+        url: &str,
+        limit: usize,
+        kind: ResourceKind,
+        kind_label: &'static str,
+    ) -> Option<Response> {
         if self.stopped() {
             return None;
         }
@@ -649,11 +662,7 @@ impl<F: Fn() -> bool> Loader<'_, F> {
             return None;
         }
         self.requests += 1;
-        let kind_label = match kind {
-            ResourceKind::Stylesheet => "css/font",
-            ResourceKind::Image => "image",
-            ResourceKind::Script => "script",
-        };
+        let start_ms = self.started.elapsed().as_secs_f64() * 1000.0;
         let req_start = Instant::now();
         let result = self.session.fetch_resource(
             url,
@@ -669,8 +678,11 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                     kind: kind_label,
                     url: label(url),
                     status: Some(response.status),
+                    content_type: label(&response.content_type),
                     bytes: response.body.len(),
+                    start_ms,
                     duration_ms,
+                    error: None,
                 });
                 if self.stopped() || !self.admit(response.body.len()) {
                     None
@@ -683,8 +695,11 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                     kind: kind_label,
                     url: label(url),
                     status: Some(response.status),
+                    content_type: label(&response.content_type),
                     bytes: response.body.len(),
+                    start_ms,
                     duration_ms,
+                    error: Some(format!("HTTP {}", response.status)),
                 });
                 self.admit(response.body.len());
                 self.warn(format!(
@@ -699,8 +714,11 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                     kind: kind_label,
                     url: label(url),
                     status: None,
+                    content_type: String::new(),
                     bytes: 0,
+                    start_ms,
                     duration_ms,
+                    error: Some(label(&error)),
                 });
                 self.warn(format!(
                     "Resource unavailable: {} at {} (byte limit {})",
@@ -1071,6 +1089,7 @@ mod tests {
             session: &session,
             page_url: "http://127.0.0.1:1/",
             cancelled: &|| false,
+            started: Instant::now(),
             deadline: Instant::now() - Duration::from_secs(1),
             requests: 0,
             bytes: 0,
@@ -1083,7 +1102,8 @@ mod tests {
                 .fetch(
                     "http://127.0.0.1:1/never",
                     MAX_CSS,
-                    ResourceKind::Stylesheet
+                    ResourceKind::Stylesheet,
+                    "stylesheet",
                 )
                 .is_none()
         );
@@ -1099,7 +1119,8 @@ mod tests {
                 .fetch(
                     "http://127.0.0.1:1/never",
                     MAX_CSS,
-                    ResourceKind::Stylesheet
+                    ResourceKind::Stylesheet,
+                    "stylesheet",
                 )
                 .is_none()
         );
@@ -1221,6 +1242,7 @@ mod tests {
             session: &session,
             page_url: "https://example.test/",
             cancelled: &|| false,
+            started: Instant::now(),
             deadline: Instant::now(),
             requests: 0,
             bytes: 0,

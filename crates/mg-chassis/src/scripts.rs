@@ -8,6 +8,7 @@ use mg_sparkle::{
     page_session::{
         SessionInput, SessionReply, TaskPump,
         automation::{AutomationRequest, AutomationResult},
+        console::{ConsoleCommand, ConsoleResult, ConsoleWireEntry},
     },
 };
 use std::time::Duration;
@@ -41,6 +42,12 @@ pub trait ScriptSession: Send {
     /// cumulative budgets; a host without this service fails explicitly.
     fn try_automation(&mut self, _: AutomationRequest, _: u64) -> Result<u64, String> {
         Err("This script runtime does not support Runtime automation".into())
+    }
+    fn try_console(&mut self, _: ConsoleCommand, _: u64) -> Result<u64, String> {
+        Err("This script runtime does not support Console evaluation".into())
+    }
+    fn take_console(&mut self) -> (Vec<ConsoleWireEntry>, Option<ConsoleResult>) {
+        (Vec::new(), None)
     }
     fn try_recv(&mut self) -> Option<SessionUpdate>;
     fn cancel(&self);

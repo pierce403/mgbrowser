@@ -39,16 +39,26 @@ impl Browser {
                 (14, 13),
                 (18, 5),
             ]],
+            Action::ToggleDevTools => &[
+                &[(13, 11), (7, 17), (13, 23)],
+                &[(20, 9), (16, 25)],
+                &[(23, 11), (29, 17), (23, 23)],
+            ],
             _ => &[],
         };
         let saved = matches!(action, Action::ToggleBookmark) && self.is_bookmarked();
+        let active_tool = matches!(action, Action::ToggleDevTools) && self.devtools.open;
         for path in paths {
             for pair in path.windows(2) {
                 icon_line(
                     c,
                     (x + pair[0].0, 14 + pair[0].1),
                     (x + pair[1].0, 14 + pair[1].1),
-                    if saved { p.accent } else { color },
+                    if saved || active_tool {
+                        p.accent
+                    } else {
+                        color
+                    },
                 );
             }
         }
@@ -136,7 +146,12 @@ impl Browser {
             Action::ToggleBookmark,
             self.current_bookmark().is_some(),
         );
-        let aw = self.width.saturating_sub(252);
+        if self.width >= 480 {
+            self.toolbar_button(c, self.width as i32 - 90, Action::ToggleDevTools, true);
+        }
+        let aw = self
+            .width
+            .saturating_sub(if self.width >= 480 { 296 } else { 252 });
         c.rect(196, 12, aw, 39, palette.field);
         let address = fit_tail(&mut self.fonts, &self.address, 16., aw as f32 - 20.);
         if self.focus == Focus::Address && self.select_all && !address.is_empty() {
@@ -178,15 +193,16 @@ impl Browser {
                 palette.muted
             },
         );
-        if self.content_height > self.height as i32 {
-            let area = (self.height as i32 - TOP - 30).max(1);
+        let view_h = self.viewport_height() as i32;
+        if self.content_height > TOP + view_h + 29 {
+            let area = view_h.saturating_sub(1).max(1);
             let thumb = (area * area / (self.content_height - TOP).max(1)).max(20);
             let sy = TOP + self.scroll * area / (self.content_height - TOP).max(1);
             c.rect(
-                self.width as i32 - 9,
-                sy,
+                self.page_viewport_width() as i32 - 9,
+                sy.min(TOP + view_h - thumb.min(view_h)),
                 6,
-                thumb as u32,
+                (thumb as u32).min(view_h.max(1) as u32),
                 palette.scrollbar,
             );
         }
@@ -199,12 +215,21 @@ impl Browser {
         }
         if self.menu_open {
             let x = self.width as i32 - 226;
-            let y = 54;
-            c.rect(x - 8, y, 228, 182, palette.border);
-            self.dialog_button(c, (x, y + 6), 212, "About mgbrowser", Action::About, 0);
+            let compact = self.height < 280;
+            let y = if compact { 28 } else { 54 };
+            let first = if compact { 4 } else { 6 };
+            let step = 34;
+            c.rect(
+                x - 8,
+                y,
+                228,
+                if compact { 210 } else { 216 },
+                palette.border,
+            );
+            self.dialog_button(c, (x, y + first), 212, "About mgbrowser", Action::About, 0);
             self.dialog_button(
                 c,
-                (x, y + 40),
+                (x, y + first + step),
                 212,
                 if self.restart_available {
                     "Update ready: restart..."
@@ -214,9 +239,38 @@ impl Browser {
                 Action::Update,
                 1,
             );
-            self.dialog_button(c, (x, y + 74), 212, "Settings", Action::Settings, 2);
-            self.dialog_button(c, (x, y + 108), 212, "Bookmarks", Action::Bookmarks, 3);
-            self.dialog_button(c, (x, y + 142), 212, "Close", Action::CloseMenu, 4);
+            self.dialog_button(
+                c,
+                (x, y + first + step * 2),
+                212,
+                "Settings",
+                Action::Settings,
+                2,
+            );
+            self.dialog_button(
+                c,
+                (x, y + first + step * 3),
+                212,
+                "Bookmarks",
+                Action::Bookmarks,
+                3,
+            );
+            self.dialog_button(
+                c,
+                (x, y + first + step * 4),
+                212,
+                "Developer tools",
+                Action::ToggleDevTools,
+                4,
+            );
+            self.dialog_button(
+                c,
+                (x, y + first + step * 5),
+                212,
+                "Close",
+                Action::CloseMenu,
+                5,
+            );
         }
         if self.bookmarks_open {
             self.paint_bookmarks(c);
