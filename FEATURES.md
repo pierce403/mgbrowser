@@ -6,6 +6,44 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-031 : HTML forms, interactive controls & modern DOM/Web Platform APIs
+
+Stability: stable
+
+### Dependencies
+
+F-003 local document rendering, F-004 native input/navigation, F-008 session cookies, F-014 Stylo CSS, F-016 JavaScript/DOM worker isolation.
+
+### Properties
+
+Interactive HTML forms, standalone controls outside `<form>`, and modern Boa DOM
+and Web Platform APIs over the seccomp-confined `VERSION = 9` page worker
+session (`RLIMIT_NOFILE = 3`, `RLIMIT_FSIZE = 0`, zero worker network or
+filesystem syscalls): `checkbox`, radio groups, `<select>`/`<option>`/`<optgroup>`
+dropdown popup overlay, `<button type="button"|"reset"|"submit">`, `<textarea>`,
+`<label>`, `<details>`/`<summary>`, `<dialog>` (`show`/`showModal`/`close`),
+`form.elements`/`submit`/`reset`/`requestSubmit`, and arbitrary `<div onclick>`
+element activation; Stylo CSS3 `querySelector`/`querySelectorAll`/`matches`/
+`closest` and `CSS.supports`/`CSS.escape`; `DocumentFragment`, `DOMParser`,
+`<template>.content`, `outerHTML`, `insertAdjacentHTML`, `{ capture, once,
+passive, signal }` + `AbortController`/`AbortSignal`, `CustomEvent` and UI event
+constructors; `URL`, `URLSearchParams`, `TextEncoder`/`TextDecoder`,
+`atob`/`btoa`, parent-seeded ChaCha20 `crypto.getRandomValues` & `randomUUID`,
+`performance.now`, `setInterval`, `requestAnimationFrame`, `queueMicrotask`,
+`structuredClone`, and Stylo `matchMedia`; live `getComputedStyle` and
+`compute_boxes`-backed `getBoundingClientRect`/`getClientRects`/`scrollTo`;
+per-origin `localStorage`, per-tab `sessionStorage`, `HttpOnly`-isolated
+`document.cookie`, same-document `history.pushState`/`replaceState`/`popstate`,
+and parent-brokered same-origin `fetch()` and `XMLHttpRequest`. See
+[docs/RELEASE-v0.9.28.md](docs/RELEASE-v0.9.28.md).
+
+### Test criteria
+
+- [x] Standalone and form-associated controls (`checkbox`, `radio`, `<select>`, `<button>`, `<textarea>`, `<label>`, `<details>`, `<dialog>`) and `<div onclick>` pass layout, rendering, hit-test, and activation suites (`m2_dom_platform`).
+- [x] Stylo CSS3 selectors, `DocumentFragment`/`DOMParser`/`outerHTML`/`insertAdjacentHTML`, `{ capture, once, passive, signal }`, Web globals, `getComputedStyle`/`getBoundingClientRect`, Storage, Cookies (`HttpOnly` isolated), History API, and parent-brokered `fetch()`/`XMLHttpRequest` pass real seccomp-confined `VERSION = 9` worker suites (`m2_platform_session`).
+- [x] Existing `script_worker`, `script_session`, `script_tasks`, `script_automation`, and `legacy-test-engine` limits and selftests pass unchanged.
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, both WPT score lanes, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-030 : CSS layout fidelity, rounded boxes, stacking & WPT coverage
 
 Stability: stable

@@ -1015,6 +1015,7 @@
     "css/css-flexbox/whitespace-in-flexitem-001.html"
   ],
   "required_passes": [
+    "css/css-flexbox/abspos/dynamic-align-self-001.html",
     "css/css-flexbox/abspos/flex-abspos-staticpos-fallback-justify-content-001.html",
     "css/css-flexbox/abspos/flex-abspos-staticpos-justify-self-001.html",
     "css/css-flexbox/abspos/flex-abspos-staticpos-margin-001.html",
@@ -1067,6 +1068,7 @@
     "css/css-flexbox/css-flexbox-img-expand-evenly.html",
     "css/css-flexbox/dynamic-baseline-change-nested.html",
     "css/css-flexbox/dynamic-baseline-change.html",
+    "css/css-flexbox/dynamic-bsize-change.html",
     "css/css-flexbox/dynamic-change-simplified-layout.html",
     "css/css-flexbox/empty-flex-box-and-margin-collapsing.html",
     "css/css-flexbox/fieldset-as-item-dynamic.html",
@@ -1099,6 +1101,7 @@
     "css/css-flexbox/flex-aspect-ratio-img-row-012.html",
     "css/css-flexbox/flex-aspect-ratio-img-row-014.html",
     "css/css-flexbox/flex-aspect-ratio-img-row-017.html",
+    "css/css-flexbox/flex-aspect-ratio-percentage-height-stale-width.html",
     "css/css-flexbox/flex-aspect-ratio-resize-001.html",
     "css/css-flexbox/flex-base-size-ignores-max-width.html",
     "css/css-flexbox/flex-basis-001.html",
@@ -1214,6 +1217,7 @@
     "css/css-flexbox/flexbox-baseline-single-item-001a.html",
     "css/css-flexbox/flexbox-baseline-single-item-001b.html",
     "css/css-flexbox/flexbox-basic-block-vert-001.xhtml",
+    "css/css-flexbox/flexbox-basic-fieldset-vert-001.xhtml",
     "css/css-flexbox/flexbox-basic-img-horiz-001.xhtml",
     "css/css-flexbox/flexbox-basic-img-vert-001.xhtml",
     "css/css-flexbox/flexbox-basic-textarea-horiz-001.xhtml",

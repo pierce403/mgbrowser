@@ -2,7 +2,25 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.27
+## Latest verified release: v0.9.28
+
+v0.9.28 adds interactive HTML forms and standalone controls (`checkbox`, `radio`,
+`<select>` dropdown popup, `<button>`, `<textarea>`, `<label>`, `<details>`/
+`<summary>`, `<dialog>`, `<div onclick>`), Stylo CSS3 DOM selectors
+(`querySelector`, `querySelectorAll`, `matches`, `closest`, `CSS.supports`),
+modern DOM mutation and Event APIs (`DocumentFragment`, `DOMParser`,
+`outerHTML`, `insertAdjacentHTML`, `{ capture, once, passive, signal }`,
+`AbortController`, `CustomEvent`), Web Platform globals (`URL`,
+`URLSearchParams`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, ChaCha20 CSPRNG
+`crypto.getRandomValues`/`randomUUID`, `performance.now`, `setInterval`,
+`requestAnimationFrame`, `queueMicrotask`, `structuredClone`, `matchMedia`),
+live `getComputedStyle` and `getBoundingClientRect`/`scrollTo`, per-origin
+`localStorage` & per-tab `sessionStorage`, `HttpOnly`-isolated
+`document.cookie`, same-document `history.pushState`/`replaceState`/`popstate`,
+and parent-brokered same-origin `fetch()` and `XMLHttpRequest` over the
+seccomp-confined `VERSION = 9` worker session. [Release notes](docs/RELEASE-v0.9.28.md).
+
+## Previous release: v0.9.27
 
 v0.9.27 upgrades CSS and layout fidelity across `mg-sparkle` — anti-aliased
 `border-radius` backgrounds, borders, and rounded overflow clipping; full CSS

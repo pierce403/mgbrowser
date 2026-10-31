@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 421,
-    "PASS": 528,
+    "FAIL": 417,
+    "PASS": 532,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -35,7 +35,7 @@
       "test": "css/css-flexbox/abspos/abspos-autopos-vrl-rtl.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/abspos/dynamic-align-self-001.html"
     },
     {
@@ -691,7 +691,7 @@
       "test": "css/css-flexbox/dynamic-baseline-change.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/dynamic-bsize-change.html"
     },
     {
@@ -955,7 +955,7 @@
       "test": "css/css-flexbox/flex-aspect-ratio-intrinsic-padding-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-aspect-ratio-percentage-height-stale-width.html"
     },
     {
@@ -1719,7 +1719,7 @@
       "test": "css/css-flexbox/flexbox-basic-fieldset-horiz-001.xhtml"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-basic-fieldset-vert-001.xhtml"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "53864da764bb3a6eaf1c2ec3aff309755f4efd009f73f3102de91556c718d454",
+  "source_sha256": "0cc4f2194100a859468472624f61bded8e2ef4736aee60f6ac3800a6012e8143",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }
