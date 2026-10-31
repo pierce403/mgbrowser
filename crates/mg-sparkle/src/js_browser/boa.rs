@@ -29,7 +29,7 @@ use modern::boa_engine::{
 use modern::boa_gc::{Finalize, Gc, GcRefCell, Trace};
 use std::{
     cell::Cell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -38,11 +38,17 @@ use std::{
 mod automation;
 mod console;
 mod cssom;
+mod dom_events;
 mod dom_exception;
+mod dom_ops;
+mod fetch_xhr;
+mod geometry_style;
 #[cfg(test)]
 mod lifecycle_tests;
 mod message_clone;
 mod observer;
+mod selectors;
+mod web_apis;
 mod window_messages;
 
 static NEXT_REALM: AtomicU64 = AtomicU64::new(1);
@@ -155,9 +161,11 @@ struct Listener {
     #[unsafe_ignore_trace]
     target: Target,
     #[unsafe_ignore_trace]
-    kind: Kind,
+    event_type: String,
     callback: Option<JsObject>,
     capture: bool,
+    once: bool,
+    passive: bool,
     property: bool,
 }
 
@@ -171,6 +179,10 @@ struct Timer {
     deadline: Instant,
     #[unsafe_ignore_trace]
     nesting: u32,
+    #[unsafe_ignore_trace]
+    repeat_ms: Option<u64>,
+    #[unsafe_ignore_trace]
+    is_raf: bool,
     #[unsafe_ignore_trace]
     permit: modern::WorkPermit,
     callback: JsObject,
@@ -193,6 +205,8 @@ struct State {
     realm: u64,
     listeners: Vec<Listener>,
     timers: Vec<Timer>,
+    #[unsafe_ignore_trace]
+    cancelled_intervals: HashSet<u32>,
     rejections: Vec<RejectionCandidate>,
     dom_tasks: Vec<DomTask>,
     // Values are scalar membership markers. This private native map must never
@@ -237,6 +251,82 @@ struct State {
     #[unsafe_ignore_trace]
     finalized: Rc<Cell<usize>>,
     wrappers_created: usize,
+    // Milestone 2 DOM, Events, Web APIs, Layout & Platform state:
+    #[unsafe_ignore_trace]
+    dom_epoch: u64,
+    #[unsafe_ignore_trace]
+    node_lists: Vec<Vec<usize>>,
+    #[unsafe_ignore_trace]
+    template_contents: HashMap<usize, usize>,
+    #[unsafe_ignore_trace]
+    dialog_return_values: HashMap<usize, String>,
+    #[unsafe_ignore_trace]
+    unselected_selects: HashSet<usize>,
+    #[unsafe_ignore_trace]
+    initial_values: HashMap<usize, Option<String>>,
+    #[unsafe_ignore_trace]
+    initial_checked: HashMap<usize, bool>,
+    event_prototypes: Option<dom_events::EventPrototypes>,
+    fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
+    modern_events: Vec<dom_events::ModernEvent>,
+    #[unsafe_ignore_trace]
+    passive_listener_depth: usize,
+    #[unsafe_ignore_trace]
+    focused_node: Option<usize>,
+    #[unsafe_ignore_trace]
+    clicking_nodes: HashSet<usize>,
+    #[unsafe_ignore_trace]
+    suppressed_inline_handlers: HashSet<(usize, String)>,
+    #[unsafe_ignore_trace]
+    async_errors: Vec<String>,
+    #[unsafe_ignore_trace]
+    origin_instant: Instant,
+    #[unsafe_ignore_trace]
+    time_origin_ms: f64,
+    #[unsafe_ignore_trace]
+    csprng: web_apis::ChaCha20Rng,
+    #[unsafe_ignore_trace]
+    viewport: page_session::platform::ViewportState,
+    #[unsafe_ignore_trace]
+    cached_layout: Option<geometry_style::CachedLayout>,
+    #[unsafe_ignore_trace]
+    element_scroll_offsets: HashMap<usize, (f32, f32)>,
+    #[unsafe_ignore_trace]
+    local_storage_map: Vec<(String, String)>,
+    #[unsafe_ignore_trace]
+    session_storage_map: Vec<(String, String)>,
+    #[unsafe_ignore_trace]
+    cookie_entries: Vec<(String, String)>,
+    #[unsafe_ignore_trace]
+    history_length: usize,
+    #[unsafe_ignore_trace]
+    scroll_restoration: &'static str,
+    #[unsafe_ignore_trace]
+    next_history_state_id: u64,
+    #[unsafe_ignore_trace]
+    history_states: HashMap<u64, message_clone::SerializedMessage>,
+    #[unsafe_ignore_trace]
+    history_state_graph: Option<message_clone::SerializedMessage>,
+    cached_history_state: Option<JsValue>,
+    #[unsafe_ignore_trace]
+    local_storage_ops: Vec<page_session::platform::StorageOp>,
+    #[unsafe_ignore_trace]
+    session_storage_ops: Vec<page_session::platform::StorageOp>,
+    #[unsafe_ignore_trace]
+    cookie_writes: Vec<String>,
+    #[unsafe_ignore_trace]
+    history_ops: Vec<page_session::platform::HistoryOp>,
+    #[unsafe_ignore_trace]
+    fetch_requests: Vec<page_session::platform::ScriptFetchRequest>,
+    #[unsafe_ignore_trace]
+    scroll_request: Option<page_session::platform::ScrollRequest>,
+    #[unsafe_ignore_trace]
+    next_fetch_id: u64,
+    pending_fetches: Vec<fetch_xhr::PendingFetch>,
+    abort_signals: Vec<fetch_xhr::AbortSignalRecord>,
+    xhr_instances: Vec<fetch_xhr::XhrRecord>,
+    #[unsafe_ignore_trace]
+    pending_xhr_delivery: Option<(usize, page_session::platform::ScriptFetchResponse)>,
 }
 type Shared = Gc<GcRefCell<State>>;
 
@@ -258,14 +348,25 @@ impl State {
         Vec<RejectionCandidate>,
         Vec<DomTask>,
         Option<JsWeakMap>,
+        Vec<dom_events::ModernEvent>,
+        Option<JsValue>,
+        Vec<fetch_xhr::PendingFetch>,
+        Vec<fetch_xhr::AbortSignalRecord>,
+        Vec<fetch_xhr::XhrRecord>,
     ) {
         self.armed_wake = None;
         self.console.clear_roots();
+        self.pending_xhr_delivery = None;
         (
             std::mem::take(&mut self.timers),
             std::mem::take(&mut self.rejections),
             std::mem::take(&mut self.dom_tasks),
             self.outstanding_rejections.take(),
+            std::mem::take(&mut self.modern_events),
+            self.cached_history_state.take(),
+            std::mem::take(&mut self.pending_fetches),
+            std::mem::take(&mut self.abort_signals),
+            std::mem::take(&mut self.xhr_instances),
         )
     }
 }
@@ -626,14 +727,21 @@ fn wrap_all_payloads(
             finalized,
         },
     );
-    let object: JsObject = JsProxy::builder(target)
+    let mut proxy_builder = JsProxy::builder(target)
         .get(get)
         .set(set)
         .has(has)
         .define_property(define_property)
-        .delete_property(delete_property)
-        .build(context)?
-        .into();
+        .delete_property(delete_property);
+    if handle.starts_with("nodelist:")
+        || handle.starts_with("computedstyle:")
+        || handle.starts_with("storage:")
+    {
+        proxy_builder = proxy_builder
+            .own_keys(own_keys)
+            .get_own_property_descriptor(get_own_property_descriptor);
+    }
+    let object: JsObject = proxy_builder.build(context)?.into();
     brands.set(&object, JsString::from(handle).into(), context)?;
     let weak = constructor.construct(&[object.clone().into()], None, context)?;
     shared.borrow_mut().wrappers.insert(handle.into(), weak);
@@ -661,6 +769,12 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     }
     let (public_name, arity) = cssom::method_metadata(name)
         .or_else(|| console::method_metadata(name))
+        .or_else(|| selectors::method_metadata(name))
+        .or_else(|| dom_ops::method_metadata(name))
+        .or_else(|| dom_events::method_metadata(name))
+        .or_else(|| web_apis::method_metadata(name))
+        .or_else(|| geometry_style::method_metadata(name))
+        .or_else(|| fetch_xhr::method_metadata(name))
         .unwrap_or((name, 1));
     let function: JsObject = FunctionObjectBuilder::new(
         context.realm(),
@@ -680,13 +794,16 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     Ok(function)
 }
 
-fn property_callback(target: Target, property: &str, context: &Context) -> Option<JsObject> {
-    let kind = Kind::modern_property(property)?;
+fn property_callback(target: Target, property: &str, context: &mut Context) -> Option<JsObject> {
+    let event_type = dom_events::is_event_handler_property(property)?;
+    let _ = dom_events::ensure_inline_handler_compiled(target, event_type, context);
     state(context)
         .borrow()
         .listeners
         .iter()
-        .find(|l| l.property && l.target == target && l.kind == kind && l.callback.is_some())
+        .find(|l| {
+            l.property && l.target == target && l.event_type == event_type && l.callback.is_some()
+        })
         .and_then(|l| l.callback.clone())
 }
 fn property_set(
@@ -696,28 +813,32 @@ fn property_set(
     context: &mut Context,
 ) -> JsResult<()> {
     modern::check_context(context)?;
-    let kind =
-        Kind::modern_property(property).ok_or_else(|| failure("Unsupported event property"))?;
+    let event_type = dom_events::is_event_handler_property(property)
+        .ok_or_else(|| failure("Unsupported event property"))?;
     let callback = value.as_callable();
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    if let Some(listener) = data
-        .listeners
-        .iter_mut()
-        .find(|l| l.property && l.target == target && l.kind == kind && l.callback.is_some())
-    {
+    if let Target::Node(nid) = target {
+        data.suppressed_inline_handlers
+            .insert((nid, event_type.to_owned()));
+    }
+    if let Some(listener) = data.listeners.iter_mut().find(|l| {
+        l.property && l.target == target && l.event_type == event_type && l.callback.is_some()
+    }) {
         listener.callback = callback;
     } else if callback.is_some() {
-        if data.listeners.len() >= 32 {
+        if data.listeners.len() >= dom_events::MAX_BOA_LISTENERS {
             return Err(failure("Listener limit exceeded"));
         }
         data.host.charge(128).map_err(failure)?;
         data.listeners.push(Listener {
             target,
-            kind,
+            event_type: event_type.to_owned(),
             callback,
             capture: false,
             property: true,
+            once: false,
+            passive: false,
         });
     }
     Ok(())
@@ -746,6 +867,15 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     modern::check_context(context)?;
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
+    if handle.starts_with("nodelist:") {
+        return selectors::nodelist_get(&handle, &property, args, context);
+    }
+    if handle.starts_with("computedstyle:") {
+        return geometry_style::computedstyle_get(&handle, args, context);
+    }
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_get(handle == "storage:local", args, context);
+    }
     let Some(name) = property_name(&property) else {
         if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
             && property == PropertyKey::Symbol(modern::boa_engine::JsSymbol::iterator())
@@ -778,7 +908,10 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             .prototype()
             .get(JsString::from(name.as_str()), context);
     }
-    if Kind::modern_property(&name).is_some() {
+    if let Some(val) = fetch_xhr::try_get(&handle, &name, context)? {
+        return Ok(val);
+    }
+    if dom_events::is_event_handler_property(&name).is_some() {
         let target = property_target(&handle, context)?;
         return Ok(property_callback(target, &name, context)
             .map(Into::into)
@@ -788,6 +921,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         .strip_prefix("event:")
         .and_then(|id| id.parse::<usize>().ok())
     {
+        if let Some(extra) = dom_events::event_extra_property(id, &name, context)? {
+            return Ok(extra);
+        }
         let shared = state(context);
         let data = shared.borrow();
         let event = data
@@ -811,6 +947,18 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             _ => {}
         }
     }
+    if let Some(val) = dom_events::try_get(&handle, &name, context)? {
+        return Ok(val);
+    }
+    if let Some(val) = dom_ops::try_get(&handle, &name, context)? {
+        return Ok(val);
+    }
+    if let Some(val) = web_apis::try_get(&handle, &name, context)? {
+        return Ok(val);
+    }
+    if let Some(val) = geometry_style::try_get(&handle, &name, context)? {
+        return Ok(val);
+    }
     let value = state(context)
         .borrow_mut()
         .host
@@ -824,22 +972,52 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
 fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
     let handle = brand(&args[0], context)?;
+    if handle.starts_with("computedstyle:") {
+        return geometry_style::computedstyle_set(&handle, args, context);
+    }
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_set(handle == "storage:local", args, context);
+    }
     let property = key(&args[1], context)?;
     let Some(name) = property_name(&property) else {
         return Err(failure("Symbol DOM properties are not implemented"));
     };
     if handle.starts_with("style:") {
-        return cssom::set(&name, args, context);
+        let res = cssom::set(&name, args, context);
+        if res.is_ok() {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        }
+        return res;
     }
-    if Kind::modern_property(&name).is_some() {
+    if let Some(done) = fetch_xhr::try_set(&handle, &name, &args[2], context)? {
+        return Ok(done.into());
+    }
+    if dom_events::is_event_handler_property(&name).is_some() {
         property_set(property_target(&handle, context)?, &name, &args[2], context)?;
-    } else if handle.starts_with("node:") && super::bool_attr_name(&name).is_some() {
+        return Ok(true.into());
+    }
+    if dom_events::try_set(&handle, &name, &args[2], context)? {
+        return Ok(true.into());
+    }
+    if dom_ops::try_set(&handle, &name, &args[2], context)?.is_some() {
+        return Ok(true.into());
+    }
+    if web_apis::try_set(&handle, &name, &args[2], context)? {
+        return Ok(true.into());
+    }
+    if geometry_style::try_set(&handle, &name, &args[2], context)? {
+        return Ok(true.into());
+    }
+    if handle.starts_with("node:") && super::bool_attr_name(&name).is_some() {
         let flag = args[2].to_boolean();
-        state(context)
-            .borrow_mut()
-            .host
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        data.host
             .set(&handle, &name, Value::Bool(flag))
             .map_err(failure)?;
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
     } else {
         let is_string = state(context)
             .borrow()
@@ -852,11 +1030,12 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         }
         let text = utf8(&args[2], context)?;
         modern::check_context(context)?;
-        state(context)
-            .borrow_mut()
-            .host
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        data.host
             .set(&handle, &name, Value::text(&text))
             .map_err(failure)?;
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
     }
     Ok(true.into())
 }
@@ -864,6 +1043,15 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     modern::check_context(context)?;
     let handle = brand(&args[0], context)?;
     let property = key(&args[1], context)?;
+    if handle.starts_with("nodelist:") {
+        return selectors::nodelist_has(&handle, &property, args, context);
+    }
+    if handle.starts_with("computedstyle:") {
+        return geometry_style::computedstyle_has(&handle, args, context);
+    }
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_has(handle == "storage:local", args, context);
+    }
     if let Some(name) = property_name(&property) {
         if handle.starts_with("style:") {
             return cssom::has(&name, args, context);
@@ -873,6 +1061,18 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             || message_property(&args[0], &name).is_some()
         {
             return Ok(true.into());
+        }
+        if let Some(present) = fetch_xhr::try_has(&handle, &name) {
+            return Ok(present.into());
+        }
+        if let Some(present) = web_apis::try_has(&handle, &name) {
+            return Ok(present.into());
+        }
+        if let Some(present) = dom_events::try_has(&handle, &name, context)? {
+            return Ok(present.into());
+        }
+        if let Some(present) = geometry_style::try_has(&handle, &name, context)? {
+            return Ok(present.into());
         }
         if handle.starts_with("collection:") {
             if let Ok(index) = name.parse::<usize>() {
@@ -884,7 +1084,10 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                     .map_err(failure);
             }
         }
-        if Kind::modern_property(&name).is_some() {
+        if dom_events::is_event_handler_property(&name).is_some() {
+            return Ok(true.into());
+        }
+        if dom_ops::try_get(&handle, &name, context)?.is_some() {
             return Ok(true.into());
         }
         let value = state(context)
@@ -901,6 +1104,41 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         .unwrap()
         .has_property(property, context)
         .map(Into::into)
+}
+
+fn own_keys(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let handle = brand(&args[0], context)?;
+    if handle.starts_with("nodelist:") {
+        return selectors::nodelist_own_keys(&handle, context);
+    }
+    if handle.starts_with("computedstyle:") {
+        return geometry_style::computedstyle_own_keys(&handle, args, context);
+    }
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_own_keys(handle == "storage:local", args, context);
+    }
+    Ok(modern::boa_engine::object::builtins::JsArray::new(context)?.into())
+}
+
+fn get_own_property_descriptor(
+    _: &JsValue,
+    args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let handle = brand(&args[0], context)?;
+    if handle.starts_with("nodelist:") {
+        let property = key(&args[1], context)?;
+        return selectors::nodelist_own_descriptor(&handle, &property, context);
+    }
+    if handle.starts_with("computedstyle:") {
+        return geometry_style::computedstyle_own_descriptor(&handle, args, context);
+    }
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_own_descriptor(handle == "storage:local", args, context);
+    }
+    Ok(JsValue::undefined())
 }
 
 fn error_property(target: &JsValue, name: &str) -> Option<JsValue> {
@@ -943,65 +1181,13 @@ fn define_property(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResul
     modern::check_context(context)?;
     Err(failure("Defining DOM properties is not implemented"))
 }
-fn delete_property(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+fn delete_property(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
+    let handle = brand(&args[0], context)?;
+    if handle == "storage:local" || handle == "storage:session" {
+        return web_apis::storage_delete(handle == "storage:local", args, context);
+    }
     Err(failure("Deleting DOM properties is not implemented"))
-}
-
-fn listener_call(
-    name: &str,
-    this: &JsValue,
-    args: &[JsValue],
-    context: &mut Context,
-) -> JsResult<JsValue> {
-    let target = event_target(this, context)?;
-    let kind = Kind::modern_parse(&utf8(
-        args.first().unwrap_or(&JsValue::undefined()),
-        context,
-    )?)
-    .map_err(failure)?;
-    let value = args.get(1).cloned().unwrap_or_default();
-    let capture = match args.get(2) {
-        None => false,
-        Some(value) if value.is_undefined() => false,
-        Some(value) => value
-            .as_boolean()
-            .ok_or_else(|| failure("Only boolean listener capture is implemented"))?,
-    };
-    if value.is_null() || value.is_undefined() {
-        return Ok(JsValue::undefined());
-    }
-    let callback = value
-        .as_callable()
-        .ok_or_else(|| failure("Listener must be a function"))?;
-    modern::check_context(context)?;
-    let shared = state(context);
-    let mut data = shared.borrow_mut();
-    let index = data.listeners.iter().position(|l| {
-        !l.property
-            && l.target == target
-            && l.kind == kind
-            && l.capture == capture
-            && l.callback.as_ref() == Some(&callback)
-    });
-    if name.ends_with("removeEventListener") {
-        if let Some(index) = index {
-            data.listeners[index].callback = None;
-        }
-    } else if index.is_none() {
-        if data.listeners.len() >= 32 {
-            return Err(failure("Listener limit exceeded"));
-        }
-        data.host.charge(128).map_err(failure)?;
-        data.listeners.push(Listener {
-            target,
-            kind,
-            callback: Some(callback),
-            capture,
-            property: false,
-        });
-    }
-    Ok(JsValue::undefined())
 }
 
 fn timer_call(
@@ -1013,41 +1199,72 @@ fn timer_call(
     if event_target(this, context)? != Target::Window {
         return Err(failure("Timer requires its Window receiver"));
     }
-    if name.ends_with("clearTimeout") {
+    if matches!(
+        name,
+        "host.window.clearTimeout"
+            | "host.window.clearInterval"
+            | "host.window.cancelAnimationFrame"
+    ) {
+        let is_raf_cancel = name == "host.window.cancelAnimationFrame";
         let id = args
             .first()
             .unwrap_or(&JsValue::undefined())
             .to_i32(context)?;
         modern::check_context(context)?;
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        if let Some(index) = data.timers.iter().position(|timer| timer.id as i32 == id) {
-            data.timers.swap_remove(index);
-        }
+        let discarded = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            if !is_raf_cancel && id > 0 {
+                data.cancelled_intervals.insert(id as u32);
+            }
+            data.timers
+                .iter()
+                .position(|timer| timer.is_raf == is_raf_cancel && timer.id as i32 == id)
+                .map(|index| data.timers.swap_remove(index))
+        };
+        drop(discarded);
         return Ok(JsValue::undefined());
     }
+    let is_raf = name == "host.window.requestAnimationFrame";
+    let is_interval = name == "host.window.setInterval";
     // String compilation is explicitly unsupported, not a hidden eval path.
     let callback = args
         .first()
         .and_then(JsValue::as_callable)
-        .ok_or_else(|| failure("Only function-valued setTimeout is implemented"))?;
-    let delay = args
-        .get(1)
-        .unwrap_or(&JsValue::undefined())
-        .to_i32(context)?
-        .max(0) as u64;
+        .ok_or_else(|| failure("Only function-valued timer/frame callback is implemented"))?;
+    let raw_delay = if is_raf {
+        16u64
+    } else {
+        args.get(1)
+            .unwrap_or(&JsValue::undefined())
+            .to_i32(context)?
+            .max(0) as u64
+    };
     modern::check_context(context)?;
     // One common pending/cumulative ledger with Promise jobs. Admit before
     // retaining callback/arguments or allocating their native record.
     let permit = modern::admit_host_task(context)?;
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    let nesting = data.timer_nesting.unwrap_or(0);
-    let delay = if nesting > 5 { delay.max(4) } else { delay };
+    let nesting = if is_raf {
+        0
+    } else {
+        data.timer_nesting.unwrap_or(0)
+    };
+    let delay = if !is_raf && nesting > 5 {
+        raw_delay.max(4)
+    } else {
+        raw_delay
+    };
+    let extra_args: Vec<JsValue> = if is_raf {
+        Vec::new()
+    } else {
+        args.get(2..).unwrap_or_default().to_vec()
+    };
     let bytes = std::mem::size_of::<Timer>()
         .checked_add(
-            args.len()
-                .saturating_sub(2)
+            extra_args
+                .len()
                 .checked_mul(std::mem::size_of::<JsValue>())
                 .ok_or_else(|| failure("Timer argument storage overflow"))?,
         )
@@ -1073,9 +1290,11 @@ fn timer_call(
         handle,
         deadline,
         nesting: nesting + 1,
+        repeat_ms: is_interval.then_some(raw_delay),
+        is_raf,
         permit,
         callback,
-        arguments: args.get(2..).unwrap_or_default().to_vec(),
+        arguments: extra_args,
     });
     Ok((id as f64).into())
 }
@@ -1083,13 +1302,51 @@ fn timer_call(
 fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     modern::check_context(context)?;
     if cssom::method_metadata(name).is_some() {
-        return cssom::call(name, this, args, context);
+        let res = cssom::call(name, this, args, context);
+        if res.is_ok() && matches!(name, "host.style.setProperty" | "host.style.removeProperty") {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        }
+        return res;
     }
     if name == "host.window.postMessage" {
         return window_messages::post(this, args, context);
     }
-    if matches!(name, "host.window.setTimeout" | "host.window.clearTimeout") {
+    if matches!(
+        name,
+        "host.window.setTimeout"
+            | "host.window.clearTimeout"
+            | "host.window.setInterval"
+            | "host.window.clearInterval"
+            | "host.window.requestAnimationFrame"
+            | "host.window.cancelAnimationFrame"
+    ) {
         return timer_call(name, this, args, context);
+    }
+    if name.ends_with("addEventListener") || name.ends_with("removeEventListener") {
+        return dom_events::listener_call(name, this, args, context);
+    }
+    if let Some(method) = name.strip_prefix("host.console.") {
+        return console::call(method, this, args, context);
+    }
+    if selectors::method_metadata(name).is_some() {
+        return selectors::call(name, this, args, context);
+    }
+    if dom_ops::method_metadata(name).is_some() {
+        return dom_ops::call(name, this, args, context);
+    }
+    if dom_events::method_metadata(name).is_some() {
+        return dom_events::call(name, this, args, context);
+    }
+    if web_apis::method_metadata(name).is_some() {
+        return web_apis::call(name, this, args, context);
+    }
+    if geometry_style::method_metadata(name).is_some() {
+        return geometry_style::call(name, this, args, context);
+    }
+    if fetch_xhr::method_metadata(name).is_some() {
+        return fetch_xhr::call(name, this, args, context);
     }
     if name == "host.event.preventDefault" {
         let Value::Host(handle) = receiver(this, context)? else {
@@ -1101,6 +1358,9 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
             .ok_or_else(|| failure("Invalid Event receiver"))?;
         let shared = state(context);
         let data = shared.borrow();
+        if data.passive_listener_depth > 0 {
+            return Ok(JsValue::undefined());
+        }
         let event = data
             .host
             .events
@@ -1112,12 +1372,6 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
         ) {
             return Ok(JsValue::undefined());
         }
-    }
-    if name.ends_with("addEventListener") || name.ends_with("removeEventListener") {
-        return listener_call(name, this, args, context);
-    }
-    if let Some(method) = name.strip_prefix("host.console.") {
-        return console::call(method, this, args, context);
     }
     let strings = state(context).borrow().host.string_arguments(name);
     let mut converted = Vec::new();
@@ -1154,12 +1408,54 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
         receiver(this, context)?
     };
     modern::check_context(context)?;
-    let value = state(context)
-        .borrow_mut()
-        .host
-        .call(name, this, converted)
-        .map_err(failure)?;
+    let value = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        let maybe_attr_invalidation =
+            if matches!(name, "host.dom.setAttribute" | "host.dom.removeAttribute") {
+                let nid = match &this {
+                    Value::Host(h) => data.host.node(h).ok(),
+                    _ => None,
+                };
+                let aname = match converted.first() {
+                    Some(Value::String(s)) => String::from_utf16(s).ok(),
+                    _ => None,
+                };
+                nid.zip(aname)
+            } else {
+                None
+            };
+        let v = data.host.call(name, this, converted).map_err(failure)?;
+        if let Some((nid, aname)) = maybe_attr_invalidation {
+            dom_events::invalidate_inline_handler(&mut data, nid, &aname);
+        }
+        if matches!(
+            name,
+            "host.dom.setAttribute"
+                | "host.dom.removeAttribute"
+                | "host.classlist.add"
+                | "host.classlist.remove"
+                | "host.classlist.toggle"
+                | "host.classlist.replace"
+        ) {
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        }
+        v
+    };
     from_host(value, context)
+}
+
+fn fallback_crypto_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0u128, |d| d.as_nanos());
+    let realm_counter = NEXT_REALM.load(Ordering::Relaxed);
+    let stack_addr = (&seed as *const [u8; 32]) as usize as u64;
+    seed[0..16].copy_from_slice(&nanos.to_le_bytes());
+    seed[16..24].copy_from_slice(&realm_counter.to_le_bytes());
+    seed[24..32].copy_from_slice(&(stack_addr ^ 0x9E37_79B9_7F4A_7C15).to_le_bytes());
+    seed
 }
 
 impl BoaPageRealm {
@@ -1171,11 +1467,33 @@ impl BoaPageRealm {
         request: Request,
         observer_init: page_session::observer::ObserverInit,
     ) -> (Option<Self>, SessionReply) {
+        Self::start_with_platform(
+            request,
+            observer_init,
+            page_session::platform::PlatformInit::default(),
+            fallback_crypto_seed(),
+        )
+    }
+    pub fn start_with_platform(
+        request: Request,
+        observer_init: page_session::observer::ObserverInit,
+        platform_init: page_session::platform::PlatformInit,
+        crypto_seed: [u8; 32],
+    ) -> (Option<Self>, SessionReply) {
+        Self::start_internal(request, observer_init, platform_init, crypto_seed, true)
+    }
+    fn start_internal(
+        request: Request,
+        observer_init: page_session::observer::ObserverInit,
+        platform_init: page_session::platform::PlatformInit,
+        crypto_seed: [u8; 32],
+        enable_network: bool,
+    ) -> (Option<Self>, SessionReply) {
         let mut reply = Self::empty_reply();
         reply.observer = Some(page_session::observer::ObserverReply::rejected_init(
             observer_init.expectation(),
         ));
-        if observer_init.validate().is_err() {
+        if observer_init.validate().is_err() || platform_init.validate().is_err() {
             reply
                 .errors
                 .push("Invalid Window harness observer configuration".into());
@@ -1310,7 +1628,13 @@ impl BoaPageRealm {
             events: Vec::new(),
             ready: "loading",
         };
-        let mut realm = match Self::new(host, error_exposure_allowed) {
+        let mut realm = match Self::new_with_platform(
+            host,
+            error_exposure_allowed,
+            platform_init,
+            crypto_seed,
+            enable_network,
+        ) {
             Ok(realm) => realm,
             Err(error) => {
                 reply.errors.push(error);
@@ -1387,7 +1711,24 @@ impl BoaPageRealm {
         reply.errors.truncate(64);
         (reply.snapshot.is_some().then_some(realm), reply)
     }
+    #[cfg(test)]
     fn new(host: BrowserHost, error_exposure_allowed: bool) -> Result<Self, String> {
+        Self::new_with_platform(
+            host,
+            error_exposure_allowed,
+            page_session::platform::PlatformInit::default(),
+            [0u8; 32],
+            false,
+        )
+    }
+
+    fn new_with_platform(
+        host: BrowserHost,
+        error_exposure_allowed: bool,
+        platform_init: page_session::platform::PlatformInit,
+        crypto_seed: [u8; 32],
+        enable_network: bool,
+    ) -> Result<Self, String> {
         let mut engine = Engine::new().map_err(|e| e.to_string())?;
         let context = engine.context_mut();
         let constructor = context.intrinsics().constructors().weak_ref().constructor();
@@ -1408,11 +1749,21 @@ impl BoaPageRealm {
             .map_err(|_| "Reflect.get intrinsic unavailable")?
             .as_callable()
             .ok_or("Reflect.get intrinsic is not callable")?;
+        let time_origin_ms = if platform_init.time_origin_ms > 0.0 {
+            platform_init.time_origin_ms
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
+        };
+        let initial_history_json = platform_init.history_state_json;
+        let cookie_entries = web_apis::parse_initial_cookies(&platform_init.initial_cookies);
         let shared = Gc::new(GcRefCell::new(State {
             host,
             realm: NEXT_REALM.fetch_add(1, Ordering::Relaxed),
             listeners: Vec::new(),
             timers: Vec::new(),
+            cancelled_intervals: HashSet::new(),
             rejections: Vec::new(),
             dom_tasks: Vec::new(),
             outstanding_rejections: None,
@@ -1441,7 +1792,53 @@ impl BoaPageRealm {
             reflect_get,
             finalized: Rc::new(Cell::new(0)),
             wrappers_created: 0,
+            dom_epoch: 1,
+            node_lists: Vec::new(),
+            template_contents: HashMap::new(),
+            dialog_return_values: HashMap::new(),
+            unselected_selects: HashSet::new(),
+            initial_values: HashMap::new(),
+            initial_checked: HashMap::new(),
+            event_prototypes: None,
+            fetch_xhr_prototypes: None,
+            modern_events: Vec::new(),
+            passive_listener_depth: 0,
+            focused_node: None,
+            clicking_nodes: HashSet::new(),
+            suppressed_inline_handlers: HashSet::new(),
+            async_errors: Vec::new(),
+            origin_instant: Instant::now(),
+            time_origin_ms,
+            csprng: web_apis::ChaCha20Rng::from_seed(crypto_seed),
+            viewport: platform_init.viewport,
+            cached_layout: None,
+            element_scroll_offsets: HashMap::new(),
+            local_storage_map: platform_init.local_storage,
+            session_storage_map: platform_init.session_storage,
+            cookie_entries,
+            history_length: platform_init.history_length.max(1),
+            scroll_restoration: "auto",
+            next_history_state_id: 0,
+            history_states: HashMap::new(),
+            history_state_graph: None,
+            cached_history_state: Some(JsValue::null()),
+            local_storage_ops: Vec::new(),
+            session_storage_ops: Vec::new(),
+            cookie_writes: Vec::new(),
+            history_ops: Vec::new(),
+            fetch_requests: Vec::new(),
+            scroll_request: None,
+            next_fetch_id: 0,
+            pending_fetches: Vec::new(),
+            abort_signals: Vec::new(),
+            xhr_instances: Vec::new(),
+            pending_xhr_delivery: None,
         }));
+        {
+            let mut data = shared.borrow_mut();
+            dom_ops::lift_template_contents(&mut data, 1)?;
+            dom_events::snapshot_initial_form_defaults(&mut data);
+        }
         context.insert_data(shared.clone());
         dom_exception::register(context).map_err(|_| "DOMException binding failed")?;
         let global = context.global_object();
@@ -1487,18 +1884,9 @@ impl BoaPageRealm {
                 .register_global_property(JsString::from(name), function, Attribute::all())
                 .map_err(|_| "Event global failed")?;
         }
-        for name in [
-            "location",
-            "onclick",
-            "onsubmit",
-            "onload",
-            "onreadystatechange",
-            "onerror",
-            "onunhandledrejection",
-            "onrejectionhandled",
-            "onmessage",
-            "onmessageerror",
-        ] {
+        for name in std::iter::once(&"location").chain(dom_events::WINDOW_HANDLER_PROPERTIES.iter())
+        {
+            let prop_name = *name;
             let getter = FunctionObjectBuilder::new(
                 context.realm(),
                 NativeFunction::from_copy_closure_with_captures(
@@ -1512,7 +1900,7 @@ impl BoaPageRealm {
                                 .unwrap_or_else(JsValue::null))
                         }
                     },
-                    name.to_string(),
+                    prop_name.to_string(),
                 ),
             )
             .build();
@@ -1535,21 +1923,31 @@ impl BoaPageRealm {
                         }
                         Ok(JsValue::undefined())
                     },
-                    name.to_string(),
+                    prop_name.to_string(),
                 ),
             )
             .build();
             global
                 .define_property_or_throw(
-                    JsString::from(name),
+                    JsString::from(prop_name),
                     PropertyDescriptor::builder()
                         .get(getter)
                         .set(setter)
                         .enumerable(true)
-                        .configurable(name != "location"),
+                        .configurable(prop_name != "location"),
                     context,
                 )
                 .map_err(|_| "Global accessor failed")?;
+        }
+        dom_events::register(context)?;
+        dom_ops::install_globals(context)?;
+        web_apis::register(context)?;
+        geometry_style::register(context)?;
+        fetch_xhr::register(context, enable_network)?;
+        if let Some(json_str) = initial_history_json
+            && let Ok(restored) = message_clone::restore_json_str(&json_str, context)
+        {
+            shared.borrow_mut().cached_history_state = Some(restored);
         }
         engine
             .set_rejection_observer(observe_rejection)
@@ -1588,6 +1986,12 @@ impl BoaPageRealm {
                 initial_failure: true,
             }),
             observer: Some(page_session::observer::ObserverReply::Disabled),
+            local_storage_ops: Vec::new(),
+            session_storage_ops: Vec::new(),
+            cookie_writes: Vec::new(),
+            history_ops: Vec::new(),
+            fetch_requests: Vec::new(),
+            scroll_request: None,
         }
     }
     fn execution_failure(
@@ -1636,7 +2040,7 @@ impl BoaPageRealm {
     fn window_error(&mut self, message: String, error: JsValue, errors: &mut Vec<String>) {
         if !self.state.borrow().listeners.iter().any(|listener| {
             listener.target == Target::Window
-                && listener.kind == Kind::Error
+                && listener.event_type == "error"
                 && listener.callback.is_some()
         }) {
             return;
@@ -1689,7 +2093,7 @@ impl BoaPageRealm {
                         .enumerate()
                         .filter(|(_, listener)| {
                             listener.target == Target::Window
-                                && listener.kind == Kind::Error
+                                && listener.event_type == "error"
                                 && listener.capture == capture
                                 && listener.callback.is_some()
                         })
@@ -1704,13 +2108,18 @@ impl BoaPageRealm {
                         break;
                     }
                     let listener = {
-                        let data = self.state.borrow();
-                        data.listeners[id]
-                            .callback
-                            .clone()
-                            .map(|callback| (callback, data.listeners[id].property))
+                        let mut data = self.state.borrow_mut();
+                        let l = &mut data.listeners[id];
+                        let prop = l.property;
+                        let passive = l.passive;
+                        let cb = if l.once {
+                            l.callback.take()
+                        } else {
+                            l.callback.clone()
+                        };
+                        cb.map(|callback| (callback, prop, passive))
                     };
-                    let Some((callback, property)) = listener else {
+                    let Some((callback, property, passive)) = listener else {
                         continue;
                     };
                     let arguments = if property {
@@ -1725,7 +2134,15 @@ impl BoaPageRealm {
                         vec![wrapper.clone()]
                     };
                     let this = self.engine.context().global_object().into();
-                    match self.call_function(&callback, &this, &arguments) {
+                    if passive {
+                        self.state.borrow_mut().passive_listener_depth += 1;
+                    }
+                    let res = self.call_listener_object(&callback, &this, &arguments);
+                    if passive {
+                        let mut data = self.state.borrow_mut();
+                        data.passive_listener_depth = data.passive_listener_depth.saturating_sub(1);
+                    }
+                    match res {
                         Ok(value) if property && value.as_boolean() == Some(true) => {
                             self.state.borrow_mut().host.events[event].canceled = true;
                         }
@@ -2050,6 +2467,7 @@ impl BoaPageRealm {
         wrapper: JsValue,
         errors: &mut Vec<String>,
     ) {
+        let kind_name = kind.name();
         for capture in [true, false] {
             if self.closed
                 || self.engine.is_fatal()
@@ -2066,7 +2484,7 @@ impl BoaPageRealm {
                     .iter()
                     .filter(|listener| {
                         listener.target == Target::Window
-                            && listener.kind == kind
+                            && listener.event_type == kind_name
                             && listener.capture == capture
                             && listener.callback.is_some()
                     })
@@ -2080,7 +2498,7 @@ impl BoaPageRealm {
                                 .enumerate()
                                 .filter(|(_, listener)| {
                                     listener.target == Target::Window
-                                        && listener.kind == kind
+                                        && listener.event_type == kind_name
                                         && listener.capture == capture
                                         && listener.callback.is_some()
                                 })
@@ -2103,17 +2521,31 @@ impl BoaPageRealm {
                     break;
                 }
                 let listener = {
-                    let data = self.state.borrow();
-                    data.listeners[id]
-                        .callback
-                        .clone()
-                        .map(|callback| (callback, data.listeners[id].property))
+                    let mut data = self.state.borrow_mut();
+                    let l = &mut data.listeners[id];
+                    let prop = l.property;
+                    let passive = l.passive;
+                    let cb = if l.once {
+                        l.callback.take()
+                    } else {
+                        l.callback.clone()
+                    };
+                    cb.map(|callback| (callback, prop, passive))
                 };
-                let Some((callback, property)) = listener else {
+                let Some((callback, property, passive)) = listener else {
                     continue;
                 };
                 let this = self.engine.context().global_object().into();
-                match self.call_function(&callback, &this, std::slice::from_ref(&wrapper)) {
+                if passive {
+                    self.state.borrow_mut().passive_listener_depth += 1;
+                }
+                let res =
+                    self.call_listener_object(&callback, &this, std::slice::from_ref(&wrapper));
+                if passive {
+                    let mut data = self.state.borrow_mut();
+                    data.passive_listener_depth = data.passive_listener_depth.saturating_sub(1);
+                }
+                match res {
                     Ok(value)
                         if property
                             && kind == Kind::UnhandledRejection
@@ -2233,12 +2665,53 @@ impl BoaPageRealm {
         let _ingress = Ingress::enter(self.state.clone());
         self.engine.call_raw(callback, this, arguments)
     }
+    fn call_listener_object(
+        &mut self,
+        callback: &JsObject,
+        this: &JsValue,
+        arguments: &[JsValue],
+    ) -> Result<JsValue, modern::ExecutionFailure> {
+        if callback.is_callable() {
+            return self.call_function(callback, this, arguments);
+        }
+        let method_lookup = {
+            let _ingress = Ingress::enter(self.state.clone());
+            callback.get(js_string!("handleEvent"), self.engine.context_mut())
+        };
+        let method_val = match method_lookup {
+            Ok(v) => v,
+            Err(err) => {
+                let diagnostic = modern::safe_error(&err);
+                return Err(modern::ExecutionFailure {
+                    diagnostic,
+                    exception: if err.as_engine().is_some() {
+                        None
+                    } else {
+                        Some(err)
+                    },
+                });
+            }
+        };
+        let Some(fn_obj) = method_val.as_callable() else {
+            let err: JsError = JsNativeError::typ()
+                .with_message("EventListener.handleEvent is not callable")
+                .into();
+            let diagnostic = modern::safe_error(&err);
+            return Err(modern::ExecutionFailure {
+                diagnostic,
+                exception: Some(err),
+            });
+        };
+        let obj_this: JsValue = callback.clone().into();
+        self.call_function(&fn_obj, &obj_this, arguments)
+    }
     fn invoke(
         &mut self,
         callback: JsObject,
         target: Target,
         event: &str,
         property: bool,
+        passive: bool,
         errors: &mut Vec<String>,
     ) -> bool {
         let prepared: Result<(JsValue, JsValue), String> = (|| {
@@ -2249,13 +2722,23 @@ impl BoaPageRealm {
             Ok((this, event))
         })();
         let canceled = match prepared {
-            Ok((this, event)) => match self.call_function(&callback, &this, &[event]) {
-                Ok(value) => property && value.as_boolean() == Some(false),
-                Err(error) => {
-                    self.execution_failure("Event handler", error, errors);
-                    false
+            Ok((this, event)) => {
+                if passive {
+                    self.state.borrow_mut().passive_listener_depth += 1;
                 }
-            },
+                let res = self.call_listener_object(&callback, &this, &[event]);
+                if passive {
+                    let mut data = self.state.borrow_mut();
+                    data.passive_listener_depth = data.passive_listener_depth.saturating_sub(1);
+                }
+                match res {
+                    Ok(value) => property && value.as_boolean() == Some(false),
+                    Err(error) => {
+                        self.execution_failure("Event handler", error, errors);
+                        false
+                    }
+                }
+            }
             Err(error) => {
                 observer::mark_execution_failed(&self.state);
                 if errors.len() < 64 {
@@ -2355,10 +2838,13 @@ impl BoaPageRealm {
         } else {
             &[Target::Node(0), Target::Window]
         };
+        let kind_name = kind.name();
         // Unobserved startup events need no retained record. Preserve the old
         // cumulative 256-record allowance without allocating invisible events.
         if !self.state.borrow().listeners.iter().any(|listener| {
-            listener.kind == kind && listener.callback.is_some() && path.contains(&listener.target)
+            listener.event_type == kind_name
+                && listener.callback.is_some()
+                && path.contains(&listener.target)
         }) {
             return;
         }
@@ -2399,8 +2885,17 @@ impl BoaPageRealm {
         data.host.events[event].current = None;
         data.host.events[event].phase = 0;
     }
+    fn clear_reply_deltas(reply: &mut SessionReply) {
+        reply.local_storage_ops.clear();
+        reply.session_storage_ops.clear();
+        reply.cookie_writes.clear();
+        reply.history_ops.clear();
+        reply.fetch_requests.clear();
+        reply.scroll_request = None;
+    }
     fn snapshot(&mut self, reply: &mut SessionReply) {
         if !self.engine.is_fatal() && !self.closed {
+            dom_events::flush_async_errors(self, &mut reply.errors);
             match self.purge_private_notices() {
                 Ok(_) => self.prune_batches(),
                 Err(()) => self.rejection_failure(&mut reply.errors),
@@ -2432,17 +2927,37 @@ impl BoaPageRealm {
                 });
                 if reply.state == RealmState::Ready {
                     reply.navigation = data.host.navigation.take();
+                    reply.local_storage_ops = std::mem::take(&mut data.local_storage_ops);
+                    reply.session_storage_ops = std::mem::take(&mut data.session_storage_ops);
+                    reply.cookie_writes = std::mem::take(&mut data.cookie_writes);
+                    reply.history_ops = std::mem::take(&mut data.history_ops);
+                    if reply.navigation.is_none() {
+                        reply.fetch_requests = std::mem::take(&mut data.fetch_requests);
+                        reply.scroll_request = data.scroll_request.take();
+                    } else {
+                        data.fetch_requests.clear();
+                        data.scroll_request = None;
+                    }
+                } else {
+                    data.local_storage_ops.clear();
+                    data.session_storage_ops.clear();
+                    data.cookie_writes.clear();
+                    data.history_ops.clear();
+                    data.fetch_requests.clear();
+                    data.scroll_request = None;
                 }
             }
             Err(error) => {
                 self.closed = true;
                 reply.state = RealmState::Closed;
                 reply.default_action = DefaultAction::None;
+                Self::clear_reply_deltas(reply);
                 reply.errors.push(error);
             }
         }
         if reply.state != RealmState::Ready {
             reply.task_wake = None;
+            Self::clear_reply_deltas(reply);
         }
         drop(data);
         if reply.state != RealmState::Ready || reply.navigation.is_some() {
@@ -2472,6 +2987,7 @@ impl BoaPageRealm {
             reply.default_action = DefaultAction::None;
             reply.navigation = None;
             reply.task_wake = None;
+            Self::clear_reply_deltas(reply);
             self.clear_work();
         }
         reply.boa = Some(self.engine.stats());
@@ -2489,6 +3005,7 @@ impl BoaPageRealm {
             reply.default_action = DefaultAction::None;
             reply.navigation = None;
             reply.task_wake = None;
+            Self::clear_reply_deltas(reply);
             self.clear_work();
             self.lifecycle = previous_lifecycle;
             if self.lifecycle.phase != LifecyclePhase::LoadComplete {
@@ -2596,13 +3113,72 @@ impl BoaPageRealm {
                     Ok(()) => {
                         self.state.borrow_mut().timer_nesting = Some(timer.nesting);
                         let this = self.engine.context().global_object().into();
-                        if let Err(error) =
+                        let call_res = if timer.is_raf {
+                            let ts = JsValue::from(dom_events::elapsed_ms(&self.state.borrow()));
+                            self.call_function(&timer.callback, &this, &[ts])
+                        } else {
                             self.call_function(&timer.callback, &this, &timer.arguments)
-                        {
+                        };
+                        if let Err(error) = call_res {
                             self.execution_failure("Timer callback", error, &mut reply.errors);
                         }
                         self.checkpoint(&mut reply.errors);
                         self.state.borrow_mut().timer_nesting = None;
+                        if let Some(repeat_ms) = timer.repeat_ms
+                            && !self.closed
+                            && !self.engine.is_fatal()
+                        {
+                            let should_repeat = {
+                                let data = self.state.borrow();
+                                data.host.navigation.is_none()
+                                    && !data.cancelled_intervals.contains(&timer.id)
+                            };
+                            if should_repeat {
+                                match modern::admit_host_task(self.engine.context_mut()) {
+                                    Ok(permit) => {
+                                        let mut data = self.state.borrow_mut();
+                                        let delay = if timer.nesting > 5 {
+                                            repeat_ms.max(4)
+                                        } else {
+                                            repeat_ms
+                                        };
+                                        let next_handle = data.next_handle.checked_add(1);
+                                        let next_deadline =
+                                            data.now().checked_add(Duration::from_millis(delay));
+                                        if let (Some(handle), Some(deadline)) =
+                                            (next_handle, next_deadline)
+                                        {
+                                            data.next_handle = handle;
+                                            data.timers.push(Timer {
+                                                id: timer.id,
+                                                handle,
+                                                deadline,
+                                                nesting: timer.nesting.saturating_add(1),
+                                                repeat_ms: Some(repeat_ms),
+                                                is_raf: false,
+                                                permit,
+                                                callback: timer.callback.clone(),
+                                                arguments: timer.arguments.clone(),
+                                            });
+                                        } else {
+                                            drop(data);
+                                            drop(permit);
+                                            self.closed = true;
+                                            reply
+                                                .errors
+                                                .push("Interval reschedule overflow".into());
+                                        }
+                                    }
+                                    Err(err) => {
+                                        self.closed = true;
+                                        reply.errors.push(bounded(
+                                            &modern::safe_error(&err).to_string(),
+                                            512,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(error) => {
                         self.closed = true;
@@ -2719,17 +3295,29 @@ impl BoaPageRealm {
         phase: u8,
         errors: &mut Vec<String>,
     ) {
+        if !capture {
+            let kind_name = self.state.borrow().host.events[event].kind.name();
+            if dom_events::ensure_inline_handler_compiled(
+                target,
+                kind_name,
+                self.engine.context_mut(),
+            )
+            .is_err()
+            {
+                let _ = self.engine.check();
+            }
+        }
         let ids: Vec<_> = {
             let mut data = self.state.borrow_mut();
             data.host.events[event].current = Some(target);
             data.host.events[event].phase = phase;
-            let kind = data.host.events[event].kind;
+            let kind_name = data.host.events[event].kind.name();
             data.listeners
                 .iter()
                 .enumerate()
                 .filter(|(_, l)| {
                     l.callback.is_some()
-                        && l.kind == kind
+                        && l.event_type == kind_name
                         && l.target == target
                         && l.capture == capture
                 })
@@ -2744,19 +3332,24 @@ impl BoaPageRealm {
                 break;
             }
             let listener = {
-                let data = self.state.borrow();
-                let listener = &data.listeners[id];
-                listener
-                    .callback
-                    .clone()
-                    .map(|callback| (callback, listener.property))
+                let mut data = self.state.borrow_mut();
+                let l = &mut data.listeners[id];
+                let prop = l.property;
+                let passive = l.passive;
+                let cb = if l.once {
+                    l.callback.take()
+                } else {
+                    l.callback.clone()
+                };
+                cb.map(|callback| (callback, prop, passive))
             };
-            if let Some((callback, property)) = listener {
+            if let Some((callback, property, passive)) = listener {
                 if self.invoke(
                     callback,
                     target,
                     &format!("event:{event}"),
                     property,
+                    passive,
                     errors,
                 ) {
                     let mut data = self.state.borrow_mut();
@@ -2841,6 +3434,21 @@ impl BoaPageRealm {
         outcome: &mut EventOutcome,
         errors: &mut Vec<String>,
     ) -> Result<DefaultAction, String> {
+        let disabled = {
+            let data = self.state.borrow();
+            let (path, length) = data.host.connected_path(target)?;
+            path[..length].iter().any(|t| match t {
+                Target::Node(id) => dom_events::is_disabled_element(&data.host.document.nodes, *id),
+                _ => false,
+            })
+        };
+        if disabled {
+            return Ok(DefaultAction::None);
+        }
+        let pre = {
+            let mut data = self.state.borrow_mut();
+            dom_events::prepare_pre_activation(&mut data, target)?
+        };
         let activation = {
             let data = self.state.borrow();
             let (path, length) = data.host.connected_path(target)?;
@@ -2857,7 +3465,12 @@ impl BoaPageRealm {
         };
         let canceled = self.emit(Kind::Click, target, None, errors)?;
         outcome.click_canceled = Some(canceled);
-        if canceled || self.engine.is_fatal() || self.state.borrow().host.navigation.is_some() {
+        dom_events::finish_realm_post_activation(self, pre.clone(), canceled, errors)?;
+        if canceled
+            || !matches!(pre, dom_events::PreActivation::None)
+            || self.engine.is_fatal()
+            || self.state.borrow().host.navigation.is_some()
+        {
             return Ok(DefaultAction::None);
         }
         let Some(node) = activation else {
@@ -2900,6 +3513,108 @@ impl BoaPageRealm {
 
     pub fn take_console_entries(&mut self) -> Vec<page_session::console::ConsoleWireEntry> {
         std::mem::take(&mut self.state.borrow_mut().console.entries)
+    }
+
+    pub fn platform_command(
+        &mut self,
+        command: page_session::platform::PlatformCommand,
+    ) -> SessionReply {
+        let mut reply = Self::empty_reply();
+        reply.revision = self.revision;
+        reply.boa = Some(self.engine.stats());
+        if self.closed || self.engine.is_fatal() {
+            self.closed = true;
+            self.clear_work();
+            reply.boa = Some(self.engine.stats());
+            reply.state = self.realm_state();
+            reply.errors.push("Page realm is no longer active".into());
+            self.observation_notice(&mut reply.errors);
+            self.finish_observer(&mut reply);
+            return reply;
+        }
+        self.revision += 1;
+        reply.revision = self.revision;
+        {
+            let mut data = self.state.borrow_mut();
+            data.armed_wake = None;
+            data.host.navigation = None;
+        }
+        match command {
+            page_session::platform::PlatformCommand::ViewportSync { viewport } => {
+                self.state.borrow_mut().viewport = viewport;
+            }
+            page_session::platform::PlatformCommand::FetchComplete { response } => {
+                fetch_xhr::complete_fetch(self, response, &mut reply.errors);
+            }
+            page_session::platform::PlatformCommand::HistoryTraverse {
+                url,
+                state_id,
+                state_json,
+                history_length,
+            } => {
+                let (old_url, in_mem_graph) = {
+                    let mut data = self.state.borrow_mut();
+                    let prev = data.host.url.as_str().to_owned();
+                    if let Ok(parsed) = url::Url::parse(&url) {
+                        data.host.url = parsed;
+                    }
+                    data.history_length = history_length.max(1);
+                    let graph = state_id.and_then(|sid| data.history_states.get(&sid).cloned());
+                    data.history_state_graph = graph.clone();
+                    (prev, graph)
+                };
+                let state_val = if let Some(graph) = in_mem_graph {
+                    let _ingress = Ingress::enter(self.state.clone());
+                    message_clone::restore(&graph, self.engine.context_mut())
+                        .unwrap_or(JsValue::null())
+                } else if let Some(raw) = state_json.as_deref() {
+                    let _ingress = Ingress::enter(self.state.clone());
+                    message_clone::restore_json_str(raw, self.engine.context_mut())
+                        .unwrap_or(JsValue::null())
+                } else {
+                    JsValue::null()
+                };
+                self.state.borrow_mut().cached_history_state = Some(state_val.clone());
+                dom_events::fire_popstate_and_hashchange(
+                    self,
+                    state_val,
+                    &old_url,
+                    &url,
+                    &mut reply.errors,
+                );
+            }
+            page_session::platform::PlatformCommand::SelectOption {
+                select_node,
+                selected_index,
+            } => {
+                let updated = {
+                    let mut data = self.state.borrow_mut();
+                    if select_node < data.host.document.nodes.len()
+                        && data.host.document.nodes[select_node].tag == "select"
+                        && dom_ops::is_connected_node(&data.host.document.nodes, select_node)
+                        && !dom_events::is_disabled_element(&data.host.document.nodes, select_node)
+                    {
+                        dom_ops::set_select_index(&mut data, select_node, selected_index)
+                            .map(|()| true)
+                    } else {
+                        Ok(false)
+                    }
+                };
+                match updated {
+                    Ok(true) => {
+                        dom_events::fire_select_events(self, select_node, &mut reply.errors)
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        self.closed = true;
+                        reply.errors.push(err);
+                    }
+                }
+            }
+        }
+        self.snapshot(&mut reply);
+        reply.errors.truncate(64);
+        reply
     }
 
     pub fn dispatch(&mut self, input: SessionInput) -> SessionReply {
@@ -2947,6 +3662,7 @@ impl BoaPageRealm {
                 } else {
                     data.host.attr(node, "value", value)?;
                 }
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
                 reply.acknowledgements.push(ControlAck { node, version });
             }
             match input.kind {
@@ -2983,7 +3699,13 @@ impl Drop for BoaPageRealm {
 /// One-shot execution shares the actual Boa page path; it never invokes Butane.
 pub fn execute(request: Request) -> super::Reply {
     let original = request.html.clone();
-    let (realm, reply) = BoaPageRealm::start(request);
+    let (realm, reply) = BoaPageRealm::start_internal(
+        request,
+        page_session::observer::ObserverInit::Disabled,
+        page_session::platform::PlatformInit::default(),
+        fallback_crypto_seed(),
+        false,
+    );
     let html = realm
         .as_ref()
         .and_then(|realm| realm.state.borrow().host.serialize(0, true).ok());

@@ -239,6 +239,9 @@ impl Browser {
             );
         }
         if !self.modal_open() {
+            if let Some(select_node) = self.open_select {
+                self.paint_select_dropdown(c, select_node);
+            }
             if self.find.open {
                 self.paint_find_bar(c);
             } else {
@@ -1088,6 +1091,66 @@ impl Browser {
             Action::CloseMenu,
             index,
         );
+    }
+
+    fn paint_select_dropdown(&mut self, c: &mut Canvas, select_node: usize) {
+        let Some((drop_x, drop_y, drop_w, row_h, options, current_selected)) =
+            self.select_dropdown_layout(select_node)
+        else {
+            self.open_select = None;
+            return;
+        };
+        if options.is_empty() {
+            return;
+        }
+        let palette = self.effective_theme().palette();
+        let total_h = (options.len() as u32)
+            .saturating_mul(row_h)
+            .saturating_add(2);
+        c.rect(drop_x, drop_y, drop_w, total_h, palette.border);
+        c.rect(
+            drop_x + 1,
+            drop_y + 1,
+            drop_w.saturating_sub(2),
+            total_h.saturating_sub(2),
+            palette.field,
+        );
+        for (idx, opt) in options.iter().enumerate() {
+            let ry = drop_y + 1 + (idx as i32) * (row_h as i32);
+            if current_selected == Some(idx) {
+                c.rect(
+                    drop_x + 1,
+                    ry,
+                    drop_w.saturating_sub(2),
+                    row_h,
+                    palette.selection,
+                );
+            }
+            let label = fit_head(
+                &mut self.fonts,
+                &opt.label,
+                14.,
+                (drop_w as f32 - 16.).max(20.),
+            );
+            let color = if opt.disabled {
+                palette.muted
+            } else {
+                palette.ink
+            };
+            c.text(&mut self.fonts, drop_x + 8, ry + 5, &label, 14., color);
+            if !opt.disabled {
+                self.hits.push(Hit {
+                    x: drop_x,
+                    y: ry,
+                    w: drop_w,
+                    h: row_h,
+                    action: Action::SelectOption {
+                        select: select_node,
+                        index: idx,
+                    },
+                });
+            }
+        }
     }
 }
 

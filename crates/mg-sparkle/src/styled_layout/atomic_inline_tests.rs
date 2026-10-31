@@ -64,13 +64,24 @@ impl SavedScene {
                             .as_ref()
                             .map(|(node, text)| (*node, text.clone(), text.capacity())),
                     ),
-                    Paint::Control(r, node, label, enabled) => SavedPaint::Control(
-                        geometry(*r),
-                        *node,
-                        label.clone(),
-                        label.capacity(),
-                        *enabled,
-                    ),
+                    Paint::Control(r, node, visual) => {
+                        let (label, enabled) = match visual {
+                            ControlVisual::Button { label } => (label.as_str(), true),
+                            ControlVisual::Text { text, .. } => (text.as_str(), false),
+                            ControlVisual::Select { label } => (label.as_str(), false),
+                            ControlVisual::Checkbox { checked } => {
+                                ("checkbox", *checked)
+                            }
+                            ControlVisual::Radio { checked } => ("radio", *checked),
+                        };
+                        SavedPaint::Control(
+                            geometry(*r),
+                            *node,
+                            label.to_owned(),
+                            label.len(),
+                            enabled,
+                        )
+                    }
                 })
                 .collect(),
             paint_nodes: scene.paint_nodes.clone(),
@@ -187,7 +198,13 @@ fn populate_scene(scene: &mut Scene, owner: usize) {
     scene.paint(owner, Paint::Image(r, ImageSource::InlineSvg(owner), None));
     scene.paint(
         owner,
-        Paint::Control(r, owner, owned_string("control"), true),
+        Paint::Control(
+            r,
+            owner,
+            ControlVisual::Button {
+                label: owned_string("control"),
+            },
+        ),
     );
     scene.box_for(owner, r);
     *scene.box_scroll.last_mut().unwrap() = false;

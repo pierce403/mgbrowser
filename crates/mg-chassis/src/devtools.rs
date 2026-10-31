@@ -2998,7 +2998,7 @@ impl Browser {
         self.dirty = true;
     }
 
-    fn inspected_node_at(&self, x: i32, y: i32) -> Option<usize> {
+    pub(super) fn inspected_node_at(&self, x: i32, y: i32) -> Option<usize> {
         if self.devtools.painted_epoch != self.dom_epoch || self.boxes.len() >= 100_000 {
             return None;
         }
@@ -7233,7 +7233,13 @@ mod tests {
         for hit in &app.hits {
             if matches!(
                 hit.action,
-                Action::Link { .. } | Action::Input(_) | Action::Submit(_)
+                Action::Link { .. }
+                    | Action::Input(_)
+                    | Action::Submit(_)
+                    | Action::PageClick(_)
+                    | Action::PageToggle(_)
+                    | Action::PageReset(_)
+                    | Action::PageSelect(_)
             ) {
                 assert!(hit.x + hit.w as i32 <= panel_x);
             }
@@ -7449,6 +7455,12 @@ mod tests {
             task_wake: None,
             lifecycle: None,
             observer: None,
+            local_storage_ops: vec![],
+            session_storage_ops: vec![],
+            cookie_writes: vec![],
+            history_ops: vec![],
+            fetch_requests: vec![],
+            scroll_request: None,
         };
         app.script_summary(&reply);
         app.block_session("Session expired");
@@ -7756,6 +7768,12 @@ mod tests {
             task_wake: None,
             lifecycle: None,
             observer: None,
+            local_storage_ops: vec![],
+            session_storage_ops: vec![],
+            cookie_writes: vec![],
+            history_ops: vec![],
+            fetch_requests: vec![],
+            scroll_request: None,
         };
         app.script_summary(&reply);
         assert!(app.performance_profile().worker_allocation_recorded);

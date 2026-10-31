@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 pub mod automation;
 pub mod console;
 pub mod observer;
+pub mod platform;
+
+pub use platform::{
+    HistoryOp, MAX_COOKIE_WRITE_BYTES, MAX_COOKIE_WRITES_PER_TX, MAX_FETCH_REQUESTS_PER_TX,
+    MAX_HISTORY_OPS_PER_TX, MAX_STORAGE_OPS_PER_TX, MAX_STORAGE_QUOTA_BYTES, PlatformCommand,
+    PlatformInit, ScriptFetchRequest, ScriptFetchResponse, ScrollRequest, StorageOp, ViewportState,
+};
 
 pub const MAX_EDITS: usize = 128;
 pub const MAX_EDIT_BYTES: usize = 8191;
@@ -190,6 +197,18 @@ pub struct SessionReply {
     /// the transport requires presence even when modern observation is disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observer: Option<observer::ObserverReply>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_storage_ops: Vec<StorageOp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_storage_ops: Vec<StorageOp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cookie_writes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history_ops: Vec<HistoryOp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fetch_requests: Vec<ScriptFetchRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_request: Option<ScrollRequest>,
 }
 
 impl SessionReply {
@@ -313,9 +332,60 @@ impl SessionReply {
             && self.navigation.is_none()
             && self.acknowledgements.is_empty()
             && self.task_wake.is_none()
+            && !self.has_platform_deltas()
             && self.lifecycle.is_none_or(|progress| {
                 progress.phase == LifecyclePhase::Initializing && progress.initial_failure
             })
+    }
+
+    pub fn has_platform_deltas(&self) -> bool {
+        !self.local_storage_ops.is_empty()
+            || !self.session_storage_ops.is_empty()
+            || !self.cookie_writes.is_empty()
+            || !self.history_ops.is_empty()
+            || !self.fetch_requests.is_empty()
+            || self.scroll_request.is_some()
+    }
+
+    pub fn clear_platform_deltas(&mut self) {
+        self.local_storage_ops.clear();
+        self.session_storage_ops.clear();
+        self.cookie_writes.clear();
+        self.history_ops.clear();
+        self.fetch_requests.clear();
+        self.scroll_request = None;
+    }
+
+    pub fn validate_platform_deltas(&self) -> Result<(), String> {
+        if self.local_storage_ops.len() > MAX_STORAGE_OPS_PER_TX
+            || self.session_storage_ops.len() > MAX_STORAGE_OPS_PER_TX
+            || self.cookie_writes.len() > MAX_COOKIE_WRITES_PER_TX
+            || self.history_ops.len() > MAX_HISTORY_OPS_PER_TX
+            || self.fetch_requests.len() > MAX_FETCH_REQUESTS_PER_TX
+        {
+            return Err("Script reply platform delta count exceeds limit".into());
+        }
+        for op in &self.local_storage_ops {
+            op.validate()?;
+        }
+        for op in &self.session_storage_ops {
+            op.validate()?;
+        }
+        for cookie in &self.cookie_writes {
+            if cookie.len() > MAX_COOKIE_WRITE_BYTES {
+                return Err("Script cookie write exceeds 4 KiB limit".into());
+            }
+        }
+        for op in &self.history_ops {
+            op.validate()?;
+        }
+        for req in &self.fetch_requests {
+            req.validate()?;
+        }
+        if let Some(scroll) = &self.scroll_request {
+            scroll.validate()?;
+        }
+        Ok(())
     }
 
     fn lifecycle_profile(&self) -> Result<Option<LifecycleProgress>, String> {
@@ -464,6 +534,12 @@ mod lifecycle_tests {
                 initial_failure: false,
             }),
             observer: Some(observer::ObserverReply::Disabled),
+            local_storage_ops: Vec::new(),
+            session_storage_ops: Vec::new(),
+            cookie_writes: Vec::new(),
+            history_ops: Vec::new(),
+            fetch_requests: Vec::new(),
+            scroll_request: None,
         }
     }
 

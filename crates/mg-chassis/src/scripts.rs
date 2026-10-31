@@ -3,6 +3,7 @@
 //! The host owns process creation, isolation, accounting, cancellation and reaping.
 //! Implementations must reject unavailable isolation; Chassis has no in-process fallback.
 pub use mg_sparkle::js_browser::SourceWireMode;
+pub use mg_sparkle::page_session::platform::{PlatformCommand, PlatformInit};
 use mg_sparkle::{
     js_browser::Request,
     page_session::{
@@ -46,6 +47,9 @@ pub trait ScriptSession: Send {
     fn try_console(&mut self, _: ConsoleCommand, _: u64) -> Result<u64, String> {
         Err("This script runtime does not support Console evaluation".into())
     }
+    fn try_platform(&mut self, _: PlatformCommand, _: u64) -> Result<u64, String> {
+        Err("This script runtime does not support Web Platform commands".into())
+    }
     fn take_console(&mut self) -> (Vec<ConsoleWireEntry>, Option<ConsoleResult>) {
         (Vec::new(), None)
     }
@@ -73,6 +77,15 @@ pub trait ScriptRuntime: Send + Sync {
         request: Request,
         generation: u64,
     ) -> Result<(Box<dyn ScriptSession>, SessionReply), String>;
+    fn start_with_platform(
+        &self,
+        request: Request,
+        generation: u64,
+        platform: PlatformInit,
+    ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+        let _ = platform;
+        self.start(request, generation)
+    }
     /// Permanently fence pending jobs before browser shutdown.
     fn close(&self);
     /// Wait a bounded time for all owned children to be reaped.

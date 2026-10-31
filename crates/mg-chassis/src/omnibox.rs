@@ -558,6 +558,7 @@ impl crate::Browser {
         self.pending_transaction = None;
         self.console_detached_dom = false;
         self.queued_console.clear();
+        self.queued_platform.clear();
         self.task_wake = None;
         self.last_task_wake_token = 0;
         self.script_blocked = false;
@@ -594,6 +595,8 @@ impl crate::Browser {
         self.selection.active_drag = None;
         self.scroll = 0;
         self.values.clear();
+        self.checked.clear();
+        self.open_select = None;
         self.edit_versions.clear();
         self.devtools.new_navigation_to(&canonical);
         self.devtools.set_page_source(&html);
@@ -606,12 +609,25 @@ impl crate::Browser {
         self.style_cache.clear();
         self.last_load_ok = true;
         self.status = format!("Internal page · {canonical}");
+        self.next_doc_group_id += 1;
+        let doc_group = self.next_doc_group_id;
+        self.active_doc_group_id = doc_group;
+        self.sync_history_meta_len();
         if add_history {
             if !self.history.is_empty() {
                 self.history.truncate(self.history_at + 1);
+                self.history_meta.truncate(self.history_at + 1);
             }
             self.history.push(canonical);
+            self.history_meta.push(crate::HistoryMeta {
+                doc_group_id: doc_group,
+                state_id: None,
+                state_json: None,
+            });
             self.history_at = self.history.len() - 1;
+        } else if let Some(meta) = self.history_meta.get_mut(self.history_at) {
+            meta.doc_group_id = doc_group;
+            meta.state_id = None;
         }
         if !self.devtools.open
             || !matches!(

@@ -111,6 +111,12 @@ fn reply(app: &Browser, wake: Option<TaskWake>) -> SessionReply {
         task_wake: wake,
         lifecycle: app.lifecycle,
         observer: Some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
+        local_storage_ops: vec![],
+        session_storage_ops: vec![],
+        cookie_writes: vec![],
+        history_ops: vec![],
+        fetch_requests: vec![],
+        scroll_request: None,
     }
 }
 fn complete(app: &Browser, state: &Arc<Mutex<State>>, reply: SessionReply) {

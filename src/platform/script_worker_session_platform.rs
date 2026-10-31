@@ -7,6 +7,7 @@ use mg_chassis::scripts::SessionContinuation;
 use mg_sparkle::page_session::automation::{AutomationRequest, AutomationResult};
 use mg_sparkle::page_session::console::{ConsoleCommand, ConsoleResult, ConsoleWireEntry};
 use mg_sparkle::page_session::observer::{ObserverInit, ObserverReply};
+use mg_sparkle::page_session::platform::{PlatformCommand, PlatformInit};
 use mg_sparkle::page_session::{
     ArenaSnapshot, ControlAck, DefaultAction, EventOutcome, LifecycleProgress, MAX_EDIT_BYTES,
     MAX_EDITS, MAX_EVENT_BYTES, RealmState, TaskWake,
@@ -25,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const VERSION: u8 = 8;
+const VERSION: u8 = 9;
 fn wire_version() -> u8 {
     if super::super::legacy_test_mode() {
         1
@@ -48,13 +49,14 @@ struct RequestFrame<
     T = TaskPump,
     A = AutomationRequest,
     C = ConsoleCommand,
+    P = PlatformCommand,
 > {
     version: u8,
     generation: u64,
     session_id: u64,
     sequence: u64,
     expected_revision: u64,
-    command: FrameCommand<I, E, T, A, C>,
+    command: FrameCommand<I, E, T, A, C, P>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", deny_unknown_fields)]
@@ -64,12 +66,14 @@ enum FrameCommand<
     T = TaskPump,
     A = AutomationRequest,
     C = ConsoleCommand,
+    P = PlatformCommand,
 > {
     Init(I),
     Event(E),
     TaskPump(T),
     Automation(A),
     Console(C),
+    Platform(P),
 }
 
 // This historical command vocabulary must never deserialize Automation, even
@@ -92,6 +96,10 @@ struct LegacyRequestFrame<I, E = SessionInput, T = TaskPump> {
     command: LegacyFrameCommand<I, E, T>,
 }
 
+fn is_zero_seed(seed: &[u8; 32]) -> bool {
+    *seed == [0u8; 32]
+}
+
 /// Init-only trusted configuration. Neither shared Request nor later commands
 /// acquire an observation field; strict v1 continues to decode its old shape.
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,21 +107,29 @@ struct LegacyRequestFrame<I, E = SessionInput, T = TaskPump> {
 struct ModernInit {
     page: Request,
     observer: ObserverInit,
+    #[serde(default, skip_serializing_if = "PlatformInit::is_default")]
+    platform: PlatformInit,
+    #[serde(default, skip_serializing_if = "is_zero_seed")]
+    crypto_seed: [u8; 32],
 }
 
 #[derive(Serialize)]
 struct ModernInitView<'a> {
     page: &'a Request,
     observer: &'a ObserverInit,
+    #[serde(skip_serializing_if = "PlatformInit::is_default")]
+    platform: &'a PlatformInit,
+    #[serde(skip_serializing_if = "is_zero_seed")]
+    crypto_seed: &'a [u8; 32],
 }
 
 /// The executable's trusted lane chooses the decoder, never a wire field.
 /// A legacy payload keeps its original strict shape, including unknown-field
 /// rejection, while conversion moves strings without a Value tree or reparse.
-fn decode_request_frame(
+fn decode_request_frame_full(
     payload: &[u8],
     legacy: bool,
-) -> Result<(RequestFrame, ObserverInit), String> {
+) -> Result<(RequestFrame, ObserverInit, PlatformInit, [u8; 32]), String> {
     if legacy {
         let frame: LegacyRequestFrame<mg_sparkle::js_browser::LegacyRequest> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
@@ -134,23 +150,38 @@ fn decode_request_frame(
                 },
             },
             ObserverInit::Disabled,
+            PlatformInit::default(),
+            [0u8; 32],
         ))
     } else {
         let frame: RequestFrame<ModernInit> =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
         if frame.version != VERSION {
-            return Err("Modern lane requires protocol v8".into());
+            return Err("Modern lane requires protocol v9".into());
         }
         let mut observer = ObserverInit::Disabled;
+        let mut platform = PlatformInit::default();
+        let mut crypto_seed = [0u8; 32];
         let command = match frame.command {
             FrameCommand::Init(init) => {
+                init.platform.validate()?;
+                if !matches!(init.observer, ObserverInit::Disabled)
+                    && (!init.platform.is_default() || init.crypto_seed != [0u8; 32])
+                {
+                    return Err(
+                        "Observed WindowHarness session forbids platform init metadata".into(),
+                    );
+                }
                 observer = init.observer;
+                platform = init.platform;
+                crypto_seed = init.crypto_seed;
                 FrameCommand::Init(init.page)
             }
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
             FrameCommand::Automation(request) => FrameCommand::Automation(request),
             FrameCommand::Console(command) => FrameCommand::Console(command),
+            FrameCommand::Platform(command) => FrameCommand::Platform(command),
         };
         Ok((
             RequestFrame {
@@ -162,8 +193,18 @@ fn decode_request_frame(
                 command,
             },
             observer,
+            platform,
+            crypto_seed,
         ))
     }
+}
+
+#[cfg(test)]
+fn decode_request_frame(
+    payload: &[u8],
+    legacy: bool,
+) -> Result<(RequestFrame, ObserverInit), String> {
+    decode_request_frame_full(payload, legacy).map(|(frame, observer, _, _)| (frame, observer))
 }
 
 #[cfg(test)]
@@ -175,19 +216,44 @@ fn encode_request_frame(
     encode_request_frame_observed(frame, legacy, limit, &ObserverInit::Disabled)
 }
 
+#[cfg(test)]
 fn encode_request_frame_observed(
     frame: &RequestFrame,
     legacy: bool,
     limit: usize,
     observer: &ObserverInit,
 ) -> Result<Vec<u8>, String> {
+    encode_request_frame_full(
+        frame,
+        legacy,
+        limit,
+        observer,
+        &PlatformInit::default(),
+        &[0u8; 32],
+    )
+}
+
+fn encode_request_frame_full(
+    frame: &RequestFrame,
+    legacy: bool,
+    limit: usize,
+    observer: &ObserverInit,
+    platform: &PlatformInit,
+    crypto_seed: &[u8; 32],
+) -> Result<Vec<u8>, String> {
     if !legacy {
         let command = match &frame.command {
-            FrameCommand::Init(page) => FrameCommand::Init(ModernInitView { page, observer }),
+            FrameCommand::Init(page) => FrameCommand::Init(ModernInitView {
+                page,
+                observer,
+                platform,
+                crypto_seed,
+            }),
             FrameCommand::Event(input) => FrameCommand::Event(input),
             FrameCommand::TaskPump(pump) => FrameCommand::TaskPump(pump),
             FrameCommand::Automation(request) => FrameCommand::Automation(request),
             FrameCommand::Console(command) => FrameCommand::Console(command),
+            FrameCommand::Platform(command) => FrameCommand::Platform(command),
         };
         return encode(
             &RequestFrame {
@@ -201,7 +267,10 @@ fn encode_request_frame_observed(
             limit,
         );
     }
-    if !matches!(observer, ObserverInit::Disabled) {
+    if !matches!(observer, ObserverInit::Disabled)
+        || !platform.is_default()
+        || !is_zero_seed(crypto_seed)
+    {
         return Err("Legacy v1 cannot enable observation".into());
     }
     // Borrow sources, edits and pumps. Counting and transmission use the same
@@ -212,6 +281,7 @@ fn encode_request_frame_observed(
         FrameCommand::TaskPump(pump) => LegacyFrameCommand::TaskPump(pump),
         FrameCommand::Automation(_) => return Err("Legacy v1 cannot carry automation".into()),
         FrameCommand::Console(_) => return Err("Legacy v1 cannot carry console".into()),
+        FrameCommand::Platform(_) => return Err("Legacy v1 cannot carry platform".into()),
     };
     encode(
         &LegacyRequestFrame {
@@ -366,16 +436,22 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
                 task_wake: old.task_wake,
                 lifecycle: None,
                 observer: None,
+                local_storage_ops: Vec::new(),
+                session_storage_ops: Vec::new(),
+                cookie_writes: Vec::new(),
+                history_ops: Vec::new(),
+                fetch_requests: Vec::new(),
+                scroll_request: None,
             },
         })
     } else {
         let frame: ModernReplyFrame =
             serde_json::from_slice(payload).map_err(|error| error.to_string())?;
         if frame.version != VERSION {
-            return Err("Modern reply requires protocol v8".into());
+            return Err("Modern reply requires protocol v9".into());
         }
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v8 reply requires non-null lifecycle and observer progress".into());
+            return Err("Modern v9 reply requires non-null lifecycle and observer progress".into());
         }
         Ok(ReplyFrame {
             version: frame.version,
@@ -398,12 +474,13 @@ fn write_reply_frame(
 ) -> Result<(), String> {
     if !legacy {
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
-            return Err("Modern v8 reply requires lifecycle and observer progress".into());
+            return Err("Modern v9 reply requires lifecycle and observer progress".into());
         }
+        frame.reply.validate_platform_deltas()?;
         let result = frame
             .result
             .as_ref()
-            .ok_or("Modern v8 reply requires a command result")?;
+            .ok_or("Modern v9 reply requires a command result")?;
         match result {
             ModernResult::Automation(result) => result.validate()?,
             ModernResult::Console(result) => result.validate()?,
@@ -430,6 +507,7 @@ fn write_reply_frame(
     let reply = &frame.reply;
     if reply.lifecycle.is_some()
         || reply.observer.is_some()
+        || reply.has_platform_deltas()
         || frame.result.is_some()
         || !frame.console.is_empty()
     {
@@ -542,6 +620,7 @@ enum TransactionCommand {
     TaskPump(TaskPump),
     Automation(AutomationRequest),
     Console(ConsoleCommand),
+    Platform(PlatformCommand),
 }
 enum Control {
     Transaction {
@@ -551,6 +630,37 @@ enum Control {
         started: Instant,
     },
     Cancel,
+}
+
+fn generate_crypto_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    let mut filled = 0usize;
+    while filled < seed.len() {
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_getrandom,
+                seed[filled..].as_mut_ptr().cast::<libc::c_void>(),
+                seed.len() - filled,
+                0,
+            )
+        };
+        if rc > 0 {
+            filled += rc as usize;
+        } else if rc == -1 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            continue;
+        } else {
+            break;
+        }
+    }
+    if seed == [0u8; 32] {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0x9e37_79b9_7f4a_7c15);
+        seed[..16].copy_from_slice(&nanos.to_le_bytes());
+        seed[0] |= 1;
+    }
+    seed
 }
 
 pub struct Session {
@@ -586,10 +696,25 @@ impl Session {
         pool: ChildPool,
         observer: ObserverInit,
     ) -> Result<(Self, SessionReply), String> {
+        Self::start_with_platform(request, generation, pool, observer, PlatformInit::default())
+    }
+    pub fn start_with_platform(
+        request: Request,
+        generation: u64,
+        pool: ChildPool,
+        observer: ObserverInit,
+        platform: PlatformInit,
+    ) -> Result<(Self, SessionReply), String> {
         let started = Instant::now();
         observer.validate().map_err(|error| error.to_string())?;
-        if super::super::legacy_test_mode() && !matches!(observer, ObserverInit::Disabled) {
+        platform.validate()?;
+        if super::super::legacy_test_mode()
+            && (!matches!(observer, ObserverInit::Disabled) || !platform.is_default())
+        {
             return Err("Legacy v1 cannot enable observation".into());
+        }
+        if !matches!(observer, ObserverInit::Disabled) && !platform.is_default() {
+            return Err("Observed WindowHarness session forbids platform init metadata".into());
         }
         pool.current(generation)?;
         let id = NEXT_SESSION
@@ -602,12 +727,19 @@ impl Session {
         let manager_pool = pool.clone();
         let automation_enabled =
             !super::super::legacy_test_mode() && matches!(observer, ObserverInit::Disabled);
+        let crypto_seed = if automation_enabled {
+            generate_crypto_seed()
+        } else {
+            [0u8; 32]
+        };
         let manager = thread::Builder::new()
             .name("mgbrowser-page-worker".into())
             .spawn(move || {
                 manage(
                     request,
                     observer,
+                    platform,
+                    crypto_seed,
                     generation,
                     id,
                     manager_pool,
@@ -729,6 +861,16 @@ impl Session {
         }
         self.try_submit(TransactionCommand::Console(command), expected_revision)
     }
+    pub fn try_platform(
+        &mut self,
+        command: PlatformCommand,
+        expected_revision: u64,
+    ) -> Result<u64, String> {
+        if !self.automation_enabled {
+            return Err("Platform commands require a modern Disabled-observer session".into());
+        }
+        self.try_submit(TransactionCommand::Platform(command), expected_revision)
+    }
     pub fn take_console(&mut self) -> (Vec<ConsoleWireEntry>, Option<ConsoleResult>) {
         (
             std::mem::take(&mut self.pending_console),
@@ -764,7 +906,9 @@ impl Session {
             // The same validation on untrusted child wire remains terminal.
             if matches!(
                 command,
-                TransactionCommand::Automation(_) | TransactionCommand::Console(_)
+                TransactionCommand::Automation(_)
+                    | TransactionCommand::Console(_)
+                    | TransactionCommand::Platform(_)
             ) {
                 return Err(error);
             }
@@ -887,9 +1031,16 @@ struct Worker {
     last_lifecycle: Option<LifecycleProgress>,
     legacy: bool,
     observer: ObserverInit,
+    init_platform: Option<(PlatformInit, [u8; 32])>,
 }
 impl Worker {
-    fn start(pool: ChildPool, generation: u64, observer: ObserverInit) -> Result<Self, String> {
+    fn start(
+        pool: ChildPool,
+        generation: u64,
+        observer: ObserverInit,
+        platform: PlatformInit,
+        crypto_seed: [u8; 32],
+    ) -> Result<Self, String> {
         // Keep this process and its workers on the same build across an update.
         let mut command = Command::new("/proc/self/exe");
         command
@@ -958,6 +1109,7 @@ impl Worker {
             last_lifecycle: None,
             legacy: super::super::legacy_test_mode(),
             observer,
+            init_platform: Some((platform, crypto_seed)),
         })
     }
     fn check(&mut self, shared: &Shared, deadline: Option<Instant>) -> Result<(), String> {
@@ -1018,7 +1170,7 @@ impl Worker {
     > {
         if matches!(
             request.command,
-            FrameCommand::Automation(_) | FrameCommand::Console(_)
+            FrameCommand::Automation(_) | FrameCommand::Console(_) | FrameCommand::Platform(_)
         ) && (self.legacy || !matches!(self.observer, ObserverInit::Disabled))
         {
             return Err("Automation requires a modern Disabled-observer session".into());
@@ -1026,13 +1178,27 @@ impl Worker {
         let deadline = started
             .checked_add(shared.remaining()?)
             .ok_or("Script active deadline exceeds the monotonic clock range")?;
-        let limit = if matches!(request.command, FrameCommand::Init(_)) {
+        let limit = if matches!(
+            request.command,
+            FrameCommand::Init(_) | FrameCommand::Platform(_)
+        ) {
             INPUT_LIMIT
         } else {
             MAX_EVENT_BYTES
         };
-        let input = encode_request_frame_observed(request, self.legacy, limit, &self.observer)
-            .map_err(|error| format!("Script-session request rejected: {error}"))?;
+        let (init_plat, init_seed) = self
+            .init_platform
+            .take()
+            .unwrap_or_else(|| (PlatformInit::default(), [0u8; 32]));
+        let input = encode_request_frame_full(
+            request,
+            self.legacy,
+            limit,
+            &self.observer,
+            &init_plat,
+            &init_seed,
+        )
+        .map_err(|error| format!("Script-session request rejected: {error}"))?;
         if input.len().saturating_add(4) > WIRE_LIMIT.saturating_sub(self.wire) {
             return Err("Script session exceeded its 32 MiB combined wire limit".into());
         }
@@ -1201,6 +1367,8 @@ fn update(
 fn manage(
     request: Request,
     observer: ObserverInit,
+    platform: PlatformInit,
+    crypto_seed: [u8; 32],
     generation: u64,
     id: u64,
     pool: ChildPool,
@@ -1209,7 +1377,7 @@ fn manage(
     updates: SyncSender<SessionUpdate>,
     started: Instant,
 ) {
-    let mut worker = match Worker::start(pool, generation, observer) {
+    let mut worker = match Worker::start(pool, generation, observer, platform, crypto_seed) {
         Ok(worker) => worker,
         Err(error) => {
             let error = shared.close(error);
@@ -1314,6 +1482,9 @@ fn manage(
                                 FrameCommand::Automation(request)
                             }
                             TransactionCommand::Console(command) => FrameCommand::Console(command),
+                            TransactionCommand::Platform(command) => {
+                                FrameCommand::Platform(command)
+                            }
                         },
                     };
                     worker.transaction(&request, &shared, started)
@@ -1401,6 +1572,7 @@ fn validate_command(command: &TransactionCommand) -> Result<(), String> {
         TransactionCommand::TaskPump(_) => Err("Task wake token must be nonzero".into()),
         TransactionCommand::Automation(request) => request.validate(),
         TransactionCommand::Console(command) => command.validate(),
+        TransactionCommand::Platform(command) => command.validate(),
     }
 }
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
@@ -1409,7 +1581,10 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     if matches!(
         request.command,
-        FrameCommand::TaskPump(_) | FrameCommand::Automation(_) | FrameCommand::Console(_)
+        FrameCommand::TaskPump(_)
+            | FrameCommand::Automation(_)
+            | FrameCommand::Console(_)
+            | FrameCommand::Platform(_)
     ) && request.version != VERSION
     {
         return Err("Legacy script session does not support tasks or automation".into());
@@ -1429,6 +1604,13 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
         entry.validate()?;
     }
     let reply = &frame.reply;
+    reply.validate_platform_deltas()?;
+    if request.version == 1 && reply.has_platform_deltas() {
+        return Err("Legacy script session cannot return platform deltas".into());
+    }
+    if let FrameCommand::Platform(cmd) = &request.command {
+        cmd.validate()?;
+    }
     match (&request.command, &frame.result) {
         (FrameCommand::Automation(input), Some(ModernResult::Automation(result))) => {
             result.validate_for(input)?
@@ -1506,7 +1688,8 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     if reply.state != RealmState::Ready
         && (reply.navigation.is_some()
             || reply.default_action != DefaultAction::None
-            || reply.task_wake.is_some())
+            || reply.task_wake.is_some()
+            || reply.has_platform_deltas())
     {
         return Err("Closed script session proposed a default or navigation".into());
     }
@@ -1543,7 +1726,7 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     if matches!(
         request.command,
-        FrameCommand::Automation(_) | FrameCommand::Console(_)
+        FrameCommand::Automation(_) | FrameCommand::Console(_) | FrameCommand::Platform(_)
     ) && (reply.default_action != DefaultAction::None
         || reply.outcome.click_canceled.is_some()
         || reply.outcome.submit_canceled.is_some()
@@ -1762,6 +1945,8 @@ impl PageEngine {
         request: Request,
         legacy: bool,
         observer: ObserverInit,
+        platform: PlatformInit,
+        crypto_seed: [u8; 32],
     ) -> (Option<Self>, SessionReply) {
         #[cfg(feature = "legacy-test-engine")]
         if legacy {
@@ -1769,8 +1954,20 @@ impl PageEngine {
             return (realm.map(Self::Legacy), reply);
         }
         let _ = legacy;
-        let (realm, reply) =
-            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_observer(request, observer);
+        let (realm, reply) = if crypto_seed == [0u8; 32] && platform.is_default() {
+            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_observer(request, observer)
+        } else {
+            let seed = if crypto_seed == [0u8; 32] {
+                let mut s = [0x5a_u8; 32];
+                s[0] = 1;
+                s
+            } else {
+                crypto_seed
+            };
+            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_platform(
+                request, observer, platform, seed,
+            )
+        };
         (realm.map(Self::Boa), reply)
     }
     fn dispatch(&mut self, input: SessionInput) -> SessionReply {
@@ -1807,6 +2004,13 @@ impl PageEngine {
             Self::Legacy(_) => Err("Legacy v1 cannot execute console".into()),
         }
     }
+    fn platform_command(&mut self, command: PlatformCommand) -> Result<SessionReply, String> {
+        match self {
+            Self::Boa(realm) => Ok(realm.platform_command(command)),
+            #[cfg(feature = "legacy-test-engine")]
+            Self::Legacy(_) => Err("Legacy v1 cannot execute platform commands".into()),
+        }
+    }
     fn take_console_entries(&mut self) -> Vec<ConsoleWireEntry> {
         match self {
             Self::Boa(realm) => realm.take_console_entries(),
@@ -1830,7 +2034,7 @@ fn child_loop_for(
     let Some(payload) = read_frame(reader, &mut wire, INPUT_LIMIT)? else {
         return Err("Session initialization missing".into());
     };
-    let (request, observer) = decode_request_frame(&payload, legacy)?;
+    let (request, observer, platform, crypto_seed) = decode_request_frame_full(&payload, legacy)?;
     if request.version != version
         || request.sequence != 0
         || request.expected_revision != 0
@@ -1842,7 +2046,8 @@ fn child_loop_for(
         return Err("First session command must be Init".into());
     };
     let automation_enabled = !legacy && matches!(observer, ObserverInit::Disabled);
-    let (mut realm, mut reply) = PageEngine::start(initial, legacy, observer);
+    let (mut realm, mut reply) =
+        PageEngine::start(initial, legacy, observer, platform, crypto_seed);
     let initial_console = if !legacy && matches!(observer, ObserverInit::Disabled) {
         realm
             .as_mut()
@@ -1874,10 +2079,18 @@ fn child_loop_for(
         if terminal {
             return Ok(());
         }
-        let Some(payload) = read_frame(reader, &mut wire, MAX_EVENT_BYTES)? else {
+        let frame_limit = if automation_enabled {
+            INPUT_LIMIT
+        } else {
+            MAX_EVENT_BYTES
+        };
+        let Some(payload) = read_frame(reader, &mut wire, frame_limit)? else {
             return Ok(());
         };
-        let (event, _) = decode_request_frame(&payload, legacy)?;
+        let (event, _, _, _) = decode_request_frame_full(&payload, legacy)?;
+        if !matches!(event.command, FrameCommand::Platform(_)) && payload.len() > MAX_EVENT_BYTES {
+            return Err("Script-session event payload exceeds 64 KiB limit".into());
+        }
         if event.version != version
             || event.generation != request.generation
             || event.session_id != request.session_id
@@ -1917,6 +2130,10 @@ fn child_loop_for(
                 command.validate()?;
                 let (reply, result) = realm.console_command(command)?;
                 (reply, Some(ModernResult::Console(result)))
+            }
+            FrameCommand::Platform(command) if automation_enabled => {
+                command.validate()?;
+                (realm.platform_command(command)?, Some(ModernResult::Page))
             }
             _ => return Err("Repeated initialization or unsupported task command".into()),
         };
@@ -2516,6 +2733,12 @@ mod tests {
                 task_wake: None,
                 lifecycle: None,
                 observer: None,
+                local_storage_ops: Vec::new(),
+                session_storage_ops: Vec::new(),
+                cookie_writes: Vec::new(),
+                history_ops: Vec::new(),
+                fetch_requests: Vec::new(),
+                scroll_request: None,
             },
         }
     }
@@ -3270,8 +3493,8 @@ mod tests {
     }
     #[test]
     fn observer_modern_v8_rejects_v1_through_v7_before_execution() {
-        assert_eq!(VERSION, 8);
-        for version in 1..=7 {
+        assert_eq!(VERSION, 9);
+        for version in 1..=8 {
             for wrapped in [false, true] {
                 let mut initial = request(0);
                 initial.version = version;
@@ -3312,7 +3535,7 @@ mod tests {
     #[test]
     fn observer_modern_v8_rejects_later_v1_through_v7_events_and_pumps_without_replies() {
         for (task, old_version) in
-            (1..=7).flat_map(|version| [false, true].map(|task| (task, version)))
+            (1..=8).flat_map(|version| [false, true].map(|task| (task, version)))
         {
             let mut initial = request(0);
             initial.version = VERSION;

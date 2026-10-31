@@ -741,6 +741,12 @@ mod tests {
                 progress: ObserverProgress::Waiting,
                 execution_failed: false,
             }),
+            local_storage_ops: vec![],
+            session_storage_ops: vec![],
+            cookie_writes: vec![],
+            history_ops: vec![],
+            fetch_requests: vec![],
+            scroll_request: None,
         }
     }
     #[derive(Default)]

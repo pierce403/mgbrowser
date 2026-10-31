@@ -100,7 +100,7 @@ fn restricted_child_completed_array_ast_storage_builds_the_frozen_form() {
         [("source".to_owned(), "fixture".to_owned())]
     );
     assert!(doc.items.iter().any(|item| matches!(item,
-        mg_sparkle::document::Item::Input { form: 0, name, value, kind }
+        mg_sparkle::document::Item::Input { form: Some(0), name, value, kind }
             if name == "q" && value.is_empty() && kind == "text")));
     assert!(doc.items.iter().any(|item| matches!(item,
         mg_sparkle::document::Item::Submit { form: 0, name, value, label }

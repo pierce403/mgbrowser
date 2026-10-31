@@ -459,8 +459,17 @@ impl Browser {
                 self.find_insert_text(&bounded);
             }
             Focus::Input(node) if !self.modal_open() => {
-                let single = sanitize_single_line(&bounded);
-                self.page_input_insert_text(node, &single);
+                if self
+                    .document
+                    .nodes
+                    .get(node)
+                    .is_some_and(|n| n.tag == "textarea")
+                {
+                    self.page_input_insert_text(node, &bounded);
+                } else {
+                    let single = sanitize_single_line(&bounded);
+                    self.page_input_insert_text(node, &single);
+                }
             }
             _ => {}
         }

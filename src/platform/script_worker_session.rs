@@ -123,6 +123,15 @@ impl Session {
     ) -> Result<(Self, SessionReply), String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }
+    pub fn start_with_platform(
+        _: Request,
+        _: u64,
+        _: ChildPool,
+        _: mg_sparkle::page_session::observer::ObserverInit,
+        _: mg_sparkle::page_session::platform::PlatformInit,
+    ) -> Result<(Self, SessionReply), String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
     pub fn start(_: Request, _: u64, _: ChildPool) -> Result<(Self, SessionReply), String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }
@@ -148,6 +157,13 @@ impl Session {
     pub fn try_console(
         &mut self,
         _: mg_sparkle::page_session::console::ConsoleCommand,
+        _: u64,
+    ) -> Result<u64, String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
+    pub fn try_platform(
+        &mut self,
+        _: mg_sparkle::page_session::platform::PlatformCommand,
         _: u64,
     ) -> Result<u64, String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())

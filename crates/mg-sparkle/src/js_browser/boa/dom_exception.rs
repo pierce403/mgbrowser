@@ -365,6 +365,13 @@ pub(super) fn exception(name: &str, message: &str, context: &mut Context) -> JsR
     Ok(JsError::from_opaque(instance.into()))
 }
 
+pub(super) fn throw(name: &str, message: &str, context: &mut Context) -> JsError {
+    match exception(name, message, context) {
+        Ok(err) => err,
+        Err(err) => err,
+    }
+}
+
 /// Native identity only: no prototype walk, tag/name access or Proxy traps.
 pub(super) fn is_dom_exception(object: &JsObject, context: &mut Context) -> JsResult<bool> {
     payload(object, context).map(|payload| payload.is_some())

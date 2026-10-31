@@ -805,6 +805,12 @@ mod tests {
             task_wake: None,
             lifecycle: None,
             observer: None,
+            local_storage_ops: Vec::new(),
+            session_storage_ops: Vec::new(),
+            cookie_writes: Vec::new(),
+            history_ops: Vec::new(),
+            fetch_requests: Vec::new(),
+            scroll_request: None,
         }
     }
     fn guarded(

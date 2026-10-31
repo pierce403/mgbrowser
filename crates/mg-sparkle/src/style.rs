@@ -675,9 +675,11 @@ impl Clone for ComputedStyle {
 // This is a deliberately small UA sheet, shared by all documents and fixtures.
 // Author rules and inline style participate in Stylo's normal cascade above it.
 const USER_AGENT_CSS: &str = r#"
-html, body, div, p, section, article, header, footer, main, nav, form, center,
+html, body, div, p, section, article, aside, header, footer, main, nav,
+details, summary, fieldset, legend, figure, figcaption, form, center,
 blockquote, pre, ul, ol, dl, dt, dd, h1, h2, h3, h4, h5, h6 { display: block }
-head, title, style, script, meta, link, template, [hidden], input[type=hidden] { display: none }
+head, title, style, script, meta, link, template, [hidden], input[type=hidden], dialog:not([open]) { display: none }
+dialog[open] { display: block; border: 2px solid #202124; padding: 16px; background: #ffffff; color: #202124 }
 body { margin: 8px; font-family: sans-serif; color: black }
 p, blockquote, ul, ol, dl, pre { margin-top: 1em; margin-bottom: 1em }
 h1 { font-size: 2em; margin: .67em 0; font-weight: bold }
@@ -698,7 +700,8 @@ th { text-align: center } caption { display: table-caption; text-align: center }
 col { display: table-column } colgroup { display: table-column-group }
 li { display: list-item }
 input, button, select, textarea { display: inline-block; font-size: 13.3333px }
-input, button { padding: 1px 2px; border: 2px solid #888 }
+input, button, select, textarea { padding: 1px 2px; border: 2px solid #888 }
+input[type=checkbox], input[type=radio] { padding: 0; border: 1px solid #666 }
 form { margin-bottom: 1em }
 hr { display: block; margin: .5em auto; border: 1px solid #888 }
 "#;
@@ -770,7 +773,7 @@ struct NodeStyleData {
 }
 
 struct StyleDocument<'a> {
-    document: &'a Document,
+    nodes_slice: &'a [Node],
     lock: SharedRwLock,
     namespace: Namespace,
     nodes: Vec<NodeStyleData>,
@@ -806,7 +809,7 @@ impl Hash for DomNode<'_> {
 }
 impl<'a> DomNode<'a> {
     fn node(&self) -> &'a Node {
-        &self.document.document.nodes[self.id]
+        &self.document.nodes_slice[self.id]
     }
     fn data(&self) -> &'a NodeStyleData {
         &self.document.nodes[self.id]
@@ -842,7 +845,8 @@ impl<'a> TNode for DomNode<'a> {
     type ConcreteDocument = Self;
     type ConcreteShadowRoot = Self;
     fn parent_node(&self) -> Option<Self> {
-        (self.id != 0).then(|| self.at(self.node().parent))
+        let parent = self.node().parent;
+        (self.id != 0 && parent != self.id).then(|| self.at(parent))
     }
     fn first_child(&self) -> Option<Self> {
         self.node().children.first().map(|&id| self.at(id))
@@ -860,7 +864,17 @@ impl<'a> TNode for DomNode<'a> {
         self.at(0)
     }
     fn is_in_document(&self) -> bool {
-        true
+        let mut cur = *self;
+        for _ in 0..=crate::document::MAX_DEPTH {
+            if cur.id == 0 {
+                return true;
+            }
+            let Some(parent) = cur.parent_node() else {
+                return false;
+            };
+            cur = parent;
+        }
+        false
     }
     fn traversal_parent(&self) -> Option<Self> {
         self.parent_node().filter(NodeInfo::is_element)
@@ -1598,7 +1612,7 @@ pub fn compute_styles_with_diagnostics(
         })
         .collect();
     let arena = StyleDocument {
-        document,
+        nodes_slice: &document.nodes,
         lock: lock.clone(),
         namespace: "http://www.w3.org/1999/xhtml".into(),
         nodes,
@@ -1715,6 +1729,12 @@ pub fn compute_styles_with_diagnostics(
                 inherited_bytes,
             )?;
             output[id] = output[parent_id].clone_with_layout(LayoutStyle::default());
+            if parent_id != 0
+                && document.nodes[parent_id].tag == "details"
+                && !document.nodes[parent_id].has("open")
+            {
+                output[id].display = Display::None;
+            }
             continue;
         }
         let mut declarations = ApplicableDeclarationList::new();
@@ -1842,6 +1862,19 @@ pub fn compute_styles_with_diagnostics(
             // Inactive fallback content is not overrideable by author CSS.
             snapshot.display = Display::None;
         }
+        if parent_id != 0
+            && document.nodes[parent_id].tag == "details"
+            && !document.nodes[parent_id].has("open")
+        {
+            let first_summary = document.nodes[parent_id]
+                .children
+                .iter()
+                .copied()
+                .find(|&c| document.nodes[c].tag == "summary");
+            if Some(id) != first_summary {
+                snapshot.display = Display::None;
+            }
+        }
         report_unsupported(
             &computed,
             &snapshot,
@@ -1855,6 +1888,302 @@ pub fn compute_styles_with_diagnostics(
         values[id] = computed;
     }
     Ok(output)
+}
+
+#[cfg(feature = "modern")]
+fn parse_dom_selector_list(selector: &str) -> Result<selectors::SelectorList<SelectorImpl>, ()> {
+    if selector.trim().is_empty() || selector.len() > 8192 {
+        return Err(());
+    }
+    let namespaces = style::stylesheets::Namespaces::default();
+    let url_data = UrlExtraData::from(url::Url::parse("about:blank").unwrap());
+    let parser = style::selector_parser::SelectorParser {
+        stylesheet_origin: Origin::Author,
+        namespaces: &namespaces,
+        url_data: &url_data,
+        for_supports_rule: false,
+    };
+    let mut input = cssparser::ParserInput::new(selector);
+    let mut css_parser = cssparser::Parser::new(&mut input);
+    selectors::SelectorList::parse(
+        &parser,
+        &mut css_parser,
+        selectors::parser::ParseRelative::No,
+    )
+    .map_err(|_| ())
+}
+
+#[cfg(feature = "modern")]
+fn build_selector_arena(nodes_slice: &[Node]) -> StyleDocument<'_> {
+    let nodes = nodes_slice
+        .iter()
+        .map(|node| NodeStyleData {
+            local_name: node.tag.as_str().into(),
+            id: node.attr("id").map(AtomIdent::from),
+            classes: node
+                .attr("class")
+                .unwrap_or("")
+                .split_ascii_whitespace()
+                .map(AtomIdent::from)
+                .collect(),
+            attr_names: node
+                .attributes
+                .iter()
+                .map(|(name, _)| name.as_str().into())
+                .collect(),
+            inline: None,
+            hints: None,
+            data: ElementDataWrapper::default(),
+        })
+        .collect();
+    StyleDocument {
+        nodes_slice,
+        lock: SharedRwLock::new(),
+        namespace: "http://www.w3.org/1999/xhtml".into(),
+        nodes,
+    }
+}
+
+#[cfg(feature = "modern")]
+fn element_matches_selector_list(
+    element: DomNode<'_>,
+    list: &selectors::SelectorList<SelectorImpl>,
+    scope: Option<OpaqueElement>,
+    caches: &mut SelectorCaches,
+) -> bool {
+    let mut context = MatchingContext::new(
+        MatchingMode::Normal,
+        None,
+        caches,
+        QuirksMode::NoQuirks,
+        NeedsSelectorFlags::No,
+        MatchingForInvalidation::No,
+    );
+    context.scope_element = scope;
+    list.slice().iter().any(|selector| {
+        selector.pseudo_element().is_none()
+            && selectors::matching::matches_selector(selector, 0, None, &element, &mut context)
+    })
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn query_selector_dom(
+    nodes: &[Node],
+    root: usize,
+    selector: &str,
+    first_only: bool,
+) -> Result<Vec<usize>, ()> {
+    let list = parse_dom_selector_list(selector)?;
+    if root >= nodes.len() || nodes[root].tag == "template" {
+        return Ok(Vec::new());
+    }
+    let arena = build_selector_arena(nodes);
+    let scope = if root != 0 && !nodes[root].tag.starts_with('#') {
+        Some(selectors::Element::opaque(&DomNode {
+            document: &arena,
+            id: root,
+        }))
+    } else if root == 0 {
+        nodes[0]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| !nodes[c].tag.starts_with('#'))
+            .map(|c| {
+                selectors::Element::opaque(&DomNode {
+                    document: &arena,
+                    id: c,
+                })
+            })
+    } else {
+        None
+    };
+    let mut caches = SelectorCaches::default();
+    let mut out = Vec::new();
+    let mut stack: Vec<usize> = nodes[root].children.iter().rev().copied().collect();
+    let mut visited = 0usize;
+    while let Some(id) = stack.pop() {
+        visited += 1;
+        if visited > crate::document::MAX_NODES {
+            break;
+        }
+        let dom_node = DomNode {
+            document: &arena,
+            id,
+        };
+        if dom_node.is_element()
+            && element_matches_selector_list(dom_node, &list, scope, &mut caches)
+        {
+            out.push(id);
+            if first_only {
+                return Ok(out);
+            }
+        }
+        if nodes[id].tag != "template" {
+            stack.extend(nodes[id].children.iter().rev().copied());
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn matches_selector_dom(
+    nodes: &[Node],
+    element_id: usize,
+    selector: &str,
+) -> Result<bool, ()> {
+    let list = parse_dom_selector_list(selector)?;
+    if element_id == 0 || element_id >= nodes.len() || nodes[element_id].tag.starts_with('#') {
+        return Ok(false);
+    }
+    let arena = build_selector_arena(nodes);
+    let el = DomNode {
+        document: &arena,
+        id: element_id,
+    };
+    let mut caches = SelectorCaches::default();
+    Ok(element_matches_selector_list(
+        el,
+        &list,
+        Some(selectors::Element::opaque(&el)),
+        &mut caches,
+    ))
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn closest_selector_dom(
+    nodes: &[Node],
+    element_id: usize,
+    selector: &str,
+) -> Result<Option<usize>, ()> {
+    let list = parse_dom_selector_list(selector)?;
+    if element_id == 0 || element_id >= nodes.len() || nodes[element_id].tag.starts_with('#') {
+        return Ok(None);
+    }
+    let arena = build_selector_arena(nodes);
+    let start = DomNode {
+        document: &arena,
+        id: element_id,
+    };
+    let scope = Some(selectors::Element::opaque(&start));
+    let mut caches = SelectorCaches::default();
+    let mut current = Some(start);
+    for _ in 0..=crate::document::MAX_DEPTH {
+        let Some(el) = current else {
+            break;
+        };
+        if element_matches_selector_list(el, &list, scope, &mut caches) {
+            return Ok(Some(el.id));
+        }
+        current = Element::parent_element(&el);
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn evaluate_media_query(
+    query: &str,
+    width: f32,
+    height: f32,
+    dpr: f32,
+    prefers_dark: bool,
+) -> (String, bool) {
+    use style_traits::ToCss;
+    let url_data = UrlExtraData::from(url::Url::parse("about:blank").unwrap());
+    let mut context = style::parser::ParserContext::new(
+        Origin::Author,
+        &url_data,
+        None,
+        style_traits::ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        Default::default(),
+        None,
+        None,
+        Default::default(),
+    );
+    let mut input = cssparser::ParserInput::new(query);
+    let media = style::media_queries::MediaList::parse(
+        &mut context,
+        &mut cssparser::Parser::new(&mut input),
+    );
+    let serialized = media.to_css_string();
+    let initial = ComputedValues::initial_values_with_font_override(
+        style::properties::style_structs::Font::initial_values(),
+    );
+    let pointer = style::servo::media_features::PointerCapabilities::FINE
+        | style::servo::media_features::PointerCapabilities::HOVER;
+    let device = Device::new(
+        style::media_queries::MediaType::screen(),
+        QuirksMode::NoQuirks,
+        euclid::Size2D::new(width.max(0.0), height.max(0.0)),
+        euclid::Size2D::new(width.max(0.0), height.max(0.0)),
+        euclid::Scale::new(dpr.max(0.1)),
+        Box::new(FontMetrics),
+        initial,
+        if prefers_dark {
+            style::queries::values::PrefersColorScheme::Dark
+        } else {
+            style::queries::values::PrefersColorScheme::Light
+        },
+        pointer,
+        pointer,
+    );
+    let matched = media.evaluate(
+        &device,
+        QuirksMode::NoQuirks,
+        &mut style::stylesheets::CustomMediaEvaluator::none(),
+    );
+    (serialized, matched)
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn css_supports_declaration(property: &str, value: &str) -> bool {
+    if property.trim().is_empty()
+        || value.trim().is_empty()
+        || property.len() > 1024
+        || value.len() > 8192
+    {
+        return false;
+    }
+    let decl_str = format!("{}: {}", property.trim(), value.trim());
+    style::stylesheets::supports_rule::Declaration(decl_str).eval(
+        &style::parser::ParserContext::new(
+            Origin::Author,
+            &UrlExtraData::from(url::Url::parse("about:blank").unwrap()),
+            Some(style::stylesheets::CssRuleType::Style),
+            style_traits::ParsingMode::DEFAULT,
+            QuirksMode::NoQuirks,
+            Default::default(),
+            None,
+            None,
+            Default::default(),
+        ),
+    )
+}
+
+#[cfg(feature = "modern")]
+pub(crate) fn css_supports_condition(condition: &str) -> bool {
+    if condition.trim().is_empty() || condition.len() > 8192 {
+        return false;
+    }
+    let mut input = cssparser::ParserInput::new(condition);
+    let mut parser = cssparser::Parser::new(&mut input);
+    let Ok(cond) =
+        parser.parse_entirely(style::stylesheets::supports_rule::SupportsCondition::parse)
+    else {
+        return false;
+    };
+    cond.eval(&style::parser::ParserContext::new(
+        Origin::Author,
+        &UrlExtraData::from(url::Url::parse("about:blank").unwrap()),
+        Some(style::stylesheets::CssRuleType::Style),
+        style_traits::ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        Default::default(),
+        None,
+        None,
+        Default::default(),
+    ))
 }
 
 fn report_unsupported(
