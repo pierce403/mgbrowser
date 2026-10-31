@@ -286,6 +286,7 @@ fn html_escape(s: &str) -> String {
 }
 
 /// Generate clean, styled HTML for internal `chrome://` and `about:` pages.
+#[allow(clippy::too_many_arguments)]
 pub fn render_internal_html(
     page: InternalPage,
     about_lines: &[String],
@@ -296,6 +297,37 @@ pub fn render_internal_html(
     theme_summary: &str,
     scale_percent: u16,
     scripts_enabled: bool,
+) -> String {
+    render_internal_html_with_session(
+        page,
+        about_lines,
+        bookmarks,
+        history,
+        downloads,
+        engine,
+        theme_summary,
+        scale_percent,
+        scripts_enabled,
+        100,
+        &[],
+    )
+}
+
+/// Generate clean, styled HTML for internal `chrome://` and `about:` pages,
+/// including per-tab page zoom and previous-session restore state.
+#[allow(clippy::too_many_arguments)]
+pub fn render_internal_html_with_session(
+    page: InternalPage,
+    about_lines: &[String],
+    bookmarks: &[Bookmark],
+    history: &[HistoryEntry],
+    downloads: &[DownloadEntry],
+    engine: SearchEngine,
+    theme_summary: &str,
+    scale_percent: u16,
+    scripts_enabled: bool,
+    page_zoom_percent: u16,
+    previous_session: &[crate::SessionTab],
 ) -> String {
     let style = "<style>
         body { font-family: sans-serif; margin: 28px 36px; background: #fafbf8; color: #1f2a22; line-height: 1.5; }
@@ -332,6 +364,29 @@ pub fn render_internal_html(
                 </form>",
                 html_escape(engine.label())
             );
+            if !previous_session.is_empty() {
+                let n = previous_session.len();
+                let preview = previous_session
+                    .iter()
+                    .take(3)
+                    .map(|t| {
+                        if t.title.is_empty() {
+                            html_escape(&t.url)
+                        } else {
+                            html_escape(&t.title)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                body.push_str(&format!(
+                    "<h2>Previous Session</h2>\
+                    <div class=\"card\"><a href=\"chrome://restore-session\">Restore previous session ({} tab{})</a> \
+                    <span class=\"muted\">— {}</span></div>",
+                    n,
+                    if n == 1 { "" } else { "s" },
+                    preview
+                ));
+            }
             if !bookmarks.is_empty() {
                 body.push_str("<h2>Saved Bookmarks</h2>");
                 for bm in bookmarks.iter().take(12) {
@@ -443,15 +498,17 @@ pub fn render_internal_html(
         InternalPage::Settings => format!(
             "<!doctype html><title>Settings</title>{style}<body>{nav}\
             <h1>Browser Settings</h1>\
-            <p class=\"sub\">Open Menu ≡ → Settings for interactive Theme, Zoom, Search Engine, and Bookmarks Bar controls.</p>\
+            <p class=\"sub\">Open Menu ≡ → Settings for interactive Theme, Display Size, Search Engine, and Bookmarks Bar controls.</p>\
             <div class=\"card\"><strong>Appearance:</strong> {}</div>\
-            <div class=\"card\"><strong>Page &amp; UI Zoom:</strong> {}% (Ctrl++ / Ctrl+- / Ctrl+0)</div>\
+            <div class=\"card\"><strong>Browser Display Size:</strong> {}% (Ctrl++ / Ctrl+- / Ctrl+0)</div>\
+            <div class=\"card\"><strong>Current Tab Page Zoom:</strong> {}% (Alt++ / Alt+- / Alt+0, Ctrl+Wheel)</div>\
             <div class=\"card\"><strong>Default Omnibox Search Engine:</strong> {}</div>\
             <div class=\"card\"><strong>JavaScript Sandbox:</strong> {} (restricted Linux seccomp worker)</div>\
-            <div class=\"card\"><strong>Privacy &amp; Data:</strong> Press Ctrl+Shift+Delete to clear History, Cookies, Network log, and Downloads list.</div>\
+            <div class=\"card\"><strong>Privacy &amp; Data:</strong> Press Ctrl+Shift+Delete to clear History, Cookies, LocalStorage, Session, Network log, and Downloads list.</div>\
             </body>",
             html_escape(theme_summary),
             scale_percent,
+            page_zoom_percent,
             html_escape(engine.label()),
             if scripts_enabled {
                 "Enabled"
@@ -579,7 +636,7 @@ impl crate::Browser {
             self.theme_preference,
             self.effective_theme()
         );
-        let html = render_internal_html(
+        let html = render_internal_html_with_session(
             page,
             &self.about_lines,
             &self.bookmarks,
@@ -589,6 +646,8 @@ impl crate::Browser {
             &theme_summary,
             self.effective_scale_percent(),
             self.scripts_enabled,
+            self.page_zoom_percent,
+            &self.previous_session,
         );
         self.address = canonical.clone();
         self.selection.address_cursor = self.address.len();
@@ -675,7 +734,7 @@ impl crate::Browser {
             self.theme_preference,
             self.effective_theme()
         );
-        let html = render_internal_html(
+        let html = render_internal_html_with_session(
             page,
             &self.about_lines,
             &self.bookmarks,
@@ -685,6 +744,8 @@ impl crate::Browser {
             &theme_summary,
             self.effective_scale_percent(),
             self.scripts_enabled,
+            self.page_zoom_percent,
+            &self.previous_session,
         );
         self.devtools.set_page_source(&html);
         self.document = mg_sparkle::document::parse(&html, &canonical);

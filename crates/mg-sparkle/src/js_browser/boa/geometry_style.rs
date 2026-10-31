@@ -357,6 +357,33 @@ fn node_rect(data: &mut State, id: usize) -> Option<(f32, f32, f32, f32)> {
     None
 }
 
+pub(super) type RectQuad = (f64, f64, f64, f64);
+
+pub(super) fn client_rect_and_boxes(data: &mut State, id: usize) -> Option<(RectQuad, RectQuad)> {
+    let (rx, ry, rw, rh) = node_rect(data, id)?;
+    let s = data
+        .cached_layout
+        .as_ref()
+        .and_then(|c| c.styles.get(id))
+        .cloned()
+        .unwrap_or_default();
+    let (sx, sy) = if s.layout.position == Position::Fixed {
+        (0.0, 0.0)
+    } else {
+        (data.viewport.scroll_x, data.viewport.scroll_y)
+    };
+    let pad_t = s.padding[0].resolve(rw).unwrap_or(0.0);
+    let pad_r = s.padding[1].resolve(rw).unwrap_or(0.0);
+    let pad_b = s.padding[2].resolve(rw).unwrap_or(0.0);
+    let pad_l = s.padding[3].resolve(rw).unwrap_or(0.0);
+    let cw = (rw - s.border_width[1] - s.border_width[3] - pad_l - pad_r).max(0.0);
+    let ch = (rh - s.border_width[0] - s.border_width[2] - pad_t - pad_b).max(0.0);
+    Some((
+        ((rx - sx) as f64, (ry - sy) as f64, rw as f64, rh as f64),
+        (pad_l as f64, pad_t as f64, cw as f64, ch as f64),
+    ))
+}
+
 pub(super) fn node_center_coords(data: &mut State, id: usize) -> Option<(f64, f64, f64, f64)> {
     let (rx, ry, rw, rh) = node_rect(data, id)?;
     let is_fixed = data
@@ -685,7 +712,13 @@ fn elements_from_point(data: &mut State, vx: f64, vy: f64) -> Vec<usize> {
     hits
 }
 
-fn build_dom_rect(x: f64, y: f64, width: f64, height: f64, context: &mut Context) -> JsObject {
+pub(super) fn build_dom_rect(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    context: &mut Context,
+) -> JsObject {
     let top = y.min(y + height);
     let bottom = y.max(y + height);
     let left = x.min(x + width);
@@ -969,25 +1002,37 @@ pub(super) fn try_set(
     } else {
         0.0
     };
-    let shared = state(context);
-    let mut data = shared.borrow_mut();
-    if data.host.document.nodes[id].tag == "html" {
-        if name == "scrollTop" {
-            data.viewport.scroll_y = clamped;
+    let (is_win, changed) = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        if data.host.document.nodes[id].tag == "html" {
+            let prev = (data.viewport.scroll_x, data.viewport.scroll_y);
+            if name == "scrollTop" {
+                data.viewport.scroll_y = clamped;
+            } else {
+                data.viewport.scroll_x = clamped;
+            }
+            data.scroll_request = Some(ScrollRequest::Absolute {
+                x: data.viewport.scroll_x,
+                y: data.viewport.scroll_y,
+            });
+            (
+                true,
+                prev != (data.viewport.scroll_x, data.viewport.scroll_y),
+            )
         } else {
-            data.viewport.scroll_x = clamped;
+            let entry = data.element_scroll_offsets.entry(id).or_insert((0.0, 0.0));
+            let prev = *entry;
+            if name == "scrollTop" {
+                entry.1 = clamped;
+            } else {
+                entry.0 = clamped;
+            }
+            (false, prev != *entry)
         }
-        data.scroll_request = Some(ScrollRequest::Absolute {
-            x: data.viewport.scroll_x,
-            y: data.viewport.scroll_y,
-        });
-    } else {
-        let entry = data.element_scroll_offsets.entry(id).or_insert((0.0, 0.0));
-        if name == "scrollTop" {
-            entry.1 = clamped;
-        } else {
-            entry.0 = clamped;
-        }
+    };
+    if changed {
+        super::observers_wc::notify_scroll_changed(is_win, context)?;
     }
     Ok(true)
 }
@@ -1850,26 +1895,33 @@ pub(super) fn call(
                     align_top = arg.to_boolean();
                 }
             }
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            if let Some((_, y, _, h)) = node_rect(&mut data, id) {
-                let target_y = if align_top {
-                    y.max(0.0)
-                } else {
-                    (y + h - data.viewport.inner_height as f32).max(0.0)
-                };
-                data.viewport.scroll_y = target_y;
-            }
-            match &mut data.scroll_request {
-                Some(ScrollRequest::FocusControl { into_view, .. }) => {
-                    *into_view = Some((id, align_top));
+            let changed = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let prev_y = data.viewport.scroll_y;
+                if let Some((_, y, _, h)) = node_rect(&mut data, id) {
+                    let target_y = if align_top {
+                        y.max(0.0)
+                    } else {
+                        (y + h - data.viewport.inner_height as f32).max(0.0)
+                    };
+                    data.viewport.scroll_y = target_y;
                 }
-                slot => {
-                    *slot = Some(ScrollRequest::IntoView {
-                        node: id,
-                        align_top,
-                    });
+                match &mut data.scroll_request {
+                    Some(ScrollRequest::FocusControl { into_view, .. }) => {
+                        *into_view = Some((id, align_top));
+                    }
+                    slot => {
+                        *slot = Some(ScrollRequest::IntoView {
+                            node: id,
+                            align_top,
+                        });
+                    }
                 }
+                prev_y != data.viewport.scroll_y
+            };
+            if changed {
+                super::observers_wc::notify_scroll_changed(true, context)?;
             }
             Ok(JsValue::undefined())
         }
@@ -1919,20 +1971,27 @@ pub(super) fn call(
         WINDOW_SCROLL_TO | WINDOW_SCROLL | WINDOW_SCROLL_BY => {
             let is_by = name == WINDOW_SCROLL_BY;
             let (opt_x, opt_y) = parse_scroll_args(args, context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            if is_by {
-                let dx = opt_x.unwrap_or(0.0);
-                let dy = opt_y.unwrap_or(0.0);
-                data.viewport.scroll_x = (data.viewport.scroll_x + dx).max(0.0);
-                data.viewport.scroll_y = (data.viewport.scroll_y + dy).max(0.0);
-                data.scroll_request = Some(ScrollRequest::By { dx, dy });
-            } else {
-                let nx = opt_x.unwrap_or(data.viewport.scroll_x).max(0.0);
-                let ny = opt_y.unwrap_or(data.viewport.scroll_y).max(0.0);
-                data.viewport.scroll_x = nx;
-                data.viewport.scroll_y = ny;
-                data.scroll_request = Some(ScrollRequest::Absolute { x: nx, y: ny });
+            let changed = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let prev = (data.viewport.scroll_x, data.viewport.scroll_y);
+                if is_by {
+                    let dx = opt_x.unwrap_or(0.0);
+                    let dy = opt_y.unwrap_or(0.0);
+                    data.viewport.scroll_x = (data.viewport.scroll_x + dx).max(0.0);
+                    data.viewport.scroll_y = (data.viewport.scroll_y + dy).max(0.0);
+                    data.scroll_request = Some(ScrollRequest::By { dx, dy });
+                } else {
+                    let nx = opt_x.unwrap_or(data.viewport.scroll_x).max(0.0);
+                    let ny = opt_y.unwrap_or(data.viewport.scroll_y).max(0.0);
+                    data.viewport.scroll_x = nx;
+                    data.viewport.scroll_y = ny;
+                    data.scroll_request = Some(ScrollRequest::Absolute { x: nx, y: ny });
+                }
+                prev != (data.viewport.scroll_x, data.viewport.scroll_y)
+            };
+            if changed {
+                super::observers_wc::notify_scroll_changed(true, context)?;
             }
             Ok(JsValue::undefined())
         }

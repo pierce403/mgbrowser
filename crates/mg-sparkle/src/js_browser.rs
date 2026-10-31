@@ -165,6 +165,210 @@ pub fn unsupported_external_attribute(node: &Node) -> Option<&'static str> {
         .find(|name| node.attr(name).is_some())
 }
 
+pub fn unsupported_module_external_attribute(node: &Node) -> Option<&'static str> {
+    if node
+        .attr("integrity")
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("integrity");
+    }
+    if node.attr("async").is_some() {
+        return Some("async");
+    }
+    if let Some(cors) = node.attr("crossorigin")
+        && cors.trim().eq_ignore_ascii_case("use-credentials")
+    {
+        return Some("crossorigin=use-credentials");
+    }
+    None
+}
+
+/// Extract static `import ... from "..."`, `import "..."`, and `export ... from "..."`
+/// module specifiers from JavaScript module source text without executing JS.
+pub fn extract_static_module_specifiers(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    let mut toks: Vec<(u8, String)> = Vec::new(); // 0=ident, 1=str, 2=punct
+    let mut depth = 0usize;
+    while i < len {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            i += 2;
+            while i < len && bytes[i] != b'\n' && bytes[i] != b'\r' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(len);
+            continue;
+        }
+        if b == b'`' {
+            i += 1;
+            while i < len {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(len);
+                    continue;
+                }
+                if bytes[i] == b'`' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            let q = b;
+            i += 1;
+            let mut s = String::new();
+            while i < len {
+                let ch = source[i..].chars().next().unwrap_or('\0');
+                i += ch.len_utf8();
+                if ch as u32 == q as u32 {
+                    break;
+                }
+                if ch == '\\' && i < len {
+                    let esc = source[i..].chars().next().unwrap_or('\0');
+                    i += esc.len_utf8();
+                    s.push(esc);
+                } else {
+                    s.push(ch);
+                }
+            }
+            if depth == 0 {
+                toks.push((1, s));
+            }
+            continue;
+        }
+        let ch = source[i..].chars().next().unwrap_or(' ');
+        if ch == '$' || ch == '_' || ch.is_alphabetic() {
+            let start = i;
+            i += ch.len_utf8();
+            while i < len {
+                let nc = source[i..].chars().next().unwrap_or(' ');
+                if nc == '$' || nc == '_' || nc.is_alphanumeric() {
+                    i += nc.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if depth == 0 {
+                toks.push((0, source[start..i].to_owned()));
+            }
+            continue;
+        }
+        match b {
+            b'(' | b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b'{' => {
+                // Keep import/export clause `{ a, b }` visible at top level if preceded by import/export/,
+                let in_clause = toks.last().is_some_and(|(k, v)| {
+                    (*k == 0 && (v == "import" || v == "export")) || (*k == 2 && v == ",")
+                });
+                if in_clause && depth == 0 {
+                    i += 1;
+                    while i < len && bytes[i] != b'}' {
+                        i += 1;
+                    }
+                    if i < len {
+                        i += 1;
+                    }
+                    toks.push((2, "{}".into()));
+                } else {
+                    depth += 1;
+                    i += 1;
+                }
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            _ => {
+                if depth == 0 {
+                    toks.push((2, ch.to_string()));
+                }
+                i += ch.len_utf8();
+            }
+        }
+    }
+    let mut specs = Vec::new();
+    let mut idx = 0usize;
+    while idx < toks.len() {
+        if toks[idx].0 == 0 && toks[idx].1 == "import" {
+            let prev_dot = idx > 0 && toks[idx - 1].0 == 2 && toks[idx - 1].1 == ".";
+            if !prev_dot {
+                if let Some((1, lit)) = toks.get(idx + 1) {
+                    if !specs.contains(lit) {
+                        specs.push(lit.clone());
+                    }
+                    idx += 2;
+                    continue;
+                }
+                let mut c = idx + 1;
+                while c < toks.len() && !(toks[c].0 == 2 && toks[c].1 == ";") {
+                    if toks[c].0 == 0 && toks[c].1 == "from" {
+                        if let Some((1, lit)) = toks.get(c + 1)
+                            && !specs.contains(lit)
+                        {
+                            specs.push(lit.clone());
+                        }
+                        c += 2;
+                        break;
+                    }
+                    if toks[c].0 == 0 && (toks[c].1 == "import" || toks[c].1 == "export") {
+                        break;
+                    }
+                    c += 1;
+                }
+                idx = c;
+                continue;
+            }
+        } else if toks[idx].0 == 0 && toks[idx].1 == "export" {
+            let prev_dot = idx > 0 && toks[idx - 1].0 == 2 && toks[idx - 1].1 == ".";
+            if !prev_dot {
+                let mut c = idx + 1;
+                if let Some((k, v)) = toks.get(c)
+                    && *k == 2
+                    && (v == "*" || v == "{}")
+                {
+                    while c < toks.len() && !(toks[c].0 == 2 && toks[c].1 == ";") {
+                        if toks[c].0 == 0 && toks[c].1 == "from" {
+                            if let Some((1, lit)) = toks.get(c + 1)
+                                && !specs.contains(lit)
+                            {
+                                specs.push(lit.clone());
+                            }
+                            break;
+                        }
+                        if toks[c].0 == 0 && (toks[c].1 == "import" || toks[c].1 == "export") {
+                            break;
+                        }
+                        c += 1;
+                    }
+                }
+            }
+        }
+        idx += 1;
+    }
+    specs
+}
+
 /// Count actual JSON bytes without allocating a second copy of script sources.
 pub fn json_bytes(value: &impl Serialize) -> Result<usize, String> {
     struct Counter(usize);
@@ -338,12 +542,166 @@ impl Request {
             })
     }
 
+    fn validate_modern_external_sources_with_modules(
+        &self,
+        document: &Document,
+        modules_enabled: bool,
+    ) -> Result<usize, String> {
+        if !modules_enabled {
+            return self.validate_modern_external_sources(document);
+        }
+        let Some(sources) = &self.external_scripts else {
+            if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+                return Err("Script request exceeds the existing 2 MiB wire limit".into());
+            }
+            return Ok(self.html.len());
+        };
+        if sources.len() > MAX_EXTERNAL_SCRIPTS {
+            return Err("External script count limit reached (16)".into());
+        }
+        let eligible: Vec<(usize, bool)> = document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(index, node)| node.tag == "script" && !inert(&document.nodes, *index))
+            .filter(|(_, node)| {
+                let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+                kind == "module" || classic_script_type(&kind)
+            })
+            .take(MAX_SCRIPTS)
+            .filter_map(|(index, node)| {
+                node.attr("src")?;
+                let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+                if kind == "module" {
+                    unsupported_module_external_attribute(node)
+                        .is_none()
+                        .then_some((index, true))
+                } else if classic_script_type(&kind) {
+                    unsupported_external_attribute(node)
+                        .is_none()
+                        .then_some((index, false))
+                } else {
+                    None
+                }
+            })
+            .take(MAX_EXTERNAL_SCRIPTS)
+            .collect();
+        let mut seen_nodes = std::collections::HashSet::new();
+        let mut seen_submodules = std::collections::HashSet::new();
+        let mut bytes = self.html.len();
+        for source in sources {
+            let is_submodule = source.node == usize::MAX;
+            let mut is_module_source = is_submodule;
+            if is_submodule {
+                let Some(prov) = &source.provenance else {
+                    return Err("Module dependency source requires same-origin provenance".into());
+                };
+                if !seen_submodules.insert(prov.response_url.as_str()) {
+                    return Err(
+                        "External script source refers to an ineligible or duplicate node".into(),
+                    );
+                }
+            } else {
+                let Some(&(_, is_mod)) = eligible.iter().find(|(idx, _)| *idx == source.node)
+                else {
+                    return Err(
+                        "External script source refers to an ineligible or duplicate node".into(),
+                    );
+                };
+                if !seen_nodes.insert(source.node) {
+                    return Err(
+                        "External script source refers to an ineligible or duplicate node".into(),
+                    );
+                }
+                is_module_source = is_mod;
+            }
+            if source.source.len() > MAX_EXTERNAL_SOURCE {
+                return Err("External script exceeds the 256 KiB source limit".into());
+            }
+            if let Some(provenance) = &source.provenance {
+                if provenance.response_url.len() > MAX_CLASSIC_SOURCE_URL_BYTES {
+                    return Err("Classic source response URL exceeds 16384 bytes".into());
+                }
+                let response = url::Url::parse(&provenance.response_url)
+                    .map_err(|_| "Invalid classic source response URL")?;
+                let document_url =
+                    url::Url::parse(&self.url).map_err(|_| "Invalid script document origin")?;
+                let raw_userinfo =
+                    provenance
+                        .response_url
+                        .split_once(':')
+                        .is_some_and(|(_, tail)| {
+                            tail.chars()
+                                .filter(|ch| !matches!(ch, '\t' | '\n' | '\r'))
+                                .skip_while(|ch| matches!(ch, '/' | '\\'))
+                                .take_while(|ch| !matches!(ch, '/' | '\\' | '?' | '#'))
+                                .any(|ch| ch == '@')
+                        });
+                if !matches!(response.scheme(), "http" | "https")
+                    || response.host().is_none()
+                    || !response.username().is_empty()
+                    || response.password().is_some()
+                    || raw_userinfo
+                    || (provenance.error_visibility == ClassicErrorVisibility::SameOrigin
+                        && response.origin() != document_url.origin())
+                    || (is_module_source && response.origin() != document_url.origin())
+                {
+                    return Err("Invalid or contradictory classic source provenance".into());
+                }
+            } else if is_module_source {
+                // Allow same-origin relative `<script type="module" src="...">` in direct tests.
+                let node = &document.nodes[source.node];
+                if let Some(src_attr) = node.attr("src")
+                    && let Ok(doc_url) = url::Url::parse(&self.url)
+                    && matches!(doc_url.scheme(), "http" | "https")
+                    && let Ok(resolved) = doc_url.join(src_attr.trim())
+                    && resolved.origin() != doc_url.origin()
+                {
+                    return Err("Cross-origin module script source is not allowed".into());
+                }
+            }
+            bytes = bytes
+                .checked_add(source.source.len())
+                .filter(|bytes| *bytes <= MAX_SOURCE)
+                .ok_or("Script document and external sources exceed the 1 MiB source limit")?;
+        }
+        if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+            return Err("Script request exceeds the existing 2 MiB wire limit".into());
+        }
+        let mut metadata_bytes = sources
+            .capacity()
+            .checked_mul(std::mem::size_of::<ExternalScriptSource>())
+            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .ok_or("External source records exceed the existing host-storage limit")?;
+        for source in sources {
+            if let Some(provenance) = &source.provenance {
+                metadata_bytes = metadata_bytes
+                    .checked_add(provenance.response_url.capacity())
+                    .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+                    .ok_or("External provenance exceeds the existing host-storage limit")?;
+            }
+        }
+        bytes
+            .checked_add(metadata_bytes)
+            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .ok_or_else(|| {
+                "External sources and metadata exceed the existing host-storage limit".into()
+            })
+    }
+
     fn external_source(&self, index: usize) -> Option<&str> {
         self.external_scripts
             .as_ref()?
             .iter()
             .find(|source| source.node == index)
             .map(|source| source.source.as_str())
+    }
+
+    fn external_source_entry(&self, index: usize) -> Option<&ExternalScriptSource> {
+        self.external_scripts
+            .as_ref()?
+            .iter()
+            .find(|source| source.node == index)
     }
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -942,6 +1300,8 @@ impl BrowserHost {
             .map(|i| i + offset)
             .collect();
         for mut node in fragment.nodes.into_iter().skip(1) {
+            node.attributes
+                .retain(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR);
             node.parent = if node.parent == 0 {
                 id
             } else {
@@ -992,6 +1352,9 @@ impl BrowserHost {
                     output.push('<');
                     output.push_str(&node.tag);
                     for (name, value) in &node.attributes {
+                        if name == crate::document::INTERNAL_CANVAS_ATTR {
+                            continue;
+                        }
                         output.push_str(&format!(" {}=\"{}\"", name, escape(value)));
                     }
                     output.push('>');
@@ -1738,21 +2101,34 @@ impl Host for BrowserHost {
                 Ok(self.element(child))
             }
             "host.dom.setAttribute" => {
-                self.attr(
-                    root,
-                    &text.to_ascii_lowercase(),
-                    args.get(1).unwrap_or(&Value::Undefined).as_dom_text()?,
-                )?;
+                let lower = text.to_ascii_lowercase();
+                if lower != crate::document::INTERNAL_CANVAS_ATTR {
+                    self.attr(
+                        root,
+                        &lower,
+                        args.get(1).unwrap_or(&Value::Undefined).as_dom_text()?,
+                    )?;
+                }
                 Ok(Value::Undefined)
             }
-            "host.dom.getAttribute" => Ok(self.document.nodes[root]
-                .attr(&text.to_ascii_lowercase())
-                .map(Value::text)
-                .unwrap_or(Value::Null)),
+            "host.dom.getAttribute" => {
+                let lower = text.to_ascii_lowercase();
+                if lower == crate::document::INTERNAL_CANVAS_ATTR {
+                    Ok(Value::Null)
+                } else {
+                    Ok(self.document.nodes[root]
+                        .attr(&lower)
+                        .map(Value::text)
+                        .unwrap_or(Value::Null))
+                }
+            }
             "host.dom.removeAttribute" => {
-                self.document.nodes[root]
-                    .attributes
-                    .retain(|(n, _)| n != &text.to_ascii_lowercase());
+                let lower = text.to_ascii_lowercase();
+                if lower != crate::document::INTERNAL_CANVAS_ATTR {
+                    self.document.nodes[root]
+                        .attributes
+                        .retain(|(n, _)| n != &lower);
+                }
                 Ok(Value::Undefined)
             }
             _ => Err(format!("Browser method {name} is not implemented")),

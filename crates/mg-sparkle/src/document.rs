@@ -11,6 +11,10 @@ const MAX_SOURCE: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_NODES: usize = 50_000;
 pub(crate) const MAX_DEPTH: usize = 256;
 const MAX_ATTRIBUTE: usize = 16_384;
+const MAX_INTERNAL_CANVAS_ATTRIBUTE: usize = 256 * 1024;
+/// Internal live bitmap projection attribute populated on `<canvas>` elements before
+/// `ArenaSnapshot` projection and hidden from JS DOM attribute APIs and HTML serialization.
+pub const INTERNAL_CANVAS_ATTR: &str = "__mg_canvas_src";
 const MAX_FORMS: usize = 256;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 
@@ -286,6 +290,13 @@ impl Document {
         dpr: f32,
     ) -> Option<String> {
         let img = self.nodes.get(img_id)?;
+        if img.tag == "canvas" {
+            return img
+                .attr(INTERNAL_CANVAS_ATTR)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+        }
         if img.tag != "img" {
             return None;
         }
@@ -352,6 +363,16 @@ impl Document {
         let Some(img) = self.nodes.get(img_id) else {
             return out;
         };
+        if img.tag == "canvas" {
+            if let Some(src) = img
+                .attr(INTERNAL_CANVAS_ATTR)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                out.push(src.to_owned());
+            }
+            return out;
+        }
         if img.tag != "img" {
             return out;
         }
@@ -731,9 +752,14 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
             .saturating_add(node.tag.len())
             .saturating_add(node.text.len());
         for (index, (key, value)) in node.attributes.iter().enumerate() {
+            let max_attr_len = if node.tag == "canvas" && key == INTERNAL_CANVAS_ATTR {
+                MAX_INTERNAL_CANVAS_ATTRIBUTE
+            } else {
+                MAX_ATTRIBUTE
+            };
             if key.is_empty()
                 || key.len() > 256
-                || value.len() > MAX_ATTRIBUTE
+                || value.len() > max_attr_len
                 || key.bytes().any(|c| {
                     c.is_ascii_control()
                         || c.is_ascii_whitespace()
@@ -782,17 +808,178 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
     if visited != nodes.len() {
         return Err("Cyclic script snapshot arena".into());
     }
-    let (document, overflow) = project_arena(nodes, page_url, true);
+    let (mut document, overflow) = project_arena(nodes, page_url, true);
     if overflow {
         Err("Script snapshot projection limit exceeded".into())
     } else {
+        document.materialize_inline_canvas_resources();
         Ok(document)
     }
 }
 
-/// Discover bounded `@font-face` `(font-family, src_url)` pairs for `.ttf`/`.otf`
+impl Document {
+    /// Materialize bounded inline `<canvas>` PNG projections (`__mg_canvas_src`) into
+    /// `self.resources` without any file or network I/O (`<= 2 MiB` total).
+    pub fn materialize_inline_canvas_resources(&mut self) {
+        const MAX_INLINE_CANVAS_RESOURCE_BYTES: usize = 2 * 1024 * 1024;
+        let mut total_bytes: usize = 0;
+        let mut seen_entries = 0usize;
+        for node in &self.nodes {
+            if node.tag != "canvas" {
+                continue;
+            }
+            let Some(data_url) = node
+                .attr(INTERNAL_CANVAS_ATTR)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if seen_entries >= 32 {
+                break;
+            }
+            if let Some(existing) = self.resources.get(data_url) {
+                total_bytes = total_bytes.saturating_add(existing.bytes.len());
+                seen_entries += 1;
+                continue;
+            }
+            if let Ok((content_type, bytes)) = crate::images::decode_data_url(data_url)
+                && total_bytes.saturating_add(bytes.len()) <= MAX_INLINE_CANVAS_RESOURCE_BYTES
+            {
+                total_bytes = total_bytes.saturating_add(bytes.len());
+                seen_entries += 1;
+                self.resources.insert(
+                    data_url.to_owned(),
+                    ResourceData {
+                        bytes,
+                        content_type,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Discover bounded `@font-face` `(font-family, src_url)` pairs for `.woff2`/`.woff`/`.ttf`/`.otf`
 /// sources without network I/O.
 pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
+    scan_font_face_rules(css, None)
+}
+
+/// Discover up to 16 `@font-face` `(font-family, src_url)` pairs whose `unicode-range`
+/// (if specified) intersects the codepoints used in `document`. Scans all `@font-face`
+/// blocks in `css` before applying the 16-rule cap so unused script subsets (e.g.
+/// Cyrillic/Greek subsets preceding Latin in Google Fonts stylesheets) do not exhaust
+/// the cap.
+pub fn font_face_rules_for_document(css: &str, document: &Document) -> Vec<(String, String)> {
+    let codepoints = collect_document_codepoints(document);
+    scan_font_face_rules(css, Some(&codepoints))
+}
+
+fn collect_document_codepoints(document: &Document) -> Vec<u32> {
+    let mut cps = Vec::new();
+    cps.extend(document.title.chars().map(u32::from));
+    if !document.nodes.is_empty() {
+        let mut stack = vec![0usize];
+        let mut seen = vec![false; document.nodes.len()];
+        while let Some(id) = stack.pop() {
+            if id >= document.nodes.len() || seen[id] {
+                continue;
+            }
+            seen[id] = true;
+            let node = &document.nodes[id];
+            if matches!(node.tag.as_str(), "script" | "style" | "template") {
+                continue;
+            }
+            if node.tag == "#text" {
+                cps.extend(node.text.chars().map(u32::from));
+                continue;
+            }
+            if matches!(node.tag.as_str(), "input" | "textarea" | "img") {
+                for attr_name in ["value", "placeholder", "alt"] {
+                    if let Some(val) = node.attr(attr_name) {
+                        cps.extend(val.chars().map(u32::from));
+                    }
+                }
+            }
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+    }
+    let has_non_ws = cps
+        .iter()
+        .any(|&cp| char::from_u32(cp).is_some_and(|ch| !ch.is_whitespace()));
+    if !has_non_ws {
+        cps.extend(0x20u32..=0x7Eu32);
+    }
+    cps.sort_unstable();
+    cps.dedup();
+    cps
+}
+
+fn parse_unicode_ranges(value: &str) -> Vec<(u32, u32)> {
+    let mut ranges = Vec::new();
+    for raw_token in value.split(',') {
+        let token = raw_token.trim();
+        let Some(rest) = token
+            .strip_prefix("U+")
+            .or_else(|| token.strip_prefix("u+"))
+        else {
+            continue;
+        };
+        if rest.is_empty() || rest.len() > 13 {
+            continue;
+        }
+        if rest.contains('?') {
+            let hex_part = rest.trim_end_matches('?');
+            let q_count = rest.len() - hex_part.len();
+            if rest.len() > 6 || q_count == 0 || !hex_part.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue;
+            }
+            let prefix = if hex_part.is_empty() {
+                0
+            } else {
+                let Ok(v) = u32::from_str_radix(hex_part, 16) else {
+                    continue;
+                };
+                v
+            };
+            let shift = (q_count as u32) * 4;
+            let start = prefix.checked_shl(shift).unwrap_or(u32::MAX);
+            if start <= 0x10FFFF {
+                let mask = (1u32.checked_shl(shift).unwrap_or(0)).wrapping_sub(1);
+                let end = (start | mask).min(0x10FFFF);
+                ranges.push((start, end));
+            }
+        } else if let Some((lo_s, hi_s)) = rest.split_once('-') {
+            if lo_s.is_empty()
+                || lo_s.len() > 6
+                || hi_s.is_empty()
+                || hi_s.len() > 6
+                || !lo_s.bytes().all(|b| b.is_ascii_hexdigit())
+                || !hi_s.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                continue;
+            }
+            if let (Ok(lo), Ok(hi)) = (u32::from_str_radix(lo_s, 16), u32::from_str_radix(hi_s, 16))
+                && lo <= hi
+                && lo <= 0x10FFFF
+            {
+                ranges.push((lo, hi.min(0x10FFFF)));
+            }
+        } else if rest.len() <= 6
+            && rest.bytes().all(|b| b.is_ascii_hexdigit())
+            && let Ok(val) = u32::from_str_radix(rest, 16)
+            && val <= 0x10FFFF
+        {
+            ranges.push((val, val));
+        }
+    }
+    ranges
+}
+
+fn scan_font_face_rules(css: &str, codepoints: Option<&[u32]>) -> Vec<(String, String)> {
     let mut rules = Vec::new();
     let mut at = 0;
     while at < css.len() && rules.len() < 16 {
@@ -857,6 +1044,7 @@ pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
                 let block = &css[block_start..block_end];
                 let mut family = None;
                 let mut src = None;
+                let mut unicode_range: Option<String> = None;
                 for decl in block.split(';') {
                     let Some((prop, val)) = decl.split_once(':') else {
                         continue;
@@ -892,9 +1080,22 @@ pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
                                 break;
                             }
                         }
+                    } else if prop.eq_ignore_ascii_case("unicode-range") && !val.is_empty() {
+                        unicode_range = Some(val.to_owned());
                     }
                 }
-                if let (Some(f), Some(s)) = (family, src) {
+                let range_matches = match (codepoints, unicode_range.as_deref()) {
+                    (Some(cps), Some(ur)) => {
+                        let ranges = parse_unicode_ranges(ur);
+                        ranges.is_empty()
+                            || ranges.iter().any(|&(lo, hi)| {
+                                let idx = cps.partition_point(|&cp| cp < lo);
+                                cps.get(idx).is_some_and(|&cp| cp <= hi)
+                            })
+                    }
+                    _ => true,
+                };
+                if range_matches && let (Some(f), Some(s)) = (family, src) {
                     rules.push((f, s));
                 }
                 continue;
@@ -2883,6 +3084,51 @@ mod tests {
                 ("FallbackWoff".to_owned(), "/fonts/mono.woff".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn font_face_rules_for_document_filters_unicode_range_subsets_before_cap() {
+        let mut css = String::new();
+        for i in 0..10 {
+            css.push_str(&format!(
+                "@font-face {{ font-family: 'NewsSans'; src: url('/f/cyr-{i}.woff2') format('woff2'); unicode-range: U+0400-045F, U+04??; }}\n"
+            ));
+        }
+        for i in 0..5 {
+            css.push_str(&format!(
+                "@font-face {{ font-family: 'NewsSans'; src: url('/f/grk-{i}.woff2') format('woff2'); unicode-range: u+0370-03FF, U+1F00; }}\n"
+            ));
+        }
+        css.push_str(
+            "@font-face { font-family: 'NewsSans'; src: url('/f/latin-reg.woff2') format('woff2'); unicode-range: U+0000-00FF; }\n\
+             @font-face { font-family: 'NewsSans'; src: url('/f/latin-bold.woff2') format('woff2'); unicode-range: U+00??; }\n\
+             @font-face { font-family: 'NewsDisplay'; src: url('/f/display-latin.woff2') format('woff2'); unicode-range: U+0041-005A, U+0061-007A; }\n",
+        );
+        // Legacy unfiltered API still caps at first 16 rules.
+        assert_eq!(font_face_rules(&css).len(), 16);
+
+        let doc = parse(
+            "<!doctype html><html><head><title>Google News</title></head><body><h1>Top headlines</h1></body></html>",
+            "https://news.example.org/",
+        );
+        assert_eq!(
+            font_face_rules_for_document(&css, &doc),
+            vec![
+                ("NewsSans".to_owned(), "/f/latin-reg.woff2".to_owned()),
+                ("NewsSans".to_owned(), "/f/latin-bold.woff2".to_owned()),
+                (
+                    "NewsDisplay".to_owned(),
+                    "/f/display-latin.woff2".to_owned()
+                ),
+            ]
+        );
+
+        // Blank skeleton document seeds ASCII 0x20..=0x7E so Latin fallback subsets still load.
+        let skeleton = parse(
+            "<!doctype html><html><body></body></html>",
+            "https://news.example.org/",
+        );
+        assert_eq!(font_face_rules_for_document(&css, &skeleton).len(), 3);
     }
 
     #[test]

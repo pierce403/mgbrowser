@@ -68,13 +68,23 @@ pub struct CookieSummary {
     pub ttl_secs: Option<u64>,
 }
 
-/// Shared, memory-only browser session. Clones share the same bounded cookie jar.
+/// Host-supplied persistence hook for `window.localStorage` (`mg-chassis` never imports `std::fs`).
+pub trait LocalStoragePersistence: Send + Sync {
+    fn save(&self, snapshot: &BTreeMap<String, Vec<(String, String)>>);
+    fn clear(&self);
+}
+
+pub type LocalStorageMap = BTreeMap<String, Vec<(String, String)>>;
+
+/// Shared, memory-only browser session (with optional host-supplied `localStorage` persistence).
+/// Clones share the same bounded cookie jar and origin-partitioned `localStorage`.
 #[derive(Clone, Default)]
 pub struct Session {
     cookies: Arc<Mutex<CookieJar>>,
     exchanges: Arc<Mutex<VecDeque<ExchangeRecord>>>,
     disable_cache: Arc<AtomicBool>,
-    local_storage: Arc<Mutex<BTreeMap<String, Vec<(String, String)>>>>,
+    local_storage: Arc<Mutex<LocalStorageMap>>,
+    local_storage_persistence: Arc<Mutex<Option<Arc<dyn LocalStoragePersistence>>>>,
 }
 
 /// Automatic resource authority, separate from top-level navigation and updates.
@@ -174,9 +184,79 @@ impl Session {
             .collect()
     }
 
+    pub fn set_storage_persistence(&self, persistence: Option<Arc<dyn LocalStoragePersistence>>) {
+        if let Ok(mut slot) = self.local_storage_persistence.lock() {
+            *slot = persistence;
+        }
+    }
+
+    pub fn load_local_storage_snapshot(&self, snapshot: BTreeMap<String, Vec<(String, String)>>) {
+        const MAX_ORIGINS: usize = 256;
+        const MAX_ORIGIN_BYTES: usize = 64 * 1024;
+        const MAX_TOTAL_BYTES: usize = 512 * 1024;
+        let mut bounded: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        let mut total_bytes = 0usize;
+        for (origin, items) in snapshot {
+            if bounded.len() >= MAX_ORIGINS {
+                break;
+            }
+            let Some(canonical) = storage_origin_key(&origin) else {
+                continue;
+            };
+            if canonical != origin {
+                continue;
+            }
+            let mut origin_bytes = 0usize;
+            let mut clean_items: Vec<(String, String)> = Vec::new();
+            for (k, v) in items {
+                if clean_items.len() >= 1024 {
+                    break;
+                }
+                let pair_bytes = k.len().saturating_add(v.len());
+                if origin_bytes.saturating_add(pair_bytes) > MAX_ORIGIN_BYTES
+                    || total_bytes.saturating_add(pair_bytes) > MAX_TOTAL_BYTES
+                {
+                    break;
+                }
+                if let Some((_, existing)) = clean_items.iter_mut().find(|(ek, _)| *ek == k) {
+                    total_bytes = total_bytes.saturating_sub(existing.len());
+                    origin_bytes = origin_bytes.saturating_sub(existing.len());
+                    *existing = v;
+                    origin_bytes = origin_bytes.saturating_add(existing.len());
+                    total_bytes = total_bytes.saturating_add(existing.len());
+                } else {
+                    origin_bytes = origin_bytes.saturating_add(pair_bytes);
+                    total_bytes = total_bytes.saturating_add(pair_bytes);
+                    clean_items.push((k, v));
+                }
+            }
+            if !clean_items.is_empty() {
+                bounded.insert(canonical, clean_items);
+            }
+        }
+        if let Ok(mut map) = self.local_storage.lock() {
+            *map = bounded;
+        }
+    }
+
+    pub fn local_storage_snapshot(&self) -> BTreeMap<String, Vec<(String, String)>> {
+        self.local_storage
+            .lock()
+            .map(|map| map.clone())
+            .unwrap_or_default()
+    }
+
     pub fn clear_local_storage(&self) {
         if let Ok(mut map) = self.local_storage.lock() {
             map.clear();
+        }
+        let persistence = self
+            .local_storage_persistence
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(p) = persistence {
+            p.clear();
         }
     }
 
@@ -198,16 +278,27 @@ impl Session {
         let Some(origin) = storage_origin_key(url) else {
             return;
         };
-        let Ok(mut map) = self.local_storage.lock() else {
-            return;
+        let snapshot = {
+            let Ok(mut map) = self.local_storage.lock() else {
+                return;
+            };
+            if !map.contains_key(&origin) && map.len() >= 256 {
+                return;
+            }
+            let entries = map.entry(origin.clone()).or_default();
+            apply_storage_ops(entries, ops);
+            if entries.is_empty() {
+                map.remove(&origin);
+            }
+            map.clone()
         };
-        if !map.contains_key(&origin) && map.len() >= 256 {
-            return;
-        }
-        let entries = map.entry(origin.clone()).or_default();
-        apply_storage_ops(entries, ops);
-        if entries.is_empty() {
-            map.remove(&origin);
+        let persistence = self
+            .local_storage_persistence
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(p) = persistence {
+            p.save(&snapshot);
         }
     }
 

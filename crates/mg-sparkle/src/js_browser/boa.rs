@@ -37,17 +37,20 @@ use std::{
 };
 
 mod automation;
+mod canvas;
 mod console;
 mod cssom;
 mod dom_events;
 mod dom_exception;
 mod dom_ops;
+mod esm;
 mod fetch_xhr;
 mod geometry_style;
 #[cfg(test)]
 mod lifecycle_tests;
 mod message_clone;
 mod observer;
+mod observers_wc;
 mod selectors;
 mod web_apis;
 mod window_messages;
@@ -363,6 +366,9 @@ struct State {
     main_event_prototypes: Option<dom_events::EventPrototypes>,
     main_fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
     isolated_worlds: Vec<IsolatedWorld>,
+    canvas: canvas::CanvasStore,
+    esm: esm::EsmState,
+    observers_wc: observers_wc::ObserversWcState,
 }
 type Shared = Gc<GcRefCell<State>>;
 
@@ -377,6 +383,7 @@ impl State {
             Instant::now()
         }
     }
+    #[allow(clippy::type_complexity)]
     fn take_work(
         &mut self,
     ) -> (
@@ -390,10 +397,13 @@ impl State {
         Vec<fetch_xhr::AbortSignalRecord>,
         Vec<fetch_xhr::XhrRecord>,
         Vec<IsolatedWorld>,
+        canvas::CanvasStore,
     ) {
         self.armed_wake = None;
         self.console.clear_roots();
         self.pending_xhr_delivery = None;
+        self.esm.clear();
+        self.observers_wc.clear();
         (
             std::mem::take(&mut self.timers),
             std::mem::take(&mut self.rejections),
@@ -405,6 +415,7 @@ impl State {
             std::mem::take(&mut self.abort_signals),
             std::mem::take(&mut self.xhr_instances),
             std::mem::take(&mut self.isolated_worlds),
+            std::mem::take(&mut self.canvas),
         )
     }
 }
@@ -619,6 +630,8 @@ struct PageSource {
     node: usize,
     external: bool,
     deferred: bool,
+    is_module: bool,
+    module_url: String,
     source: String,
 }
 
@@ -831,21 +844,31 @@ fn wrap_all_payloads(
             return Ok(object);
         }
     }
-    let (realm, finalized, constructor, brands) = {
+    let (realm, finalized, constructor, brands, ce_proto) = {
         let mut data = shared.borrow_mut();
         data.host
             .charge(256 + handle.len() + std::mem::size_of::<Option<MessagePayload>>())
             .map_err(failure)?;
         data.wrappers_created += 1;
+        let ce_proto = if active_world == 0
+            && let Some(nid) = handle
+                .strip_prefix("node:")
+                .and_then(|s| s.parse::<usize>().ok())
+        {
+            observers_wc::upgraded_prototype(&data, nid)
+        } else {
+            None
+        };
         (
             data.realm,
             data.finalized.clone(),
             data.weak_constructor.clone(),
             data.brands.clone(),
+            ce_proto,
         )
     };
     let target = JsObject::from_proto_and_data(
-        context.intrinsics().constructors().object().prototype(),
+        ce_proto.unwrap_or_else(|| context.intrinsics().constructors().object().prototype()),
         Brand {
             handle: handle.into(),
             realm,
@@ -906,6 +929,8 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
         .or_else(|| web_apis::method_metadata(name))
         .or_else(|| geometry_style::method_metadata(name))
         .or_else(|| fetch_xhr::method_metadata(name))
+        .or_else(|| canvas::method_metadata(name))
+        .or_else(|| observers_wc::method_metadata(name))
         .unwrap_or((name, 1));
     let function: JsObject = FunctionObjectBuilder::new(
         context.realm(),
@@ -1156,12 +1181,50 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     }
     if handle.starts_with("node:") && super::bool_attr_name(&name).is_some() {
         let flag = args[2].to_boolean();
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        data.host
-            .set(&handle, &name, Value::Bool(flag))
-            .map_err(failure)?;
-        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        let attr_name = super::bool_attr_name(&name).unwrap_or("");
+        let mutated = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            let track = observers_wc::has_any_interest(&data);
+            let nid_opt = if track {
+                data.host.node(&handle).ok()
+            } else {
+                None
+            };
+            let old_val = nid_opt.and_then(|nid| {
+                data.host
+                    .document
+                    .nodes
+                    .get(nid)?
+                    .attr(attr_name)
+                    .map(str::to_owned)
+            });
+            data.host
+                .set(&handle, &name, Value::Bool(flag))
+                .map_err(failure)?;
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            if let Some(nid) = nid_opt {
+                let new_val = data
+                    .host
+                    .document
+                    .nodes
+                    .get(nid)
+                    .and_then(|n| n.attr(attr_name).map(str::to_owned));
+                if old_val != new_val {
+                    observers_wc::record_attribute_mutation(
+                        &mut data, nid, attr_name, old_val, new_val,
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if mutated {
+            observers_wc::after_dom_mutation(context)?;
+        }
     } else {
         let is_string = state(context)
             .borrow()
@@ -1203,6 +1266,30 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                 };
                 let prop_key = PropertyKey::from(JsString::from(name.as_str()));
                 if !holder.has_own_property(prop_key.clone(), context)? {
+                    let mut cur_proto = holder.borrow().prototype();
+                    for _ in 0..32 {
+                        let Some(p) = cur_proto else { break };
+                        let (desc_opt, next_proto) = {
+                            let borrowed = p.borrow();
+                            (borrowed.properties().get(&prop_key), borrowed.prototype())
+                        };
+                        if let Some(desc) = desc_opt {
+                            if desc.is_accessor_descriptor() {
+                                let Some(setter) = desc.set().and_then(JsValue::as_callable) else {
+                                    return Ok(false.into());
+                                };
+                                let recv_val =
+                                    args.get(3).cloned().unwrap_or_else(|| args[0].clone());
+                                setter.call(&recv_val, std::slice::from_ref(&args[2]), context)?;
+                                return Ok(true.into());
+                            }
+                            if !desc.writable().unwrap_or(true) {
+                                return Ok(false.into());
+                            }
+                            break;
+                        }
+                        cur_proto = next_proto;
+                    }
                     state(context)
                         .borrow_mut()
                         .host
@@ -1226,12 +1313,127 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
         }
         let text = utf8(&args[2], context)?;
         modern::check_context(context)?;
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        data.host
-            .set(&handle, &name, Value::text(&text))
-            .map_err(failure)?;
-        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        let mutated = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            let track = observers_wc::has_any_interest(&data);
+            enum PreObs {
+                None,
+                Attr {
+                    nid: usize,
+                    attr: String,
+                    old: Option<String>,
+                },
+                ReplaceText {
+                    nid: usize,
+                    old_children: Vec<usize>,
+                    was_connected: bool,
+                },
+            }
+            let pre = if !track {
+                PreObs::None
+            } else if let Some(cid) = handle
+                .strip_prefix("classlist:")
+                .and_then(|s| s.parse::<usize>().ok())
+                && name == "value"
+            {
+                let old = data
+                    .host
+                    .document
+                    .nodes
+                    .get(cid)
+                    .and_then(|n| n.attr("class").map(str::to_owned));
+                PreObs::Attr {
+                    nid: cid,
+                    attr: "class".into(),
+                    old,
+                }
+            } else if let Some(did) = handle
+                .strip_prefix("dataset:")
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                let attr = format!("data-{}", super::css_property_name(&name));
+                let old = data
+                    .host
+                    .document
+                    .nodes
+                    .get(did)
+                    .and_then(|n| n.attr(&attr).map(str::to_owned));
+                PreObs::Attr {
+                    nid: did,
+                    attr,
+                    old,
+                }
+            } else if let Ok(nid) = data.host.node(&handle)
+                && nid != 0
+            {
+                let tag = data.host.document.nodes[nid].tag.as_str();
+                if matches!(name.as_str(), "textContent" | "innerText")
+                    || (name == "value" && tag == "textarea")
+                {
+                    let old_children = data.host.document.nodes[nid].children.clone();
+                    let was_connected = dom_ops::is_connected_node(&data.host.document.nodes, nid);
+                    PreObs::ReplaceText {
+                        nid,
+                        old_children,
+                        was_connected,
+                    }
+                } else if matches!(
+                    name.as_str(),
+                    "id" | "className"
+                        | "name"
+                        | "type"
+                        | "value"
+                        | "href"
+                        | "src"
+                        | "action"
+                        | "method"
+                ) {
+                    let attr = if name == "className" {
+                        "class".into()
+                    } else {
+                        name.clone()
+                    };
+                    let old = data.host.document.nodes[nid].attr(&attr).map(str::to_owned);
+                    PreObs::Attr { nid, attr, old }
+                } else {
+                    PreObs::None
+                }
+            } else {
+                PreObs::None
+            };
+            data.host
+                .set(&handle, &name, Value::text(&text))
+                .map_err(failure)?;
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            match pre {
+                PreObs::None => false,
+                PreObs::Attr { nid, attr, old } => {
+                    observers_wc::record_attribute_mutation(&mut data, nid, &attr, old, Some(text));
+                    true
+                }
+                PreObs::ReplaceText {
+                    nid,
+                    old_children,
+                    was_connected,
+                } => {
+                    let added = data.host.document.nodes[nid].children.clone();
+                    observers_wc::record_child_list_mutation(
+                        &mut data,
+                        nid,
+                        &added,
+                        &old_children,
+                        None,
+                        None,
+                        was_connected,
+                    );
+                    true
+                }
+            }
+        };
+        if mutated {
+            observers_wc::after_dom_mutation(context)?;
+        }
     }
     Ok(true.into())
 }
@@ -1546,6 +1748,12 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
     if fetch_xhr::method_metadata(name).is_some() {
         return fetch_xhr::call(name, this, args, context);
     }
+    if canvas::method_metadata(name).is_some() {
+        return canvas::call_canvas_element_method(name, this, args, context);
+    }
+    if observers_wc::method_metadata(name).is_some() {
+        return observers_wc::call(name, this, args, context);
+    }
     if name == "host.event.preventDefault" {
         let Value::Host(handle) = receiver(this, context)? else {
             return Err(failure("Invalid Event receiver"));
@@ -1606,9 +1814,10 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
         receiver(this, context)?
     };
     modern::check_context(context)?;
-    let value = {
+    let (value, obs_mutated) = {
         let shared = state(context);
         let mut data = shared.borrow_mut();
+        let track = observers_wc::has_any_interest(&data);
         let maybe_attr_invalidation =
             if matches!(name, "host.dom.setAttribute" | "host.dom.removeAttribute") {
                 let nid = match &this {
@@ -1623,9 +1832,70 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
             } else {
                 None
             };
+        let pre_attr = if !track {
+            None
+        } else if let Some((nid, ref aname)) = maybe_attr_invalidation {
+            let lower = aname.to_ascii_lowercase();
+            let old = data
+                .host
+                .document
+                .nodes
+                .get(nid)
+                .and_then(|n| n.attr(&lower).map(str::to_owned));
+            Some((nid, lower, old))
+        } else if matches!(
+            name,
+            "host.classlist.add"
+                | "host.classlist.remove"
+                | "host.classlist.toggle"
+                | "host.classlist.replace"
+        ) && let Value::Host(ref h) = this
+            && let Some(cid) = h
+                .strip_prefix("classlist:")
+                .and_then(|s| s.parse::<usize>().ok())
+        {
+            let old = data
+                .host
+                .document
+                .nodes
+                .get(cid)
+                .and_then(|n| n.attr("class").map(str::to_owned));
+            Some((cid, "class".to_owned(), old))
+        } else {
+            None
+        };
         let v = data.host.call(name, this, converted).map_err(failure)?;
         if let Some((nid, aname)) = maybe_attr_invalidation {
             dom_events::invalidate_inline_handler(&mut data, nid, &aname);
+            if matches!(aname.to_ascii_lowercase().as_str(), "width" | "height") {
+                canvas::on_canvas_dimension_mutated(&mut data, nid).map_err(failure)?;
+            }
+        }
+        let mut did_obs = false;
+        if let Some((nid, attr_lower, old_val)) = pre_attr {
+            let new_val = data
+                .host
+                .document
+                .nodes
+                .get(nid)
+                .and_then(|n| n.attr(&attr_lower).map(str::to_owned));
+            let should_record = match name {
+                "host.dom.setAttribute" | "host.classlist.add" | "host.classlist.remove" => {
+                    new_val.is_some()
+                }
+                "host.dom.removeAttribute" => old_val.is_some(),
+                _ => old_val != new_val,
+            };
+            if should_record {
+                observers_wc::record_attribute_mutation(
+                    &mut data,
+                    nid,
+                    &attr_lower,
+                    old_val,
+                    new_val,
+                );
+                did_obs = true;
+            }
         }
         if matches!(
             name,
@@ -1638,8 +1908,11 @@ fn call(name: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> 
         ) {
             data.dom_epoch = data.dom_epoch.wrapping_add(1);
         }
-        v
+        (v, did_obs)
     };
+    if obs_mutated {
+        observers_wc::after_dom_mutation(context)?;
+    }
     from_host(value, context)
 }
 
@@ -1961,11 +2234,13 @@ impl BoaPageRealm {
         request: Request,
         observer_init: page_session::observer::ObserverInit,
     ) -> (Option<Self>, SessionReply) {
-        Self::start_with_platform(
+        Self::start_internal(
             request,
             observer_init,
             page_session::platform::PlatformInit::default(),
             fallback_crypto_seed(),
+            true,
+            false,
         )
     }
     pub fn start_with_platform(
@@ -1974,7 +2249,18 @@ impl BoaPageRealm {
         platform_init: page_session::platform::PlatformInit,
         crypto_seed: [u8; 32],
     ) -> (Option<Self>, SessionReply) {
-        Self::start_internal(request, observer_init, platform_init, crypto_seed, true)
+        let modules_enabled = matches!(
+            observer_init,
+            page_session::observer::ObserverInit::Disabled
+        );
+        Self::start_internal(
+            request,
+            observer_init,
+            platform_init,
+            crypto_seed,
+            true,
+            modules_enabled,
+        )
     }
     fn start_internal(
         request: Request,
@@ -1982,6 +2268,7 @@ impl BoaPageRealm {
         platform_init: page_session::platform::PlatformInit,
         crypto_seed: [u8; 32],
         enable_network: bool,
+        modules_enabled: bool,
     ) -> (Option<Self>, SessionReply) {
         let mut reply = Self::empty_reply();
         reply.observer = Some(page_session::observer::ObserverReply::rejected_init(
@@ -2017,7 +2304,9 @@ impl BoaPageRealm {
             url.as_str(),
             !platform_init.automation_only,
         );
-        let allocated = match request.validate_modern_external_sources(&document) {
+        let allocated = match request
+            .validate_modern_external_sources_with_modules(&document, modules_enabled)
+        {
             Ok(bytes) => bytes,
             Err(error) => {
                 reply.errors.push(error);
@@ -2034,6 +2323,59 @@ impl BoaPageRealm {
                 })
             })
         });
+        let doc_base_url = if document.base_url.is_empty() {
+            url.as_str().to_owned()
+        } else {
+            document.base_url.clone()
+        };
+        let mut esm_importmap = HashMap::new();
+        let mut esm_sources = HashMap::new();
+        if modules_enabled {
+            for (idx, n) in document.nodes.iter().enumerate() {
+                if n.tag == "script"
+                    && !inert(&document.nodes, idx)
+                    && n.attr("type")
+                        .is_some_and(|t| t.trim().eq_ignore_ascii_case("importmap"))
+                {
+                    esm_importmap = esm::parse_importmap_json(
+                        &text_content(&document.nodes, idx),
+                        &doc_base_url,
+                    );
+                    break;
+                }
+            }
+            if let Some(ext_list) = &request.external_scripts {
+                for entry in ext_list {
+                    if entry.node == usize::MAX {
+                        if let Some(prov) = &entry.provenance {
+                            esm_sources.insert(prov.response_url.clone(), entry.source.clone());
+                        }
+                    } else if let Some(n) = document.nodes.get(entry.node)
+                        && n.attr("type")
+                            .is_some_and(|t| t.trim().eq_ignore_ascii_case("module"))
+                    {
+                        let mod_url = entry
+                            .provenance
+                            .as_ref()
+                            .map(|p| p.response_url.clone())
+                            .or_else(|| {
+                                n.attr("src").and_then(|s| {
+                                    url::Url::parse(&doc_base_url)
+                                        .and_then(|b| b.join(s.trim()))
+                                        .ok()
+                                        .map(|mut u| {
+                                            u.set_fragment(None);
+                                            u.into()
+                                        })
+                                })
+                            });
+                        if let Some(u) = mod_url {
+                            esm_sources.insert(u, entry.source.clone());
+                        }
+                    }
+                }
+            }
+        }
         let mut sources = Vec::new();
         let mut deferred = Vec::new();
         let mut count = 0;
@@ -2056,15 +2398,60 @@ impl BoaPageRealm {
             ) {
                 continue;
             }
+            if modules_enabled && kind != "module" && node.attr("nomodule").is_some() {
+                continue;
+            }
             count += 1;
             if count > 32 {
                 reply.errors.push("Script count limit reached".into());
                 break;
             }
             if kind == "module" {
-                reply
-                    .errors
-                    .push("Module scripts are not implemented".into());
+                if !modules_enabled {
+                    reply
+                        .errors
+                        .push("Module scripts are not implemented".into());
+                    continue;
+                }
+                if let Some(src_attr) = node.attr("src") {
+                    if let Some(entry) = request.external_source_entry(index) {
+                        let mod_url = entry
+                            .provenance
+                            .as_ref()
+                            .map(|p| p.response_url.clone())
+                            .or_else(|| {
+                                url::Url::parse(&doc_base_url)
+                                    .and_then(|b| b.join(src_attr.trim()))
+                                    .ok()
+                                    .map(|mut u| {
+                                        u.set_fragment(None);
+                                        u.into()
+                                    })
+                            })
+                            .unwrap_or_else(|| doc_base_url.clone());
+                        deferred.push(PageSource {
+                            node: index,
+                            external: true,
+                            deferred: true,
+                            is_module: true,
+                            module_url: mod_url,
+                            source: entry.source.clone(),
+                        });
+                    } else if request.external_scripts.is_none() {
+                        reply
+                            .errors
+                            .push("External script loading is not implemented".into());
+                    }
+                } else {
+                    deferred.push(PageSource {
+                        node: index,
+                        external: false,
+                        deferred: true,
+                        is_module: true,
+                        module_url: doc_base_url.clone(),
+                        source: text_content(&document.nodes, index),
+                    });
+                }
                 continue;
             }
             if node.attr("src").is_some() {
@@ -2074,6 +2461,8 @@ impl BoaPageRealm {
                             node: index,
                             external: true,
                             deferred: true,
+                            is_module: false,
+                            module_url: String::new(),
                             source: source.to_owned(),
                         });
                     } else {
@@ -2081,6 +2470,8 @@ impl BoaPageRealm {
                             node: index,
                             external: true,
                             deferred: false,
+                            is_module: false,
+                            module_url: String::new(),
                             source: source.to_owned(),
                         });
                     }
@@ -2095,6 +2486,8 @@ impl BoaPageRealm {
                 node: index,
                 external: false,
                 deferred: false,
+                is_module: false,
+                module_url: String::new(),
                 source: text_content(&document.nodes, index),
             });
         }
@@ -2146,6 +2539,13 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
+        if modules_enabled {
+            let mut data = realm.state.borrow_mut();
+            data.esm.enabled = true;
+            data.esm.page_url = doc_base_url;
+            data.esm.importmap = esm_importmap;
+            data.esm.sources = esm_sources;
+        }
         observer::enable(&mut realm, observer_init);
         for (index, source) in sources.iter().enumerate() {
             if realm.engine.is_fatal() {
@@ -2160,13 +2560,27 @@ impl BoaPageRealm {
                     break;
                 }
             }
-            let label = if source.external {
+            let label = if source.is_module {
+                if source.external {
+                    "External module"
+                } else {
+                    "Inline module"
+                }
+            } else if source.external {
                 "External"
             } else {
                 "Inline"
             };
-            let normalized = normalize_classic_html_comments(&source.source);
-            let result = {
+            let result = if source.is_module {
+                realm.state.borrow_mut().current_script = None;
+                esm::evaluate_inline_or_root_module(
+                    &mut realm,
+                    &source.source,
+                    &source.module_url,
+                    source.external,
+                )
+            } else {
+                let normalized = normalize_classic_html_comments(&source.source);
                 let _ingress = Ingress::enter(realm.state.clone());
                 realm.state.borrow_mut().current_script = Some(source.node);
                 let res = realm.engine.evaluate_raw(&normalized);
@@ -2355,6 +2769,9 @@ impl BoaPageRealm {
             main_event_prototypes: None,
             main_fetch_xhr_prototypes: None,
             isolated_worlds: Vec::new(),
+            canvas: canvas::CanvasStore::default(),
+            esm: esm::EsmState::default(),
+            observers_wc: observers_wc::ObserversWcState::default(),
         }));
         {
             let mut data = shared.borrow_mut();
@@ -2503,6 +2920,8 @@ impl BoaPageRealm {
         }
         dom_events::register(context)?;
         dom_ops::install_globals(context)?;
+        canvas::install_globals(context)?;
+        observers_wc::register(context, is_extra_realm)?;
         web_apis::register(context)?;
         geometry_style::register(context)?;
         fetch_xhr::register(context, enable_network)?;
@@ -3648,6 +4067,9 @@ impl BoaPageRealm {
         }
         reply.boa = Some(self.engine.stats());
         let mut data = self.state.borrow_mut();
+        if reply.state == RealmState::Ready {
+            canvas::flush_dirty_canvases_to_dom(&mut data);
+        }
         match data.host.serialize(0, true) {
             Ok(_) => {
                 reply.snapshot = Some(ArenaSnapshot {
@@ -4277,7 +4699,9 @@ impl BoaPageRealm {
         }
         match command {
             page_session::platform::PlatformCommand::ViewportSync { viewport } => {
+                let old_vp = self.state.borrow().viewport;
                 self.state.borrow_mut().viewport = viewport;
+                observers_wc::on_viewport_sync(self, old_vp, viewport, &mut reply.errors);
             }
             page_session::platform::PlatformCommand::FetchComplete { response } => {
                 fetch_xhr::complete_fetch(self, response, &mut reply.errors);
@@ -4440,6 +4864,7 @@ pub fn execute(request: Request) -> super::Reply {
         page_session::observer::ObserverInit::Disabled,
         page_session::platform::PlatformInit::default(),
         fallback_crypto_seed(),
+        false,
         false,
     );
     let html = realm
