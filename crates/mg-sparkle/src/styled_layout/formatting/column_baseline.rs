@@ -109,10 +109,11 @@ impl Adapter<'_, '_, '_> {
         }
         // Match Taffy's resolution against the original definite inner width,
         // not its later intrinsic width. Percentages are auto when indefinite.
-        let resolve = |value| match value {
+        let resolve = |value: Length| match value {
             Length::Px(value) => Some(value),
             Length::Percent(value) => width.map(|width| value * width),
-            Length::Auto | Length::Calc { .. } => None,
+            Length::Calc { .. } => width.and_then(|width| value.resolve(width)),
+            Length::Auto => None,
         };
         resolve(style.layout.inset[3])
             .or_else(|| resolve(style.layout.inset[1]).map(|value| -value))

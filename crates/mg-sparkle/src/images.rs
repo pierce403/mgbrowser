@@ -257,6 +257,7 @@ pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
         .physical_edge(i64::from(y) + i64::from(image.height))
         .clamp(i64::from(clip_top), i64::from(clip_bottom));
     let scale = f64::from(canvas.scale());
+    let has_rclip = canvas.has_rounded_clip();
     for sy in top..bottom {
         let source_y = ((sy as f64 + 0.5) / scale - f64::from(y))
             .floor()
@@ -267,7 +268,14 @@ pub fn blit(canvas: &mut Canvas, image: &RasterImage, x: i32, y: i32) {
                 .clamp(0.0, f64::from(image.width - 1)) as usize;
             let source = (source_y * image.width as usize + source_x) * 4;
             let rgba = &image.pixels[source..source + 4];
-            let alpha = u32::from(rgba[3]);
+            let mut alpha = u32::from(rgba[3]);
+            if has_rclip {
+                let rcov = u32::from(canvas.rounded_clip_coverage(sx as u32, sy as u32));
+                if rcov == 0 {
+                    continue;
+                }
+                alpha = (alpha * rcov + 127) / 255;
+            }
             let target = &mut canvas.pixels[sy as usize * canvas.width as usize + sx as usize];
             let blend = |channel: usize, shift: u32| {
                 (u32::from(rgba[channel]) * alpha

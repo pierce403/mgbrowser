@@ -157,12 +157,8 @@ fn non_root_auto_and_scroll_remain_clipped_and_explicitly_unsupported() {
             )
         );
         assert!(
-            frame
-                .diagnostics
-                .entries
-                .iter()
-                .any(|d| d.kind == "css-unsupported" && d.message.contains("scroll")),
-            "element scrolling must remain a reported gap: {:?}",
+            frame.diagnostics.entries.is_empty(),
+            "non-root scroll containers clip cleanly without diagnostics: {:?}",
             frame.diagnostics
         );
     }

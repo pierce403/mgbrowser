@@ -1,8 +1,7 @@
-//! Bounded out-of-flow boxes after normal layout. This is not the complete CSS
-//! stacking-context or hypothetical static-position algorithm.
+//! Bounded out-of-flow boxes after normal layout.
 
 use super::*;
-use crate::style::{BoxSizing, IntrinsicSize, Position};
+use crate::style::{BoxSizing, IntrinsicSize, Position, Visibility};
 
 const MAX_POSITIONED: usize = 512;
 
@@ -39,6 +38,40 @@ pub(super) fn is_inset_zero_passthrough(layout: &Layout<'_, '_>, id: usize) -> b
         })
 }
 
+fn is_collapsed_ancestor(layout: &Layout<'_, '_>, cursor: usize) -> bool {
+    let style = &layout.styles[cursor];
+    if style.visibility != Visibility::Collapse {
+        return false;
+    }
+    if matches!(
+        style.display,
+        Display::TableRow
+            | Display::TableRowGroup
+            | Display::TableHeaderGroup
+            | Display::TableFooterGroup
+            | Display::TableColumn
+            | Display::TableColumnGroup
+    ) {
+        return true;
+    }
+    if cursor != 0 && !matches!(style.layout.position, Position::Absolute | Position::Fixed) {
+        let mut p = layout.document.nodes[cursor].parent;
+        for _ in 0..MAX_DEPTH {
+            if p == 0 || layout.styles[p].display != Display::Contents {
+                break;
+            }
+            p = layout.document.nodes[p].parent;
+        }
+        if matches!(
+            layout.styles[p].display,
+            Display::Flex | Display::InlineFlex
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn run(layout: &mut Layout<'_, '_>) {
     if layout.exhausted {
         return;
@@ -70,7 +103,9 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
                 return;
             }
             let style = &layout.styles[cursor];
-            hidden |= style.display == Display::None || !style.visible || style.opacity <= 0.0;
+            hidden |= style.display == Display::None
+                || style.opacity <= 0.0
+                || (cursor != id && is_collapsed_ancestor(layout, cursor));
             if cursor != id && !is_inset_zero_passthrough(layout, cursor) {
                 fixed_ancestor |= style.layout.position == Position::Fixed;
                 if containing.is_none() && style.layout.position != Position::Static {
@@ -143,7 +178,7 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         }
     }
     // Ancestors must provide final geometry before descendants. Among ready
-    // nodes, numeric z-index and then DOM order decide paint and hit order.
+    // nodes, numeric z-index and then DOM order decide initial emission order.
     for _ in 0..entries.len() {
         let mut selected = None;
         for (index, entry) in entries.iter().enumerate() {
@@ -187,6 +222,28 @@ fn border(
         layout.fail(id, missing);
     }
     rect
+}
+
+fn resolve_axis_align(
+    align: formatting::StaticAxisAlign,
+    safety: Option<formatting::StaticAxisAlign>,
+    start_edge: f32,
+    extent: f32,
+    size: f32,
+    margin_start: f32,
+    margin_end: f32,
+) -> f32 {
+    let outer = size + margin_start + margin_end;
+    let effective = if outer > extent {
+        safety.unwrap_or(align)
+    } else {
+        align
+    };
+    match effective {
+        formatting::StaticAxisAlign::Start => start_edge + margin_start,
+        formatting::StaticAxisAlign::Center => start_edge + (extent - outer) / 2.0 + margin_start,
+        formatting::StaticAxisAlign::End => start_edge + extent - size - margin_end,
+    }
 }
 
 fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: &Entry) -> bool {
@@ -257,6 +314,27 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             .unwrap_or(edges);
         value.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT)
     };
+    let explicit_h = style.height.resolve(containing.h);
+    let stretch_h = top.zip(bottom);
+    let height_is_definite = explicit_h.is_some() || stretch_h.is_some();
+    let definite_border_h = height_is_definite.then(|| {
+        let raw_h = if let Some(h) = explicit_h {
+            sizing(h, vertical)
+        } else {
+            let (t, b) = stretch_h.unwrap();
+            (containing.h - t - b - margin[0] - margin[2]).max(vertical)
+        };
+        constrain(
+            raw_h,
+            style.min_height,
+            style.max_height,
+            containing.h,
+            vertical,
+        )
+    });
+    let is_replaced = layout.is_replaced(id);
+    let is_image_or_svg = matches!(layout.document.nodes[id].tag.as_str(), "img" | "svg");
+
     let width = if let Some(width) = style.width.resolve(containing.w) {
         sizing(width, horizontal)
     } else if !style.layout.width_fit_content
@@ -264,6 +342,42 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         && let (Some(left), Some(right)) = (left, right)
     {
         (containing.w - left - right - margin[1] - margin[3]).max(horizontal)
+    } else if !style.layout.width_fit_content
+        && !style.layout.width_max_content
+        && let Some(used_h) = definite_border_h
+        && (style.layout.aspect_ratio.is_some() || (is_replaced && is_image_or_svg))
+    {
+        if is_replaced {
+            let Some((nat_w, nat_h)) = layout.measure_natural_replaced(id, entry.depth + 1) else {
+                layout.fail(id, "positioned replaced content measurement rejected");
+                return false;
+            };
+            let nat_ratio = (nat_w > 0.0 && nat_h > 0.0).then_some(nat_w / nat_h);
+            let ratio = if style.layout.aspect_ratio_auto {
+                nat_ratio.or(style.layout.aspect_ratio)
+            } else {
+                style.layout.aspect_ratio.or(nat_ratio)
+            };
+            if let Some(r) = ratio {
+                if !style.layout.aspect_ratio_auto
+                    && style.layout.aspect_ratio.is_some()
+                    && style.layout.box_sizing == BoxSizing::BorderBox
+                {
+                    (used_h * r).max(horizontal)
+                } else {
+                    (used_h - vertical).max(0.0) * r + horizontal
+                }
+            } else {
+                nat_w + horizontal
+            }
+        } else {
+            let r = style.layout.aspect_ratio.unwrap();
+            if style.layout.box_sizing == BoxSizing::BorderBox {
+                (used_h * r).max(horizontal)
+            } else {
+                (used_h - vertical).max(0.0) * r + horizontal
+            }
+        }
     } else {
         let intrinsic = if style.layout.width_fit_content || style.layout.width_max_content {
             layout.measure_fit_content_intrinsic(
@@ -353,38 +467,87 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         width = width.max(content_minimum + horizontal).min(MAX_EXTENT);
     }
     let content_width = (width - horizontal).max(0.0);
-    let height = if let Some(height) = style.height.resolve(containing.h) {
-        sizing(height, vertical)
-    } else if let (Some(top), Some(bottom)) = (top, bottom) {
-        (containing.h - top - bottom - margin[0] - margin[2]).max(vertical)
-    } else if layout.is_replaced(id) {
+    let height = if let Some(used_h) = definite_border_h {
+        used_h
+    } else if is_replaced {
         let Some((natural_width, natural_height)) =
             layout.measure_natural_replaced(id, entry.depth + 1)
         else {
             layout.fail(id, "positioned replaced content measurement rejected");
             return false;
         };
-        let height = if layout.document.nodes[id].tag == "img" && natural_width > 0.0 {
-            natural_height * content_width / natural_width
+        let nat_ratio = (is_image_or_svg && natural_width > 0.0 && natural_height > 0.0)
+            .then_some(natural_width / natural_height);
+        let ratio = if style.layout.aspect_ratio_auto {
+            nat_ratio.or(style.layout.aspect_ratio)
         } else {
-            natural_height
+            style.layout.aspect_ratio.or(nat_ratio)
         };
-        height + vertical
+        let raw_h = if let Some(r) = ratio {
+            if !style.layout.aspect_ratio_auto
+                && style.layout.aspect_ratio.is_some()
+                && style.layout.box_sizing == BoxSizing::BorderBox
+            {
+                (width / r).max(vertical)
+            } else {
+                content_width / r + vertical
+            }
+        } else if layout.document.nodes[id].tag == "img" && natural_width > 0.0 {
+            natural_height * content_width / natural_width + vertical
+        } else {
+            natural_height + vertical
+        };
+        constrain(
+            raw_h,
+            style.min_height,
+            style.max_height,
+            containing.h,
+            vertical,
+        )
+    } else if let Some(ar) = style.layout.aspect_ratio {
+        let ar_border_h = if style.layout.box_sizing == BoxSizing::BorderBox {
+            (width / ar).max(vertical)
+        } else {
+            content_width / ar + vertical
+        };
+        let auto_min_border_h = if style.min_height == Length::Auto
+            && style.layout.overflow == [crate::style::Overflow::Visible; 2]
+        {
+            let Some(ch) = layout.measure_content_height(id, content_width, None, entry.depth + 1)
+            else {
+                layout.fail(id, "positioned content height measurement rejected");
+                return false;
+            };
+            let max_b = style
+                .max_height
+                .resolve(containing.h)
+                .map(|n| sizing(n, vertical))
+                .unwrap_or(MAX_EXTENT);
+            (ch + vertical).min(max_b)
+        } else {
+            vertical
+        };
+        constrain(
+            ar_border_h.max(auto_min_border_h),
+            style.min_height,
+            style.max_height,
+            containing.h,
+            vertical,
+        )
     } else {
         let Some(height) = layout.measure_content_height(id, content_width, None, entry.depth + 1)
         else {
             layout.fail(id, "positioned content height measurement rejected");
             return false;
         };
-        height + vertical
+        constrain(
+            height + vertical,
+            style.min_height,
+            style.max_height,
+            containing.h,
+            vertical,
+        )
     };
-    let height = constrain(
-        height,
-        style.min_height,
-        style.max_height,
-        containing.h,
-        vertical,
-    );
     // Auto margins only consume free space when both insets are definite.
     for (start, end, before, after, extent, size) in [
         (3, 1, left, right, containing.w, width),
@@ -403,22 +566,74 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             }
         }
     }
-    let static_pos = if style.layout.position == Position::Absolute
-        && style.layout.z_index.is_none()
-        && is_block(style.display)
-    {
-        layout.scene.static_positions.get(&id).copied()
+    let fixed_scroll = if fixed {
+        layout.viewport.scroll as f32
     } else {
-        None
+        0.0
     };
-    let x = left
-        .map(|n| containing.x + n + margin[3])
-        .or_else(|| right.map(|n| containing.x + containing.w - n - width - margin[1]))
-        .unwrap_or_else(|| static_pos.map_or(containing.x, |(sx, _)| sx) + margin[3]);
+    let abspos_align = layout
+        .scene
+        .abspos_alignments
+        .get(&id)
+        .copied()
+        .map(|mut a| {
+            a.rect.y += fixed_scroll;
+            a
+        });
+    let static_pos = layout
+        .scene
+        .static_positions
+        .get(&id)
+        .copied()
+        .map(|(sx, sy, rtl)| (sx, sy + fixed_scroll, rtl));
+    let x =
+        left.map(|n| containing.x + n + margin[3])
+            .or_else(|| right.map(|n| containing.x + containing.w - n - width - margin[1]))
+            .unwrap_or_else(|| {
+                if let Some(align) = abspos_align {
+                    resolve_axis_align(
+                        align.h_align,
+                        align.h_safe_fallback,
+                        align.rect.x,
+                        align.rect.w,
+                        width,
+                        margin[3],
+                        margin[1],
+                    )
+                } else if let Some((sx, _, is_rtl)) = static_pos {
+                    if is_rtl {
+                        sx - width - margin[1]
+                    } else {
+                        sx + margin[3]
+                    }
+                } else if entry.containing.is_some_and(|cb| {
+                    layout.styles[cb].direction == crate::style::TextDirection::Rtl
+                }) {
+                    containing.x + containing.w - width - margin[1]
+                } else {
+                    containing.x + margin[3]
+                }
+            });
     let y = top
         .map(|n| containing.y + n + margin[0])
         .or_else(|| bottom.map(|n| containing.y + containing.h - n - height - margin[2]))
-        .unwrap_or_else(|| static_pos.map_or(containing.y, |(_, sy)| sy) + margin[0]);
+        .unwrap_or_else(|| {
+            if let Some(align) = abspos_align {
+                resolve_axis_align(
+                    align.v_align,
+                    align.v_safe_fallback,
+                    align.rect.y,
+                    align.rect.h,
+                    height,
+                    margin[0],
+                    margin[2],
+                )
+            } else if let Some((_, sy, _)) = static_pos {
+                sy + margin[0]
+            } else {
+                containing.y + margin[0]
+            }
+        });
     if ![x, y, width, height]
         .into_iter()
         .all(|n| n.is_finite() && n.abs() <= MAX_EXTENT)
@@ -433,6 +648,7 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         h: height,
     };
     let mut clip: Option<Rect> = None;
+    let mut rounded_clips: Vec<crate::paint::RoundedRect> = Vec::new();
     if !fixed {
         let mut ancestor = layout.document.nodes[id].parent;
         for depth in 0..=MAX_DEPTH {
@@ -459,6 +675,9 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
                 if let Some(next) = layout.clip_for(ancestor, r) {
                     clip = Some(clip.map_or(next, |r| r.intersect(next)));
                 }
+                if let Some(rr) = layout.rounded_clip_for(ancestor, r) {
+                    rounded_clips.push(rr);
+                }
             }
             if ancestor == 0 || ends_clipping {
                 break;
@@ -467,9 +686,8 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         }
     }
     let mark = layout.scene.mark();
-    let definite_height = (style.height.resolve(containing.h).is_some()
-        || (top.is_some() && bottom.is_some()))
-    .then_some((height - vertical).max(0.0));
+    let definite_height = (height_is_definite || style.layout.aspect_ratio.is_some())
+        .then_some((height - vertical).max(0.0));
     layout.paint_allocated(id, rect, padding, definite_height, entry.depth + 1);
     for &(node, r) in &layout.scene.borders[mark.3..] {
         if let Some(slot) = border_boxes.get_mut(node) {
@@ -481,6 +699,9 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
     }
     if let Some(clip) = clip {
         layout.scene.clip(mark, clip);
+    }
+    for rr in rounded_clips {
+        layout.scene.clip_rounded(mark, rr);
     }
     if layout.exhausted {
         layout.fail(id, "positioned paint or descendant layout rejected");

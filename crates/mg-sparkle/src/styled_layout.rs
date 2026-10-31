@@ -94,6 +94,7 @@ fn background_box(
 #[derive(Clone)]
 enum Paint {
     Background(Rect, usize, [f32; 4]),
+    RoundedDecoration(Rect, usize, [f32; 4]),
     Rect(Rect, Color),
     Text(Rect, usize, String),
     Image(Rect, ImageSource, Option<(usize, String)>),
@@ -110,11 +111,44 @@ impl Paint {
     fn rect_mut(&mut self) -> &mut Rect {
         match self {
             Self::Background(r, ..)
+            | Self::RoundedDecoration(r, ..)
             | Self::Rect(r, _)
             | Self::Text(r, ..)
             | Self::Image(r, ..)
             | Self::Control(r, ..) => r,
         }
+    }
+}
+
+fn has_nonzero_border_radius(s: &ComputedStyle) -> bool {
+    s.border_radii.iter().any(|&(rx, ry)| {
+        !matches!(rx, Length::Px(0.0) | Length::Percent(0.0))
+            || !matches!(ry, Length::Px(0.0) | Length::Percent(0.0))
+    })
+}
+
+fn resolve_rounded_rect(s: &ComputedStyle, r: Rect) -> crate::paint::RoundedRect {
+    let raw = s.border_radii.map(|(rx, ry)| {
+        (
+            rx.resolve(r.w).unwrap_or(0.0),
+            ry.resolve(r.h).unwrap_or(0.0),
+        )
+    });
+    crate::paint::RoundedRect::from_raw(r.x, r.y, r.w, r.h, raw)
+}
+
+fn rounded_background_box(
+    outer: crate::paint::RoundedRect,
+    border: [f32; 4],
+    padding: [f32; 4],
+    kind: crate::style::BackgroundBox,
+) -> Option<crate::paint::RoundedRect> {
+    use crate::style::BackgroundBox;
+    match kind {
+        BackgroundBox::Border => Some(outer),
+        BackgroundBox::Padding => Some(outer.inset(border)),
+        BackgroundBox::Content => Some(outer.inset(padding)),
+        BackgroundBox::Unsupported => None,
     }
 }
 
@@ -150,6 +184,8 @@ struct Scene {
     /// Parallel, bounded clip rectangles in document coordinates. None retains
     /// the historical full-viewport paint path without rounding changes.
     clips: Vec<Option<Rect>>,
+    /// Parallel rounded clip shapes in document coordinates (empty when rectangular).
+    rounded_clips: Vec<Vec<crate::paint::RoundedRect>>,
     boxes: Vec<LayoutBox>,
     /// Fixed-position subtrees keep Inspector geometry without increasing the
     /// page's scroll range. Parallel to boxes, changed only for emitted ranges.
@@ -160,8 +196,17 @@ struct Scene {
     /// Unclipped, fractional structural border boxes for containing blocks.
     /// Kept separate from clipped Inspector coverage and shifted with children.
     borders: Vec<(usize, Rect)>,
-    /// Hypothetical normal-flow static positions for out-of-flow boxes.
-    static_positions: HashMap<usize, (f32, f32)>,
+    /// Hypothetical normal-flow static positions for out-of-flow boxes `(x, y, is_rtl)`.
+    static_positions: HashMap<usize, (f32, f32, bool)>,
+    /// Hypothetical static alignment rectangles for abspos children of flex/grid containers.
+    abspos_alignments: HashMap<usize, formatting::AbsposStaticAlignment>,
+    /// Emitted ranges for sticky-positioned boxes `(id, start, end, border_rect)`.
+    sticky_ranges: Vec<(
+        usize,
+        (usize, usize, usize, usize),
+        (usize, usize, usize, usize),
+        Rect,
+    )>,
 }
 
 impl Scene {
@@ -174,24 +219,39 @@ impl Scene {
         )
     }
     fn shift(&mut self, start: (usize, usize, usize, usize), dx: f32, dy: f32) {
-        for op in &mut self.paints[start.0..] {
+        self.shift_range(start, self.mark(), dx, dy);
+    }
+    fn shift_range(
+        &mut self,
+        start: (usize, usize, usize, usize),
+        end: (usize, usize, usize, usize),
+        dx: f32,
+        dy: f32,
+    ) {
+        for op in &mut self.paints[start.0..end.0] {
             let r = op.rect_mut();
             r.x += dx;
             r.y += dy;
         }
-        for clip in self.clips[start.0..].iter_mut().flatten() {
+        for clip in self.clips[start.0..end.0].iter_mut().flatten() {
             clip.x += dx;
             clip.y += dy;
         }
-        for b in &mut self.boxes[start.1..] {
+        for rrs in &mut self.rounded_clips[start.0..end.0] {
+            for rr in rrs {
+                rr.x += dx;
+                rr.y += dy;
+            }
+        }
+        for b in &mut self.boxes[start.1..end.1] {
             b.x += dx.round() as i32;
             b.y += dy.round() as i32;
         }
-        for (r, _) in &mut self.hits[start.2..] {
+        for (r, _) in &mut self.hits[start.2..end.2] {
             r.x += dx;
             r.y += dy;
         }
-        for (_, r) in &mut self.borders[start.3..] {
+        for (_, r) in &mut self.borders[start.3..end.3] {
             r.x += dx;
             r.y += dy;
         }
@@ -212,6 +272,7 @@ impl Scene {
         if self.paints.len() < MAX_OPS {
             self.paints.push(op);
             self.clips.push(None);
+            self.rounded_clips.push(Vec::new());
             self.paint_nodes.push(node);
         }
     }
@@ -223,6 +284,12 @@ impl Scene {
     }
     fn clip(&mut self, start: (usize, usize, usize, usize), clip: Rect) {
         self.clip_range(start, self.mark(), clip);
+    }
+    fn clip_rounded(&mut self, start: (usize, usize, usize, usize), rr: crate::paint::RoundedRect) {
+        let end = self.mark();
+        for rrs in &mut self.rounded_clips[start.0..end.0] {
+            rrs.push(rr);
+        }
     }
     fn clip_range(
         &mut self,
@@ -270,6 +337,15 @@ struct Intrinsic {
     max: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PlacedFloat {
+    side: crate::style::FloatSide,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
 #[derive(Clone)]
 enum Token {
     Word {
@@ -284,8 +360,9 @@ enum Token {
     Gap(f32),
     Box(usize),
     Block(usize),
+    Float(usize),
     StaticPos(usize),
-    Break,
+    Break(usize),
 }
 
 #[derive(Clone)]
@@ -295,8 +372,89 @@ struct Cell {
     span: usize,
 }
 struct Table {
-    rows: Vec<(Option<usize>, Vec<Cell>)>,
+    rows: Vec<(Option<usize>, bool, Vec<Cell>)>,
+    collapsed_cols: Vec<bool>,
     columns: usize,
+}
+
+fn materialize_pseudo_elements(
+    document: &Document,
+    styles: &[ComputedStyle],
+) -> Result<Option<(Document, Arc<[ComputedStyle]>)>, LayoutFailure> {
+    let orig_len = document.nodes.len();
+    let has_any = (0..orig_len).any(|id| {
+        styles[id].display != Display::None
+            && !matches!(
+                document.nodes[id].tag.as_str(),
+                "#text" | "img" | "svg" | "input" | "textarea" | "br"
+            )
+            && (styles[id].before.is_some() || styles[id].after.is_some())
+    });
+    if !has_any {
+        return Ok(None);
+    }
+    let mut doc = document.clone();
+    let mut all_styles: Vec<ComputedStyle> = styles.to_vec();
+    for id in 0..orig_len {
+        if all_styles[id].display == Display::None
+            || matches!(
+                doc.nodes[id].tag.as_str(),
+                "#text" | "img" | "svg" | "input" | "textarea" | "br"
+            )
+        {
+            continue;
+        }
+        let before = all_styles[id].before.take();
+        let after = all_styles[id].after.take();
+        for (is_before, maybe_ps) in [(true, before), (false, after)] {
+            let Some(ps) = maybe_ps else {
+                continue;
+            };
+            if doc.nodes.len() + 2 > MAX_OPS {
+                return Err(LayoutFailure {
+                    node: Some(id),
+                    reason: "pseudo-element node admission limit",
+                });
+            }
+            if !ps.text.is_empty() && ps.text.chars().take(MAX_TEXT_RUN + 1).count() > MAX_TEXT_RUN
+            {
+                return Err(LayoutFailure {
+                    node: Some(id),
+                    reason: "document/style or text-run admission limit",
+                });
+            }
+            let pseudo_id = doc.nodes.len();
+            let mut pseudo_children = Vec::new();
+            doc.nodes.push(crate::document::Node {
+                tag: "span".to_owned(),
+                attributes: Vec::new(),
+                text: String::new(),
+                parent: id,
+                children: Vec::new(),
+            });
+            let text_style = (!ps.text.is_empty()).then(|| ps.style.inherit_for_text());
+            all_styles.push(ps.style);
+            if let Some(ts) = text_style {
+                let text_id = doc.nodes.len();
+                doc.nodes.push(crate::document::Node {
+                    tag: "#text".to_owned(),
+                    attributes: Vec::new(),
+                    text: ps.text,
+                    parent: pseudo_id,
+                    children: Vec::new(),
+                });
+                all_styles.push(ts);
+                pseudo_children.push(text_id);
+            }
+            doc.nodes[pseudo_id].children = pseudo_children;
+            if is_before {
+                doc.nodes[id].children.insert(0, pseudo_id);
+            } else {
+                doc.nodes[id].children.push(pseudo_id);
+            }
+        }
+    }
+    Ok(Some((doc, all_styles.into())))
 }
 
 #[cfg(test)]
@@ -358,6 +516,12 @@ pub(crate) fn render_scaled_profiled(
             reason: "document/style or text-run admission limit",
         });
     }
+    let orig_nodes_len = document.nodes.len();
+    let materialized = materialize_pseudo_elements(document, &styles)?;
+    let (document, styles): (&Document, Arc<[ComputedStyle]>) = match &materialized {
+        Some((doc, st)) => (doc, Arc::clone(st)),
+        None => (document, styles),
+    };
     let viewport_overflow = viewport_overflow_node(document, &styles);
     fonts.clear_families();
     for sheet in &document.stylesheets {
@@ -393,6 +557,8 @@ pub(crate) fn render_scaled_profiled(
         format_scratch: 0,
         replaced_nodes: Vec::new(),
         anonymous_tables: Vec::new(),
+        floats: Vec::new(),
+        last_float_top: 0.0,
         budget: 2_000_000,
         exhausted: false,
         failure: None,
@@ -421,6 +587,7 @@ pub(crate) fn render_scaled_profiled(
             0,
         )
         .1;
+    layout.apply_sticky_offsets();
     positioned::run(&mut layout);
     stacking::run(&mut layout);
     if layout.exhausted
@@ -464,7 +631,7 @@ pub(crate) fn render_scaled_profiled(
         if opacity <= 0.0 && !matches!(op, Paint::Image(..)) {
             continue;
         }
-        canvas.restore_clip(full_clip);
+        canvas.restore_clip(full_clip.clone());
         if let Some(clip) = layout.scene.clips[index] {
             canvas.intersect_clip(
                 clip.x.round() as i32,
@@ -472,6 +639,9 @@ pub(crate) fn render_scaled_profiled(
                 clip.w.ceil().max(0.0) as u32,
                 clip.h.ceil().max(0.0) as u32,
             );
+        }
+        for rr in &layout.scene.rounded_clips[index] {
+            canvas.intersect_rounded_clip(rr.to_physical(&canvas, viewport.scroll));
         }
         match op {
             Paint::Background(rect, node, padding) => {
@@ -494,6 +664,52 @@ pub(crate) fn render_scaled_profiled(
                 if let Some(gradient) = &style.background_gradient
                     && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
                 {
+                    crate::gradient::paint(
+                        &mut canvas,
+                        [origin.x, origin.y, origin.w, origin.h],
+                        [clip.x, clip.y, clip.w, clip.h],
+                        gradient,
+                        viewport.scroll,
+                    );
+                }
+            }
+            Paint::RoundedDecoration(rect, node, padding) => {
+                if !visible(*rect, viewport) {
+                    continue;
+                }
+                let style = &layout.styles[*node];
+                let outer_logical = resolve_rounded_rect(style, *rect);
+                let inner_logical = outer_logical.inset(style.border_width);
+                let bg_logical = rounded_background_box(
+                    outer_logical,
+                    style.border_width,
+                    *padding,
+                    style.background_clip,
+                );
+                let outer_phys = outer_logical.to_physical(&canvas, viewport.scroll);
+                let inner_phys = inner_logical.to_physical(&canvas, viewport.scroll);
+                let bg_phys = bg_logical.map(|b| {
+                    (
+                        b.to_physical(&canvas, viewport.scroll),
+                        style.background_color.rgb,
+                        style.background_color.alpha * opacity,
+                    )
+                });
+                let borders = style.border_color.map(|c| (c.rgb, c.alpha * opacity));
+                canvas.paint_rounded_decoration(outer_phys, inner_phys, bg_phys, borders);
+                let area = |kind| background_box(*rect, style.border_width, *padding, kind);
+                if let Some(gradient) = &style.background_gradient
+                    && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
+                {
+                    if let Some(grad_rr) = rounded_background_box(
+                        outer_logical,
+                        style.border_width,
+                        *padding,
+                        gradient.clip,
+                    ) {
+                        canvas
+                            .intersect_rounded_clip(grad_rr.to_physical(&canvas, viewport.scroll));
+                    }
                     crate::gradient::paint(
                         &mut canvas,
                         [origin.x, origin.y, origin.w, origin.h],
@@ -788,8 +1004,24 @@ pub(crate) fn render_scaled_profiled(
         })
         .collect();
     // Existing Chassis/CDP expects viewport-relative boxes, including offscreen boxes.
+    layout.scene.boxes.retain(|b| b.node < orig_nodes_len);
     for b in &mut layout.scene.boxes {
         b.y -= viewport.scroll;
+    }
+    if materialized.is_some() {
+        for run in &mut text_runs {
+            while run.node >= orig_nodes_len {
+                run.node = document.nodes[run.node].parent;
+            }
+        }
+        for entry in &mut layout.diagnostics.entries {
+            if let Some(mut n) = entry.node {
+                while n >= orig_nodes_len {
+                    n = document.nodes[n].parent;
+                }
+                entry.node = Some(n);
+            }
+        }
     }
     let paint_ms = paint_started.elapsed().as_secs_f64() * 1000.0;
     Ok((
@@ -849,12 +1081,21 @@ fn paint_rect(canvas: &mut Canvas, r: Rect, color: Color, scroll: i32) {
         let bottom = canvas
             .physical_edge((r.y + r.h - scroll as f32).ceil() as i64)
             .clamp(i64::from(clip_top), i64::from(clip_bottom)) as usize;
+        let has_rc = canvas.has_rounded_clip();
         for y in top..bottom {
             for x in left..right {
+                let mut a = color.alpha;
+                if has_rc {
+                    let cov = canvas.rounded_clip_coverage(x as u32, y as u32);
+                    if cov == 0 {
+                        continue;
+                    }
+                    a *= f32::from(cov) / 255.0;
+                }
                 let pixel = &mut canvas.pixels[y * canvas.width as usize + x];
                 let channel = |shift: u32| {
-                    (((color.rgb >> shift) & 255u32) as f32 * color.alpha
-                        + ((*pixel >> shift) & 255u32) as f32 * (1.0 - color.alpha))
+                    (((color.rgb >> shift) & 255u32) as f32 * a
+                        + ((*pixel >> shift) & 255u32) as f32 * (1.0 - a))
                         .round() as u32
                 };
                 *pixel = channel(16) << 16 | channel(8) << 8 | channel(0);
@@ -892,6 +1133,8 @@ struct Layout<'a, 'c> {
     replaced_nodes: Vec<bool>,
     /// Pure orphan-cell containers admitted once per pass, without DOM changes.
     anonymous_tables: Vec<bool>,
+    floats: Vec<PlacedFloat>,
+    last_float_top: f32,
     budget: usize,
     exhausted: bool,
     failure: Option<(usize, &'static str)>,
@@ -1027,11 +1270,7 @@ impl Layout<'_, '_> {
     fn clip_for(&self, id: usize, r: Rect) -> Option<Rect> {
         use crate::style::Overflow;
         let s = &self.styles[id];
-        // The legacy automatic-table path retains its established line/cell
-        // metrics. Table-cell clipping awaits that formatting model's own
-        // acceptance, rather than cutting glyphs at an approximate cell edge.
-        // Style diagnostics explicitly report this remaining boundary.
-        if self.viewport_overflow == Some(id) || s.display == Display::TableCell {
+        if self.viewport_overflow == Some(id) {
             return None;
         }
         let x = !matches!(s.layout.overflow[0], Overflow::Visible);
@@ -1054,6 +1293,20 @@ impl Layout<'_, '_> {
                 MAX_EXTENT * 2.0
             },
         })
+    }
+
+    fn rounded_clip_for(&self, id: usize, r: Rect) -> Option<crate::paint::RoundedRect> {
+        use crate::style::Overflow;
+        let s = &self.styles[id];
+        if self.viewport_overflow == Some(id) || !has_nonzero_border_radius(s) {
+            return None;
+        }
+        let x = !matches!(s.layout.overflow[0], Overflow::Visible);
+        let y = !matches!(s.layout.overflow[1], Overflow::Visible);
+        if !x || !y {
+            return None;
+        }
+        Some(resolve_rounded_rect(s, r).inset(s.border_width))
     }
 
     fn spend(&mut self, depth: usize) -> bool {
@@ -1358,25 +1611,37 @@ impl Layout<'_, '_> {
         if !s.visible {
             return;
         }
-        self.scene.paint(id, Paint::Background(r, id, padding));
-        let b = s.border_width;
-        let edges = [
-            Rect { h: b[0], ..r },
-            Rect {
-                x: r.x + r.w - b[1],
-                w: b[1],
-                ..r
-            },
-            Rect {
-                y: r.y + r.h - b[2],
-                h: b[2],
-                ..r
-            },
-            Rect { w: b[3], ..r },
-        ];
-        for (i, edge) in edges.into_iter().enumerate() {
-            self.scene.paint(id, Paint::Rect(edge, s.border_color[i]));
+        let rounded = has_nonzero_border_radius(s);
+        if rounded {
+            self.scene
+                .paint(id, Paint::RoundedDecoration(r, id, padding));
+        } else {
+            self.scene.paint(id, Paint::Background(r, id, padding));
+            let b = s.border_width;
+            let edges = [
+                Rect { h: b[0], ..r },
+                Rect {
+                    x: r.x + r.w - b[1],
+                    w: b[1],
+                    ..r
+                },
+                Rect {
+                    y: r.y + r.h - b[2],
+                    h: b[2],
+                    ..r
+                },
+                Rect { w: b[3], ..r },
+            ];
+            for (i, edge) in edges.into_iter().enumerate() {
+                self.scene.paint(id, Paint::Rect(edge, s.border_color[i]));
+            }
         }
+        let bg_rr = (rounded && (r.w > 0.0 || r.h > 0.0))
+            .then(|| {
+                let outer = resolve_rounded_rect(s, r);
+                rounded_background_box(outer, s.border_width, padding, s.background_clip)
+            })
+            .flatten();
         for bg in s.background_images.iter().rev() {
             let w = bg.width.resolve(r.w).unwrap_or(r.w);
             let h = bg.height.resolve(r.h).unwrap_or(w);
@@ -1390,6 +1655,11 @@ impl Layout<'_, '_> {
                 id,
                 Paint::Image(Rect { w, h, ..r }, ImageSource::Resource(url), None),
             );
+            if let Some(rr) = bg_rr
+                && let Some(slot) = self.scene.rounded_clips.last_mut()
+            {
+                slot.push(rr);
+            }
         }
     }
     fn image_url(&self, id: usize) -> Option<String> {
@@ -1513,11 +1783,19 @@ impl Layout<'_, '_> {
             } else {
                 self.natural_replaced_size(id, width != Some(0.0) && height != Some(0.0))
             };
-            let ratio = (natural_w / natural_h.max(1.0)).max(0.001);
-            let is_image = matches!(self.document.nodes[id].tag.as_str(), "img" | "svg");
+            let explicit_ar = (!self.styles[id].layout.aspect_ratio_auto)
+                .then_some(self.styles[id].layout.aspect_ratio)
+                .flatten();
+            let ratio = explicit_ar.unwrap_or_else(|| (natural_w / natural_h.max(1.0)).max(0.001));
+            let has_ratio = explicit_ar.is_some()
+                || matches!(self.document.nodes[id].tag.as_str(), "img" | "svg");
             let s = &self.styles[id];
             let mut w = width.unwrap_or_else(|| {
-                if is_image {
+                if explicit_ar.is_some() {
+                    height.map_or(natural_w, |h| {
+                        ((h + vertical) * ratio - horizontal).max(0.0)
+                    })
+                } else if has_ratio {
                     height.map_or(natural_w, |h| h * ratio)
                 } else {
                     natural_w
@@ -1535,8 +1813,12 @@ impl Layout<'_, '_> {
                 .unwrap_or(0.0);
             w = w.min(max_w).max(min_w).clamp(0.0, MAX_EXTENT);
             let h = height.unwrap_or_else(|| {
-                if is_image && width.is_some() {
+                if explicit_ar.is_some() && width.is_some() {
+                    ((w + horizontal) / ratio - vertical).max(0.0)
+                } else if has_ratio && width.is_some() {
                     w / ratio
+                } else if let Some(ar) = explicit_ar {
+                    ((w + horizontal) / ar - vertical).max(0.0)
                 } else {
                     natural_h
                 }
@@ -1556,16 +1838,27 @@ impl Layout<'_, '_> {
             self.natural_replaced_size(id, width != Some(0.0) && height != Some(0.0));
         let node = &self.document.nodes[id];
         let s = &self.styles[id];
-        if !matches!(node.tag.as_str(), "img" | "svg") {
+        let explicit_ar = (!s.layout.aspect_ratio_auto)
+            .then_some(s.layout.aspect_ratio)
+            .flatten();
+        if !matches!(node.tag.as_str(), "img" | "svg") && explicit_ar.is_none() {
             return (
                 width.unwrap_or(default_w).clamp(0.0, MAX_EXTENT),
                 constrain_height(s, height.unwrap_or(default_h), containing_height),
             );
         }
-        let ratio = default_w / default_h.max(1.0);
+        let ratio = explicit_ar.unwrap_or_else(|| default_w / default_h.max(1.0));
         let used_height = constrain_height(
             s,
-            height.unwrap_or_else(|| width.map_or(default_h, |w| w / ratio.max(0.001))),
+            height.unwrap_or_else(|| {
+                if let Some(w) = width {
+                    w / ratio.max(0.001)
+                } else if let Some(ar) = explicit_ar {
+                    default_w / ar.max(0.001)
+                } else {
+                    default_h
+                }
+            }),
             containing_height,
         );
         (
@@ -1791,7 +2084,9 @@ impl Layout<'_, '_> {
             }
         } else {
             let children = node.children.clone();
-            let mut current = 0.0;
+            let mut current = 0.0f32;
+            let mut float_left_w = 0.0f32;
+            let mut float_right_w = 0.0f32;
             let mut pending_space = 0.0;
             let mut result = Intrinsic::default();
             for child in children {
@@ -1800,6 +2095,22 @@ impl Layout<'_, '_> {
                     crate::style::Position::Absolute | crate::style::Position::Fixed
                 ) || self.styles[child].display == Display::None
                 {
+                    continue;
+                }
+                if self.document.nodes[child].tag == "br" {
+                    let br_clear = self.styles[child].layout.clear;
+                    result.max = result.max.max(float_left_w + float_right_w + current);
+                    current = 0.0;
+                    pending_space = 0.0;
+                    match br_clear {
+                        crate::style::ClearSide::Left => float_left_w = 0.0,
+                        crate::style::ClearSide::Right => float_right_w = 0.0,
+                        crate::style::ClearSide::Both => {
+                            float_left_w = 0.0;
+                            float_right_w = 0.0;
+                        }
+                        crate::style::ClearSide::None => {}
+                    }
                     continue;
                 }
                 if self.document.nodes[child].tag == "#text"
@@ -1817,6 +2128,19 @@ impl Layout<'_, '_> {
                     }
                     continue;
                 }
+                let child_clear = self.styles[child].layout.clear;
+                if child_clear != crate::style::ClearSide::None {
+                    result.max = result.max.max(float_left_w + float_right_w + current);
+                    match child_clear {
+                        crate::style::ClearSide::Left => float_left_w = 0.0,
+                        crate::style::ClearSide::Right => float_right_w = 0.0,
+                        crate::style::ClearSide::Both => {
+                            float_left_w = 0.0;
+                            float_right_w = 0.0;
+                        }
+                        crate::style::ClearSide::None => {}
+                    }
+                }
                 // A content-only text measurement inherits typography, not an
                 // element box. The legacy snapshot keeps parent box fields on
                 // text nodes for other paths: do not count those edges twice.
@@ -1828,16 +2152,31 @@ impl Layout<'_, '_> {
                     self.intrinsic(child, depth + 1)
                 };
                 result.min = result.min.max(v.min);
-                if is_block(self.styles[child].display) {
-                    result.max = result.max.max(current).max(v.max);
-                    current = 0.0;
-                    pending_space = 0.0;
-                } else if v.max > 0.0 {
-                    current += pending_space + v.max;
-                    pending_space = 0.0;
+                match self.styles[child].layout.float {
+                    crate::style::FloatSide::Left => {
+                        float_left_w += v.max;
+                        result.max = result.max.max(float_left_w + float_right_w + current);
+                    }
+                    crate::style::FloatSide::Right => {
+                        float_right_w += v.max;
+                        result.max = result.max.max(float_left_w + float_right_w + current);
+                    }
+                    crate::style::FloatSide::None => {
+                        if is_block(self.styles[child].display) {
+                            result.max = result
+                                .max
+                                .max(float_left_w + float_right_w + current)
+                                .max(float_left_w + float_right_w + v.max);
+                            current = 0.0;
+                            pending_space = 0.0;
+                        } else if v.max > 0.0 {
+                            current += pending_space + v.max;
+                            pending_space = 0.0;
+                        }
+                    }
                 }
             }
-            result.max = result.max.max(current);
+            result.max = result.max.max(float_left_w + float_right_w + current);
             if matches!(s.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre) {
                 result.min = result.max;
             }
@@ -1847,14 +2186,61 @@ impl Layout<'_, '_> {
     fn table(&mut self, id: usize) -> &Table {
         if !self.table_cache.contains_key(&id) {
             let mut rows = Vec::new();
-            let mut todo = self.document.nodes[id].children.clone();
-            todo.reverse();
+            let mut collapsed_cols = Vec::new();
+            let mut todo: Vec<(usize, bool)> = self.document.nodes[id]
+                .children
+                .iter()
+                .rev()
+                .map(|&c| (c, false))
+                .collect();
             let mut count = 0;
-            while let Some(child) = todo.pop() {
+            while let Some((child, grp_collapsed)) = todo.pop() {
                 if self.styles[child].display == Display::None {
                     continue;
                 }
+                let own_collapsed =
+                    self.styles[child].visibility == crate::style::Visibility::Collapse;
                 match self.styles[child].display {
+                    Display::TableColumnGroup => {
+                        let col_grp_collapsed = grp_collapsed || own_collapsed;
+                        let has_col_children = self.document.nodes[child]
+                            .children
+                            .iter()
+                            .any(|&c| self.styles[c].display == Display::TableColumn);
+                        if has_col_children {
+                            todo.extend(
+                                self.document.nodes[child]
+                                    .children
+                                    .iter()
+                                    .rev()
+                                    .map(|&c| (c, col_grp_collapsed)),
+                            );
+                        } else {
+                            let span = self.document.nodes[child]
+                                .attr("span")
+                                .and_then(|n| n.parse::<usize>().ok())
+                                .unwrap_or(1)
+                                .clamp(1, MAX_COLUMNS);
+                            for _ in 0..span {
+                                if collapsed_cols.len() < MAX_COLUMNS {
+                                    collapsed_cols.push(col_grp_collapsed);
+                                }
+                            }
+                        }
+                    }
+                    Display::TableColumn => {
+                        let col_collapsed = grp_collapsed || own_collapsed;
+                        let span = self.document.nodes[child]
+                            .attr("span")
+                            .and_then(|n| n.parse::<usize>().ok())
+                            .unwrap_or(1)
+                            .clamp(1, MAX_COLUMNS);
+                        for _ in 0..span {
+                            if collapsed_cols.len() < MAX_COLUMNS {
+                                collapsed_cols.push(col_collapsed);
+                            }
+                        }
+                    }
                     Display::TableRow => {
                         let mut column = 0;
                         let mut cells = Vec::new();
@@ -1877,12 +2263,19 @@ impl Layout<'_, '_> {
                             column += span;
                         }
                         count = count.max(column);
-                        rows.push((Some(child), cells));
+                        rows.push((Some(child), grp_collapsed || own_collapsed, cells));
                     }
                     Display::TableRowGroup
                     | Display::TableHeaderGroup
                     | Display::TableFooterGroup => {
-                        todo.extend(self.document.nodes[child].children.iter().rev())
+                        let next_collapsed = grp_collapsed || own_collapsed;
+                        todo.extend(
+                            self.document.nodes[child]
+                                .children
+                                .iter()
+                                .rev()
+                                .map(|&c| (c, next_collapsed)),
+                        );
                     }
                     _ => {}
                 }
@@ -1891,6 +2284,7 @@ impl Layout<'_, '_> {
                 id,
                 Table {
                     rows,
+                    collapsed_cols,
                     columns: count,
                 },
             );
@@ -1906,11 +2300,12 @@ impl Layout<'_, '_> {
     }
     fn table_columns(&mut self, id: usize, depth: usize) -> (Vec<f32>, Vec<f32>) {
         let columns = self.table(id).columns;
+        let collapsed_cols = self.table(id).collapsed_cols.clone();
         let rows = self.table(id).rows.clone();
         let mut min = vec![0.0f32; columns];
         let mut max = min.clone();
         let mut spans = Vec::new();
-        for (_, cells) in rows {
+        for (_, _, cells) in rows {
             for cell in cells {
                 let intrinsic = self.intrinsic(cell.node, depth + 1);
                 if cell.span == 1 {
@@ -1928,6 +2323,12 @@ impl Layout<'_, '_> {
             distribute_deficit(&mut max[range.clone()], (intrinsic.max - spacing).max(0.0));
             for i in range {
                 max[i] = max[i].max(min[i]);
+            }
+        }
+        for (c, &is_col_collapsed) in collapsed_cols.iter().enumerate() {
+            if is_col_collapsed && c < columns {
+                min[c] = 0.0;
+                max[c] = 0.0;
             }
         }
         (min, max)
@@ -2021,6 +2422,22 @@ impl Layout<'_, '_> {
                     } else if is_table {
                         let i = self.intrinsic(id, depth + 1);
                         i.max.min(available).max(i.min)
+                    } else if let Some(ar) = s.layout.aspect_ratio
+                        && let Some(def_h) = height_length(s.height, containing_height)
+                    {
+                        let used_border_h = if s.layout.box_sizing
+                            == crate::style::BoxSizing::BorderBox
+                        {
+                            constrain_height(&s, def_h, containing_height)
+                                .max(padding[0] + padding[2])
+                        } else {
+                            constrain_height(&s, def_h, containing_height) + padding[0] + padding[2]
+                        };
+                        if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                            (used_border_h * ar).max(horizontal)
+                        } else {
+                            (used_border_h - padding[0] - padding[2]).max(0.0) * ar + horizontal
+                        }
                     } else {
                         (available - margin[1] - margin[3]).max(horizontal)
                     }
@@ -2069,7 +2486,27 @@ impl Layout<'_, '_> {
                 let parent = self.document.nodes[id].parent;
                 if self.styles[parent].text_align == TextAlign::Center {
                     margin[3] += extra / 2.0;
+                } else if self.styles[parent].text_align == TextAlign::Right
+                    || (s.display == Display::Table
+                        && self.styles[parent].direction == crate::style::TextDirection::Rtl)
+                {
+                    margin[3] += extra;
                 }
+            }
+            _ if forced.is_none()
+                && id != 0
+                && !matches!(
+                    s.display,
+                    Display::InlineBlock
+                        | Display::InlineFlex
+                        | Display::InlineGrid
+                        | Display::InlineTable
+                        | Display::TableCell
+                )
+                && self.styles[self.document.nodes[id].parent].direction
+                    == crate::style::TextDirection::Rtl =>
+            {
+                margin[3] = available - width - margin[1];
             }
             _ => {}
         }
@@ -2090,6 +2527,11 @@ impl Layout<'_, '_> {
         };
         let bx = x + margin[3] + dx;
         let by = y + margin[0] + dy;
+        let self_start_mark = if EMIT {
+            self.scene.mark()
+        } else {
+            (0, 0, 0, 0)
+        };
         // Reserve decoration before children so parent backgrounds stay behind them.
         let start = if EMIT {
             let start = self.scene.paints.len();
@@ -2124,14 +2566,40 @@ impl Layout<'_, '_> {
                     height
                 }
             });
+        let ar_content_height =
+            if specified_height.is_none() && !is_table && s.display != Display::TableCell {
+                s.layout.aspect_ratio.map(|ar| {
+                    let raw = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                        (width / ar - padding[0] - padding[2]).max(0.0)
+                    } else {
+                        content_w / ar
+                    };
+                    if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                        (constrain_height(&s, raw + padding[0] + padding[2], containing_height)
+                            - padding[0]
+                            - padding[2])
+                            .max(0.0)
+                    } else {
+                        constrain_height(&s, raw, containing_height)
+                    }
+                })
+            } else {
+                None
+            };
         // The synthetic document represents the initial containing block.
         // Minimum/maximum height alone must not make an auto height definite.
         let child_height = if id == 0 {
             containing_height
         } else {
-            specified_height
+            specified_height.or(ar_content_height)
         };
-        let content_h = if is_format(s.display) {
+        let saved_floats = self.establishes_bfc(id).then(|| {
+            (
+                std::mem::take(&mut self.floats),
+                std::mem::replace(&mut self.last_float_top, content_y),
+            )
+        });
+        let mut content_h = if is_format(s.display) {
             formatting::run::<EMIT>(
                 self,
                 id,
@@ -2160,12 +2628,43 @@ impl Layout<'_, '_> {
         } else {
             self.flow::<EMIT>(id, content_x, content_y, content_w, child_height, depth + 1)
         };
+        if let Some((prev_floats, prev_top)) = saved_floats {
+            let float_bottom = self
+                .floats
+                .iter()
+                .map(|f| f.y + f.h - content_y)
+                .fold(0.0f32, f32::max);
+            self.floats = prev_floats;
+            self.last_float_top = prev_top;
+            if specified_height.is_none() {
+                content_h = content_h.max(float_bottom);
+            }
+        }
         // Table and cell heights remain minimums for their contents. Ordinary
         // blocks can overflow their specified height without enlarging it.
         let used_height = if is_table || s.display == Display::TableCell {
             content_h.max(specified_height.unwrap_or(0.0))
+        } else if let Some(spec) = specified_height {
+            spec
+        } else if let Some(ar_h) = ar_content_height {
+            if s.min_height == Length::Auto
+                && s.layout.overflow == [crate::style::Overflow::Visible; 2]
+            {
+                let max_ch = height_length(s.max_height, containing_height)
+                    .map(|mh| {
+                        if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                            (mh - padding[0] - padding[2]).max(0.0)
+                        } else {
+                            mh
+                        }
+                    })
+                    .unwrap_or(MAX_EXTENT);
+                ar_h.max(content_h.min(max_ch))
+            } else {
+                ar_h
+            }
         } else {
-            specified_height.unwrap_or(content_h)
+            content_h
         };
         let h = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
             constrain_height(&s, used_height + padding[0] + padding[2], containing_height)
@@ -2182,50 +2681,91 @@ impl Layout<'_, '_> {
         };
         // Update reserved background/border boxes after determining content height.
         if EMIT {
-            if s.display != Display::TableCell
-                && let Some(clip) = self.clip_for(id, rect)
-            {
-                self.scene.clip(children_start, clip);
+            formatting::record_abspos_children(
+                self,
+                id,
+                Rect {
+                    x: content_x,
+                    y: content_y,
+                    w: content_w,
+                    h: (h - padding[0] - padding[2]).max(0.0),
+                },
+            );
+            if s.display != Display::TableCell {
+                if let Some(clip) = self.clip_for(id, rect) {
+                    self.scene.clip(children_start, clip);
+                }
+                if let Some(rr) = self.rounded_clip_for(id, rect) {
+                    self.scene.clip_rounded(children_start, rr);
+                }
             }
-            self.finish_decoration(start, id, rect);
+            self.finish_decoration(start, id, rect, padding);
             self.scene.border_for(id, rect);
             self.scene.box_for(id, rect);
             self.hit(id, rect);
+            if s.layout.position == crate::style::Position::Sticky {
+                self.scene
+                    .sticky_ranges
+                    .push((id, self_start_mark, self.scene.mark(), rect));
+            }
         }
         (width + margin[1] + margin[3], h + margin[0] + margin[2])
     }
-    fn finish_decoration(&mut self, start: usize, id: usize, r: Rect) {
+    fn finish_decoration(&mut self, start: usize, id: usize, r: Rect, padding: [f32; 4]) {
         if !self.styles[id].visible {
             return;
         }
-        let b = self.styles[id].border_width;
-        let rects = [
-            r,
-            Rect { h: b[0], ..r },
-            Rect {
-                x: r.x + r.w - b[1],
-                w: b[1],
-                ..r
-            },
-            Rect {
-                y: r.y + r.h - b[2],
-                h: b[2],
-                ..r
-            },
-            Rect { w: b[3], ..r },
-        ];
-        for (i, rect) in rects.into_iter().enumerate() {
-            if let Some(Paint::Rect(old, _) | Paint::Background(old, ..)) =
-                self.scene.paints.get_mut(start + i)
-            {
-                *old = rect;
+        let s = &self.styles[id];
+        let rounded = has_nonzero_border_radius(s);
+        let bg_offset = if rounded {
+            if let Some(Paint::RoundedDecoration(old, ..)) = self.scene.paints.get_mut(start) {
+                *old = r;
             }
-        }
+            1
+        } else {
+            let b = s.border_width;
+            let rects = [
+                r,
+                Rect { h: b[0], ..r },
+                Rect {
+                    x: r.x + r.w - b[1],
+                    w: b[1],
+                    ..r
+                },
+                Rect {
+                    y: r.y + r.h - b[2],
+                    h: b[2],
+                    ..r
+                },
+                Rect { w: b[3], ..r },
+            ];
+            for (i, rect) in rects.into_iter().enumerate() {
+                if let Some(Paint::Rect(old, _) | Paint::Background(old, ..)) =
+                    self.scene.paints.get_mut(start + i)
+                {
+                    *old = rect;
+                }
+            }
+            5
+        };
+        let bg_rr = rounded
+            .then(|| {
+                let outer = resolve_rounded_rect(s, r);
+                rounded_background_box(outer, s.border_width, padding, s.background_clip)
+            })
+            .flatten();
         for (i, bg) in self.styles[id].background_images.iter().rev().enumerate() {
             let w = bg.width.resolve(r.w).unwrap_or(r.w);
             let h = bg.height.resolve(r.h).unwrap_or(w);
-            if let Some(Paint::Image(old, ..)) = self.scene.paints.get_mut(start + 5 + i) {
+            let idx = start + bg_offset + i;
+            if let Some(Paint::Image(old, ..)) = self.scene.paints.get_mut(idx) {
                 *old = Rect { w, h, ..r };
+            }
+            if let Some(rr) = bg_rr
+                && let Some(slot) = self.scene.rounded_clips.get_mut(idx)
+            {
+                slot.clear();
+                slot.push(rr);
             }
         }
     }
@@ -2239,13 +2779,24 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> f32 {
         let (mut min, mut max) = self.table_columns(id, depth + 1);
+        let collapsed_cols = self.table(id).collapsed_cols.clone();
         let rows = self.table(id).rows.clone();
         let spacing = self.table_spacing(id);
-        let space = spacing[0] * (min.len() + 1) as f32;
+        let visible_cols = (0..min.len())
+            .filter(|&c| collapsed_cols.get(c) != Some(&true))
+            .count();
+        let space = spacing[0] * (visible_cols + 1) as f32;
         let mut fixed = vec![false; min.len()];
-        for (_, cells) in &rows {
+        for (c, &is_col_collapsed) in collapsed_cols.iter().enumerate() {
+            if is_col_collapsed && c < min.len() {
+                min[c] = 0.0;
+                max[c] = 0.0;
+                fixed[c] = true;
+            }
+        }
+        for (_, _, cells) in &rows {
             for cell in cells {
-                if cell.span == 1 {
+                if cell.span == 1 && collapsed_cols.get(cell.column) != Some(&true) {
                     let style = &self.styles[cell.node];
                     if let Some(w) = style.width.resolve(width) {
                         min[cell.column] = min[cell.column].max(w);
@@ -2257,7 +2808,7 @@ impl Layout<'_, '_> {
         }
         let available = (width - space).max(0.0);
         let total_max = max.iter().sum::<f32>();
-        let widths = if available > total_max && fixed.iter().any(|f| !f) {
+        let widths: Vec<f32> = if available > total_max && fixed.iter().any(|f| !f) {
             let flexible = max
                 .iter()
                 .zip(&fixed)
@@ -2283,8 +2834,13 @@ impl Layout<'_, '_> {
         } else {
             allocate_columns(&min, &max, available)
         };
+        let is_rtl = self.styles[id].direction == crate::style::TextDirection::Rtl;
+        let total_table_w = (widths.iter().sum::<f32>() + space).max(width);
         let mut top = y + spacing[1];
-        for (row, cells) in rows {
+        for (row, row_collapsed, cells) in rows {
+            if row_collapsed {
+                continue;
+            }
             let row_start = if EMIT && let Some(row) = row {
                 let start = self.scene.paints.len();
                 self.decorate(
@@ -2314,14 +2870,27 @@ impl Layout<'_, '_> {
             });
             let mut ranges = Vec::new();
             for cell in cells {
-                let left = x
-                    + spacing[0]
-                    + widths[..cell.column].iter().sum::<f32>()
-                    + spacing[0] * cell.column as f32;
+                let active_cols = (cell.column..cell.column + cell.span)
+                    .filter(|&c| collapsed_cols.get(c) != Some(&true))
+                    .count();
+                if active_cols == 0 {
+                    continue;
+                }
+                let preceding_active = (0..cell.column)
+                    .filter(|&c| collapsed_cols.get(c) != Some(&true))
+                    .count();
                 let cw = widths[cell.column..cell.column + cell.span]
                     .iter()
                     .sum::<f32>()
-                    + spacing[0] * (cell.span - 1) as f32;
+                    + spacing[0] * (active_cols - 1) as f32;
+                let offset_before = spacing[0]
+                    + widths[..cell.column].iter().sum::<f32>()
+                    + spacing[0] * preceding_active as f32;
+                let left = if is_rtl {
+                    x + total_table_w - offset_before - cw
+                } else {
+                    x + offset_before
+                };
                 let start = if EMIT {
                     self.scene.mark()
                 } else {
@@ -2348,72 +2917,73 @@ impl Layout<'_, '_> {
                     _ => 0.0,
                 };
                 if dy > 0.0 {
-                    for op in &mut self.scene.paints[start.0..end.0] {
-                        op.rect_mut().y += dy;
+                    self.scene.shift_range(start, end, 0.0, dy);
+                }
+                let cell_rect = Rect {
+                    x: left,
+                    y: top,
+                    w: cw,
+                    h: height,
+                };
+                let (_, cell_padding) = self.edges(cell, cw);
+                // The cell background/border spans the complete row, not only its content.
+                self.scene.border_for(cell, cell_rect);
+                self.finish_decoration(start.0, cell, cell_rect, cell_padding);
+                if let Some(clip) = self.clip_for(cell, cell_rect) {
+                    let clip = clip.paint_edges();
+                    for p in start.0..end.0 {
+                        if self.scene.paint_nodes[p] != cell {
+                            let cur = &mut self.scene.clips[p];
+                            *cur = Some(cur.map_or(clip, |r| r.intersect(clip)));
+                        }
                     }
-                    for clip in self.scene.clips[start.0..end.0].iter_mut().flatten() {
-                        clip.y += dy;
+                    for b_idx in start.1..end.1 {
+                        if self.scene.boxes[b_idx].node != cell {
+                            let b = &mut self.scene.boxes[b_idx];
+                            let r = Rect {
+                                x: b.x as f32,
+                                y: b.y as f32,
+                                w: b.width as f32,
+                                h: b.height as f32,
+                            }
+                            .intersect(clip);
+                            b.x = r.x.round() as i32;
+                            b.y = r.y.round() as i32;
+                            b.width = r.w.ceil().max(0.0) as u32;
+                            b.height = r.h.ceil().max(0.0) as u32;
+                        }
                     }
-                    for (_, r) in &mut self.scene.borders[start.3..end.3] {
-                        r.y += dy;
-                    }
-                    for b in &mut self.scene.boxes[start.1..end.1] {
-                        b.y += dy.round() as i32;
-                    }
-                    for (r, _) in &mut self.scene.hits[start.2..end.2] {
-                        r.y += dy;
+                    for hi in start.2..end.2 {
+                        if self.scene.hit_nodes[hi] != cell {
+                            let r = &mut self.scene.hits[hi].0;
+                            if r.x < clip.x
+                                || r.y < clip.y
+                                || r.x + r.w > clip.x + clip.w
+                                || r.y + r.h > clip.y + clip.h
+                            {
+                                *r = r.paint_edges().intersect(clip);
+                            }
+                        }
                     }
                 }
-                // The cell background/border spans the complete row, not only its content.
-                self.scene.border_for(
-                    cell,
-                    Rect {
-                        x: left,
-                        y: top,
-                        w: cw,
-                        h: height,
-                    },
-                );
-                self.finish_decoration(
-                    start.0,
-                    cell,
-                    Rect {
-                        x: left,
-                        y: top,
-                        w: cw,
-                        h: height,
-                    },
-                );
+                if let Some(rr) = self.rounded_clip_for(cell, cell_rect) {
+                    for p in start.0..end.0 {
+                        if self.scene.paint_nodes[p] != cell {
+                            self.scene.rounded_clips[p].push(rr);
+                        }
+                    }
+                }
             }
             if EMIT && let Some(row) = row {
-                self.scene.border_for(
-                    row,
-                    Rect {
-                        x,
-                        y: top,
-                        w: width,
-                        h: height,
-                    },
-                );
-                self.finish_decoration(
-                    row_start,
-                    row,
-                    Rect {
-                        x,
-                        y: top,
-                        w: width,
-                        h: height,
-                    },
-                );
-                self.scene.box_for(
-                    row,
-                    Rect {
-                        x,
-                        y: top,
-                        w: width,
-                        h: height,
-                    },
-                );
+                let row_rect = Rect {
+                    x,
+                    y: top,
+                    w: width,
+                    h: height,
+                };
+                self.scene.border_for(row, row_rect);
+                self.finish_decoration(row_start, row, row_rect, self.styles[row].border_width);
+                self.scene.box_for(row, row_rect);
             }
             top = (top + height + spacing[1]).min(MAX_EXTENT);
         }
@@ -2424,11 +2994,7 @@ impl Layout<'_, '_> {
             self.styles[id].layout.position,
             crate::style::Position::Absolute | crate::style::Position::Fixed
         ) {
-            if out.len() < MAX_OPS
-                && self.styles[id].layout.position == crate::style::Position::Absolute
-                && self.styles[id].layout.z_index.is_none()
-                && self.styles[id].display == Display::Block
-            {
+            if out.len() < MAX_OPS {
                 out.push(Token::StaticPos(id));
             }
             return;
@@ -2485,7 +3051,9 @@ impl Layout<'_, '_> {
                 });
             }
         } else if node.tag == "br" {
-            out.push(Token::Break);
+            out.push(Token::Break(id));
+        } else if s.layout.float != crate::style::FloatSide::None {
+            out.push(Token::Float(id));
         } else if node.tag == "svg" && is_block(s.display) {
             // SVG is a newly admitted replaced element, but an authored block
             // display must still start a block instead of getting a baseline.
@@ -2505,17 +3073,132 @@ impl Layout<'_, '_> {
             out.push(Token::Block(id));
         } else {
             let (margin, padding) = self.edges(id, 0.0);
-            if margin[3] + padding[3] != 0.0 {
-                out.push(Token::Gap(margin[3] + padding[3]));
+            let (start_gap, end_gap) = if s.direction == crate::style::TextDirection::Rtl {
+                (margin[1] + padding[1], margin[3] + padding[3])
+            } else {
+                (margin[3] + padding[3], margin[1] + padding[1])
+            };
+            if start_gap != 0.0 {
+                out.push(Token::Gap(start_gap));
             }
             for child in node.children.clone() {
                 self.tokens(child, out, depth + 1);
             }
-            if margin[1] + padding[1] != 0.0 {
-                out.push(Token::Gap(margin[1] + padding[1]));
+            if end_gap != 0.0 {
+                out.push(Token::Gap(end_gap));
             }
         }
     }
+    fn establishes_bfc(&self, id: usize) -> bool {
+        if id == 0 {
+            return true;
+        }
+        let s = &self.styles[id];
+        if s.layout.float != crate::style::FloatSide::None
+            || matches!(
+                s.layout.position,
+                crate::style::Position::Absolute | crate::style::Position::Fixed
+            )
+            || matches!(
+                s.display,
+                Display::InlineBlock
+                    | Display::TableCell
+                    | Display::Table
+                    | Display::InlineTable
+                    | Display::Flex
+                    | Display::InlineFlex
+                    | Display::Grid
+                    | Display::InlineGrid
+            )
+            || (self.viewport_overflow != Some(id)
+                && s.layout.overflow != [crate::style::Overflow::Visible; 2])
+        {
+            return true;
+        }
+        let mut parent = self.document.nodes[id].parent;
+        while parent != 0 && self.styles[parent].display == Display::Contents {
+            parent = self.document.nodes[parent].parent;
+        }
+        parent != 0 && is_format(self.styles[parent].display)
+    }
+
+    fn clear_y(&self, clear: crate::style::ClearSide) -> f32 {
+        use crate::style::{ClearSide, FloatSide};
+        let mut y = f32::NEG_INFINITY;
+        for f in &self.floats {
+            let matches_side = match clear {
+                ClearSide::None => false,
+                ClearSide::Left => f.side == FloatSide::Left,
+                ClearSide::Right => f.side == FloatSide::Right,
+                ClearSide::Both => true,
+            };
+            if matches_side {
+                y = y.max(f.y + f.h);
+            }
+        }
+        y
+    }
+
+    fn float_band(&self, x: f32, width: f32, y_top: f32, h: f32) -> (f32, f32, Option<f32>) {
+        let mut left = x;
+        let mut right = x + width;
+        let mut next_bottom: Option<f32> = None;
+        let y_end = y_top + h.max(0.01);
+        for f in &self.floats {
+            let f_bottom = f.y + f.h;
+            if f_bottom > y_top + 0.001 && (h <= 0.0 || f.y < y_end - 0.001) {
+                match f.side {
+                    crate::style::FloatSide::Left => left = left.max(f.x + f.w),
+                    crate::style::FloatSide::Right => right = right.min(f.x),
+                    crate::style::FloatSide::None => {}
+                }
+                next_bottom = Some(next_bottom.map_or(f_bottom, |cur| cur.min(f_bottom)));
+            }
+        }
+        (left, right, next_bottom)
+    }
+
+    fn measure_or_emit_float<const EMIT: bool>(
+        &mut self,
+        child: usize,
+        x: f32,
+        y: f32,
+        containing_w: f32,
+        containing_h: Option<f32>,
+        depth: usize,
+    ) -> (f32, f32) {
+        if self.is_replaced(child) {
+            return self.replaced::<EMIT>(child, x, y, containing_w, containing_h);
+        }
+        if self.is_structured_button(child) {
+            return self.inline_button::<EMIT>(child, x, y, containing_w, containing_h, depth);
+        }
+        let s = &self.styles[child];
+        let has_explicit_w = s.width != Length::Auto
+            || s.layout.width_fit_content
+            || s.layout.width_max_content
+            || (s.layout.aspect_ratio.is_some() && height_length(s.height, containing_h).is_some())
+            || matches!(s.display, Display::Table | Display::InlineTable);
+        let forced = if has_explicit_w {
+            None
+        } else {
+            let intr = self.intrinsic(child, depth);
+            let (m, _) = self.edges(child, containing_w);
+            let shrink_outer = intr.max.min(intr.min.max(containing_w));
+            Some((shrink_outer - m[1] - m[3]).max(0.0))
+        };
+        self.block_layout_context::<EMIT>(
+            child,
+            x,
+            y,
+            containing_w,
+            containing_h,
+            forced,
+            depth,
+            true,
+        )
+    }
+
     fn flow<const EMIT: bool>(
         &mut self,
         id: usize,
@@ -2553,37 +3236,122 @@ impl Layout<'_, '_> {
                     }
                 }
                 Token::StaticPos(child) => {
-                    if is_block(self.styles[child].display) && !line.is_empty() {
-                        top += self.line::<EMIT>(
-                            id,
-                            x,
-                            top,
-                            width,
-                            containing_height,
-                            &line,
-                            used,
-                            depth + 1,
-                        );
-                        line.clear();
-                        used = 0.0;
-                        pending_space = None;
-                    }
                     if EMIT && self.scene.static_positions.len() < MAX_OPS {
-                        let sx = x + if line.is_empty() || is_block(self.styles[child].display) {
+                        let is_rtl = self.styles[id].direction == crate::style::TextDirection::Rtl;
+                        let was_block = !self.styles[child].layout.original_was_inline_level;
+                        let inline_adv = if was_block || line.is_empty() {
                             0.0
                         } else {
-                            used
+                            used + pending_space.map_or(0.0, |(_, w)| w)
                         };
-                        self.scene.static_positions.insert(child, (sx, top));
+                        let sx = if is_rtl {
+                            x + width - inline_adv
+                        } else {
+                            x + inline_adv
+                        };
+                        let sy = if was_block && !line.is_empty() {
+                            top + self.line_height(id)
+                        } else {
+                            top
+                        };
+                        self.scene.static_positions.insert(child, (sx, sy, is_rtl));
+                    }
+                }
+                Token::Float(child) => {
+                    let (fw, fh) = self.measure_or_emit_float::<false>(
+                        child,
+                        0.0,
+                        0.0,
+                        width,
+                        containing_height,
+                        depth + 1,
+                    );
+                    let child_clear = self.styles[child].layout.clear;
+                    if !line.is_empty() {
+                        let (bl, br, _) = if self.floats.is_empty() {
+                            (x, x + width, None)
+                        } else {
+                            self.float_band(x, width, top, fh.max(self.line_height(id)))
+                        };
+                        if child_clear != crate::style::ClearSide::None
+                            || used + fw > (br - bl) + 0.01
+                        {
+                            top += self.line::<EMIT>(
+                                id,
+                                bl,
+                                top,
+                                (br - bl).max(0.0),
+                                containing_height,
+                                &line,
+                                used,
+                                depth + 1,
+                            );
+                            line.clear();
+                            used = 0.0;
+                            pending_space = None;
+                        }
+                    }
+                    let mut fy = top.max(self.last_float_top);
+                    if child_clear != crate::style::ClearSide::None {
+                        let cy_clear = self.clear_y(child_clear);
+                        if cy_clear.is_finite() {
+                            fy = fy.max(cy_clear);
+                        }
+                    }
+                    let side = self.styles[child].layout.float;
+                    let mut cy = fy;
+                    let fx = loop {
+                        let (bl, br, next_b) = self.float_band(x, width, cy, fh);
+                        if fw <= (br - bl) + 0.01 || next_b.is_none() {
+                            break match side {
+                                crate::style::FloatSide::Right => br - fw,
+                                _ => bl,
+                            };
+                        }
+                        let Some(nb) = next_b.filter(|&nb| nb > cy) else {
+                            break match side {
+                                crate::style::FloatSide::Right => br - fw,
+                                _ => bl,
+                            };
+                        };
+                        cy = nb;
+                    };
+                    fy = cy.min(MAX_EXTENT);
+                    if EMIT {
+                        self.measure_or_emit_float::<true>(
+                            child,
+                            fx,
+                            fy,
+                            width,
+                            containing_height,
+                            depth + 1,
+                        );
+                    }
+                    self.last_float_top = self.last_float_top.max(fy);
+                    if self.floats.len() < MAX_OPS {
+                        self.floats.push(PlacedFloat {
+                            side,
+                            x: fx,
+                            y: fy,
+                            w: fw,
+                            h: fh,
+                        });
                     }
                 }
                 Token::Block(child) => {
                     if !line.is_empty() {
+                        let (bl, br) = if self.floats.is_empty() {
+                            (x, x + width)
+                        } else {
+                            let (bl, br, _) =
+                                self.float_band(x, width, top, self.line_height(id).max(1.0));
+                            (bl, br)
+                        };
                         top += self.line::<EMIT>(
                             id,
-                            x,
+                            bl,
                             top,
-                            width,
+                            (br - bl).max(0.0),
                             containing_height,
                             &line,
                             used,
@@ -2593,33 +3361,155 @@ impl Layout<'_, '_> {
                     }
                     used = 0.0;
                     pending_space = None;
-                    top += self
-                        .block_layout::<EMIT>(
-                            child,
-                            x,
-                            top,
-                            width,
-                            containing_height,
-                            None,
-                            depth + 1,
-                        )
-                        .1;
-                }
-                Token::Break => {
-                    top += if line.is_empty() {
-                        self.line_height(id)
+                    let child_clear = self.styles[child].layout.clear;
+                    if child_clear != crate::style::ClearSide::None && !self.floats.is_empty() {
+                        let cy_clear = self.clear_y(child_clear);
+                        if cy_clear.is_finite() {
+                            let (m, _) = self.edges(child, width);
+                            top = top.max(cy_clear - m[0]);
+                            self.last_float_top = self.last_float_top.max(top + m[0]);
+                        }
+                    }
+                    if !self.floats.is_empty() && self.establishes_bfc(child) {
+                        let (m, p) = self.edges(child, width);
+                        let cs = self.styles[child].clone();
+                        let is_tbl = matches!(cs.display, Display::Table | Display::InlineTable);
+                        let is_auto_w = cs.width == Length::Auto
+                            && !cs.layout.width_fit_content
+                            && !cs.layout.width_max_content
+                            && !is_tbl
+                            && !self.is_replaced(child)
+                            && !(cs.layout.aspect_ratio.is_some()
+                                && height_length(cs.height, containing_height).is_some());
+                        let mut cy = top;
+                        let (_, used_outer_h) = loop {
+                            let (bl, br, next_b) = self.float_band(x, width, cy + m[0], 1.0);
+                            if next_b.is_none() {
+                                break self.block_layout::<EMIT>(
+                                    child,
+                                    x,
+                                    cy,
+                                    width,
+                                    containing_height,
+                                    None,
+                                    depth + 1,
+                                );
+                            }
+                            if is_auto_w {
+                                let cand_bx = (x + m[3]).max(bl);
+                                let cand_w = (br - cand_bx - m[1]).max(p[1] + p[3]);
+                                let min_border_w =
+                                    (self.intrinsic(child, depth + 1).min - m[1] - m[3])
+                                        .max(p[1] + p[3]);
+                                if cand_bx + cand_w.max(min_border_w) + m[1].max(0.0) <= br + 0.01 {
+                                    break self.block_layout::<EMIT>(
+                                        child,
+                                        cand_bx - m[3],
+                                        cy,
+                                        width,
+                                        containing_height,
+                                        Some(cand_w.max(min_border_w)),
+                                        depth + 1,
+                                    );
+                                }
+                            } else {
+                                let (outer_w, _) = self.block_layout::<false>(
+                                    child,
+                                    0.0,
+                                    0.0,
+                                    width,
+                                    containing_height,
+                                    None,
+                                    depth + 1,
+                                );
+                                let border_w = (outer_w - m[1] - m[3]).max(0.0);
+                                let is_rtl =
+                                    self.styles[id].direction == crate::style::TextDirection::Rtl;
+                                let cand_bx = if is_rtl {
+                                    (br - m[1] - border_w).min(x + width - m[1] - border_w)
+                                } else {
+                                    (x + m[3]).max(bl)
+                                };
+                                if cand_bx >= bl - 0.01 && cand_bx + border_w <= br + 0.01 {
+                                    break self.block_layout::<EMIT>(
+                                        child,
+                                        cand_bx - m[3],
+                                        cy,
+                                        width,
+                                        containing_height,
+                                        Some(border_w),
+                                        depth + 1,
+                                    );
+                                }
+                            }
+                            let Some(nb) = next_b.filter(|&nb| nb - m[0] > cy) else {
+                                break self.block_layout::<EMIT>(
+                                    child,
+                                    x,
+                                    cy,
+                                    width,
+                                    containing_height,
+                                    None,
+                                    depth + 1,
+                                );
+                            };
+                            cy = nb - m[0];
+                        };
+                        top = cy + used_outer_h;
                     } else {
-                        self.line::<EMIT>(
+                        top += self
+                            .block_layout::<EMIT>(
+                                child,
+                                x,
+                                top,
+                                width,
+                                containing_height,
+                                None,
+                                depth + 1,
+                            )
+                            .1;
+                    }
+                }
+                Token::Break(br_id) => {
+                    let br_clear = self.styles[br_id].layout.clear;
+                    if line.is_empty() {
+                        if br_clear != crate::style::ClearSide::None && !self.floats.is_empty() {
+                            let cy_clear = self.clear_y(br_clear);
+                            if cy_clear > top {
+                                top = cy_clear;
+                                self.last_float_top = self.last_float_top.max(top);
+                            } else {
+                                top += self.line_height(id);
+                            }
+                        } else {
+                            top += self.line_height(id);
+                        }
+                    } else {
+                        let (bl, br) = if self.floats.is_empty() {
+                            (x, x + width)
+                        } else {
+                            let (bl, br, _) =
+                                self.float_band(x, width, top, self.line_height(id).max(1.0));
+                            (bl, br)
+                        };
+                        top += self.line::<EMIT>(
                             id,
-                            x,
+                            bl,
                             top,
-                            width,
+                            (br - bl).max(0.0),
                             containing_height,
                             &line,
                             used,
                             depth + 1,
-                        )
-                    };
+                        );
+                        if br_clear != crate::style::ClearSide::None && !self.floats.is_empty() {
+                            let cy_clear = self.clear_y(br_clear);
+                            if cy_clear > top {
+                                top = cy_clear;
+                                self.last_float_top = self.last_float_top.max(top);
+                            }
+                        }
+                    }
                     line.clear();
                     used = 0.0;
                     pending_space = None;
@@ -2638,20 +3528,51 @@ impl Layout<'_, '_> {
                         self.styles[id].white_space,
                         WhiteSpace::NoWrap | WhiteSpace::Pre
                     );
-                    if !nowrap && !line.is_empty() && used + sw + tw > width {
-                        top += self.line::<EMIT>(
-                            id,
-                            x,
-                            top,
-                            width,
-                            containing_height,
-                            &line,
-                            used,
-                            depth + 1,
-                        );
-                        line.clear();
-                        used = 0.0;
-                        pending_space = None;
+                    if self.floats.is_empty() {
+                        if !nowrap && !line.is_empty() && used + sw + tw > width {
+                            top += self.line::<EMIT>(
+                                id,
+                                x,
+                                top,
+                                width,
+                                containing_height,
+                                &line,
+                                used,
+                                depth + 1,
+                            );
+                            line.clear();
+                            used = 0.0;
+                            pending_space = None;
+                        }
+                    } else {
+                        let lh_probe = self.line_height(id).max(1.0);
+                        let (bl, br, _) = self.float_band(x, width, top, lh_probe);
+                        let avail_line = (br - bl).max(0.0);
+                        if !nowrap && !line.is_empty() && used + sw + tw > avail_line {
+                            top += self.line::<EMIT>(
+                                id,
+                                bl,
+                                top,
+                                avail_line,
+                                containing_height,
+                                &line,
+                                used,
+                                depth + 1,
+                            );
+                            line.clear();
+                            used = 0.0;
+                            pending_space = None;
+                        }
+                        if !nowrap && line.is_empty() {
+                            while let (bl2, br2, Some(nb)) =
+                                self.float_band(x, width, top, lh_probe)
+                            {
+                                if tw <= (br2 - bl2) + 0.01 || nb <= top {
+                                    break;
+                                }
+                                top = nb;
+                            }
+                        }
                     }
                     if let Some((node, w)) = pending_space.take() {
                         line.push(Token::Space { node, width: w });
@@ -2666,7 +3587,22 @@ impl Layout<'_, '_> {
             }
         }
         if !line.is_empty() {
-            top += self.line::<EMIT>(id, x, top, width, containing_height, &line, used, depth + 1);
+            let (bl, br) = if self.floats.is_empty() {
+                (x, x + width)
+            } else {
+                let (bl, br, _) = self.float_band(x, width, top, self.line_height(id).max(1.0));
+                (bl, br)
+            };
+            top += self.line::<EMIT>(
+                id,
+                bl,
+                top,
+                (br - bl).max(0.0),
+                containing_height,
+                &line,
+                used,
+                depth + 1,
+            );
         }
         (top - y).max(0.0)
     }
@@ -2683,7 +3619,7 @@ impl Layout<'_, '_> {
         } else if self.is_structured_button(id) {
             self.inline_button::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
-        } else if self.is_definite_atomic_inline(id, width) {
+        } else if self.is_definite_atomic_inline(id, width, containing_height) {
             self.definite_atomic_inline::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
         } else if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
@@ -2699,11 +3635,18 @@ impl Layout<'_, '_> {
         }
     }
 
-    fn is_definite_atomic_inline(&self, id: usize, width: f32) -> bool {
+    fn is_definite_atomic_inline(
+        &self,
+        id: usize,
+        width: f32,
+        containing_height: Option<f32>,
+    ) -> bool {
         matches!(
             self.styles[id].display,
             Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
-        ) && self.styles[id].width.resolve(width).is_some()
+        ) && (self.styles[id].width.resolve(width).is_some()
+            || (self.styles[id].layout.aspect_ratio.is_some()
+                && height_length(self.styles[id].height, containing_height).is_some()))
             && !self.is_replaced(id)
             && !self.is_structured_button(id)
     }
@@ -2819,7 +3762,7 @@ impl Layout<'_, '_> {
                             depth + 1,
                         );
                         height = height.max(h);
-                    } else if self.is_definite_atomic_inline(*child, width) {
+                    } else if self.is_definite_atomic_inline(*child, width, containing_height) {
                         let (_, h) = self.definite_atomic_inline::<false>(
                             *child,
                             0.0,
@@ -2862,12 +3805,18 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> f32 {
         let (height, ascent) = self.line_metrics(id, width, containing_height, tokens, depth);
-        let mut left = x + match self.styles[id].text_align {
-            TextAlign::Center => (width - used).max(0.0) / 2.0,
-            TextAlign::Right | TextAlign::End => (width - used).max(0.0),
+        let is_rtl = self.styles[id].direction == crate::style::TextDirection::Rtl;
+        let mut left = x + match (self.styles[id].text_align, is_rtl) {
+            (TextAlign::Center, _) => (width - used).max(0.0) / 2.0,
+            (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start, true) => {
+                (width - used).max(0.0)
+            }
             _ => 0.0,
         };
-        for token in tokens {
+        let rtl_order = is_rtl.then(|| rtl_visual_indices(tokens));
+        for step in 0..tokens.len() {
+            let token_idx = rtl_order.as_ref().map_or(step, |order| order[step]);
+            let token = &tokens[token_idx];
             match token {
                 Token::Word {
                     node,
@@ -2920,7 +3869,7 @@ impl Layout<'_, '_> {
                             containing_height,
                             depth + 1,
                         )
-                    } else if self.is_definite_atomic_inline(*child, width) {
+                    } else if self.is_definite_atomic_inline(*child, width, containing_height) {
                         self.definite_atomic_inline::<EMIT>(
                             *child,
                             left,
@@ -2994,6 +3943,7 @@ impl Layout<'_, '_> {
         if !EMIT {
             return (r.w + m[1] + m[3], r.h + m[0] + m[2]);
         }
+        let self_start_mark = self.scene.mark();
         let content = Rect {
             x: r.x + p[3],
             y: r.y + p[0],
@@ -3001,6 +3951,11 @@ impl Layout<'_, '_> {
             h,
         };
         self.paint_replaced_allocated(id, r, content);
+        if self.styles[id].layout.position == crate::style::Position::Sticky {
+            self.scene
+                .sticky_ranges
+                .push((id, self_start_mark, self.scene.mark(), r));
+        }
         (r.w + m[1] + m[3], r.h + m[0] + m[2])
     }
 
@@ -3123,6 +4078,7 @@ impl Layout<'_, '_> {
         if !self.spend(depth) {
             return;
         }
+        let self_start_mark = self.scene.mark();
         let content = Rect {
             x: r.x + padding[3],
             y: r.y + padding[0],
@@ -3131,6 +4087,11 @@ impl Layout<'_, '_> {
         };
         if self.is_replaced(id) {
             self.paint_replaced_allocated(id, r, content);
+            if self.styles[id].layout.position == crate::style::Position::Sticky {
+                self.scene
+                    .sticky_ranges
+                    .push((id, self_start_mark, self.scene.mark(), r));
+            }
             return;
         }
         self.scene.border_for(id, r);
@@ -3180,11 +4141,258 @@ impl Layout<'_, '_> {
                 );
             }
         }
+        formatting::record_abspos_children(self, id, content);
         if let Some(clip) = self.clip_for(id, r) {
             self.scene.clip(children_start, clip);
         }
+        if let Some(rr) = self.rounded_clip_for(id, r) {
+            self.scene.clip_rounded(children_start, rr);
+        }
         self.scene.box_for(id, r);
         self.hit(id, r);
+        if self.styles[id].layout.position == crate::style::Position::Sticky {
+            self.scene
+                .sticky_ranges
+                .push((id, self_start_mark, self.scene.mark(), r));
+        }
+    }
+
+    fn apply_sticky_offsets(&mut self) {
+        use crate::style::Overflow;
+        if self.scene.sticky_ranges.is_empty() || self.exhausted {
+            return;
+        }
+        let mut ranges = std::mem::take(&mut self.scene.sticky_ranges);
+        // Process outer sticky containers before nested sticky descendants.
+        for idx in (0..ranges.len()).rev() {
+            let (id, start, end, rect) = ranges[idx];
+            if id == 0 {
+                continue;
+            }
+            let mut border_boxes = vec![None; self.document.nodes.len()];
+            for &(node, br) in &self.scene.borders {
+                if let Some(slot) = border_boxes.get_mut(node) {
+                    *slot = Some(br);
+                }
+            }
+            // Nearest block/flex/grid/table-cell containing block.
+            let mut cb = self.document.nodes[id].parent;
+            while cb != 0
+                && matches!(
+                    self.styles[cb].display,
+                    Display::Inline
+                        | Display::Contents
+                        | Display::TableRow
+                        | Display::TableRowGroup
+                        | Display::TableHeaderGroup
+                        | Display::TableFooterGroup
+                )
+            {
+                cb = self.document.nodes[cb].parent;
+            }
+            let cb_border = border_boxes.get(cb).copied().flatten().unwrap_or(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: self.viewport.width as f32,
+                h: self.viewport.height as f32,
+            });
+            let cb_parent_w = if cb == 0 {
+                cb_border.w
+            } else {
+                let p = self.document.nodes[cb].parent;
+                border_boxes
+                    .get(p)
+                    .copied()
+                    .flatten()
+                    .map_or(self.viewport.width as f32, |r| r.w)
+            };
+            let (_, cb_pad) = self.edges(cb, cb_parent_w);
+            let cb_content = Rect {
+                x: cb_border.x + cb_pad[3],
+                y: cb_border.y + cb_pad[0],
+                w: (cb_border.w - cb_pad[1] - cb_pad[3]).max(0.0),
+                h: (cb_border.h - cb_pad[0] - cb_pad[2]).max(0.0),
+            };
+            // Nearest scroll container ancestor (or viewport).
+            let mut scroll_anc = self.document.nodes[id].parent;
+            let mut scrollport = None;
+            while scroll_anc != 0 {
+                if Some(scroll_anc) != self.viewport_overflow
+                    && self.styles[scroll_anc].layout.overflow != [Overflow::Visible; 2]
+                    && !matches!(
+                        self.styles[scroll_anc].display,
+                        Display::Inline | Display::Contents
+                    )
+                {
+                    if let Some(sb) = border_boxes.get(scroll_anc).copied().flatten() {
+                        let b = self.styles[scroll_anc].border_width;
+                        scrollport = Some(Rect {
+                            x: sb.x + b[3],
+                            y: sb.y + b[0],
+                            w: (sb.w - b[1] - b[3]).max(0.0),
+                            h: (sb.h - b[0] - b[2]).max(0.0),
+                        });
+                    }
+                    break;
+                }
+                scroll_anc = self.document.nodes[scroll_anc].parent;
+            }
+            let scrollport = scrollport.unwrap_or(Rect {
+                x: 0.0,
+                y: self.viewport.scroll as f32,
+                w: self.viewport.width as f32,
+                h: self.viewport.height as f32,
+            });
+            let inset = self.styles[id].layout.inset;
+            let top_in = height_length_signed(inset[0], Some(scrollport.h));
+            let right_in = inset[1].resolve(scrollport.w);
+            let bottom_in = height_length_signed(inset[2], Some(scrollport.h));
+            let left_in = inset[3].resolve(scrollport.w);
+            if top_in.is_none() && right_in.is_none() && bottom_in.is_none() && left_in.is_none() {
+                continue;
+            }
+            let (m, _) = self.edges(id, cb_content.w);
+            let min_x = cb_content.x + m[3];
+            let max_x = (cb_content.x + cb_content.w - m[1] - rect.w).max(min_x);
+            let min_y = cb_content.y + m[0];
+            let max_y = (cb_content.y + cb_content.h - m[2] - rect.h).max(min_y);
+            let mut new_x = rect.x;
+            let mut new_y = rect.y;
+            let cb_rtl = self.styles[cb].direction == crate::style::TextDirection::Rtl;
+            if cb_rtl {
+                if let Some(left) = left_in {
+                    new_x = new_x.max((scrollport.x + left).min(max_x));
+                }
+                if let Some(right) = right_in {
+                    new_x = new_x.min((scrollport.x + scrollport.w - right - rect.w).max(min_x));
+                }
+            } else {
+                if let Some(right) = right_in {
+                    new_x = new_x.min((scrollport.x + scrollport.w - right - rect.w).max(min_x));
+                }
+                if let Some(left) = left_in {
+                    new_x = new_x.max((scrollport.x + left).min(max_x));
+                }
+            }
+            if let Some(bottom) = bottom_in {
+                new_y = new_y.min((scrollport.y + scrollport.h - bottom - rect.h).max(min_y));
+            }
+            if let Some(top) = top_in {
+                new_y = new_y.max((scrollport.y + top).min(max_y));
+            }
+            let dx = new_x - rect.x;
+            let dy = new_y - rect.y;
+            if dx == 0.0 && dy == 0.0 {
+                continue;
+            }
+            for op in &mut self.scene.paints[start.0..end.0] {
+                let r = op.rect_mut();
+                r.x += dx;
+                r.y += dy;
+            }
+            for b in &mut self.scene.boxes[start.1..end.1] {
+                b.x += dx.round() as i32;
+                b.y += dy.round() as i32;
+            }
+            for (r, _) in &mut self.scene.hits[start.2..end.2] {
+                r.x += dx;
+                r.y += dy;
+            }
+            for &(node, _) in &self.scene.borders[start.3..end.3] {
+                let _ = node;
+            }
+            for (_, r) in &mut self.scene.borders[start.3..end.3] {
+                r.x += dx;
+                r.y += dy;
+            }
+            // Update nested sticky entries and out-of-flow static/abspos anchors inside `id`.
+            for inner in &mut ranges[..idx] {
+                if inner.1.0 >= start.0 && inner.2.0 <= end.0 {
+                    inner.3.x += dx;
+                    inner.3.y += dy;
+                }
+            }
+            let is_descendant = |mut node: usize| {
+                while node != 0 {
+                    if node == id {
+                        return true;
+                    }
+                    node = self.document.nodes[node].parent;
+                }
+                false
+            };
+            for (&child, pos) in &mut self.scene.static_positions {
+                if child != id && is_descendant(child) {
+                    pos.0 += dx;
+                    pos.1 += dy;
+                }
+            }
+            for (&child, align) in &mut self.scene.abspos_alignments {
+                if child != id && is_descendant(child) {
+                    align.rect.x += dx;
+                    align.rect.y += dy;
+                }
+            }
+            // Recompute clips on shifted paints so ancestor overflow clips stay stationary
+            // while sticky/descendant clips move with the sticky subtree.
+            let mut updated_borders = vec![None; self.document.nodes.len()];
+            for &(node, br) in &self.scene.borders {
+                if let Some(slot) = updated_borders.get_mut(node) {
+                    *slot = Some(br);
+                }
+            }
+            for p in start.0..end.0 {
+                let owner = self.scene.paint_nodes[p];
+                let mut clip: Option<Rect> = None;
+                let mut rrs: Vec<crate::paint::RoundedRect> = Vec::new();
+                // Preserve own background-image rounded mask if present.
+                if matches!(
+                    self.scene.paints[p],
+                    Paint::Image(_, ImageSource::Resource(_), None)
+                ) && has_nonzero_border_radius(&self.styles[owner])
+                    && let Some(own_r) = updated_borders.get(owner).copied().flatten()
+                {
+                    let own_parent_w = if owner == 0 {
+                        own_r.w
+                    } else {
+                        updated_borders
+                            .get(self.document.nodes[owner].parent)
+                            .copied()
+                            .flatten()
+                            .map_or(self.viewport.width as f32, |r| r.w)
+                    };
+                    let (_, own_pad) = self.edges(owner, own_parent_w);
+                    let outer = resolve_rounded_rect(&self.styles[owner], own_r);
+                    if let Some(bg_rr) = rounded_background_box(
+                        outer,
+                        self.styles[owner].border_width,
+                        own_pad,
+                        self.styles[owner].background_clip,
+                    ) {
+                        rrs.push(bg_rr);
+                    }
+                }
+                let mut anc = if owner == 0 {
+                    0
+                } else {
+                    self.document.nodes[owner].parent
+                };
+                while anc != 0 {
+                    if let Some(ar) = updated_borders.get(anc).copied().flatten() {
+                        if let Some(c) = self.clip_for(anc, ar) {
+                            let c = c.paint_edges();
+                            clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                        }
+                        if let Some(rr) = self.rounded_clip_for(anc, ar) {
+                            rrs.push(rr);
+                        }
+                    }
+                    anc = self.document.nodes[anc].parent;
+                }
+                self.scene.clips[p] = clip;
+                self.scene.rounded_clips[p] = rrs;
+            }
+        }
     }
 
     pub(super) fn first_baseline(&mut self, id: usize, width: f32, depth: usize) -> Option<f32> {
@@ -3212,6 +4420,7 @@ impl Layout<'_, '_> {
         let children = self.document.nodes[id].children.clone();
         for child in children {
             if self.styles[child].display == Display::None
+                || self.styles[child].layout.float != crate::style::FloatSide::None
                 || matches!(
                     self.styles[child].layout.position,
                     crate::style::Position::Absolute | crate::style::Position::Fixed
@@ -3245,6 +4454,36 @@ impl Layout<'_, '_> {
         }
         None
     }
+}
+
+fn is_strong_ltr_token(token: &Token) -> bool {
+    matches!(token, Token::Word { text, .. } if text.chars().any(|c| c.is_ascii_alphabetic()))
+}
+
+fn rtl_visual_indices(tokens: &[Token]) -> Vec<usize> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if is_strong_ltr_token(&tokens[i]) {
+            let start = i;
+            i += 1;
+            while i + 1 < tokens.len()
+                && matches!(tokens[i], Token::Space { .. })
+                && is_strong_ltr_token(&tokens[i + 1])
+            {
+                i += 2;
+            }
+            runs.push(start..i);
+        } else {
+            runs.push(i..i + 1);
+            i += 1;
+        }
+    }
+    let mut out = Vec::with_capacity(tokens.len());
+    for run in runs.into_iter().rev() {
+        out.extend(run);
+    }
+    out
 }
 
 fn is_format(display: Display) -> bool {
@@ -3477,6 +4716,8 @@ mod tests {
             format_scratch: 0,
             replaced_nodes: Vec::new(),
             anonymous_tables: Vec::new(),
+            floats: Vec::new(),
+            last_float_top: 0.0,
             budget: 2_000_000,
             exhausted: false,
             failure: None,
@@ -3489,6 +4730,8 @@ mod tests {
     fn assert_no_scene_allocation(layout: &Layout<'_, '_>) {
         assert_eq!(layout.scene.mark(), (0, 0, 0, 0));
         assert_eq!(layout.scene.clips.capacity(), 0);
+        assert_eq!(layout.scene.rounded_clips.capacity(), 0);
+        assert_eq!(layout.scene.sticky_ranges.capacity(), 0);
         assert_eq!(layout.scene.borders.capacity(), 0);
         assert_eq!(layout.scene.paints.capacity(), 0);
         assert_eq!(layout.scene.paint_nodes.capacity(), 0);
@@ -3917,6 +5160,8 @@ mod tests {
             format_scratch: 0,
             replaced_nodes: Vec::new(),
             anonymous_tables: Vec::new(),
+            floats: Vec::new(),
+            last_float_top: 0.0,
             budget: 2_000_000,
             exhausted: false,
             failure: None,

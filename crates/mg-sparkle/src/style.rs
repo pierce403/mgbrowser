@@ -170,6 +170,8 @@ pub enum CalcOp {
 }
 
 /// A CSS length whose containing-block percentage is resolved during layout.
+/// 8-byte aligned so `&Length` can be passed directly to `CompactLength::calc`.
+#[repr(align(8))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Length {
     Auto,
@@ -384,6 +386,11 @@ pub struct LayoutStyle {
     pub width_max_content: bool,
     pub max_width_fit_content: bool,
     pub min_width_intrinsic: Option<IntrinsicSize>,
+    pub aspect_ratio: Option<f32>,
+    pub aspect_ratio_auto: bool,
+    pub original_was_inline_level: bool,
+    pub float: FloatSide,
+    pub clear: ClearSide,
     pub position: Position,
     /// Physical top, right, bottom, left offsets.
     pub inset: [Length; 4],
@@ -422,6 +429,11 @@ impl Default for LayoutStyle {
             width_max_content: false,
             max_width_fit_content: false,
             min_width_intrinsic: None,
+            aspect_ratio: None,
+            aspect_ratio_auto: true,
+            original_was_inline_level: false,
+            float: FloatSide::None,
+            clear: ClearSide::None,
             position: Position::Static,
             inset: [Length::Auto; 4],
             overflow: [Overflow::Visible; 2],
@@ -446,6 +458,44 @@ impl Default for LayoutStyle {
             outer_calc_only: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FloatSide {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClearSide {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Visible,
+    Hidden,
+    Collapse,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PseudoStyle {
+    pub style: ComputedStyle,
+    pub text: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -565,6 +615,8 @@ pub struct ComputedStyle {
     pub padding: [Length; 4],
     pub border_width: [f32; 4],
     pub border_color: [Color; 4],
+    /// Corner radii `[top_left, top_right, bottom_right, bottom_left]` as `(rx, ry)`.
+    pub border_radii: [(Length, Length); 4],
     pub width: Length,
     pub height: Length,
     pub min_width: Length,
@@ -572,9 +624,12 @@ pub struct ComputedStyle {
     pub max_width: Length,
     pub max_height: Length,
     pub text_align: TextAlign,
+    pub direction: TextDirection,
     pub vertical_align: VerticalAlign,
     pub white_space: WhiteSpace,
+    pub visibility: Visibility,
     pub visible: bool,
+    pub own_opacity: f32,
     pub(crate) opacity: f32,
     pub pointer_events: bool,
     pub border_collapse: bool,
@@ -582,6 +637,8 @@ pub struct ComputedStyle {
     pub border_spacing: [f32; 2],
     /// URL layers in CSS front-to-back order. Paint in reverse order.
     pub background_images: Vec<BackgroundImage>,
+    pub before: Option<Box<PseudoStyle>>,
+    pub after: Option<Box<PseudoStyle>>,
 }
 
 impl Default for ComputedStyle {
@@ -606,6 +663,7 @@ impl Default for ComputedStyle {
             padding: [Length::Px(0.0); 4],
             border_width: [0.0; 4],
             border_color: [black; 4],
+            border_radii: [(Length::Px(0.0), Length::Px(0.0)); 4],
             width: Length::Auto,
             height: Length::Auto,
             min_width: Length::Auto,
@@ -613,21 +671,24 @@ impl Default for ComputedStyle {
             max_width: Length::Auto,
             max_height: Length::Auto,
             text_align: TextAlign::Start,
+            direction: TextDirection::Ltr,
             vertical_align: VerticalAlign::Baseline,
             white_space: WhiteSpace::Normal,
+            visibility: Visibility::Visible,
             visible: true,
+            own_opacity: 1.0,
             opacity: 1.0,
             pointer_events: true,
             border_collapse: false,
             border_spacing: [2.0; 2],
             background_images: Vec::new(),
+            before: None,
+            after: None,
         }
     }
 }
 
 impl ComputedStyle {
-    // Preserve the existing text-style convention without ever cloning an
-    // element's non-inherited grid container allocation into a text node.
     fn clone_with_layout(&self, layout: LayoutStyle) -> Self {
         Self {
             display: self.display,
@@ -648,6 +709,7 @@ impl ComputedStyle {
             padding: self.padding,
             border_width: self.border_width,
             border_color: self.border_color,
+            border_radii: self.border_radii,
             width: self.width,
             height: self.height,
             min_width: self.min_width,
@@ -655,14 +717,65 @@ impl ComputedStyle {
             max_width: self.max_width,
             max_height: self.max_height,
             text_align: self.text_align,
+            direction: self.direction,
             vertical_align: self.vertical_align,
             white_space: self.white_space,
+            visibility: self.visibility,
             visible: self.visible,
+            own_opacity: self.own_opacity,
             opacity: self.opacity,
             pointer_events: self.pointer_events,
             border_collapse: self.border_collapse,
             border_spacing: self.border_spacing,
             background_images: self.background_images.clone(),
+            before: self.before.clone(),
+            after: self.after.clone(),
+        }
+    }
+
+    // Preserve the existing text-style convention without ever cloning an
+    // element's non-inherited grid or pseudo-element allocations into a text node.
+    pub(crate) fn inherit_for_text(&self) -> Self {
+        Self {
+            display: self.display,
+            layout: LayoutStyle::default(),
+            color: self.color,
+            background_color: self.background_color,
+            background_clip: self.background_clip,
+            background_gradient: self.background_gradient,
+            svg_fill: self.svg_fill,
+            svg_stroke: self.svg_stroke,
+            font_size: self.font_size,
+            font_weight: self.font_weight,
+            italic: self.italic,
+            font_families: self.font_families.clone(),
+            line_height: self.line_height,
+            underline: self.underline,
+            margin: self.margin,
+            padding: self.padding,
+            border_width: self.border_width,
+            border_color: self.border_color,
+            border_radii: [(Length::Px(0.0), Length::Px(0.0)); 4],
+            width: self.width,
+            height: self.height,
+            min_width: self.min_width,
+            min_height: self.min_height,
+            max_width: self.max_width,
+            max_height: self.max_height,
+            text_align: self.text_align,
+            direction: self.direction,
+            vertical_align: self.vertical_align,
+            white_space: self.white_space,
+            visibility: self.visibility,
+            visible: self.visible,
+            own_opacity: 1.0,
+            opacity: self.opacity,
+            pointer_events: self.pointer_events,
+            border_collapse: self.border_collapse,
+            border_spacing: self.border_spacing,
+            background_images: self.background_images.clone(),
+            before: None,
+            after: None,
         }
     }
 }
@@ -709,8 +822,16 @@ const MAX_FONT_FAMILIES: usize = 16;
 const MAX_STYLE_URL_BYTES: usize = 4096;
 const MAX_FONT_NAME_BYTES: usize = 256;
 
+fn pseudo_heap_bytes(pseudo: &Option<Box<PseudoStyle>>) -> usize {
+    pseudo.as_ref().map_or(0, |item| {
+        std::mem::size_of::<PseudoStyle>() + snapshot_heap_bytes(&item.style) + item.text.capacity()
+    })
+}
+
 pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
     layout_heap_bytes(&value.layout)
+        + pseudo_heap_bytes(&value.before)
+        + pseudo_heap_bytes(&value.after)
         + value.font_families.capacity() * std::mem::size_of::<String>()
         + value.background_images.capacity() * std::mem::size_of::<BackgroundImage>()
         + value
@@ -1008,7 +1129,7 @@ impl Element for DomNode<'_> {
         context: &mut MatchingContext<SelectorImpl>,
     ) -> bool {
         context.matching_mode() == MatchingMode::ForStatelessPseudoElement
-            && matches!(pe, PseudoElement::Before)
+            && matches!(pe, PseudoElement::Before | PseudoElement::After)
     }
     fn apply_selector_flags(&self, _: ElementSelectorFlags) {}
     fn is_link(&self) -> bool {
@@ -1708,13 +1829,15 @@ pub fn compute_styles_with_diagnostics(
             // Admit before cloning: inherited strings must not amplify a small
             // stylesheet by the number of text nodes in the arena.
             let inherited_bytes = snapshot_heap_bytes(&output[parent_id])
-                - layout_heap_bytes(&output[parent_id].layout);
+                - layout_heap_bytes(&output[parent_id].layout)
+                - pseudo_heap_bytes(&output[parent_id].before)
+                - pseudo_heap_bytes(&output[parent_id].after);
             admit_snapshot_bytes(
                 &mut snapshot_bytes,
                 snapshot_heap_bytes(&output[id]),
                 inherited_bytes,
             )?;
-            output[id] = output[parent_id].clone_with_layout(LayoutStyle::default());
+            output[id] = output[parent_id].inherit_for_text();
             continue;
         }
         let mut declarations = ApplicableDeclarationList::new();
@@ -1760,61 +1883,12 @@ pub fn compute_styles_with_diagnostics(
             &mut tree_caches,
         );
         let mut snapshot = renderer_style(&computed)?;
-        snapshot.opacity = output[parent_id].opacity
-            * if svg_contexts[id] {
-                1.0
-            } else {
-                computed.get_effects().opacity.clamp(0.0, 1.0)
-            };
-        if node.node().children.is_empty() && snapshot.background_images.is_empty() {
-            let mut before_declarations = ApplicableDeclarationList::new();
-            let mut before_context = MatchingContext::new(
-                MatchingMode::ForStatelessPseudoElement,
-                None,
-                &mut caches,
-                QuirksMode::NoQuirks,
-                NeedsSelectorFlags::No,
-                MatchingForInvalidation::No,
-            );
-            stylist.push_applicable_declarations(
-                node,
-                Some(&PseudoElement::Before),
-                None,
-                None,
-                Default::default(),
-                RuleInclusion::All,
-                &mut before_declarations,
-                &mut before_context,
-            );
-            if !before_declarations.is_empty() {
-                let before_rules = stylist.rule_tree().insert_ordered_rules_with_important(
-                    before_declarations
-                        .into_iter()
-                        .map(ApplicableDeclarationBlock::for_rule_tree),
-                    &guards,
-                );
-                let before_computed = stylist.cascade_style_and_visited(
-                    Some(node),
-                    Some(&PseudoElement::Before),
-                    &CascadeInputs {
-                        rules: Some(before_rules),
-                        ..Default::default()
-                    },
-                    &guards,
-                    Some(computed.as_ref()),
-                    Some(computed.as_ref()),
-                    style::properties::cascade::FirstLineReparenting::No,
-                    &Default::default(),
-                    None,
-                    &mut Default::default(),
-                    &mut tree_caches,
-                );
-                let before_snapshot = renderer_style(&before_computed)?;
-                if !before_snapshot.background_images.is_empty() {
-                    snapshot.background_images = before_snapshot.background_images;
-                }
-            }
-        }
+        snapshot.own_opacity = if svg_contexts[id] {
+            1.0
+        } else {
+            computed.get_effects().opacity.clamp(0.0, 1.0)
+        };
+        snapshot.opacity = output[parent_id].opacity * snapshot.own_opacity;
         if svg_contexts[id] {
             for (property, paint) in [("fill", snapshot.svg_fill), ("stroke", snapshot.svg_stroke)]
             {
@@ -1842,6 +1916,116 @@ pub fn compute_styles_with_diagnostics(
             // Inactive fallback content is not overrideable by author CSS.
             snapshot.display = Display::None;
         }
+        if !svg_contexts[id]
+            && snapshot.display != Display::None
+            && !matches!(
+                node.node().tag.as_str(),
+                "img" | "input" | "br" | "hr" | "svg" | "textarea" | "select"
+            )
+        {
+            for pseudo_kind in [PseudoElement::Before, PseudoElement::After] {
+                let mut pseudo_declarations = ApplicableDeclarationList::new();
+                let mut pseudo_context = MatchingContext::new(
+                    MatchingMode::ForStatelessPseudoElement,
+                    None,
+                    &mut caches,
+                    QuirksMode::NoQuirks,
+                    NeedsSelectorFlags::No,
+                    MatchingForInvalidation::No,
+                );
+                stylist.push_applicable_declarations(
+                    node,
+                    Some(&pseudo_kind),
+                    None,
+                    None,
+                    Default::default(),
+                    RuleInclusion::All,
+                    &mut pseudo_declarations,
+                    &mut pseudo_context,
+                );
+                if pseudo_declarations.is_empty() {
+                    continue;
+                }
+                let pseudo_rules = stylist.rule_tree().insert_ordered_rules_with_important(
+                    pseudo_declarations
+                        .into_iter()
+                        .map(ApplicableDeclarationBlock::for_rule_tree),
+                    &guards,
+                );
+                let pseudo_computed = stylist.cascade_style_and_visited(
+                    Some(node),
+                    Some(&pseudo_kind),
+                    &CascadeInputs {
+                        rules: Some(pseudo_rules),
+                        ..Default::default()
+                    },
+                    &guards,
+                    Some(computed.as_ref()),
+                    Some(computed.as_ref()),
+                    style::properties::cascade::FirstLineReparenting::No,
+                    &Default::default(),
+                    None,
+                    &mut Default::default(),
+                    &mut tree_caches,
+                );
+                let Some(pseudo_text) = pseudo_content_text(&pseudo_computed)? else {
+                    continue;
+                };
+                let mut pseudo_snapshot = renderer_style(&pseudo_computed)?;
+                if pseudo_snapshot.display == Display::None {
+                    continue;
+                }
+                pseudo_snapshot.own_opacity = pseudo_computed.get_effects().opacity.clamp(0.0, 1.0);
+                pseudo_snapshot.opacity = snapshot.opacity * pseudo_snapshot.own_opacity;
+                if matches!(pseudo_kind, PseudoElement::Before)
+                    && node.node().children.is_empty()
+                    && snapshot.background_images.is_empty()
+                    && !pseudo_snapshot.background_images.is_empty()
+                    && pseudo_snapshot.display == Display::Inline
+                    && pseudo_text.is_empty()
+                    && pseudo_snapshot.width == Length::Auto
+                    && pseudo_snapshot.height == Length::Auto
+                    && pseudo_snapshot.padding == [Length::Px(0.0); 4]
+                    && pseudo_snapshot.border_width == [0.0; 4]
+                {
+                    snapshot.background_images =
+                        std::mem::take(&mut pseudo_snapshot.background_images);
+                    continue;
+                }
+                let pseudo_remaining = MAX_SNAPSHOT_HEAP_BYTES
+                    .checked_sub(snapshot_bytes)
+                    .and_then(|n| n.checked_add(snapshot_heap_bytes(&output[id])))
+                    .and_then(|n| n.checked_sub(snapshot_heap_bytes(&snapshot)))
+                    .and_then(|n| n.checked_sub(std::mem::size_of::<PseudoStyle>()))
+                    .and_then(|n| n.checked_sub(snapshot_heap_bytes(&pseudo_snapshot)))
+                    .and_then(|n| n.checked_sub(pseudo_text.capacity()))
+                    .ok_or("computed style snapshot bound exceeded")?;
+                pseudo_snapshot.layout = renderer_layout(
+                    &pseudo_computed,
+                    pseudo_snapshot.display,
+                    pseudo_remaining,
+                    id,
+                    &document.base_url,
+                    &mut diagnostics.borrow_mut(),
+                )?;
+                report_unsupported(
+                    &pseudo_computed,
+                    &pseudo_snapshot,
+                    id,
+                    &document.base_url,
+                    &mut diagnostics.borrow_mut(),
+                );
+                let boxed = Box::new(PseudoStyle {
+                    style: pseudo_snapshot,
+                    text: pseudo_text,
+                });
+                match pseudo_kind {
+                    PseudoElement::Before => snapshot.before = Some(boxed),
+                    PseudoElement::After => snapshot.after = Some(boxed),
+                    _ => {}
+                }
+            }
+        }
         report_unsupported(
             &computed,
             &snapshot,
@@ -1857,6 +2041,34 @@ pub fn compute_styles_with_diagnostics(
     Ok(output)
 }
 
+fn pseudo_content_text(values: &ComputedValues) -> Result<Option<String>, String> {
+    use style::values::generics::counters::{Content, ContentItem};
+    match &values.get_counters().content {
+        Content::Normal | Content::None => Ok(None),
+        Content::Items(items) => {
+            let mut text = String::new();
+            for item in items.items.iter().take(items.alt_start) {
+                match item {
+                    ContentItem::String(s) => {
+                        if text.len().saturating_add(s.len()) > MAX_STYLE_URL_BYTES {
+                            return Err("computed pseudo-element content bound exceeded".into());
+                        }
+                        text.push_str(s);
+                    }
+                    ContentItem::OpenQuote | ContentItem::CloseQuote => {
+                        if text.len().saturating_add(1) > MAX_STYLE_URL_BYTES {
+                            return Err("computed pseudo-element content bound exceeded".into());
+                        }
+                        text.push('"');
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Some(text))
+        }
+    }
+}
+
 fn report_unsupported(
     values: &ComputedValues,
     rendered: &ComputedStyle,
@@ -1869,25 +2081,6 @@ fn report_unsupported(
     let box_style = values.get_box();
     if rendered.display == Display::None {
         return;
-    }
-    let border = values.get_border();
-    if [
-        &border.border_top_left_radius,
-        &border.border_top_right_radius,
-        &border.border_bottom_right_radius,
-        &border.border_bottom_left_radius,
-    ]
-    .iter()
-    .any(|radius| {
-        [&radius.0.width.0, &radius.0.height.0]
-            .iter()
-            .any(|value| !matches!(plain_length(value), Length::Px(0.) | Length::Percent(0.)))
-    }) {
-        diagnostics.record(
-            "css-unsupported",
-            format_args!("CSS nonzero border-radius is not implemented; backgrounds, borders and clipping use square corners"),
-            format_args!("{source}"), Some(node), None,
-        );
     }
     let background = values.get_background();
     if rendered.background_clip == BackgroundBox::Unsupported {
@@ -1933,71 +2126,6 @@ fn report_unsupported(
                 "CSS display: {} is not implemented; using block layout",
                 box_style.display.to_css_string()
             ),
-            format_args!("{source}"),
-            Some(node),
-            None,
-        );
-    }
-    if rendered.layout.position == Position::Sticky {
-        diagnostics.record(
-            "css-unsupported",
-            format_args!(
-                "CSS position: {} is not implemented; using normal flow without sticky offsets",
-                box_style.position.to_css_string()
-            ),
-            format_args!("{source}"),
-            Some(node),
-            None,
-        );
-    }
-    if matches!(
-        rendered.layout.position,
-        Position::Absolute | Position::Fixed
-    ) && !(rendered.layout.position == Position::Absolute
-        && rendered.layout.z_index.is_none()
-        && rendered.display == Display::Block)
-    {
-        for (axis, before, after) in [("horizontal", 3, 1), ("vertical", 0, 2)] {
-            if rendered.layout.inset[before] == Length::Auto
-                && rendered.layout.inset[after] == Length::Auto
-            {
-                diagnostics.record(
-                    "css-unsupported",
-                    format_args!("CSS position: {} has both {axis} insets auto; hypothetical static position is not implemented; using containing-block start", box_style.position.to_css_string()),
-                    format_args!("{source}"), Some(node), None,
-                );
-            }
-        }
-    }
-    if let Some(z) = rendered.layout.z_index {
-        diagnostics.record(
-            "css-unsupported",
-            format_args!("CSS z-index: {z} uses limited positioned paint ordering; full stacking contexts and negative layers behind normal flow are not implemented"),
-            format_args!("{source}"), Some(node), None,
-        );
-    }
-    if rendered.display == Display::TableCell
-        && rendered
-            .layout
-            .overflow
-            .iter()
-            .any(|value| *value != Overflow::Visible)
-    {
-        diagnostics.record(
-            "css-unsupported",
-            format_args!("CSS table-cell overflow clipping is not implemented by the legacy automatic-table path"),
-            format_args!("{source}"), Some(node), None,
-        );
-    }
-    if rendered
-        .layout
-        .overflow
-        .iter()
-        .any(|value| matches!(value, Overflow::Auto | Overflow::Scroll))
-    {
-        diagnostics.record(
-            "css-unsupported",
-            format_args!("CSS overflow-x: {}; overflow-y: {} require element scrolling, which is not implemented", box_style.overflow_x.to_css_string(), box_style.overflow_y.to_css_string()),
             format_args!("{source}"),
             Some(node),
             None,
@@ -2191,42 +2319,66 @@ enum MappingFailure {
 }
 type Mapping<T> = Result<T, MappingFailure>;
 
-fn layout_length(value: &style::values::computed::LengthPercentage) -> Mapping<Length> {
-    let result = if let Some(px) = value.to_length() {
-        Length::Px(px.px())
+fn layout_length(
+    value: &style::values::computed::LengthPercentage,
+    non_negative: bool,
+) -> Mapping<Length> {
+    if let Some(px) = value.to_length() {
+        let v = px.px();
+        v.is_finite()
+            .then_some(Length::Px(v))
+            .ok_or(MappingFailure::Limit("non-finite computed layout length"))
     } else if let Some(percent) = value.to_percentage() {
-        Length::Percent(percent.0)
+        let v = percent.0;
+        v.is_finite()
+            .then_some(Length::Percent(v))
+            .ok_or(MappingFailure::Limit("non-finite computed layout length"))
+    } else if let Some(
+        calc @ Length::Calc {
+            op: CalcOp::Linear, ..
+        },
+    ) = linear_calc_length(value, non_negative)
+    {
+        Ok(calc)
     } else {
-        return Err(MappingFailure::Unsupported("mixed calc lengths"));
-    };
-    match result {
-        Length::Px(v) | Length::Percent(v) if v.is_finite() => Ok(result),
-        _ => Err(MappingFailure::Limit("non-finite computed layout length")),
+        Err(MappingFailure::Unsupported("mixed calc lengths"))
     }
 }
 fn outer_layout_length(
     value: &style::values::computed::LengthPercentage,
     non_negative: bool,
 ) -> Mapping<Length> {
-    let result = if let Some(px) = value.to_length() {
-        Length::Px(px.px())
+    if let Some(px) = value.to_length() {
+        let v = px.px();
+        v.is_finite()
+            .then_some(Length::Px(v))
+            .ok_or(MappingFailure::Limit("non-finite computed layout length"))
     } else if let Some(percent) = value.to_percentage() {
-        Length::Percent(percent.0)
+        let v = percent.0;
+        v.is_finite()
+            .then_some(Length::Percent(v))
+            .ok_or(MappingFailure::Limit("non-finite computed layout length"))
     } else if let Some(calc) = linear_calc_length(value, non_negative) {
-        return Err(MappingFailure::OuterCalc(calc, "mixed calc lengths"));
+        if matches!(
+            calc,
+            Length::Calc {
+                op: CalcOp::Linear,
+                ..
+            }
+        ) {
+            Ok(calc)
+        } else {
+            Err(MappingFailure::OuterCalc(calc, "mixed calc lengths"))
+        }
     } else {
-        return Err(MappingFailure::Unsupported("mixed calc lengths"));
-    };
-    match result {
-        Length::Px(v) | Length::Percent(v) if v.is_finite() => Ok(result),
-        _ => Err(MappingFailure::Limit("non-finite computed layout length")),
+        Err(MappingFailure::Unsupported("mixed calc lengths"))
     }
 }
 fn flex_basis_size(value: &style::values::computed::Size) -> Mapping<Length> {
     use style::values::computed::Size;
     match value {
         Size::Auto => Ok(Length::Auto),
-        Size::LengthPercentage(v) => layout_length(&v.0),
+        Size::LengthPercentage(v) => layout_length(&v.0, true),
         _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
     }
 }
@@ -2252,7 +2404,7 @@ fn layout_gap(
     use style::values::generics::length::LengthPercentageOrNormal;
     match value {
         LengthPercentageOrNormal::Normal => Ok(Length::Px(0.)),
-        LengthPercentageOrNormal::LengthPercentage(v) => layout_length(&v.0),
+        LengthPercentageOrNormal::LengthPercentage(v) => layout_length(&v.0, true),
     }
 }
 fn alignment(flags: style::values::specified::align::AlignFlags) -> Alignment {
@@ -2324,7 +2476,7 @@ fn track_breadth(value: &style::values::computed::TrackBreadth) -> Mapping<Track
         B::Auto => TrackBreadth::Auto,
         B::MinContent => TrackBreadth::MinContent,
         B::MaxContent => TrackBreadth::MaxContent,
-        B::Breadth(v) => TrackBreadth::Length(layout_length(v)?),
+        B::Breadth(v) => TrackBreadth::Length(layout_length(v, true)?),
         B::Flex(v) if v.0.is_finite() && v.0 >= 0. => TrackBreadth::Fr(v.0),
         B::Flex(_) => return Err(MappingFailure::Limit("non-finite computed grid fraction")),
     })
@@ -2513,11 +2665,69 @@ fn renderer_layout(
     diagnostics: &mut StyleDiagnostics,
 ) -> Result<LayoutStyle, String> {
     use style::properties::longhands::{
-        aspect_ratio, box_sizing, contain, direction, flex_direction, flex_wrap, writing_mode,
+        box_sizing, contain, direction, flex_direction, flex_wrap, writing_mode,
     };
-    use style::values::generics::{box_::PositionProperty, flex::FlexBasis as B, position::ZIndex};
+    use style::values::computed::Display as D;
+    use style::values::generics::{
+        box_::PositionProperty,
+        flex::FlexBasis as B,
+        position::{PreferredRatio, ZIndex},
+    };
+    use style::values::specified::box_::{Clear as StyloClear, Float as StyloFloat};
     let p = values.get_position();
     let b = values.get_box();
+    let inherited = values.get_inherited_box();
+    let is_rtl = inherited.direction == direction::computed_value::T::Rtl;
+    let position = match b.position {
+        PositionProperty::Static => Position::Static,
+        PositionProperty::Relative => Position::Relative,
+        PositionProperty::Absolute => Position::Absolute,
+        PositionProperty::Fixed => Position::Fixed,
+        PositionProperty::Sticky => Position::Sticky,
+    };
+    let float = if matches!(position, Position::Absolute | Position::Fixed) {
+        FloatSide::None
+    } else {
+        match b.float {
+            StyloFloat::None => FloatSide::None,
+            StyloFloat::Left => FloatSide::Left,
+            StyloFloat::Right => FloatSide::Right,
+            StyloFloat::InlineStart => {
+                if is_rtl {
+                    FloatSide::Right
+                } else {
+                    FloatSide::Left
+                }
+            }
+            StyloFloat::InlineEnd => {
+                if is_rtl {
+                    FloatSide::Left
+                } else {
+                    FloatSide::Right
+                }
+            }
+        }
+    };
+    let clear = match b.clear {
+        StyloClear::None => ClearSide::None,
+        StyloClear::Left => ClearSide::Left,
+        StyloClear::Right => ClearSide::Right,
+        StyloClear::Both => ClearSide::Both,
+        StyloClear::InlineStart => {
+            if is_rtl {
+                ClearSide::Right
+            } else {
+                ClearSide::Left
+            }
+        }
+        StyloClear::InlineEnd => {
+            if is_rtl {
+                ClearSide::Left
+            } else {
+                ClearSide::Right
+            }
+        }
+    };
     let mut report = LayoutReporter {
         diagnostics,
         node,
@@ -2525,18 +2735,34 @@ fn renderer_layout(
         unsupported: false,
         non_outer_calc_unsupported: false,
     };
+    let aspect_ratio = match &p.aspect_ratio.ratio {
+        PreferredRatio::None => None,
+        PreferredRatio::Ratio(r) => {
+            let w = r.0.0;
+            let h = r.1.0;
+            if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                let val = w / h;
+                (val.is_finite() && val > 0.0).then_some(val)
+            } else {
+                None
+            }
+        }
+    };
+    let original_was_inline_level = matches!(
+        b.original_display,
+        D::Inline | D::InlineBlock | D::InlineFlex | D::InlineGrid | D::InlineTable
+    );
     let mut output = LayoutStyle {
         box_sizing: match p.box_sizing {
             box_sizing::computed_value::T::ContentBox => BoxSizing::ContentBox,
             box_sizing::computed_value::T::BorderBox => BoxSizing::BorderBox,
         },
-        position: match b.position {
-            PositionProperty::Static => Position::Static,
-            PositionProperty::Relative => Position::Relative,
-            PositionProperty::Absolute => Position::Absolute,
-            PositionProperty::Fixed => Position::Fixed,
-            PositionProperty::Sticky => Position::Sticky,
-        },
+        aspect_ratio,
+        aspect_ratio_auto: p.aspect_ratio.auto,
+        original_was_inline_level,
+        float,
+        clear,
+        position,
         overflow: [layout_overflow(b.overflow_x), layout_overflow(b.overflow_y)],
         z_index: match p.z_index {
             ZIndex::Auto => None,
@@ -2583,11 +2809,6 @@ fn renderer_layout(
     let inherited = values.get_inherited_box();
     for (name, differs, reason) in [
         (
-            "direction",
-            inherited.direction != direction::get_initial_value(),
-            "non-default direction",
-        ),
-        (
             "writing-mode",
             inherited.writing_mode != writing_mode::get_initial_value(),
             "non-horizontal writing modes",
@@ -2596,11 +2817,6 @@ fn renderer_layout(
             "contain",
             b.contain != contain::get_initial_value(),
             "CSS containment semantics",
-        ),
-        (
-            "aspect-ratio",
-            p.aspect_ratio != aspect_ratio::get_initial_value(),
-            "CSS preferred aspect ratios",
         ),
     ] {
         if differs {
@@ -2869,7 +3085,7 @@ fn renderer_gradient(values: &ComputedValues) -> Option<LinearGradient> {
 
 fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
     use style::properties::longhands::{
-        border_collapse, text_wrap_mode, visibility, white_space_collapse,
+        border_collapse, direction, text_wrap_mode, visibility, white_space_collapse,
     };
     use style::values::computed::font::SingleFontFamily;
     use style::values::computed::{AlignmentBaseline, Display as D, LineHeight};
@@ -3109,6 +3325,18 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             &border.border_left_color,
         ]
         .map(resolve_color),
+        border_radii: [
+            &border.border_top_left_radius,
+            &border.border_top_right_radius,
+            &border.border_bottom_right_radius,
+            &border.border_bottom_left_radius,
+        ]
+        .map(|r| {
+            (
+                box_length(&r.0.width.0, true),
+                box_length(&r.0.height.0, true),
+            )
+        }),
         width: size_length(&position.width),
         height: size_length(&position.height),
         min_width: size_length(&position.min_width),
@@ -3116,9 +3344,19 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         max_width: max_size_length(&position.max_width),
         max_height: max_size_length(&position.max_height),
         text_align,
+        direction: match values.get_inherited_box().direction {
+            direction::computed_value::T::Ltr => TextDirection::Ltr,
+            direction::computed_value::T::Rtl => TextDirection::Rtl,
+        },
         vertical_align,
         white_space,
+        visibility: match values.get_inherited_box().visibility {
+            visibility::computed_value::T::Visible => Visibility::Visible,
+            visibility::computed_value::T::Hidden => Visibility::Hidden,
+            visibility::computed_value::T::Collapse => Visibility::Collapse,
+        },
         visible: values.get_inherited_box().visibility == visibility::computed_value::T::Visible,
+        own_opacity: values.get_effects().opacity.clamp(0.0, 1.0),
         opacity: values.get_effects().opacity.clamp(0.0, 1.0),
         pointer_events: values.get_inherited_ui().pointer_events != PointerEvents::None,
         border_collapse: table.border_collapse == border_collapse::computed_value::T::Collapse,
@@ -3127,5 +3365,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             table.border_spacing.0.height.0.px(),
         ],
         background_images,
+        before: None,
+        after: None,
     })
 }

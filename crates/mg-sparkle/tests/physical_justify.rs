@@ -574,23 +574,15 @@ fn unrelated_item_legacy_and_wrong_property_refusals_remain_typed() {
 }
 
 #[test]
-fn rtl_and_vertical_writing_do_not_silently_gain_support() {
+fn rtl_physical_justify_works_and_vertical_writing_remains_refused() {
     let rtl = pair(
         "display:flex;width:100px;height:40px;direction:rtl;justify-content:left",
         "width:20px;height:20px",
         "width:30px;height:20px",
     );
-    let frame = render(&rtl, 1.0);
-    assert!(frame.diagnostics.entries.iter().any(|entry| {
-        entry.kind == "css-unsupported" && entry.message.contains("CSS direction:")
-    }));
-    assert!(
-        frame
-            .diagnostics
-            .entries
-            .iter()
-            .any(|entry| entry.kind == "layout-fallback")
-    );
+    let frame = clean_frame(&rtl, 1.0);
+    assert_item(&rtl, &frame, "b", (0, 0, 30, 20), GREEN);
+    assert_item(&rtl, &frame, "a", (30, 0, 20, 20), RED);
     let vertical = pair(
         "display:flex;width:100px;height:40px;writing-mode:vertical-rl;justify-content:right",
         "width:20px;height:20px",

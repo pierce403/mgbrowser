@@ -66,7 +66,7 @@ fn rect<'a>(doc: &Document, frame: &'a Frame, selector: &str) -> &'a LayoutBox {
 #[test]
 fn max_content_snapshot_is_distinct_from_fit_content_numeric_and_auto() {
     let doc = document(
-        "<div id=max style='width:max-content'></div><div id=fit style='width:fit-content'></div><div id=auto style='width:auto'></div><div id=numeric style='width:80px'></div><div id=loss style='width:max-content;height:calc(50% + 3px)'></div>",
+        "<div id=max style='width:max-content'></div><div id=fit style='width:fit-content'></div><div id=auto style='width:auto'></div><div id=numeric style='width:80px'></div><div id=linear style='width:max-content;height:calc(50% + 3px)'></div><div id=loss style='width:max-content;height:min(50%, 3px)'></div>",
     );
     let styles = style::compute_styles(&doc, &doc.stylesheets, (320., 300.)).unwrap();
     let at = |selector| &styles[doc.query_selector(0, selector).unwrap().unwrap()];
@@ -77,6 +77,8 @@ fn max_content_snapshot_is_distinct_from_fit_content_numeric_and_auto() {
     for selector in ["#fit", "#auto", "#numeric"] {
         assert!(!at(selector).layout.width_max_content, "{selector}");
     }
+    assert!(at("#linear").layout.width_max_content);
+    assert!(!at("#linear").layout.unsupported);
     assert!(at("#loss").layout.width_max_content);
     assert!(at("#loss").layout.unsupported);
 }
@@ -88,7 +90,7 @@ fn unsupported_sizing_values_still_produce_explicit_diagnostics() {
         "max-width:max-content",
         "height:max-content",
         "width:fit-content(50px)",
-        "width:max-content;height:calc(50% + 3px)",
+        "width:max-content;height:min(50%, 3px)",
     ] {
         let doc = document(&format!("<div id=subject style='{unsupported}'>text</div>"));
         let styles = style::compute_styles(&doc, &doc.stylesheets, (320., 300.)).unwrap();

@@ -18,6 +18,7 @@ enum SavedImage {
 #[derive(Debug, PartialEq)]
 enum SavedPaint {
     Background(Geometry, usize, [f32; 4]),
+    RoundedDecoration(Geometry, usize, [f32; 4]),
     Rect(Geometry, Color),
     Text(Geometry, usize, String, usize),
     Image(Geometry, SavedImage, Option<(usize, String, usize)>),
@@ -34,7 +35,7 @@ struct SavedScene {
     hits: Vec<(Geometry, Action, Option<usize>)>,
     hit_nodes: Vec<usize>,
     borders: Vec<(usize, Geometry)>,
-    static_positions: HashMap<usize, (f32, f32)>,
+    static_positions: HashMap<usize, (f32, f32, bool)>,
     capacities: [usize; 9],
 }
 
@@ -47,6 +48,9 @@ impl SavedScene {
                 .map(|paint| match paint {
                     Paint::Background(r, node, padding) => {
                         SavedPaint::Background(geometry(*r), *node, *padding)
+                    }
+                    Paint::RoundedDecoration(r, node, padding) => {
+                        SavedPaint::RoundedDecoration(geometry(*r), *node, *padding)
                     }
                     Paint::Rect(r, color) => SavedPaint::Rect(geometry(*r), *color),
                     Paint::Text(r, node, text) => {
@@ -201,7 +205,7 @@ fn populate_scene(scene: &mut Scene, owner: usize) {
     );
     scene.border_for(owner, r);
     *scene.clips.last_mut().unwrap() = Some(r);
-    scene.static_positions.insert(owner, (13.25, -4.5));
+    scene.static_positions.insert(owner, (13.25, -4.5, false));
 }
 
 // Both layouts start from the same real computed snapshot and call sequence.

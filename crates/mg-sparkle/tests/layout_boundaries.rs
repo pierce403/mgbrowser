@@ -91,7 +91,6 @@ fn flex_and_grid_scroll_containers_clip_initial_pixels_and_hits_with_diagnostic(
                 let doc = document(&format!(
                     "<div style='{outer};width:160px'><div id=clip style='{inner};width:80px;height:30px;overflow:{overflow}'><a id=wide href=/wide style='display:block;flex:0 0 140px;width:140px;height:60px;background:#aa0000'></a></div><div id=after style='width:20px;height:20px;background:#0000aa'></div></div>"
                 ));
-                let clip = doc.query_selector(0, "#clip").unwrap().unwrap();
                 for scale in [1.0, 1.25, 2.0] {
                     let f = frame(&doc, scale);
                     assert_eq!(geometry(rect(&doc, &f, "#clip")), (0, 0, 80, 30));
@@ -110,10 +109,7 @@ fn flex_and_grid_scroll_containers_clip_initial_pixels_and_hits_with_diagnostic(
                     assert_eq!(pixel(90, 10), 0x0000aa);
                     assert_eq!(pixel(10, 31), 0xffffff);
                     assert!(
-                        f.diagnostics.entries.iter().any(|d| d.node == Some(clip)
-                            && d.kind == "css-unsupported"
-                            && d.message
-                                .contains("require element scrolling, which is not implemented")),
+                        f.diagnostics.entries.is_empty(),
                         "{outer};{inner};{overflow}: {:?}",
                         f.diagnostics
                     );

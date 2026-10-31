@@ -107,7 +107,8 @@ pub(super) fn prepare(layout: &mut Layout<'_, '_>) {
         layout.table_cache.insert(
             id,
             Table {
-                rows: vec![(None, cells)],
+                rows: vec![(None, false, cells)],
+                collapsed_cols: Vec::new(),
                 columns,
             },
         );

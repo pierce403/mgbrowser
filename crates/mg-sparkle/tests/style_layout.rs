@@ -132,7 +132,7 @@ fn grid_preferences_apply_before_inline_and_sheet_parsing() {
 fn intrinsic_minimum_width_is_explicit_and_unrelated_loss_stays_unsupported() {
     use style::IntrinsicSize;
     let (doc, styles, _) = compute(
-        "<div id=a style='min-width:min-content'></div><div id=b style='min-width:max-content'></div><div id=c style='min-width:min-content;width:calc(50% + 2px)'></div><div id=d style='width:min-content'></div>",
+        "<div id=a style='min-width:min-content'></div><div id=b style='min-width:max-content'></div><div id=c style='min-width:min-content;width:min(50%, 2px)'></div><div id=d style='width:min-content'></div><div id=e style='min-width:min-content;width:calc(50% + 2px)'></div>",
     );
     assert_eq!(
         at(&doc, &styles, "#a").layout.min_width_intrinsic,
@@ -146,16 +146,15 @@ fn intrinsic_minimum_width_is_explicit_and_unrelated_loss_stays_unsupported() {
     assert!(!at(&doc, &styles, "#b").layout.unsupported);
     assert!(at(&doc, &styles, "#c").layout.unsupported);
     assert!(at(&doc, &styles, "#d").layout.unsupported);
+    assert!(!at(&doc, &styles, "#e").layout.unsupported);
 }
 
 #[test]
 fn absent_writing_containment_and_ratio_semantics_have_explicit_fallbacks() {
     for (property, value) in [
-        ("direction", "rtl"),
         ("writing-mode", "vertical-rl"),
         ("contain", "layout"),
         ("contain", "style"),
-        ("aspect-ratio", "3 / 2"),
     ] {
         let (doc, styles, report) =
             compute(&format!("<div id=x style='{property}:{value}'>text</div>"));
@@ -181,6 +180,13 @@ fn absent_writing_containment_and_ratio_semantics_have_explicit_fallbacks() {
             "{property}:{value}"
         );
     }
+    let (doc, styles, report) =
+        compute("<div id=r style='direction:rtl;aspect-ratio:3 / 2'>text</div>");
+    let r = at(&doc, &styles, "#r");
+    assert!(!r.layout.unsupported);
+    assert_eq!(r.direction, style::TextDirection::Rtl);
+    assert_eq!(r.layout.aspect_ratio, Some(1.5));
+    assert!(report.entries.is_empty(), "{report:?}");
 }
 
 #[test]
@@ -244,7 +250,7 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
         "grid-template-columns:[named] 1fr",
         "grid-template-columns:fit-content(10px)",
         "grid-template-areas:\"a a\"",
-        "grid-template-columns:calc(20% + 1px)",
+        "grid-template-columns:min(20%, 1px)",
     ] {
         let (doc, styles, report) =
             compute(&format!("<div id=x style='display:grid;{rule}'></div>"));
@@ -260,12 +266,12 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
         );
     }
     for rule in [
-        "width:calc(50% + 2px)",
+        "width:min(50%, 2px)",
         "flex-basis:min-content",
-        "left:calc(20% - 4px)",
-        "gap:calc(1px + 2%)",
+        "left:max(20%, 4px)",
+        "gap:min(1px, 2%)",
         "grid-column:named",
-        "padding:calc(10% + 2px)",
+        "padding:max(10%, 2px)",
     ] {
         let (doc, styles, report) =
             compute(&format!("<div id=x style='display:flex;{rule}'></div>"));
@@ -277,6 +283,17 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
                 .any(|d| d.message.contains("not represented")),
             "{rule}"
         );
+    }
+    for rule in [
+        "width:calc(50% + 2px)",
+        "left:calc(20% - 4px)",
+        "gap:calc(1px + 2%)",
+        "padding:calc(10% + 2px)",
+    ] {
+        let (doc, styles, report) =
+            compute(&format!("<div id=x style='display:flex;{rule}'></div>"));
+        assert!(!at(&doc, &styles, "#x").layout.unsupported, "{rule}");
+        assert!(report.entries.is_empty(), "{rule}: {report:?}");
     }
 }
 

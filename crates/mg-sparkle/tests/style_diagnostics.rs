@@ -78,7 +78,7 @@ fn parse_errors_identify_sheet_and_attribute_without_losing_neighboring_styles()
 #[test]
 fn unsupported_computed_properties_report_actual_fallback_and_node() {
     let document = parse(
-        "<div id=legacy style='display:flow-root;position:sticky;overflow:auto'>Text</div><div id=absolute style='position:absolute;z-index:-1'>Positioned</div>",
+        "<div id=legacy style='display:flow-root;background-image:linear-gradient(red,blue,green)'>Text</div><div id=nonlinear style='width:min(50%, 10px)'>Calc</div>",
         "https://example.test/",
     );
     let mut report = StyleDiagnostics::default();
@@ -90,15 +90,12 @@ fn unsupported_computed_properties_report_actual_fallback_and_node() {
     )
     .unwrap();
     let legacy = document.query_selector(0, "#legacy").unwrap().unwrap();
-    let absolute = document.query_selector(0, "#absolute").unwrap().unwrap();
+    let nonlinear = document.query_selector(0, "#nonlinear").unwrap().unwrap();
     assert_eq!(styles[legacy].display, Display::Block);
     for (node, text) in [
         (legacy, "display: flow-root"),
-        (legacy, "position: sticky"),
-        (legacy, "overflow-x: auto"),
-        (absolute, "both horizontal insets auto"),
-        (absolute, "both vertical insets auto"),
-        (absolute, "CSS z-index: -1"),
+        (legacy, "CSS gradient omitted"),
+        (nonlinear, "CSS width:"),
     ] {
         let diagnostic = report
             .entries
@@ -109,7 +106,7 @@ fn unsupported_computed_properties_report_actual_fallback_and_node() {
         assert_eq!(diagnostic.source, document.base_url);
         assert_eq!((diagnostic.line, diagnostic.column), (None, None));
     }
-    assert_eq!(report.entries.len(), 6);
+    assert_eq!(report.entries.len(), 3);
     assert_eq!(report.omitted, 0);
     assert!(!report.entries.iter().any(|d| d.kind == "css-parse"));
     assert_eq!(frame(&document).diagnostics, report);
@@ -118,7 +115,7 @@ fn unsupported_computed_properties_report_actual_fallback_and_node() {
 #[test]
 fn implemented_layout_paths_do_not_report_obsolete_fallbacks() {
     let document = parse(
-        "<div style='display:flex;overflow:hidden;width:120px'><span>Flex</span></div><div style='display:grid;grid-template-columns:30px 40px;overflow:clip'><span>Grid</span></div><div style='position:relative;left:2px'>Relative</div><div style='position:absolute;left:0;top:100px'>Absolute</div><div style='position:fixed;right:0;bottom:0'>Fixed</div>",
+        "<div style='display:flex;overflow:hidden;width:120px'><span>Flex</span></div><div style='display:grid;grid-template-columns:30px 40px;overflow:clip'><span>Grid</span></div><div style='position:relative;left:2px'>Relative</div><div style='position:sticky;top:0;overflow:auto'>Sticky</div><div style='position:absolute;z-index:-1'>Absolute</div><div style='position:fixed;right:0;bottom:0'>Fixed</div>",
         "https://example.test/",
     );
     let mut report = StyleDiagnostics::default();
@@ -131,33 +128,44 @@ fn implemented_layout_paths_do_not_report_obsolete_fallbacks() {
 }
 
 #[test]
-fn rounded_corner_gap_is_node_scoped_bounded_and_does_not_change_square_paint() {
-    let html = |radius: &str| {
-        format!(
-            "<div id=card style='width:40px;height:20px;background:red;border-radius:{radius}'></div>"
-        )
-    };
-    let square = parse(&html("0"), "https://example.test/");
-    let rounded = parse(&html("18px"), "https://example.test/");
-    let baseline = frame(&square);
-    let diagnosed = frame(&rounded);
-    assert_eq!(baseline.canvas.pixels, diagnosed.canvas.pixels);
-    assert_eq!(baseline.boxes, diagnosed.boxes);
-    assert_eq!(
-        format!("{:?}", baseline.hits),
-        format!("{:?}", diagnosed.hits)
+fn rounded_corners_render_without_diagnostics_and_zero_radius_matches_square() {
+    let square = parse(
+        "<div id=card style='width:40px;height:20px;background:red'></div>",
+        "https://example.test/",
     );
+    let zero_radius = parse(
+        "<div id=card style='width:40px;height:20px;background:red;border-radius:0'></div>",
+        "https://example.test/",
+    );
+    let rounded = parse(
+        "<style>html,body{margin:0}</style><div id=card style='width:40px;height:20px;background:#ff0000;border-radius:10px'></div>",
+        "https://example.test/",
+    );
+    let baseline = frame(&square);
+    let zero = frame(&zero_radius);
+    assert_eq!(baseline.canvas.pixels, zero.canvas.pixels);
+    assert_eq!(baseline.boxes, zero.boxes);
+    assert_eq!(format!("{:?}", baseline.hits), format!("{:?}", zero.hits));
     assert!(baseline.diagnostics.entries.is_empty());
-    let node = rounded.query_selector(0, "#card").unwrap().unwrap();
-    assert_eq!(diagnosed.diagnostics.entries.len(), 1);
-    let diagnostic = &diagnosed.diagnostics.entries[0];
-    assert_eq!(diagnostic.kind, "css-unsupported");
-    assert_eq!(diagnostic.node, Some(node));
-    assert_eq!(diagnostic.source, rounded.base_url);
-    assert!(diagnostic.message.contains("border-radius"));
-    assert!(diagnostic.message.contains("square corners"));
+    assert!(zero.diagnostics.entries.is_empty());
+
+    let curved = frame(&rounded);
+    assert!(
+        curved.diagnostics.entries.is_empty(),
+        "{:?}",
+        curved.diagnostics
+    );
+    assert_eq!(
+        curved.canvas.pixels[0], 0xffffff,
+        "outer corner must not bleed"
+    );
+    assert_eq!(
+        curved.canvas.pixels[10 * curved.canvas.width as usize + 20],
+        0xff0000
+    );
+
     let many = parse(
-        &"<div style='border-radius:50%'></div>".repeat(100),
+        &"<div style='display:flow-root'></div>".repeat(100),
         "https://example.test/",
     );
     let mut report = StyleDiagnostics::default();
@@ -167,7 +175,7 @@ fn rounded_corner_gap_is_node_scoped_bounded_and_does_not_change_square_paint() 
 }
 
 #[test]
-fn legacy_table_cell_clipping_boundary_is_explicit_without_changing_table_output() {
+fn table_cell_overflow_clips_descendants_without_unsupported_diagnostics() {
     let html = |overflow: &str| {
         format!(
             "<table style='border-spacing:0'><tr><td id=cell style='overflow:{overflow};font-size:13.328125px'><a href='/next'>Title <span style='font-size:10.671875px'>domain.example</span></a></td><td>Other</td></tr></table>"
@@ -175,7 +183,6 @@ fn legacy_table_cell_clipping_boundary_is_explicit_without_changing_table_output
     };
     let visible = parse(&html("visible"), "https://example.test/");
     let clipped = parse(&html("hidden"), "https://example.test/");
-    let id = clipped.query_selector(0, "#cell").unwrap().unwrap();
     let baseline = frame(&visible);
     let diagnosed = frame(&clipped);
     assert_eq!(baseline.canvas.pixels, diagnosed.canvas.pixels);
@@ -189,13 +196,22 @@ fn legacy_table_cell_clipping_boundary_is_explicit_without_changing_table_output
     };
     assert_eq!(hits(&baseline), hits(&diagnosed));
     assert!(baseline.diagnostics.entries.is_empty());
-    assert_eq!(diagnosed.diagnostics.entries.len(), 1);
-    let diagnostic = &diagnosed.diagnostics.entries[0];
-    assert_eq!(diagnostic.kind, "css-unsupported");
-    assert_eq!(diagnostic.node, Some(id));
-    assert_eq!(diagnostic.source, clipped.base_url);
-    assert!(diagnostic.message.contains("table-cell overflow clipping"));
-    assert_eq!((diagnostic.line, diagnostic.column), (None, None));
+    assert!(diagnosed.diagnostics.entries.is_empty());
+
+    let overflowing = parse(
+        "<style>html,body{margin:0} table{border-spacing:0}</style><table><tr><td style='width:30px;height:20px;padding:0;overflow:hidden'><div style='position:relative;left:20px;width:30px;height:20px;background:#ff0000'></div></td><td style='width:50px;height:20px;padding:0'></td></tr></table>",
+        "https://example.test/",
+    );
+    let rendered = frame(&overflowing);
+    assert!(rendered.diagnostics.entries.is_empty());
+    assert_eq!(
+        rendered.canvas.pixels[10 * rendered.canvas.width as usize + 25],
+        0xff0000
+    );
+    assert_eq!(
+        rendered.canvas.pixels[10 * rendered.canvas.width as usize + 40],
+        0xffffff
+    );
 }
 
 #[test]

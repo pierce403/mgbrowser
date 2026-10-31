@@ -92,6 +92,7 @@ pub(crate) fn paint(
         * scale)
         .round()
         .clamp(f64::from(active_top), f64::from(active_bottom)) as usize;
+    let has_rclip = canvas.has_rounded_clip();
     let mut written = 0;
     for py in top..bottom {
         let mut y = (py as f64 + 0.5) / scale + f64::from(scroll) - oy;
@@ -115,14 +116,24 @@ pub(crate) fn paint(
             } else {
                 0.
             };
-            let alpha = alphas[0] * (1. - mix) + alphas[1] * mix;
+            let mut alpha = alphas[0] * (1. - mix) + alphas[1] * mix;
             if alpha <= 0. {
                 continue;
+            }
+            let mut clip_scale = 1.;
+            if has_rclip {
+                let rcov = canvas.rounded_clip_coverage(px as u32, py as u32);
+                if rcov == 0 {
+                    continue;
+                }
+                clip_scale = f64::from(rcov) / 255.;
+                alpha *= clip_scale;
             }
             let pixel = &mut canvas.pixels[py * canvas.width as usize + px];
             let mut rgb = 0;
             for (channel, shift) in [16, 8, 0].into_iter().enumerate() {
-                let foreground = colors[0][channel] * (1. - mix) + colors[1][channel] * mix;
+                let foreground =
+                    (colors[0][channel] * (1. - mix) + colors[1][channel] * mix) * clip_scale;
                 let background = f64::from((*pixel >> shift) & 255);
                 rgb |= ((foreground + background * (1. - alpha))
                     .round()

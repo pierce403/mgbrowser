@@ -164,13 +164,15 @@ fn positioned_fit_content_does_not_become_auto_opposite_inset_stretch() {
 #[test]
 fn fit_content_snapshot_is_distinct_and_does_not_clear_unrelated_loss() {
     let doc = document(
-        "<div id=fit style='width:fit-content'></div><div id=auto style='width:auto'></div><div id=bad style='width:fit-content;height:calc(50% + 3px)'></div><div id=function style='width:fit-content(50px)'></div>",
+        "<div id=fit style='width:fit-content'></div><div id=auto style='width:auto'></div><div id=linear style='width:fit-content;height:calc(50% + 3px)'></div><div id=bad style='width:fit-content;height:min(50%, 3px)'></div><div id=function style='width:fit-content(50px)'></div>",
     );
     let styles = style::compute_styles(&doc, &doc.stylesheets, (320.0, 300.0)).unwrap();
     let at = |selector| &styles[doc.query_selector(0, selector).unwrap().unwrap()];
     assert!(at("#fit").layout.width_fit_content);
     assert!(!at("#fit").layout.unsupported);
     assert!(!at("#auto").layout.width_fit_content);
+    assert!(at("#linear").layout.width_fit_content);
+    assert!(!at("#linear").layout.unsupported);
     assert!(at("#bad").layout.width_fit_content);
     assert!(at("#bad").layout.unsupported);
     assert!(!at("#function").layout.width_fit_content);

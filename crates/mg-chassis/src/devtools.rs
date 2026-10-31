@@ -7404,7 +7404,7 @@ mod tests {
     fn actual_render_diagnostics_survive_repaint_without_accumulating() {
         let mut app = fixture();
         app.document = document::parse(
-            "<style>div{display:flex;position:absolute}</style><div>Text</div>",
+            "<style>div{display:flow-root}</style><div>Text</div>",
             "https://example.com/",
         );
         app.paint();

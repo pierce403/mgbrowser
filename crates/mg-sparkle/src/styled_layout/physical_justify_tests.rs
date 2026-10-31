@@ -399,26 +399,22 @@ fn nonfinite_and_unrepresented_state_still_precedes_layout() {
 }
 
 #[test]
-fn rtl_and_nonhorizontal_writing_modes_retain_snapshot_diagnostics() {
+fn rtl_physical_justify_flips_inline_edges_and_nonhorizontal_writing_modes_retain_diagnostics() {
     for display in ["flex", "grid"] {
-        let css = format!("display:{display};justify-content:right;direction:rtl");
-        let (style, diagnostics) = computed_with_diagnostics(&css);
-        assert!(style.layout.unsupported, "{css}");
-        assert_eq!(diagnostics.omitted, 0, "{css}");
-        assert!(
-            diagnostics
-                .entries
-                .iter()
-                .any(|entry| entry.kind == "css-unsupported"
-                    && entry.message.contains("non-default direction")),
-            "{css}"
-        );
-        for view in views(&style) {
-            assert_eq!(
-                view.validate(),
-                Err("computed layout contains an unrepresented CSS value"),
-                "{css}"
-            );
+        for (kw, expected) in [("right", AlignContent::START), ("left", AlignContent::END)] {
+            let css = format!("display:{display};justify-content:{kw};direction:rtl");
+            let (style, diagnostics) = computed_with_diagnostics(&css);
+            assert!(!style.layout.unsupported, "{css}");
+            assert!(diagnostics.entries.is_empty(), "{css}: {diagnostics:?}");
+            for view in views(&style) {
+                assert_eq!(view.validate(), Ok(()), "{css}");
+                assert_eq!(view.direction(), Direction::Rtl, "{css}");
+                assert_eq!(
+                    FlexboxContainerStyle::justify_content(&view),
+                    Some(expected),
+                    "{css}"
+                );
+            }
         }
         for writing_mode in ["vertical-rl", "vertical-lr"] {
             let css =

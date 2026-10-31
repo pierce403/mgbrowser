@@ -6,8 +6,8 @@
 use super::formatting_style::{LeafStyle, StyleView};
 use super::{Intrinsic, Layout, MAX_DEPTH, MAX_EXTENT, Rect, Token, is_css_space};
 use crate::style::{
-    AlignKeyword, BoxSizing, Display, FlexDirection, GridAutoFlow, GridLine, IntrinsicSize, Length,
-    Position, WhiteSpace,
+    AlignKeyword, AlignSafety, BoxSizing, Display, FlexDirection, FlexWrap, GridAutoFlow, GridLine,
+    IntrinsicSize, Length, Position, TextDirection, Visibility, WhiteSpace,
 };
 use std::{cell::Cell, ops::Range};
 use taffy::{
@@ -71,6 +71,7 @@ struct Adapter<'l, 'a, 'c> {
     sources: Vec<usize>,
     depth: usize,
     charge: usize,
+    parent_size: (Option<f32>, Option<f32>),
     invalid: Cell<bool>,
 }
 
@@ -94,6 +95,311 @@ fn space(value: AvailableSpace) -> bool {
 
 fn valid_size(size: Size<f32>) -> bool {
     dimension(size.width) && dimension(size.height)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StaticAxisAlign {
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AbsposStaticAlignment {
+    pub(super) rect: Rect,
+    pub(super) h_align: StaticAxisAlign,
+    pub(super) v_align: StaticAxisAlign,
+    pub(super) h_safe_fallback: Option<StaticAxisAlign>,
+    pub(super) v_safe_fallback: Option<StaticAxisAlign>,
+}
+
+pub(super) fn record_abspos_children(layout: &mut Layout<'_, '_>, id: usize, content_rect: Rect) {
+    let parent_style = &layout.styles[id];
+    if !matches!(
+        parent_style.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    ) {
+        return;
+    }
+    record_abspos_walk(layout, id, id, content_rect, 0);
+}
+
+fn record_abspos_walk(
+    layout: &mut Layout<'_, '_>,
+    root_id: usize,
+    cursor_id: usize,
+    content_rect: Rect,
+    depth: usize,
+) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let children_len = layout.document.nodes[cursor_id].children.len();
+    for idx in 0..children_len {
+        let child = layout.document.nodes[cursor_id].children[idx];
+        let child_tag_is_text = layout.document.nodes[child].tag == "#text";
+        if child_tag_is_text {
+            continue;
+        }
+        let child_display = layout.styles[child].display;
+        let child_pos = layout.styles[child].layout.position;
+        if child_display == Display::None {
+            continue;
+        }
+        if matches!(child_pos, Position::Absolute | Position::Fixed) {
+            let align = compute_abspos_alignment(
+                &layout.styles[root_id],
+                &layout.styles[child],
+                content_rect,
+            );
+            layout.scene.abspos_alignments.insert(child, align);
+        } else if child_display == Display::Contents {
+            record_abspos_walk(layout, root_id, child, content_rect, depth + 1);
+        }
+    }
+}
+
+fn compute_abspos_alignment(
+    parent_style: &crate::style::ComputedStyle,
+    child_style: &crate::style::ComputedStyle,
+    rect: Rect,
+) -> AbsposStaticAlignment {
+    let parent_rtl = parent_style.direction == TextDirection::Rtl;
+    let child_rtl = child_style.direction == TextDirection::Rtl;
+    let inline_start_parent = if parent_rtl {
+        StaticAxisAlign::End
+    } else {
+        StaticAxisAlign::Start
+    };
+    let inline_end_parent = if parent_rtl {
+        StaticAxisAlign::Start
+    } else {
+        StaticAxisAlign::End
+    };
+    let inline_start_child = if child_rtl {
+        StaticAxisAlign::End
+    } else {
+        StaticAxisAlign::Start
+    };
+    let inline_end_child = if child_rtl {
+        StaticAxisAlign::Start
+    } else {
+        StaticAxisAlign::End
+    };
+
+    if matches!(parent_style.display, Display::Flex | Display::InlineFlex) {
+        let flex_dir = parent_style.layout.flex_direction;
+        let main_is_h = matches!(flex_dir, FlexDirection::Row | FlexDirection::RowReverse);
+        let main_rev = if main_is_h {
+            (flex_dir == FlexDirection::RowReverse) ^ parent_rtl
+        } else {
+            flex_dir == FlexDirection::ColumnReverse
+        };
+        let main_start = if main_rev {
+            StaticAxisAlign::End
+        } else {
+            StaticAxisAlign::Start
+        };
+        let main_end = if main_rev {
+            StaticAxisAlign::Start
+        } else {
+            StaticAxisAlign::End
+        };
+        let jc = parent_style.layout.justify_content;
+        let main_align = match jc.keyword {
+            AlignKeyword::Auto
+            | AlignKeyword::Normal
+            | AlignKeyword::Stretch
+            | AlignKeyword::FlexStart
+            | AlignKeyword::SpaceBetween
+            | AlignKeyword::Baseline => main_start,
+            AlignKeyword::FlexEnd | AlignKeyword::LastBaseline => main_end,
+            AlignKeyword::Center
+            | AlignKeyword::AnchorCenter
+            | AlignKeyword::SpaceAround
+            | AlignKeyword::SpaceEvenly => StaticAxisAlign::Center,
+            AlignKeyword::Start => {
+                if main_is_h {
+                    inline_start_parent
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+            AlignKeyword::End => {
+                if main_is_h {
+                    inline_end_parent
+                } else {
+                    StaticAxisAlign::End
+                }
+            }
+            AlignKeyword::SelfStart => {
+                if main_is_h {
+                    inline_start_child
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+            AlignKeyword::SelfEnd => {
+                if main_is_h {
+                    inline_end_child
+                } else {
+                    StaticAxisAlign::End
+                }
+            }
+            AlignKeyword::Left => StaticAxisAlign::Start,
+            AlignKeyword::Right => {
+                if main_is_h {
+                    StaticAxisAlign::End
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+        };
+        let main_safe = (jc.safety == AlignSafety::Safe).then_some(if main_is_h {
+            inline_start_parent
+        } else {
+            StaticAxisAlign::Start
+        });
+
+        let cross_is_h = !main_is_h;
+        let wrap_rev = parent_style.layout.flex_wrap == FlexWrap::WrapReverse;
+        let cross_rev = if cross_is_h {
+            wrap_rev ^ parent_rtl
+        } else {
+            wrap_rev
+        };
+        let cross_start = if cross_rev {
+            StaticAxisAlign::End
+        } else {
+            StaticAxisAlign::Start
+        };
+        let cross_end = if cross_rev {
+            StaticAxisAlign::Start
+        } else {
+            StaticAxisAlign::End
+        };
+        let ac = if child_style.layout.align_self.keyword == AlignKeyword::Auto {
+            parent_style.layout.align_items
+        } else {
+            child_style.layout.align_self
+        };
+        let cross_align = match ac.keyword {
+            AlignKeyword::Auto
+            | AlignKeyword::Normal
+            | AlignKeyword::Stretch
+            | AlignKeyword::Baseline
+            | AlignKeyword::FlexStart
+            | AlignKeyword::SpaceBetween => cross_start,
+            AlignKeyword::FlexEnd | AlignKeyword::LastBaseline => cross_end,
+            AlignKeyword::Center
+            | AlignKeyword::AnchorCenter
+            | AlignKeyword::SpaceAround
+            | AlignKeyword::SpaceEvenly => StaticAxisAlign::Center,
+            AlignKeyword::Start => {
+                if cross_is_h {
+                    inline_start_parent
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+            AlignKeyword::End => {
+                if cross_is_h {
+                    inline_end_parent
+                } else {
+                    StaticAxisAlign::End
+                }
+            }
+            AlignKeyword::SelfStart => {
+                if cross_is_h {
+                    inline_start_child
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+            AlignKeyword::SelfEnd => {
+                if cross_is_h {
+                    inline_end_child
+                } else {
+                    StaticAxisAlign::End
+                }
+            }
+            AlignKeyword::Left => StaticAxisAlign::Start,
+            AlignKeyword::Right => {
+                if cross_is_h {
+                    StaticAxisAlign::End
+                } else {
+                    StaticAxisAlign::Start
+                }
+            }
+        };
+        let cross_safe = (ac.safety == AlignSafety::Safe).then_some(if cross_is_h {
+            inline_start_parent
+        } else {
+            StaticAxisAlign::Start
+        });
+
+        let (h_align, v_align, h_safe_fallback, v_safe_fallback) = if main_is_h {
+            (main_align, cross_align, main_safe, cross_safe)
+        } else {
+            (cross_align, main_align, cross_safe, main_safe)
+        };
+        AbsposStaticAlignment {
+            rect,
+            h_align,
+            v_align,
+            h_safe_fallback,
+            v_safe_fallback,
+        }
+    } else {
+        let j = if child_style.layout.justify_self.keyword == AlignKeyword::Auto {
+            parent_style.layout.justify_items
+        } else {
+            child_style.layout.justify_self
+        };
+        let h_align = match j.keyword {
+            AlignKeyword::Auto
+            | AlignKeyword::Normal
+            | AlignKeyword::Stretch
+            | AlignKeyword::Baseline
+            | AlignKeyword::Start
+            | AlignKeyword::FlexStart
+            | AlignKeyword::SpaceBetween => inline_start_parent,
+            AlignKeyword::End | AlignKeyword::FlexEnd | AlignKeyword::LastBaseline => {
+                inline_end_parent
+            }
+            AlignKeyword::SelfStart => inline_start_child,
+            AlignKeyword::SelfEnd => inline_end_child,
+            AlignKeyword::Center
+            | AlignKeyword::AnchorCenter
+            | AlignKeyword::SpaceAround
+            | AlignKeyword::SpaceEvenly => StaticAxisAlign::Center,
+            AlignKeyword::Left => StaticAxisAlign::Start,
+            AlignKeyword::Right => StaticAxisAlign::End,
+        };
+        let a = if child_style.layout.align_self.keyword == AlignKeyword::Auto {
+            parent_style.layout.align_items
+        } else {
+            child_style.layout.align_self
+        };
+        let v_align = match a.keyword {
+            AlignKeyword::End
+            | AlignKeyword::FlexEnd
+            | AlignKeyword::SelfEnd
+            | AlignKeyword::LastBaseline => StaticAxisAlign::End,
+            AlignKeyword::Center
+            | AlignKeyword::AnchorCenter
+            | AlignKeyword::SpaceAround
+            | AlignKeyword::SpaceEvenly => StaticAxisAlign::Center,
+            _ => StaticAxisAlign::Start,
+        };
+        AbsposStaticAlignment {
+            rect,
+            h_align,
+            v_align,
+            h_safe_fallback: (j.safety == AlignSafety::Safe).then_some(inline_start_parent),
+            v_safe_fallback: (a.safety == AlignSafety::Safe).then_some(StaticAxisAlign::Start),
+        }
+    }
 }
 
 // Visits only this context's participants. No heap-backed traversal stack or
@@ -212,6 +518,7 @@ fn run_inner<const EMIT: bool>(
         sources: Vec::new(),
         depth,
         charge,
+        parent_size: (width.into_option(), height),
         invalid: Cell::new(false),
     };
     adapter.sources.reserve_exact(count);
@@ -396,12 +703,85 @@ fn run_inner<const EMIT: bool>(
         },
         vertical_margins_are_collapsible: Line::FALSE,
     };
-    let output = adapter.compute_child_layout(NodeId::from(0usize), input);
+    let has_collapsed_flex = matches!(
+        adapter.layout.styles[id].display,
+        Display::Flex | Display::InlineFlex
+    ) && adapter.slots[1..].iter().any(|slot| {
+        matches!(slot.kind, Kind::Element)
+            && adapter.layout.styles[slot.node].visibility == Visibility::Collapse
+    });
+    let mut output = adapter.compute_child_layout(NodeId::from(0usize), input);
     if adapter.failed() || !valid_size(output.size) {
         adapter
             .layout
             .fail(id, "formatting result is failed or outside finite extent");
         return None;
+    }
+    if has_collapsed_flex {
+        // CSS Flexbox 1 §4.4: collapsed flex items leave a cross-size strut and
+        // are removed from main-axis layout and rendering.
+        let strut_size = output.size;
+        let root_style = &adapter.layout.styles[id];
+        let is_col = matches!(
+            root_style.layout.flex_direction,
+            FlexDirection::Column | FlexDirection::ColumnReverse
+        );
+        let single_line = root_style.layout.flex_wrap == FlexWrap::NoWrap;
+        let mut max_item_cross = 0.0_f32;
+        for slot in &adapter.slots[1..] {
+            if matches!(slot.kind, Kind::Element)
+                && adapter.layout.styles[slot.node].visibility == Visibility::Collapse
+            {
+                let g = slot.geometry;
+                let item_cross = if is_col {
+                    g.size.width + g.margin.left + g.margin.right
+                } else {
+                    g.size.height + g.margin.top + g.margin.bottom
+                };
+                if item_cross.is_finite() {
+                    max_item_cross = max_item_cross.max(item_cross);
+                }
+            }
+        }
+        adapter.slots.retain(|slot| {
+            !matches!(slot.kind, Kind::Element)
+                || adapter.layout.styles[slot.node].visibility != Visibility::Collapse
+        });
+        for slot in &mut adapter.slots {
+            slot.cache.clear();
+            slot.written = false;
+        }
+        let mut input2 = input;
+        if single_line {
+            if is_col && input2.known_dimensions.width.is_none() {
+                input2.known_dimensions.width = Some(strut_size.width);
+                input2.known_dimensions_are_definite.width = true;
+            } else if !is_col && input2.known_dimensions.height.is_none() {
+                input2.known_dimensions.height = Some(strut_size.height);
+                input2.known_dimensions_are_definite.height = true;
+            }
+        }
+        output = adapter.compute_child_layout(NodeId::from(0usize), input2);
+        if is_col && input.known_dimensions.width.is_none() {
+            output.size.width = output.size.width.max(if single_line {
+                strut_size.width
+            } else {
+                max_item_cross
+            });
+        } else if !is_col && input.known_dimensions.height.is_none() {
+            output.size.height = output.size.height.max(if single_line {
+                strut_size.height
+            } else {
+                max_item_cross
+            });
+        }
+        if adapter.failed() || !valid_size(output.size) {
+            adapter.layout.fail(
+                id,
+                "formatting collapsed result is failed or outside finite extent",
+            );
+            return None;
+        }
     }
     if EMIT {
         if column_baseline {
@@ -511,7 +891,13 @@ impl Adapter<'_, '_, '_> {
     fn view(&self, index: usize) -> StyleView<'_> {
         let slot = &self.slots[index];
         let style = &self.layout.styles[slot.node];
-        match slot.kind {
+        let root_style = &self.layout.styles[self.slots[0].node];
+        let is_row = !matches!(root_style.display, Display::Flex | Display::InlineFlex)
+            || matches!(
+                root_style.layout.flex_direction,
+                FlexDirection::Row | FlexDirection::RowReverse
+            );
+        let view = match slot.kind {
             Kind::Root => StyleView::root_content(style),
             Kind::Anonymous { .. } => StyleView::anonymous(style),
             Kind::Element => {
@@ -522,7 +908,8 @@ impl Adapter<'_, '_, '_> {
                 slot.intrinsic_max
                     .map_or(view, |value| view.with_intrinsic_max_width(value))
             }
-        }
+        };
+        view.with_parent_size(self.parent_size.0, self.parent_size.1, is_row)
     }
 
     fn anonymous_tokens(&mut self, index: usize) -> Option<Vec<Token>> {
@@ -904,10 +1291,6 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
     fn get_core_container_style(&self, id: NodeId) -> StyleView<'_> {
         self.view(usize::from(id))
     }
-    fn resolve_calc_value(&self, _: *const (), _: f32) -> f32 {
-        self.invalid.set(true);
-        f32::NAN
-    }
     fn set_unrounded_layout(&mut self, id: NodeId, geometry: &Geometry) {
         if self.failed() || !self.spend_callback(id) {
             return;
@@ -922,17 +1305,21 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
             return LayoutOutput::HIDDEN;
         }
         if input.run_mode == RunMode::PerformLayout && usize::from(id) != 0 {
-            let slot = &mut self.slots[usize::from(id)];
+            let index = usize::from(id);
+            let node = self.slots[index].node;
+            let has_ratio = matches!(self.slots[index].kind, Kind::Element)
+                && self.view(index).effective_aspect_ratio().is_some();
             // Taffy flexbox computes this flag from stretch, definite basis and
             // container sizing; a content-derived final size is not enough.
             // Grid passes known dimensions only after its sizing/alignment.
-            let own = matches!(slot.kind, Kind::Element)
-                && super::height_length(
-                    self.layout.styles[slot.node].height,
+            let own = matches!(self.slots[index].kind, Kind::Element)
+                && (super::height_length(
+                    self.layout.styles[node].height,
                     input.parent_size.height,
                 )
-                .is_some();
-            slot.definite_height = own
+                .is_some()
+                    || (has_ratio && input.known_dimensions.width.is_some()));
+            self.slots[index].definite_height = own
                 || (input.known_dimensions.height.is_some()
                     && input.known_dimensions_are_definite.height);
         }
@@ -951,15 +1338,16 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                     }
                 }
             } else {
-                let style = LeafStyle::from(tree.view(index));
-                let invalid_calc = Cell::new(false);
+                let view = tree.view(index);
+                let style = LeafStyle::from(view.with_parent_size(
+                    input.parent_size.width.or(tree.parent_size.0),
+                    input.parent_size.height.or(tree.parent_size.1),
+                    view.container_is_row,
+                ));
                 let mut output = compute_leaf_layout(
                     input,
                     &style,
-                    |_, _| {
-                        invalid_calc.set(true);
-                        f32::NAN
-                    },
+                    |_, _| 0.0,
                     |_, available| match tree.measure(index, input, available) {
                         Some(size) => size,
                         None => {
@@ -971,9 +1359,6 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                         }
                     },
                 );
-                if invalid_calc.get() {
-                    tree.invalid.set(true);
-                }
                 let root_style = &tree.layout.styles[tree.slots[0].node];
                 if matches!(root_style.display, Display::Flex | Display::InlineFlex)
                     && matches!(
@@ -1129,6 +1514,8 @@ mod tests {
             format_scratch: 0,
             replaced_nodes: Vec::new(),
             anonymous_tables: Vec::new(),
+            floats: Vec::new(),
+            last_float_top: 0.0,
             budget: 2_000_000,
             exhausted: false,
             failure: None,
