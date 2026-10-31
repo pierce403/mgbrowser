@@ -18,7 +18,9 @@ mod scale;
 pub mod scripts;
 mod scroll;
 mod theme;
-pub use cdp_browser::{BrowserCdp, TargetAction, TargetOutcome, TargetRequest};
+pub use cdp_browser::{
+    BrowserCdp, DownloadBehaviorConfig, TargetAction, TargetOutcome, TargetRequest,
+};
 pub use clipboard::{ClipboardUpdate, MAX_CLIPBOARD_BYTES, PasteRequest, PasteSource};
 pub use initial_load::{InitialScriptFailure, InitialScriptOutcome, InitialScriptStatus};
 
@@ -389,7 +391,11 @@ pub struct Browser {
     boxes: Vec<mg_sparkle::render::LayoutBox>,
     cdp_enabled: bool,
     cdp_events: Vec<cdp_browser::Event>,
+    cdp_network_events: Vec<cdp_browser::NetworkEvent>,
     scripts_enabled: bool,
+    automation_only_session: bool,
+    raw_page_html: String,
+    last_synced_viewport: Option<ViewportState>,
     child_pool: Arc<dyn scripts::ScriptRuntime>,
     page_session: Option<Box<dyn scripts::ScriptSession>>,
     page_revision: u64,
@@ -982,7 +988,15 @@ impl Browser {
             boxes: Vec::new(),
             cdp_enabled: false,
             cdp_events: Vec::new(),
+            cdp_network_events: Vec::new(),
             scripts_enabled: false,
+            automation_only_session: false,
+            raw_page_html: if blank {
+                String::new()
+            } else {
+                "<title>mgbrowser</title><h1>mgbrowser</h1><p>Enter a URL above to begin browsing.</p>".into()
+            },
+            last_synced_viewport: None,
             child_pool: scripts,
             page_session: None,
             page_revision: 0,
@@ -1113,6 +1127,16 @@ impl Browser {
         self.initial_script = InitialScriptOutcome::new(self.scripts_enabled);
         if self.cdp_enabled {
             self.cdp_events.push(cdp_browser::Event::Started);
+            self.cdp_network_events
+                .push(cdp_browser::NetworkEvent::DocumentRequest {
+                    request_id: self.generation.to_string(),
+                    url: target.clone(),
+                    method: if body.is_some() {
+                        "POST".into()
+                    } else {
+                        "GET".into()
+                    },
+                });
         }
         if !self.devtools_is_docked() {
             self.devtools.close();
@@ -1130,6 +1154,8 @@ impl Browser {
         if let Some(session) = &retired {
             session.cancel();
         }
+        self.automation_only_session = false;
+        self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.console_detached_dom = false;
         self.queued_console.clear();
@@ -1275,6 +1301,7 @@ impl Browser {
                                 .duration_since(UNIX_EPOCH)
                                 .map(|d| d.as_secs_f64() * 1000.0)
                                 .unwrap_or(0.0),
+                            automation_only: false,
                         }
                     } else {
                         PlatformInit::default()
@@ -1367,6 +1394,8 @@ impl Browser {
             self.open_select = None;
             self.edit_versions.clear();
             self.pending_transaction = None;
+            self.automation_only_session = false;
+            self.last_synced_viewport = None;
             self.console_detached_dom = false;
             self.queued_console.clear();
             self.queued_platform.clear();
@@ -1403,6 +1432,13 @@ impl Browser {
             let resource_timings = loaded.resource_profile.timings.clone();
             let resources_total_ms = loaded.resource_profile.total_ms;
             let script_timings = loaded.script_fetch_profile.timings.clone();
+            let mut cdp_subresources = Vec::new();
+            if self.cdp_enabled {
+                cdp_subresources.extend(resource_timings.iter().cloned());
+                cdp_subresources.extend(script_timings.iter().cloned());
+            }
+            let mut cdp_doc_response: Option<(String, u16, String, usize)> = None;
+            let mut cdp_doc_failed: Option<(String, String)> = None;
             let mut slowest = loaded.resource_profile.timings;
             slowest.extend(loaded.script_fetch_profile.timings);
             slowest.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
@@ -1460,6 +1496,14 @@ impl Browser {
                             self.history_meta.truncate(self.history.len());
                             self.history_at = self.history.len() - 1;
                         }
+                        if self.cdp_enabled {
+                            self.cdp_network_events.push(
+                                cdp_browser::NetworkEvent::DocumentFailed {
+                                    request_id: loaded.generation.to_string(),
+                                    error: "net::ERR_ABORTED".into(),
+                                },
+                            );
+                        }
                         self.enqueue_loaded_download(
                             response.url.as_str(),
                             response.content_disposition.as_deref(),
@@ -1468,11 +1512,22 @@ impl Browser {
                         );
                         self.loading = false;
                         self.last_load_ok = true;
-                        self.finish_initial_load(None);
+                        if self.cdp_enabled {
+                            self.cdp_events.push(cdp_browser::Event::Finished {
+                                generation: loaded.generation,
+                                error: Some("net::ERR_ABORTED".into()),
+                            });
+                        }
                         self.dirty = true;
                         continue;
                     }
 
+                    cdp_doc_response = Some((
+                        response.url.to_string(),
+                        response.status,
+                        response.content_type.clone(),
+                        response.body.len(),
+                    ));
                     self.last_load_ok = (200..300).contains(&response.status);
                     self.address = response.url.to_string();
                     self.selection.address_cursor = self.address.len();
@@ -1488,6 +1543,18 @@ impl Browser {
                     }
                     let source = decode_text(&response.body, &response.content_type);
                     self.devtools.set_page_source(&source);
+                    if response.content_type.contains("html") || response.content_type.is_empty() {
+                        if source.len() <= mg_sparkle::js_browser::MAX_SOURCE {
+                            self.raw_page_html = source.clone();
+                        } else {
+                            self.raw_page_html.clear();
+                        }
+                    } else {
+                        self.raw_page_html = format!(
+                            "<title>Resource</title><h1>Resource received</h1><p>{}</p><p>This content type is not rendered yet.</p>",
+                            escape(&response.content_type)
+                        );
+                    }
                     let mut scripting = false;
                     let mut projected = None;
                     let loaded_script_attempted = loaded.script.is_some();
@@ -1697,6 +1764,7 @@ impl Browser {
                     );
                 }
                 Err(error) => {
+                    cdp_doc_failed = Some((self.address.clone(), error.clone()));
                     self.devtools.finish_network_load(
                         &self.address,
                         None,
@@ -1715,13 +1783,12 @@ impl Browser {
                         .fail(InitialScriptFailure::Infrastructure, &error);
                     self.page_mime = "text/html".into();
                     self.status = format!("Load failed: {error}");
-                    self.document = document::parse(
-                        &format!(
-                            "<title>Load failed</title><h1>Could not load this page</h1><p>{}</p>",
-                            escape(&error)
-                        ),
-                        &self.address,
+                    let fail_html = format!(
+                        "<title>Load failed</title><h1>Could not load this page</h1><p>{}</p>",
+                        escape(&error)
                     );
+                    self.raw_page_html = fail_html.clone();
+                    self.document = document::parse(&fail_html, &self.address);
                     eprintln!("LOAD_ERROR {error}");
                 }
             }
@@ -1729,6 +1796,9 @@ impl Browser {
             self.page_loader = loaded.generation;
             let mut startup_history_go = None;
             if let Some((sid, mut init_reply)) = startup_platform_reply {
+                let mut vp = self.current_viewport_state();
+                vp.scroll_y = 0.0;
+                self.last_synced_viewport = Some(vp);
                 startup_history_go = self.apply_platform_deltas(sid, &mut init_reply);
             }
             self.dom_epoch += 1;
@@ -1741,9 +1811,29 @@ impl Browser {
             self.frame_cache = None;
             self.style_cache.clear();
             if self.cdp_enabled {
+                if let Some((url, status, mime_type, bytes)) = cdp_doc_response {
+                    self.cdp_network_events
+                        .push(cdp_browser::NetworkEvent::DocumentResponse {
+                            request_id: loaded.generation.to_string(),
+                            url,
+                            status,
+                            mime_type,
+                            bytes,
+                        });
+                } else if let Some((_url, error)) = cdp_doc_failed {
+                    self.cdp_network_events
+                        .push(cdp_browser::NetworkEvent::DocumentFailed {
+                            request_id: loaded.generation.to_string(),
+                            error,
+                        });
+                }
                 self.cdp_events.push(cdp_browser::Event::Committed {
                     frame: cdp_browser::frame(self),
                 });
+                if !cdp_subresources.is_empty() {
+                    self.cdp_network_events
+                        .push(cdp_browser::NetworkEvent::Subresources(cdp_subresources));
+                }
             }
             if let Some(error) = load_error {
                 self.finish_initial_load(Some(error));
@@ -2266,6 +2356,8 @@ impl Browser {
             session.cancel();
         }
         self.finish_automation(Err(error.into()), scripts::SessionContinuation::Terminal);
+        self.automation_only_session = false;
+        self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.queued_console.clear();
         self.queued_platform.clear();
@@ -2557,6 +2649,7 @@ impl Browser {
                     self.dirty = true;
                 }
                 ScrollRequest::IntoView { node, align_top } => {
+                    self.refresh_layout();
                     let found = self
                         .boxes
                         .iter()
@@ -2568,8 +2661,52 @@ impl Browser {
                         } else {
                             (doc_y + h - self.viewport_height() as i32).max(0)
                         };
+                        self.last_synced_viewport = None;
                         self.dirty = true;
                     }
+                }
+                ScrollRequest::FocusControl {
+                    node,
+                    select_all,
+                    into_view,
+                } => {
+                    if let Some(n) = node
+                        && self.input_item(n).is_some()
+                    {
+                        self.focus = Focus::Input(n);
+                        self.ensure_input_range_synced(n);
+                        if select_all {
+                            self.select_all = true;
+                            if let Some(val) = self.current_input_value(n)
+                                && !val.is_empty()
+                            {
+                                self.selection.input_anchor = Some(0);
+                                self.selection.input_cursor = val.len();
+                            }
+                        } else {
+                            self.select_all = false;
+                            self.sync_input_selection_flags(n);
+                        }
+                    } else {
+                        self.focus = Focus::Page;
+                        self.select_all = false;
+                    }
+                    if let Some((view_node, _align_top)) = into_view {
+                        self.refresh_layout();
+                        let found = self
+                            .boxes
+                            .iter()
+                            .find(|b| b.node == view_node)
+                            .map(|b| ((b.y - self.page_top()) + self.scroll, b.height as i32));
+                        if let Some((doc_y, h)) = found {
+                            let view_h = self.viewport_height() as i32;
+                            if doc_y < self.scroll || doc_y + h > self.scroll + view_h {
+                                self.scroll = (doc_y + h / 2 - view_h / 2).max(0);
+                                self.last_synced_viewport = None;
+                            }
+                        }
+                    }
+                    self.dirty = true;
                 }
             }
         }
@@ -2732,7 +2869,7 @@ impl Browser {
             self.dirty = true;
             return Err(self.status.clone());
         }
-        if self.page_session.is_none() {
+        if self.page_session.is_none() || self.automation_only_session {
             return Ok(false);
         }
         // Admit count and raw payload before cloning any edit. Framing performs
@@ -4191,6 +4328,8 @@ impl Browser {
                     if let Some(session) = self.page_session.take() {
                         session.cancel();
                     }
+                    self.automation_only_session = false;
+                    self.last_synced_viewport = None;
                     self.pending_transaction = None;
                     self.queued_console.clear();
                     self.queued_platform.clear();
@@ -6387,8 +6526,199 @@ impl Browser {
     pub fn set_debugging(&mut self, enabled: bool) {
         if !enabled {
             self.revoke_automation_permission("Remote debugging disabled after Runtime use");
+            if self.automation_only_session {
+                if let Some(session) = self.page_session.take() {
+                    session.cancel();
+                }
+                self.automation_only_session = false;
+                self.last_synced_viewport = None;
+                self.lifecycle = None;
+            }
         }
         self.cdp_enabled = enabled;
+    }
+
+    pub(crate) fn ensure_automation_session(&mut self) -> Result<(), String> {
+        if self.page_session.is_some()
+            && self
+                .lifecycle
+                .is_some_and(|p| p.phase == LifecyclePhase::LoadComplete)
+        {
+            return Ok(());
+        }
+        if !self.cdp_enabled
+            || self.loading
+            || self.fetching
+            || self.script_blocked
+            || self.pending_transaction.is_some()
+            || self.child_pool.source_wire_mode() != scripts::SourceWireMode::Modern
+            || self.child_pool.observer_expectation() != ObserverExpectation::Disabled
+        {
+            return Err("Automation requires an idle modern CDP page".into());
+        }
+        if self.page_session.is_none() {
+            self.child_pool.set_generation(self.generation)?;
+            let automation_only = !self.scripts_enabled;
+            let page_url_str = self.page_url.as_str();
+            let sess_entries = net::storage_origin_key(page_url_str)
+                .and_then(|k| {
+                    self.session_storage
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.get(&k).cloned())
+                })
+                .unwrap_or_default();
+            let history_length = self.history.len().max(1);
+            let history_state_json = self
+                .history_meta
+                .get(self.history_at)
+                .and_then(|m| m.state_json.clone());
+            let viewport = self.current_viewport_state();
+            let platform_init = PlatformInit {
+                local_storage: self.session.local_storage_for_origin(page_url_str),
+                session_storage: sess_entries,
+                initial_cookies: self.session.script_cookie_header(page_url_str),
+                viewport,
+                history_length,
+                history_state_json,
+                time_origin_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0),
+                automation_only,
+            };
+            let (mut session, mut reply) = self.child_pool.start_with_platform(
+                mg_sparkle::js_browser::Request {
+                    url: self.page_url.clone(),
+                    html: self.raw_page_html.clone(),
+                    external_scripts: None,
+                },
+                self.generation,
+                platform_init,
+            )?;
+            let received = Instant::now();
+            let mut ledger = ObserverLedger::new(self.child_pool.observer_expectation())
+                .map_err(|e| e.to_string())?;
+            let _ = session.take_console();
+            let validation = (|| {
+                if reply.revision != 0
+                    || reply.is_rejected_initial()
+                    || reply.state != RealmState::Ready
+                    || !reply.acknowledgements.is_empty()
+                    || reply.default_action != DefaultAction::None
+                    || reply.outcome.click_canceled.is_some()
+                    || reply.outcome.submit_canceled.is_some()
+                {
+                    return Err("Invalid automation session initial reply".to_owned());
+                }
+                let wake = self.validate_task_wake(&reply, received)?;
+                let lifecycle = self.validate_lifecycle_reply(&reply, None)?;
+                let document =
+                    Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
+                reply
+                    .validate_observer_frame(self.child_pool.observer_expectation())
+                    .map_err(|e| e.to_string())?;
+                let incoming = reply
+                    .observer
+                    .take()
+                    .ok_or_else(|| "Modern reply omitted trusted observation".to_owned())?;
+                ledger.stage(incoming).map_err(|e| e.to_string())?.commit();
+                Ok((document, wake, lifecycle))
+            })();
+            let charged = session.charge_active(received.elapsed());
+            let (document, wake, lifecycle) = match validation.and_then(|v| charged.map(|_| v)) {
+                Ok(v) => v,
+                Err(error) => {
+                    session.cancel();
+                    return Err(error);
+                }
+            };
+            self.acknowledge_projection(document, &[]);
+            self.observer_ledger = Some(ledger);
+            self.lifecycle = lifecycle;
+            self.last_accounting = Some(reply.accounting_snapshot());
+            self.page_revision = reply.revision;
+            self.last_task_wake_token = 0;
+            self.task_wake = None;
+            self.replace_task_wake(wake);
+            self.automation_only_session = automation_only;
+            self.last_synced_viewport = Some(viewport);
+            self.page_session = Some(session);
+        }
+        let saved_epoch = self.dom_epoch;
+        let saved_cdp_len = self.cdp_events.len();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self
+            .lifecycle
+            .is_none_or(|p| p.phase != LifecyclePhase::LoadComplete)
+            || self.pending_transaction.is_some()
+        {
+            if Instant::now() >= deadline {
+                self.block_session("Automation session lifecycle timed out");
+                return Err("Automation session lifecycle timed out".into());
+            }
+            if self.script_blocked {
+                return Err("Automation session failed during lifecycle initialization".into());
+            }
+            self.poll_task_wake(Instant::now());
+            self.poll_page_session();
+            if self
+                .lifecycle
+                .is_none_or(|p| p.phase != LifecyclePhase::LoadComplete)
+                || self.pending_transaction.is_some()
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        self.dom_epoch = saved_epoch;
+        self.cdp_events.truncate(saved_cdp_len);
+        Ok(())
+    }
+
+    pub(crate) fn sync_viewport_to_session(&mut self) {
+        if !self.runtime_automation_idle() || !self.can_use_platform_commands() {
+            return;
+        }
+        let vp = self.current_viewport_state();
+        if self.last_synced_viewport == Some(vp) {
+            return;
+        }
+        let Some(session) = self.page_session.as_mut() else {
+            return;
+        };
+        let session_id = session.id();
+        let Ok(sequence) = session.try_platform(
+            scripts::PlatformCommand::ViewportSync { viewport: vp },
+            self.page_revision,
+        ) else {
+            return;
+        };
+        self.task_wake = None;
+        self.pending_transaction = Some(PendingTransaction::Platform {
+            identity: TransactionIdentity {
+                generation: self.generation,
+                session_id,
+                sequence,
+                revision: self.page_revision,
+            },
+        });
+        let saved_epoch = self.dom_epoch;
+        let saved_cdp_len = self.cdp_events.len();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while self.pending_transaction.is_some()
+            && !self.script_blocked
+            && Instant::now() < deadline
+        {
+            self.poll_page_session();
+            if self.pending_transaction.is_some() {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        if self.pending_transaction.is_none() && !self.script_blocked {
+            self.last_synced_viewport = Some(vp);
+            self.dom_epoch = saved_epoch;
+            self.cdp_events.truncate(saved_cdp_len);
+        }
     }
     /// Disable the toolbar for embedding. Enabling it requires the chrome feature.
     pub fn set_chrome(&mut self, enabled: bool) {

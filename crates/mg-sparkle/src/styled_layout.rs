@@ -685,7 +685,20 @@ pub(crate) fn render_scaled_profiled(
             0,
         )
         .1;
-    layout.apply_sticky_offsets();
+    let pre_sticky_scroll_height = layout
+        .scene
+        .boxes
+        .iter()
+        .zip(&layout.scene.box_scroll)
+        .fold(height, |acc, (rect, contributes)| {
+            if *contributes && rect.width != 0 && rect.height != 0 {
+                acc.max(rect.y as f32 + rect.height as f32)
+            } else {
+                acc
+            }
+        })
+        .clamp(0.0, MAX_EXTENT);
+    layout.apply_sticky_offsets(pre_sticky_scroll_height);
     positioned::run(&mut layout);
     stacking::run(&mut layout);
     if layout.exhausted
@@ -887,10 +900,22 @@ pub(crate) fn render_scaled_profiled(
                     continue;
                 }
                 let key = (source.clone(), rect.w.ceil() as u32, rect.h.ceil() as u32);
+                let inline_data = match source {
+                    ImageSource::Resource(url) if !document.resources.contains_key(url) => {
+                        crate::images::decode_data_url(url).ok()
+                    }
+                    _ => None,
+                };
                 let resource = match source {
-                    ImageSource::Resource(url) => document.resources.get(url).map(|resource| {
-                        (resource.bytes.as_slice(), resource.content_type.as_str())
-                    }),
+                    ImageSource::Resource(url) => document
+                        .resources
+                        .get(url)
+                        .map(|resource| (resource.bytes.as_slice(), resource.content_type.as_str()))
+                        .or_else(|| {
+                            inline_data
+                                .as_ref()
+                                .map(|(ct, bytes)| (bytes.as_slice(), ct.as_str()))
+                        }),
                     ImageSource::InlineSvg(id) => layout
                         .inline_svg
                         .get(id)
@@ -1250,6 +1275,23 @@ fn visible(r: Rect, v: Viewport) -> bool {
         && r.y < (v.scroll + v.height as i32) as f32
 }
 
+fn resolve_layout_image_url(base_url: &str, reference: &str) -> Option<String> {
+    let trimmed = reference.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() >= 5 && trimmed.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+        return Some(trimmed.to_owned());
+    }
+    url::Url::parse(base_url)
+        .and_then(|u| u.join(trimmed))
+        .ok()
+        .map(|mut url| {
+            url.set_fragment(None);
+            url.into()
+        })
+}
+
 fn image_cache_admits(width: u32, height: u32, bytes: usize, entries: usize) -> bool {
     width <= 2048
         && height <= 2048
@@ -1416,10 +1458,16 @@ impl Layout<'_, '_> {
         let Some(url) = self.image_url(id) else {
             return false;
         };
-        let Some(resource) = self.document.resources.get(&url) else {
-            return false;
-        };
-        crate::images::svg_is_aspect_ratio_only(&resource.bytes, &resource.content_type)
+        if let Some(resource) = self.document.resources.get(&url) {
+            return crate::images::svg_is_aspect_ratio_only(
+                &resource.bytes,
+                &resource.content_type,
+            );
+        }
+        if let Ok((content_type, bytes)) = crate::images::decode_data_url(&url) {
+            return crate::images::svg_is_aspect_ratio_only(&bytes, &content_type);
+        }
+        false
     }
 
     fn prepare_inline_svg(&mut self, id: usize) {
@@ -1879,12 +1927,8 @@ impl Layout<'_, '_> {
         for bg in s.background_images.iter().rev() {
             let w = bg.width.resolve(r.w).unwrap_or(r.w);
             let h = bg.height.resolve(r.h).unwrap_or(w);
-            let url = url::Url::parse(&bg.url)
-                .map(|mut url| {
-                    url.set_fragment(None);
-                    url.to_string()
-                })
-                .unwrap_or_else(|_| bg.url.clone());
+            let url = resolve_layout_image_url(&self.document.base_url, &bg.url)
+                .unwrap_or_else(|| bg.url.clone());
             self.scene.paint(
                 id,
                 Paint::Image(Rect { w, h, ..r }, ImageSource::Resource(url), None),
@@ -1897,14 +1941,24 @@ impl Layout<'_, '_> {
         }
     }
     fn image_url(&self, id: usize) -> Option<String> {
-        let reference = self.document.nodes[id].attr("src")?;
-        url::Url::parse(&self.document.base_url)
-            .and_then(|u| u.join(reference))
-            .ok()
-            .map(|mut url| {
-                url.set_fragment(None);
-                url.into()
-            })
+        let preferred_ref =
+            self.document
+                .effective_image_reference(id, self.viewport.width as f32, 1.0)?;
+        let preferred = resolve_layout_image_url(&self.document.base_url, &preferred_ref)?;
+        if self.document.resources.contains_key(&preferred)
+            || (preferred.len() >= 5 && preferred.as_bytes()[..5].eq_ignore_ascii_case(b"data:"))
+        {
+            return Some(preferred);
+        }
+        for candidate_ref in self.document.all_image_candidate_references(id) {
+            if let Some(resolved) =
+                resolve_layout_image_url(&self.document.base_url, &candidate_ref)
+                && self.document.resources.contains_key(&resolved)
+            {
+                return Some(resolved);
+            }
+        }
+        Some(preferred)
     }
     fn replaced_size(
         &mut self,
@@ -2152,6 +2206,11 @@ impl Layout<'_, '_> {
                 .get(url)
                 .and_then(|resource| {
                     crate::images::decode(&resource.bytes, &resource.content_type, None, None).ok()
+                })
+                .or_else(|| {
+                    crate::images::decode_data_url(url)
+                        .ok()
+                        .and_then(|(ct, bytes)| crate::images::decode(&bytes, &ct, None, None).ok())
                 })
                 .map(|image| (image.width as f32, image.height as f32))
                 .unwrap_or((18.0, 18.0));
@@ -4346,7 +4405,8 @@ impl Layout<'_, '_> {
             self.hit(id, r);
         } else if node.tag == "img" {
             if let Some(url) = self.image_url(id)
-                && self.document.resources.contains_key(&url)
+                && (self.document.resources.contains_key(&url)
+                    || (url.len() >= 5 && url.as_bytes()[..5].eq_ignore_ascii_case(b"data:")))
             {
                 self.scene.paint(
                     id,
@@ -4605,7 +4665,7 @@ impl Layout<'_, '_> {
         }
     }
 
-    fn apply_sticky_offsets(&mut self) {
+    fn apply_sticky_offsets(&mut self, doc_scroll_height: f32) {
         use crate::style::Overflow;
         if self.scene.sticky_ranges.is_empty() || self.exhausted {
             return;
@@ -4638,12 +4698,16 @@ impl Layout<'_, '_> {
             {
                 cb = self.document.nodes[cb].parent;
             }
-            let cb_border = border_boxes.get(cb).copied().flatten().unwrap_or(Rect {
+            let root_canvas_h = doc_scroll_height.max(self.viewport.height as f32);
+            let mut cb_border = border_boxes.get(cb).copied().flatten().unwrap_or(Rect {
                 x: 0.0,
                 y: 0.0,
                 w: self.viewport.width as f32,
-                h: self.viewport.height as f32,
+                h: root_canvas_h,
             });
+            if cb == 0 {
+                cb_border.h = cb_border.h.max(root_canvas_h);
+            }
             let cb_parent_w = if cb == 0 {
                 cb_border.w
             } else {
@@ -5781,5 +5845,59 @@ mod tests {
         );
         let item = element_box(&doc, &frame, "#item");
         assert_eq!((item.x, item.y, item.width, item.height), (0, 0, 200, 50));
+    }
+
+    #[test]
+    fn sticky_topbar_clamps_to_viewport_top_and_containing_block_bottom() {
+        let doc = crate::document::parse(
+            "<style>body { margin: 0 } #section { height: 200px } #bar { position: sticky; top: 0; height: 40px; background: #224466 } #after { height: 600px }</style><div id=section><div id=bar>Top</div></div><div id=after></div>",
+            "https://example.test/",
+        );
+        let styles = crate::style::compute_styles(&doc, &doc.stylesheets, (400.0, 300.0)).unwrap();
+
+        // Scroll 0: header starts at y=0.
+        let f0 = render_test(&doc, styles.clone(), 400, 0);
+        assert_eq!(element_box(&doc, &f0, "#bar").y, 0);
+
+        // Scroll 100 (within 200px container): sticky bar stays clamped at viewport y=0.
+        let f100 = render_test(&doc, styles.clone(), 400, 100);
+        assert_eq!(element_box(&doc, &f100, "#bar").y, 0);
+        assert_eq!(f100.canvas.pixels[10 * 400 + 10], 0x224466);
+
+        // Scroll 180 (past 200 - 40 = 160 max_y): clamped to bottom of #section -> viewport y = 160 - 180 = -20.
+        let f180 = render_test(&doc, styles, 400, 180);
+        assert_eq!(element_box(&doc, &f180, "#bar").y, -20);
+
+        // Root canvas sticky (cb == 0 via display: contents on html & body) stays pinned across deep scroll.
+        let root_doc = crate::document::parse(
+            "<style>html, body { display: contents } #top { position: sticky; top: 0; height: 32px; background: #cc3300 } #long { height: 1200px }</style><div id=top>Nav</div><div id=long></div>",
+            "https://example.test/",
+        );
+        let root_styles =
+            crate::style::compute_styles(&root_doc, &root_doc.stylesheets, (400.0, 200.0)).unwrap();
+        let f500 = render_test(&root_doc, root_styles, 400, 500);
+        let top_box = element_box(&root_doc, &f500, "#top");
+        assert_eq!(
+            (top_box.x, top_box.y, top_box.width, top_box.height),
+            (8, 0, 384, 32),
+            "top_box={top_box:?}"
+        );
+        assert_eq!(f500.canvas.pixels[25 * 400 + 200], 0xcc3300);
+    }
+
+    #[test]
+    fn data_svg_and_picture_srcset_measure_and_paint_supported_raster() {
+        let data_svg = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='12'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%3E%3Cstop%20offset='0%25'%20stop-color='%23ff0000'/%3E%3Cstop%20offset='100%25'%20stop-color='%23ff0000'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='24'%20height='12'%20fill='url(%23g)'/%3E%3C/svg%3E";
+        let doc = crate::document::parse(
+            &format!(
+                r#"<style>body {{ margin: 0 }} img {{ display: block }}</style><picture><source type="image/webp" srcset="/bad.webp 1x"><source srcset="{data_svg} 1x"><img id="logo" src="/missing.png"></picture>"#
+            ),
+            "https://example.test/",
+        );
+        let styles = crate::style::compute_styles(&doc, &doc.stylesheets, (200.0, 100.0)).unwrap();
+        let frame = render_test(&doc, styles, 200, 0);
+        let b = element_box(&doc, &frame, "#logo");
+        assert_eq!((b.width, b.height), (24, 12));
+        assert_eq!(frame.canvas.pixels[2 * 200 + 2], 0xff0000);
     }
 }

@@ -5,9 +5,22 @@ use super::{TOP, test_app};
 use crate::cdp::{Command, MAX_TARGETS, PageInfo, Server, target_number};
 use base64::Engine;
 use serde_json::{Value, json};
-use std::{collections::HashMap, io::Cursor, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    io::{Cursor, Read, Write},
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 mod runtime;
+
+/// Host-observed download policy configured via `Browser.setDownloadBehavior`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadBehaviorConfig {
+    pub behavior: String,
+    pub download_path: Option<String>,
+    pub events_enabled: bool,
+}
 
 /// A validated browser-root mutation for the native owner of the live pages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +52,7 @@ struct PendingTarget {
     route: Route,
     id: Value,
     before: Vec<String>,
+    browser_context_id: Option<String>,
 }
 
 const FRAME: &str = "frame-1";
@@ -63,6 +77,26 @@ pub enum Event {
     },
 }
 
+pub(crate) enum NetworkEvent {
+    DocumentRequest {
+        request_id: String,
+        url: String,
+        method: String,
+    },
+    DocumentResponse {
+        request_id: String,
+        url: String,
+        status: u16,
+        mime_type: String,
+        bytes: usize,
+    },
+    DocumentFailed {
+        request_id: String,
+        error: String,
+    },
+    Subresources(Vec<crate::resources::ResourceTiming>),
+}
+
 #[derive(Clone, Hash, Eq, PartialEq)]
 struct Route {
     client: u64,
@@ -73,6 +107,10 @@ struct Scope {
     target: String,
     page: bool,
     dom: bool,
+    network: bool,
+    lifecycle_events: bool,
+    auto_attached: bool,
+    parent_session: Option<String>,
     pressed: Option<(i32, i32, u64)>,
 }
 struct Pending {
@@ -84,13 +122,24 @@ struct Pending {
 pub struct BrowserCdp {
     server: Server,
     scopes: HashMap<Route, Scope>,
+    browser_sessions: HashMap<String, u64>,
+    auto_attach_clients: HashMap<u64, bool>,
+    discover_clients: HashSet<u64>,
+    browser_contexts: HashSet<String>,
+    target_contexts: HashMap<String, String>,
     pending: Vec<Pending>,
+    deferred: VecDeque<Command>,
     next_session: u64,
+    next_context_id: u64,
+    next_subresource_id: u64,
     started: Instant,
     live_targets: Vec<String>,
     last_target_number: u64,
     runtime: runtime::Broker,
     target_request: Option<PendingTarget>,
+    close_requested: bool,
+    allow_zero_targets: bool,
+    download_behavior: Option<DownloadBehaviorConfig>,
 }
 
 type Reply = Result<Value, (i32, String)>;
@@ -146,10 +195,33 @@ fn frame_id(target: &str) -> String {
     format!("frame-{}", target.strip_prefix("page-").unwrap_or(target))
 }
 
-fn frame_for(app: &App, target: &str) -> Value {
+fn scope_frame_id(target: &str, auto_attached: bool) -> String {
+    if auto_attached {
+        target.to_owned()
+    } else {
+        frame_id(target)
+    }
+}
+
+fn frame_for(app: &App, target: &str, auto_attached: bool) -> Value {
     let mut value = frame(app);
-    value["id"] = json!(frame_id(target));
+    value["id"] = json!(scope_frame_id(target, auto_attached));
     value
+}
+
+fn status_text(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "",
+    }
 }
 
 fn version(p: &Value) -> Reply {
@@ -161,24 +233,107 @@ fn version(p: &Value) -> Reply {
 }
 
 impl BrowserCdp {
+    fn from_server(server: Server) -> Self {
+        Self {
+            server,
+            scopes: HashMap::new(),
+            browser_sessions: HashMap::new(),
+            auto_attach_clients: HashMap::new(),
+            discover_clients: HashSet::new(),
+            browser_contexts: HashSet::new(),
+            target_contexts: HashMap::new(),
+            pending: Vec::new(),
+            deferred: VecDeque::new(),
+            next_session: 1,
+            next_context_id: 1,
+            next_subresource_id: 0,
+            started: Instant::now(),
+            live_targets: Vec::new(),
+            last_target_number: 0,
+            runtime: runtime::Broker::default(),
+            target_request: None,
+            close_requested: false,
+            allow_zero_targets: false,
+            download_behavior: None,
+        }
+    }
+
     pub fn bind(port: u16) -> Result<Self, String> {
         let server = Server::bind(port)?;
         eprintln!(
             "CDP listening on ws://127.0.0.1:{}/devtools/browser/browser-1 (experimental subset; local clients control this page)",
             server.port()
         );
-        Ok(Self {
-            server,
-            scopes: HashMap::new(),
-            pending: Vec::new(),
-            next_session: 1,
-            started: Instant::now(),
-            live_targets: Vec::new(),
-            last_target_number: 0,
-            runtime: runtime::Broker::default(),
-            target_request: None,
-        })
+        Ok(Self::from_server(server))
     }
+
+    pub fn bind_pipe(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Self {
+        Self::from_server(Server::bind_pipe(reader, writer))
+    }
+
+    pub fn port(&self) -> u16 {
+        self.server.port()
+    }
+
+    pub fn pipe_eof(&self) -> bool {
+        self.server.pipe_eof()
+    }
+
+    pub fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.close_requested)
+    }
+
+    pub fn set_allow_zero_targets(&mut self, allow: bool) {
+        self.allow_zero_targets = allow;
+    }
+
+    pub fn download_behavior(&self) -> Option<&DownloadBehaviorConfig> {
+        self.download_behavior.as_ref()
+    }
+
+    pub fn emit_download_events(
+        &self,
+        frame_id: &str,
+        guid: &str,
+        url: &str,
+        suggested_filename: &str,
+        state: &str,
+        total_bytes: usize,
+    ) {
+        let Some(cfg) = &self.download_behavior else {
+            return;
+        };
+        if !cfg.events_enabled {
+            return;
+        }
+        for &client in self.auto_attach_clients.keys() {
+            let root = Route {
+                client,
+                session: None,
+            };
+            self.event(
+                &root,
+                "Browser.downloadWillBegin",
+                json!({
+                    "frameId": frame_id,
+                    "guid": guid,
+                    "url": url,
+                    "suggestedFilename": suggested_filename,
+                }),
+            );
+            self.event(
+                &root,
+                "Browser.downloadProgress",
+                json!({
+                    "guid": guid,
+                    "totalBytes": total_bytes,
+                    "receivedBytes": if state == "completed" { total_bytes } else { 0 },
+                    "state": state,
+                }),
+            );
+        }
+    }
+
     pub fn tick(&mut self, app: &mut App) {
         if let Err(error) = self.tick_pages(&mut [(TARGET, app)]) {
             eprintln!("CDP page registration failed: {error}");
@@ -222,11 +377,14 @@ impl BrowserCdp {
             }
             highest = highest.max(number);
         }
+        let previous_targets = std::mem::take(&mut self.live_targets);
         self.last_target_number = highest;
         self.live_targets = pages
             .iter()
             .map(|(target, _)| (*target).to_owned())
             .collect();
+        self.target_contexts
+            .retain(|t, _| self.live_targets.contains(t));
         let deliveries = self.runtime.retain_targets(&self.live_targets);
         self.deliver_runtime(deliveries);
         let stale: Vec<_> = self
@@ -239,21 +397,111 @@ impl BrowserCdp {
         for route in stale {
             self.runtime.revoke(&route);
             self.cancel_pending(&route, "Target closed");
-            self.scopes.remove(&route);
-            if let Some(session) = &route.session {
+            let removed = self.scopes.remove(&route);
+            if let (Some(session), Some(removed_scope)) = (&route.session, removed) {
+                let include_target = removed_scope.auto_attached
+                    || removed_scope.parent_session.is_some()
+                    || self.auto_attach_clients.contains_key(&route.client);
+                let payload = if include_target {
+                    json!({"sessionId":session,"targetId":removed_scope.target})
+                } else {
+                    json!({"sessionId":session})
+                };
                 self.event(
                     &Route {
                         client: route.client,
-                        session: None,
+                        session: removed_scope.parent_session,
                     },
                     "Target.detachedFromTarget",
-                    json!({"sessionId":session}),
+                    payload,
                 );
             }
         }
+        for old_t in &previous_targets {
+            if !self.live_targets.contains(old_t) {
+                for &client in &self.discover_clients {
+                    self.event(
+                        &Route {
+                            client,
+                            session: None,
+                        },
+                        "Target.targetDestroyed",
+                        json!({"targetId":old_t}),
+                    );
+                }
+            }
+        }
         self.publish_pages(pages)?;
-        self.reconcile_clients();
+        let clients = self.reconcile_clients();
+        for (target, app) in pages.iter() {
+            if !previous_targets.iter().any(|p| p == target) {
+                for &client in &self.discover_clients {
+                    if clients.contains(&client) {
+                        self.event(
+                            &Route {
+                                client,
+                                session: None,
+                            },
+                            "Target.targetCreated",
+                            json!({"targetInfo":self.target_info(target, app)}),
+                        );
+                    }
+                }
+            }
+        }
+        let auto_clients: Vec<(u64, bool)> = self
+            .auto_attach_clients
+            .iter()
+            .filter(|(c, _)| clients.contains(c))
+            .map(|(&c, &w)| (c, w))
+            .collect();
+        for (client, wait) in auto_clients {
+            for (target, app) in pages.iter() {
+                let already = self
+                    .scopes
+                    .iter()
+                    .any(|(r, s)| r.client == client && s.auto_attached && s.target == *target);
+                if !already {
+                    let session = format!("session-{}", self.next_session);
+                    self.next_session += 1;
+                    let sroute = Route {
+                        client,
+                        session: Some(session.clone()),
+                    };
+                    self.scopes.insert(
+                        sroute.clone(),
+                        Scope {
+                            target: (*target).to_owned(),
+                            auto_attached: true,
+                            ..Scope::default()
+                        },
+                    );
+                    self.runtime.set_auto_attached(&sroute, true);
+                    self.event(
+                        &Route {
+                            client,
+                            session: None,
+                        },
+                        "Target.attachedToTarget",
+                        json!({
+                            "sessionId": session,
+                            "targetInfo": self.target_info(target, app),
+                            "waitingForDebugger": wait,
+                        }),
+                    );
+                }
+            }
+        }
         Ok(())
+    }
+
+    fn any_worker_busy(&self, pages: &[(&str, &mut App)]) -> bool {
+        pages.iter().any(|(tid, app)| {
+            app.pending_transaction.is_some()
+                || app.automation_waiting.is_some()
+                || app.automation_completion.is_some()
+                || self.runtime.has_pending_or_queued(tid)
+        })
     }
 
     fn tick_pages_mode(
@@ -274,8 +522,22 @@ impl BrowserCdp {
             return Ok(());
         }
         // Bound work per window frame so a busy client cannot monopolize input.
-        for _ in 0..16 {
-            let Some(command) = self.server.try_recv() else {
+        for _ in 0..32 {
+            if !self.deferred.is_empty() && self.any_worker_busy(pages) {
+                break;
+            }
+            let command = if let Some(cmd) = self.deferred.pop_front() {
+                cmd
+            } else if let Some(cmd) = self.server.try_recv() {
+                if self.auto_attach_clients.contains_key(&cmd.client) && self.any_worker_busy(pages)
+                {
+                    if self.deferred.len() < 256 {
+                        self.deferred.push_back(cmd);
+                    }
+                    break;
+                }
+                cmd
+            } else {
                 break;
             };
             self.command_pages_mode(pages, command, target_host);
@@ -325,6 +587,14 @@ impl BrowserCdp {
             return Err("Native target request does not belong to this pending handoff".into());
         }
         let pending = self.target_request.take().unwrap();
+        if let Some(ref ctx_id) = pending.browser_context_id {
+            for (tid, _) in pages.iter() {
+                if !pending.before.iter().any(|b| b == tid) {
+                    self.target_contexts
+                        .insert((*tid).to_owned(), ctx_id.clone());
+                }
+            }
+        }
         if let Err(error) = self.reconcile_pages(pages) {
             self.reply(
                 &pending.route,
@@ -394,16 +664,22 @@ impl BrowserCdp {
 
     fn reconcile_clients(&mut self) -> Vec<u64> {
         let clients = self.server.client_ids();
-        for route in self
+        let dead_routes: Vec<_> = self
             .scopes
             .keys()
             .filter(|route| !clients.contains(&route.client))
-        {
+            .cloned()
+            .collect();
+        for route in &dead_routes {
             self.runtime.revoke(route);
         }
         self.scopes
             .retain(|route, _| clients.contains(&route.client));
+        self.browser_sessions.retain(|_, c| clients.contains(c));
+        self.auto_attach_clients.retain(|c, _| clients.contains(c));
+        self.discover_clients.retain(|c| clients.contains(c));
         self.pending.retain(|p| clients.contains(&p.route.client));
+        self.deferred.retain(|c| clients.contains(&c.client));
         clients
     }
 
@@ -465,7 +741,9 @@ impl BrowserCdp {
     fn flush_page_events(&mut self, target: &str, app: &mut App) {
         let deliveries = self.runtime.poll(target, app);
         self.deliver_runtime(deliveries);
-        let frame_id = frame_id(target);
+        let mut saw_load_complete = false;
+        let mut net_events =
+            std::collections::VecDeque::from(std::mem::take(&mut app.cdp_network_events));
         for event in std::mem::take(&mut app.cdp_events) {
             match event {
                 Event::DocumentUpdated => {
@@ -485,20 +763,52 @@ impl BrowserCdp {
                 Event::Started => {
                     for (route, scope) in &self.scopes {
                         if scope.target == target && scope.page {
-                            self.event(
-                                route,
-                                "Page.frameStartedLoading",
-                                json!({"frameId":frame_id}),
-                            );
+                            let fid = scope_frame_id(target, scope.auto_attached);
+                            if scope.auto_attached {
+                                self.event(
+                                    route,
+                                    "Page.frameRequestedNavigation",
+                                    json!({
+                                        "frameId": fid,
+                                        "reason": "other",
+                                        "url": app.address,
+                                        "disposition": "currentTab",
+                                    }),
+                                );
+                            }
+                            self.event(route, "Page.frameStartedLoading", json!({"frameId":fid}));
+                        }
+                    }
+                    while matches!(
+                        net_events.front(),
+                        Some(NetworkEvent::DocumentRequest { .. })
+                    ) {
+                        if let Some(ne) = net_events.pop_front() {
+                            self.emit_network_event(target, app.page_loader, &app.page_url, ne);
                         }
                     }
                 }
                 Event::Finished { generation, error } => {
+                    while matches!(
+                        net_events.front(),
+                        Some(
+                            NetworkEvent::DocumentRequest { .. }
+                                | NetworkEvent::DocumentResponse { .. }
+                                | NetworkEvent::DocumentFailed { .. }
+                                | NetworkEvent::Subresources(_)
+                        )
+                    ) {
+                        if let Some(ne) = net_events.pop_front() {
+                            self.emit_network_event(target, app.page_loader, &app.page_url, ne);
+                        }
+                    }
                     let pending = std::mem::take(&mut self.pending);
                     for p in pending {
                         if p.target == target && p.generation == generation {
+                            let auto = self.scopes.get(&p.route).is_some_and(|s| s.auto_attached);
+                            let fid = scope_frame_id(target, auto);
                             let mut result =
-                                json!({"frameId":frame_id,"loaderId":generation.to_string()});
+                                json!({"frameId":fid,"loaderId":generation.to_string()});
                             if let Some(error) = &error {
                                 result["errorText"] = json!(error);
                             }
@@ -509,16 +819,32 @@ impl BrowserCdp {
                     }
                     for (route, scope) in &self.scopes {
                         if scope.target == target && scope.page {
-                            self.event(
-                                route,
-                                "Page.frameStoppedLoading",
-                                json!({"frameId":frame_id}),
-                            );
+                            let fid = scope_frame_id(target, scope.auto_attached);
+                            self.event(route, "Page.frameStoppedLoading", json!({"frameId":fid}));
                         }
                     }
                 }
-                Event::Committed { mut frame } => {
-                    frame["id"] = json!(frame_id);
+                Event::Committed { frame } => {
+                    while matches!(
+                        net_events.front(),
+                        Some(
+                            NetworkEvent::DocumentRequest { .. }
+                                | NetworkEvent::DocumentResponse { .. }
+                                | NetworkEvent::DocumentFailed { .. }
+                        )
+                    ) {
+                        if let Some(ne) = net_events.pop_front() {
+                            self.emit_network_event(target, app.page_loader, &app.page_url, ne);
+                        }
+                    }
+                    let timestamp = Instant::now()
+                        .saturating_duration_since(self.started)
+                        .as_secs_f64();
+                    let loader_id = frame
+                        .get("loaderId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
                     for scope in self
                         .scopes
                         .values_mut()
@@ -530,6 +856,9 @@ impl BrowserCdp {
                         if scope.target != target {
                             continue;
                         }
+                        let fid = scope_frame_id(target, scope.auto_attached);
+                        let mut f = frame.clone();
+                        f["id"] = json!(fid);
                         if scope.dom {
                             self.event(route, "DOM.documentUpdated", json!({}));
                         }
@@ -537,39 +866,329 @@ impl BrowserCdp {
                             self.event(
                                 route,
                                 "Page.frameNavigated",
-                                json!({"frame":frame,"type":"Navigation"}),
+                                json!({"frame":f,"type":"Navigation"}),
                             );
+                            if scope.lifecycle_events {
+                                for name in ["init", "commit"] {
+                                    self.event(
+                                        route,
+                                        "Page.lifecycleEvent",
+                                        json!({
+                                            "frameId": fid,
+                                            "loaderId": loader_id,
+                                            "name": name,
+                                            "timestamp": timestamp,
+                                        }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    while matches!(net_events.front(), Some(NetworkEvent::Subresources(_))) {
+                        if let Some(ne) = net_events.pop_front() {
+                            self.emit_network_event(target, app.page_loader, &app.page_url, ne);
                         }
                     }
                 }
                 Event::DomContentLoaded { at } | Event::LoadComplete { at } => {
-                    let method = if matches!(event, Event::DomContentLoaded { .. }) {
+                    while matches!(net_events.front(), Some(NetworkEvent::Subresources(_))) {
+                        if let Some(ne) = net_events.pop_front() {
+                            self.emit_network_event(target, app.page_loader, &app.page_url, ne);
+                        }
+                    }
+                    let is_dcl = matches!(event, Event::DomContentLoaded { .. });
+                    if !is_dcl {
+                        saw_load_complete = true;
+                    }
+                    let method = if is_dcl {
                         "Page.domContentEventFired"
                     } else {
                         "Page.loadEventFired"
                     };
+                    let lifecycle_name = if is_dcl { "DOMContentLoaded" } else { "load" };
                     let timestamp = at.saturating_duration_since(self.started).as_secs_f64();
+                    let loader_id = app.page_loader.to_string();
                     for (route, scope) in &self.scopes {
                         if scope.target == target && scope.page {
                             self.event(route, method, json!({"timestamp":timestamp}));
+                            if scope.lifecycle_events {
+                                let fid = scope_frame_id(target, scope.auto_attached);
+                                self.event(
+                                    route,
+                                    "Page.lifecycleEvent",
+                                    json!({
+                                        "frameId": fid,
+                                        "loaderId": loader_id,
+                                        "name": lifecycle_name,
+                                        "timestamp": timestamp,
+                                    }),
+                                );
+                            }
                         }
                     }
                 }
             }
         }
+        while let Some(net_event) = net_events.pop_front() {
+            self.emit_network_event(target, app.page_loader, &app.page_url, net_event);
+        }
         let pending = std::mem::take(&mut self.pending);
         for p in pending {
             if p.target == target && p.generation != app.generation {
-                self.reply(&p.route, p.id, Ok(json!({"frameId":frame_id,"errorText":"net::ERR_ABORTED: superseded navigation"})));
+                let auto = self.scopes.get(&p.route).is_some_and(|s| s.auto_attached);
+                let fid = scope_frame_id(target, auto);
+                self.reply(
+                    &p.route,
+                    p.id,
+                    Ok(json!({"frameId":fid,"errorText":"net::ERR_ABORTED: superseded navigation"})),
+                );
             } else {
                 self.pending.push(p);
             }
         }
+        if saw_load_complete {
+            let deliveries = self.runtime.poll(target, app);
+            self.deliver_runtime(deliveries);
+        }
     }
+
+    fn emit_network_event(
+        &mut self,
+        target: &str,
+        page_loader: u64,
+        page_url: &str,
+        net_event: NetworkEvent,
+    ) {
+        match net_event {
+            NetworkEvent::DocumentRequest {
+                request_id,
+                url,
+                method,
+            } => {
+                let ts = Instant::now()
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64();
+                let wall = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                for (route, scope) in &self.scopes {
+                    if scope.target == target && scope.network {
+                        let fid = scope_frame_id(target, scope.auto_attached);
+                        self.event(
+                            route,
+                            "Network.requestWillBeSent",
+                            json!({
+                                "requestId": request_id,
+                                "loaderId": request_id,
+                                "documentURL": url,
+                                "request": {
+                                    "url": url,
+                                    "method": method,
+                                    "headers": {},
+                                },
+                                "timestamp": ts,
+                                "wallTime": wall,
+                                "initiator": {"type": "other"},
+                                "type": "Document",
+                                "frameId": fid,
+                            }),
+                        );
+                    }
+                }
+            }
+            NetworkEvent::DocumentResponse {
+                request_id,
+                url,
+                status,
+                mime_type,
+                bytes,
+            } => {
+                let ts = Instant::now()
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64();
+                for (route, scope) in &self.scopes {
+                    if scope.target == target && scope.network {
+                        let fid = scope_frame_id(target, scope.auto_attached);
+                        self.event(
+                            route,
+                            "Network.responseReceived",
+                            json!({
+                                "requestId": request_id,
+                                "loaderId": request_id,
+                                "timestamp": ts,
+                                "type": "Document",
+                                "response": {
+                                    "url": url,
+                                    "status": status,
+                                    "statusText": status_text(status),
+                                    "headers": {"content-type": mime_type},
+                                    "mimeType": mime_type,
+                                    "protocol": "http/1.1",
+                                },
+                                "frameId": fid,
+                            }),
+                        );
+                        self.event(
+                            route,
+                            "Network.loadingFinished",
+                            json!({
+                                "requestId": request_id,
+                                "timestamp": ts,
+                                "encodedDataLength": bytes,
+                            }),
+                        );
+                    }
+                }
+            }
+            NetworkEvent::DocumentFailed { request_id, error } => {
+                let ts = Instant::now()
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64();
+                for (route, scope) in &self.scopes {
+                    if scope.target == target && scope.network {
+                        self.event(
+                            route,
+                            "Network.loadingFailed",
+                            json!({
+                                "requestId": request_id,
+                                "timestamp": ts,
+                                "type": "Document",
+                                "errorText": error,
+                            }),
+                        );
+                    }
+                }
+            }
+            NetworkEvent::Subresources(timings) => {
+                let ts = Instant::now()
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64();
+                let wall = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let loader_id = page_loader.to_string();
+                for timing in timings {
+                    self.next_subresource_id += 1;
+                    let req_id = format!("sub-{}", self.next_subresource_id);
+                    let res_type = match timing.kind {
+                        "stylesheet" => "Stylesheet",
+                        "image" => "Image",
+                        "script" => "Script",
+                        "font" => "Font",
+                        _ => "Other",
+                    };
+                    let mime = if timing.content_type.is_empty() {
+                        match timing.kind {
+                            "stylesheet" => "text/css",
+                            "image" => "image/png",
+                            "script" => "text/javascript",
+                            "font" => "font/woff",
+                            _ => "application/octet-stream",
+                        }
+                    } else {
+                        timing.content_type.as_str()
+                    };
+                    for (route, scope) in &self.scopes {
+                        if scope.target != target || !scope.network {
+                            continue;
+                        }
+                        let fid = scope_frame_id(target, scope.auto_attached);
+                        self.event(
+                            route,
+                            "Network.requestWillBeSent",
+                            json!({
+                                "requestId": req_id,
+                                "loaderId": loader_id,
+                                "documentURL": page_url,
+                                "request": {
+                                    "url": timing.url,
+                                    "method": "GET",
+                                    "headers": {},
+                                },
+                                "timestamp": ts,
+                                "wallTime": wall,
+                                "initiator": {"type": "parser"},
+                                "type": res_type,
+                                "frameId": fid,
+                            }),
+                        );
+                        if let Some(status) = timing.status {
+                            self.event(
+                                route,
+                                "Network.responseReceived",
+                                json!({
+                                    "requestId": req_id,
+                                    "loaderId": loader_id,
+                                    "timestamp": ts,
+                                    "type": res_type,
+                                    "response": {
+                                        "url": timing.url,
+                                        "status": status,
+                                        "statusText": status_text(status),
+                                        "headers": {"content-type": mime},
+                                        "mimeType": mime,
+                                        "protocol": "http/1.1",
+                                    },
+                                    "frameId": fid,
+                                }),
+                            );
+                            self.event(
+                                route,
+                                "Network.loadingFinished",
+                                json!({
+                                    "requestId": req_id,
+                                    "timestamp": ts,
+                                    "encodedDataLength": timing.bytes,
+                                }),
+                            );
+                        } else {
+                            self.event(
+                                route,
+                                "Network.loadingFailed",
+                                json!({
+                                    "requestId": req_id,
+                                    "timestamp": ts,
+                                    "type": res_type,
+                                    "errorText": timing.error.as_deref().unwrap_or("Failed to load resource"),
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn target_info(&self, target: &str, app: &App) -> Value {
-        json!({"targetId":target,"type":"page","title":crate::cdp::bounded_text(&app.document.title,4096),"url":crate::cdp::bounded_text(&app.page_url,16 * 1024),
-            "attached":self.scopes.values().any(|scope| scope.target == target) || self.server.page_clients().iter().any(|(_, id)| id == target),"canAccessOpener":false})
+        let ctx_id = self
+            .target_contexts
+            .get(target)
+            .map(String::as_str)
+            .unwrap_or("default-context");
+        json!({
+            "targetId": target,
+            "type": "page",
+            "title": crate::cdp::bounded_text(&app.document.title, 4096),
+            "url": crate::cdp::bounded_text(&app.page_url, 16 * 1024),
+            "attached": self.scopes.values().any(|scope| scope.target == target)
+                || self.server.page_clients().iter().any(|(_, id)| id == target),
+            "canAccessOpener": false,
+            "browserContextId": ctx_id,
+        })
     }
+
+    fn is_browser_root_route(&self, route: &Route, browser: bool) -> bool {
+        if !browser {
+            return false;
+        }
+        match &route.session {
+            None => true,
+            Some(s) => self.browser_sessions.get(s) == Some(&route.client),
+        }
+    }
+
     #[cfg(test)]
     fn command(&mut self, app: &mut App, command: Command) {
         self.command_pages(&mut [(TARGET, app)], command);
@@ -599,7 +1218,7 @@ impl BrowserCdp {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
-        if id.as_u64().is_none()
+        if (id.as_i64().is_none() && id.as_u64().is_none())
             || message.get("method").and_then(Value::as_str).is_none()
             || message.get("sessionId").is_some_and(|s| !s.is_string())
         {
@@ -608,13 +1227,18 @@ impl BrowserCdp {
                 id,
                 Err((
                     -32600,
-                    "Expected nonnegative integer id, method string, and optional sessionId string"
-                        .into(),
+                    "Expected integer id, method string, and optional sessionId string".into(),
                 )),
             );
             return;
         }
-        if route.session.is_some() && (!command.browser || !self.scopes.contains_key(&route)) {
+        let known_browser_session = route
+            .session
+            .as_ref()
+            .is_some_and(|s| self.browser_sessions.get(s) == Some(&route.client));
+        if route.session.is_some()
+            && (!command.browser || (!self.scopes.contains_key(&route) && !known_browser_session))
+        {
             self.reply(&route, id, Err(failed("Unknown or detached sessionId")));
             return;
         }
@@ -637,7 +1261,7 @@ impl BrowserCdp {
                     id,
                     Err(failed("Native target mutation is already pending")),
                 ),
-                Ok(action) => {
+                Ok((action, browser_context_id)) => {
                     self.target_request = Some(PendingTarget {
                         action,
                         ticket: Arc::new(()),
@@ -645,6 +1269,7 @@ impl BrowserCdp {
                         route,
                         id,
                         before: pages.iter().map(|(id, _)| (*id).to_owned()).collect(),
+                        browser_context_id,
                     })
                 }
             }
@@ -654,9 +1279,298 @@ impl BrowserCdp {
             self.reply(&route, id, version(&params));
             return;
         }
+        if self.is_browser_root_route(&route, command.browser) {
+            match method {
+                "Browser.close" => {
+                    let res = keys(&params, &[]).map(|()| {
+                        self.close_requested = true;
+                        json!({})
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Browser.setDownloadBehavior" => {
+                    let res = (|| -> Reply {
+                        keys(
+                            &params,
+                            &[
+                                "behavior",
+                                "browserContextId",
+                                "downloadPath",
+                                "eventsEnabled",
+                            ],
+                        )?;
+                        let behavior = string(&params, "behavior")?.to_owned();
+                        if !matches!(
+                            behavior.as_str(),
+                            "deny" | "allow" | "allowAndName" | "default"
+                        ) {
+                            return Err(invalid("Unsupported download behavior"));
+                        }
+                        let download_path = params
+                            .get("downloadPath")
+                            .map(|v| {
+                                v.as_str()
+                                    .map(str::to_owned)
+                                    .ok_or_else(|| invalid("downloadPath must be a string"))
+                            })
+                            .transpose()?;
+                        let events_enabled = boolean(&params, "eventsEnabled", false)?;
+                        self.download_behavior = Some(DownloadBehaviorConfig {
+                            behavior,
+                            download_path,
+                            events_enabled,
+                        });
+                        Ok(json!({}))
+                    })();
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Browser.grantPermissions" | "Browser.resetPermissions" => {
+                    self.reply(
+                        &route,
+                        id,
+                        params
+                            .as_object()
+                            .ok_or_else(|| invalid("params must be an object"))
+                            .map(|_| json!({})),
+                    );
+                    return;
+                }
+                "Browser.getWindowForTarget" => {
+                    let (w, h) = pages
+                        .first()
+                        .map(|(_, a)| (a.width, a.height))
+                        .unwrap_or((1280, 720));
+                    let res = keys(&params, &["targetId"]).map(|()| {
+                        json!({
+                            "windowId": 1,
+                            "bounds": {
+                                "left": 0,
+                                "top": 0,
+                                "width": w,
+                                "height": h,
+                                "windowState": "normal",
+                            }
+                        })
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Browser.getWindowBounds" => {
+                    let (w, h) = pages
+                        .first()
+                        .map(|(_, a)| (a.width, a.height))
+                        .unwrap_or((1280, 720));
+                    let res = keys(&params, &["windowId"]).map(|()| {
+                        json!({
+                            "bounds": {
+                                "left": 0,
+                                "top": 0,
+                                "width": w,
+                                "height": h,
+                                "windowState": "normal",
+                            }
+                        })
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Browser.setWindowBounds" => {
+                    let res = keys(&params, &["windowId", "bounds"]).map(|()| json!({}));
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.attachToBrowserTarget" => {
+                    let res = keys(&params, &[]).map(|()| {
+                        let s = format!("browser-session-{}", self.next_session);
+                        self.next_session += 1;
+                        self.browser_sessions.insert(s.clone(), route.client);
+                        json!({"sessionId": s})
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.setAutoAttach" => {
+                    let res = (|| -> Reply {
+                        keys(
+                            &params,
+                            &["autoAttach", "waitForDebuggerOnStart", "flatten", "filter"],
+                        )?;
+                        let auto_attach = boolean(&params, "autoAttach", false)?;
+                        let wait = boolean(&params, "waitForDebuggerOnStart", false)?;
+                        let _ = boolean(&params, "flatten", true)?;
+                        if auto_attach {
+                            self.auto_attach_clients.insert(route.client, wait);
+                            let mut attached = Vec::new();
+                            for (target, app) in pages.iter() {
+                                let already = self.scopes.iter().any(|(r, s)| {
+                                    r.client == route.client
+                                        && s.auto_attached
+                                        && s.target == *target
+                                });
+                                if !already {
+                                    let session = format!("session-{}", self.next_session);
+                                    self.next_session += 1;
+                                    let sroute = Route {
+                                        client: route.client,
+                                        session: Some(session.clone()),
+                                    };
+                                    self.scopes.insert(
+                                        sroute.clone(),
+                                        Scope {
+                                            target: (*target).to_owned(),
+                                            auto_attached: true,
+                                            ..Scope::default()
+                                        },
+                                    );
+                                    self.runtime.set_auto_attached(&sroute, true);
+                                    attached.push((session, self.target_info(target, app)));
+                                }
+                            }
+                            for (session, info) in attached {
+                                self.event(
+                                    &Route {
+                                        client: route.client,
+                                        session: None,
+                                    },
+                                    "Target.attachedToTarget",
+                                    json!({
+                                        "sessionId": session,
+                                        "targetInfo": info,
+                                        "waitingForDebugger": wait,
+                                    }),
+                                );
+                            }
+                        } else {
+                            self.auto_attach_clients.remove(&route.client);
+                        }
+                        Ok(json!({}))
+                    })();
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.setDiscoverTargets" => {
+                    let res = (|| -> Reply {
+                        keys(&params, &["discover", "filter"])?;
+                        let discover = boolean(&params, "discover", false)?;
+                        if discover {
+                            let newly = self.discover_clients.insert(route.client);
+                            if newly {
+                                for (target, app) in pages.iter() {
+                                    self.event(
+                                        &Route {
+                                            client: route.client,
+                                            session: None,
+                                        },
+                                        "Target.targetCreated",
+                                        json!({"targetInfo": self.target_info(target, app)}),
+                                    );
+                                }
+                            }
+                        } else {
+                            self.discover_clients.remove(&route.client);
+                        }
+                        Ok(json!({}))
+                    })();
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.createBrowserContext" => {
+                    let res = keys(
+                        &params,
+                        &[
+                            "disposeOnDetach",
+                            "proxyServer",
+                            "proxyBypassList",
+                            "originsWithUniversalNetworkAccess",
+                        ],
+                    )
+                    .map(|()| {
+                        let cid = format!("context-{}", self.next_context_id);
+                        self.next_context_id += 1;
+                        self.browser_contexts.insert(cid.clone());
+                        json!({"browserContextId": cid})
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.disposeBrowserContext" => {
+                    let res = (|| -> Reply {
+                        keys(&params, &["browserContextId"])?;
+                        let cid = string(&params, "browserContextId")?;
+                        self.browser_contexts.remove(cid);
+                        Ok(json!({}))
+                    })();
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Target.getBrowserContexts" => {
+                    let res = keys(&params, &[]).map(|()| {
+                        let list: Vec<String> = self.browser_contexts.iter().cloned().collect();
+                        json!({"browserContextIds": list})
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Storage.getCookies" => {
+                    let cookies = pages
+                        .first()
+                        .map(|(_, a)| a.session.cdp_cookies())
+                        .unwrap_or_default();
+                    let res =
+                        keys(&params, &["browserContextId"]).map(|()| json!({"cookies": cookies}));
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Storage.setCookies" => {
+                    let res = keys(&params, &["cookies", "browserContextId"]).map(|()| json!({}));
+                    self.reply(&route, id, res);
+                    return;
+                }
+                "Storage.clearCookies" => {
+                    let res = keys(&params, &["browserContextId"]).map(|()| {
+                        for (_, a) in pages.iter_mut() {
+                            a.session.clear_cookies();
+                        }
+                        json!({})
+                    });
+                    self.reply(&route, id, res);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if method == "Target.getTargets" {
-            let result = keys(&params, &[]).map(|()| json!({"targetInfos":pages.iter().map(|(target, app)|self.target_info(target, app)).collect::<Vec<_>>()}));
+            let result = keys(&params, &["filter"]).map(|()| {
+                json!({
+                    "targetInfos": pages
+                        .iter()
+                        .map(|(target, app)| self.target_info(target, app))
+                        .collect::<Vec<_>>()
+                })
+            });
             self.reply(&route, id, result);
+            return;
+        }
+        if method == "Target.getTargetInfo"
+            && params.get("targetId").is_none()
+            && self.is_browser_root_route(&route, command.browser)
+            && self.auto_attach_clients.contains_key(&route.client)
+        {
+            let res = keys(&params, &[]).map(|()| {
+                json!({
+                    "targetInfo": {
+                        "targetId": "browser-1",
+                        "type": "browser",
+                        "title": "",
+                        "url": "",
+                        "attached": true,
+                        "canAccessOpener": false,
+                    }
+                })
+            });
+            self.reply(&route, id, res);
             return;
         }
         let routed = self
@@ -677,6 +1591,9 @@ impl BrowserCdp {
                     )
                 }),
             "Target.detachFromTarget" => string(&params, "sessionId").and_then(|session| {
+                if self.browser_sessions.get(session) == Some(&route.client) {
+                    return Ok("__browser__".to_owned());
+                }
                 self.scopes
                     .get(&Route {
                         client: route.client,
@@ -697,11 +1614,32 @@ impl BrowserCdp {
                 return;
             }
         };
+        if target == "__browser__" && method == "Target.detachFromTarget" {
+            let res = (|| -> Reply {
+                keys(&params, &["sessionId", "targetId"])?;
+                let s = string(&params, "sessionId")?;
+                self.browser_sessions.remove(s);
+                self.event(
+                    &Route {
+                        client: route.client,
+                        session: None,
+                    },
+                    "Target.detachedFromTarget",
+                    json!({"sessionId": s, "targetId": "browser-1"}),
+                );
+                Ok(json!({}))
+            })();
+            self.reply(&route, id, res);
+            return;
+        }
         let Some((_, app)) = pages.iter_mut().find(|(id, _)| *id == target) else {
             self.reply(&route, id, Err(failed("Unknown or closed target")));
             return;
         };
-        if runtime::recognizes(method) {
+        if runtime::recognizes(method)
+            || method == "Page.createIsolatedWorld"
+            || method == "DOM.resolveNode"
+        {
             if command.browser && route.session.is_none() {
                 self.reply(
                     &route,
@@ -720,16 +1658,112 @@ impl BrowserCdp {
                 self.reply(&route, id, Err(failed("Session target mismatch")));
                 return;
             }
-            let deliveries = self
-                .runtime
-                .command(&target, *app, &route, id, method, &params);
+            let auto_attached = scope.auto_attached;
+            let deliveries = if method == "Page.createIsolatedWorld" {
+                let valid = (|| -> Result<String, (i32, String)> {
+                    keys(
+                        &params,
+                        &[
+                            "frameId",
+                            "worldName",
+                            "grantUniveralAccess",
+                            "grantUniversalAccess",
+                        ],
+                    )?;
+                    let fid = scope_frame_id(&target, auto_attached);
+                    if params.get("frameId").is_some() && string(&params, "frameId")? != fid {
+                        return Err(failed("Unknown frameId"));
+                    }
+                    let world_name = params
+                        .get("worldName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("isolated")
+                        .to_owned();
+                    Ok(world_name)
+                })();
+                match valid {
+                    Ok(world_name) => self
+                        .runtime
+                        .create_isolated_world(&target, *app, &route, id, world_name),
+                    Err(err) => vec![runtime::Delivery::Reply {
+                        route: route.clone(),
+                        id,
+                        result: Err(err),
+                    }],
+                }
+            } else if method == "DOM.resolveNode" {
+                let valid = (|| -> Result<(usize, Option<u32>, Option<String>), (i32, String)> {
+                    keys(
+                        &params,
+                        &[
+                            "nodeId",
+                            "backendNodeId",
+                            "objectGroup",
+                            "executionContextId",
+                        ],
+                    )?;
+                    let node = if params.get("nodeId").is_some() {
+                        app.node_index(&params)?
+                    } else if let Some(bid) = params.get("backendNodeId").and_then(Value::as_u64) {
+                        app.backend_node_index(bid)?
+                    } else {
+                        return Err(invalid("nodeId or backendNodeId is required"));
+                    };
+                    let ctx_id = match params.get("executionContextId") {
+                        None => None,
+                        Some(v) => Some(
+                            v.as_u64()
+                                .and_then(|n| u32::try_from(n).ok())
+                                .ok_or_else(|| invalid("executionContextId must be a u32"))?,
+                        ),
+                    };
+                    let group = match params.get("objectGroup") {
+                        None => None,
+                        Some(v) => Some(
+                            v.as_str()
+                                .ok_or_else(|| invalid("objectGroup must be a string"))?
+                                .to_owned(),
+                        ),
+                    };
+                    Ok((node, ctx_id, group))
+                })();
+                match valid {
+                    Ok((node, ctx_id, group)) => self
+                        .runtime
+                        .resolve_node(&target, *app, &route, id, node, ctx_id, group),
+                    Err(err) => vec![runtime::Delivery::Reply {
+                        route: route.clone(),
+                        id,
+                        result: Err(err),
+                    }],
+                }
+            } else {
+                self.runtime
+                    .command(&target, *app, &route, id, method, &params)
+            };
             self.deliver_runtime(deliveries);
             return;
         }
+        let post_lifecycle = if method == "Page.setLifecycleEventsEnabled"
+            && boolean(&params, "enabled", false).unwrap_or(false)
+            && !app.loading
+            && !app.page_url.is_empty()
+        {
+            let auto = self.scopes.get(&route).is_some_and(|s| s.auto_attached);
+            Some((
+                scope_frame_id(&target, auto),
+                app.page_loader.to_string(),
+                Instant::now()
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64(),
+            ))
+        } else {
+            None
+        };
         let result = self.dispatch_page(app, &target, &route, command.browser, method, &params);
         match result {
             Ok(result) if method == "Page.navigate" => {
-                if result.get("errorText").is_some() {
+                if result.get("errorText").is_some() || !app.loading {
                     self.reply(&route, id, Ok(result));
                 } else {
                     self.pending.push(Pending {
@@ -740,7 +1774,24 @@ impl BrowserCdp {
                     });
                 }
             }
-            result => self.reply(&route, id, result),
+            result => {
+                let is_ok = result.is_ok();
+                self.reply(&route, id, result);
+                if is_ok && let Some((fid, loader_id, ts)) = post_lifecycle {
+                    for name in ["init", "DOMContentLoaded", "load"] {
+                        self.event(
+                            &route,
+                            "Page.lifecycleEvent",
+                            json!({
+                                "frameId": fid,
+                                "loaderId": loader_id,
+                                "name": name,
+                                "timestamp": ts,
+                            }),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -751,14 +1802,43 @@ impl BrowserCdp {
         browser: bool,
         method: &str,
         params: &Value,
-    ) -> Result<TargetAction, (i32, String)> {
-        if !browser || route.session.is_some() {
+    ) -> Result<(TargetAction, Option<String>), (i32, String)> {
+        if !self.is_browser_root_route(route, browser) {
             return Err(invalid(
-                "Target mutation requires the browser endpoint without sessionId",
+                "Target mutation requires the browser endpoint without page sessionId",
             ));
         }
+        let is_auto = self.auto_attach_clients.contains_key(&route.client);
         if method == "Target.createTarget" {
-            keys(params, &["url"])?;
+            if is_auto {
+                keys(
+                    params,
+                    &[
+                        "url",
+                        "width",
+                        "height",
+                        "browserContextId",
+                        "enableBeginFrameControl",
+                        "newWindow",
+                        "background",
+                        "forTab",
+                    ],
+                )?;
+            } else {
+                keys(params, &["url"])?;
+            }
+            let ctx_id = match params.get("browserContextId") {
+                None => None,
+                Some(v) => {
+                    let s = v
+                        .as_str()
+                        .ok_or_else(|| invalid("browserContextId must be a string"))?;
+                    if s != "default-context" && !self.browser_contexts.contains(s) {
+                        return Err(invalid("Unknown browserContextId"));
+                    }
+                    Some(s.to_owned())
+                }
+            };
             let value = string(params, "url")?;
             if value.len() > 16_384 {
                 return Err(invalid("URL too long"));
@@ -777,7 +1857,7 @@ impl BrowserCdp {
             if pages.len() >= MAX_TARGETS {
                 return Err(failed("CDP target limit is 16"));
             }
-            return Ok(TargetAction::Create { url });
+            return Ok((TargetAction::Create { url }, ctx_id));
         }
         keys(params, &["targetId"])?;
         let target = string(params, "targetId")?;
@@ -785,16 +1865,22 @@ impl BrowserCdp {
             return Err(failed("Unknown or closed target"));
         }
         if method == "Target.closeTarget" {
-            if pages.len() <= 1 {
+            if pages.len() <= 1 && !self.allow_zero_targets {
                 return Err(failed("Closing the final native tab is unsupported"));
             }
-            Ok(TargetAction::Close {
-                target: target.to_owned(),
-            })
+            Ok((
+                TargetAction::Close {
+                    target: target.to_owned(),
+                },
+                None,
+            ))
         } else {
-            Ok(TargetAction::Activate {
-                target: target.to_owned(),
-            })
+            Ok((
+                TargetAction::Activate {
+                    target: target.to_owned(),
+                },
+                None,
+            ))
         }
     }
     #[cfg(test)]
@@ -808,6 +1894,31 @@ impl BrowserCdp {
     ) -> Reply {
         self.dispatch_page(app, TARGET, route, browser, method, p)
     }
+    fn resolve_dom_node_index(
+        &self,
+        app: &App,
+        target: &str,
+        route: &Route,
+        p: &Value,
+    ) -> Result<usize, (i32, String)> {
+        if p.get("nodeId").is_some() {
+            app.node_index(p)
+        } else if let Some(bid) = p.get("backendNodeId").and_then(Value::as_u64) {
+            app.backend_node_index(bid)
+        } else if let Some(oid) = p.get("objectId").and_then(Value::as_str) {
+            let (t, g, node) = self
+                .runtime
+                .node_for_object(route, oid)
+                .ok_or_else(|| failed("Could not find node with given objectId"))?;
+            if t != target || g != app.generation || node >= app.document.nodes.len() {
+                return Err(failed("Node with given objectId is stale"));
+            }
+            Ok(node)
+        } else {
+            Err(invalid("nodeId, backendNodeId, or objectId is required"))
+        }
+    }
+
     fn dispatch_page(
         &mut self,
         app: &mut App,
@@ -828,7 +1939,7 @@ impl BrowserCdp {
         match method {
             "Browser.getVersion" => return version(p),
             "Target.getTargets" => {
-                keys(p, &[])?;
+                keys(p, &["filter"])?;
                 return Ok(json!({"targetInfos":[self.target_info(target, app)]}));
             }
             "Target.getTargetInfo" => {
@@ -840,7 +1951,7 @@ impl BrowserCdp {
             }
             "Target.attachToTarget" => {
                 keys(p, &["targetId", "flatten"])?;
-                if !browser || route.session.is_some() {
+                if !self.is_browser_root_route(route, browser) {
                     return Err(invalid("Attach on the browser endpoint without sessionId"));
                 }
                 if string(p, "targetId")? != target {
@@ -867,15 +1978,28 @@ impl BrowserCdp {
                     },
                     Scope {
                         target: target.to_owned(),
+                        parent_session: route.session.clone(),
                         ..Scope::default()
                     },
                 );
-                self.event(route,"Target.attachedToTarget",json!({"sessionId":session,"targetInfo":self.target_info(target, app),"waitingForDebugger":false}));
+                self.event(
+                    route,
+                    "Target.attachedToTarget",
+                    json!({
+                        "sessionId": session,
+                        "targetInfo": self.target_info(target, app),
+                        "waitingForDebugger": false,
+                    }),
+                );
                 return Ok(json!({"sessionId":session}));
             }
             "Target.detachFromTarget" => {
-                keys(p, &["sessionId"])?;
-                if !browser || route.session.is_some() {
+                if self.auto_attach_clients.contains_key(&route.client) || route.session.is_some() {
+                    keys(p, &["sessionId", "targetId"])?;
+                } else {
+                    keys(p, &["sessionId"])?;
+                }
+                if !self.is_browser_root_route(route, browser) {
                     return Err(invalid(
                         "Detach on the browser endpoint without outer sessionId",
                     ));
@@ -885,16 +2009,24 @@ impl BrowserCdp {
                     client: route.client,
                     session: Some(session.into()),
                 };
-                if self.scopes.remove(&detached).is_none() {
+                let Some(removed) = self.scopes.remove(&detached) else {
                     return Err(failed("Unknown sessionId"));
-                }
+                };
                 self.runtime.revoke(&detached);
                 self.cancel_pending(&detached, "Session detached");
-                self.event(
-                    route,
-                    "Target.detachedFromTarget",
-                    json!({"sessionId":session}),
-                );
+                let include_target = removed.auto_attached
+                    || removed.parent_session.is_some()
+                    || self.auto_attach_clients.contains_key(&route.client);
+                let payload = if include_target {
+                    json!({"sessionId":session,"targetId":removed.target})
+                } else {
+                    json!({"sessionId":session})
+                };
+                let emit_route = Route {
+                    client: route.client,
+                    session: removed.parent_session.or_else(|| route.session.clone()),
+                };
+                self.event(&emit_route, "Target.detachedFromTarget", payload);
                 return Ok(json!({}));
             }
             _ => {}
@@ -908,61 +2040,309 @@ impl BrowserCdp {
                 "Page commands require an attached sessionId on the browser endpoint",
             ));
         }
-        let scope = self.scopes.entry(route.clone()).or_insert_with(|| Scope {
-            target: target.to_owned(),
-            ..Scope::default()
-        });
-        if scope.target != target {
-            return Err(failed("Session target mismatch"));
-        }
-        if runtime::recognizes(method) {
+        let auto_attached = {
+            let scope = self.scopes.entry(route.clone()).or_insert_with(|| Scope {
+                target: target.to_owned(),
+                ..Scope::default()
+            });
+            if scope.target != target {
+                return Err(failed("Session target mismatch"));
+            }
+            scope.auto_attached
+        };
+        if runtime::recognizes(method)
+            || method == "Page.createIsolatedWorld"
+            || method == "DOM.resolveNode"
+        {
             return Err(failed(
                 "Runtime commands require the asynchronous worker broker",
             ));
         }
-        let frame_id = frame_id(target);
+        let fid = scope_frame_id(target, auto_attached);
         match method {
             "Page.enable" | "Page.disable" => {
+                keys(p, &["enableFileChooserOpenedEvent"])?;
+                self.scopes.get_mut(route).unwrap().page = method.ends_with("enable");
+                Ok(json!({}))
+            }
+            "Page.setLifecycleEventsEnabled" => {
+                keys(p, &["enabled"])?;
+                let enabled = boolean(p, "enabled", false)?;
+                self.scopes.get_mut(route).unwrap().lifecycle_events = enabled;
+                Ok(json!({}))
+            }
+            "Page.addScriptToEvaluateOnNewDocument" => {
+                keys(
+                    p,
+                    &[
+                        "source",
+                        "worldName",
+                        "includeCommandLineAPI",
+                        "runImmediately",
+                    ],
+                )?;
+                let source = string(p, "source")?.to_owned();
+                let world_name = match p.get("worldName") {
+                    None => None,
+                    Some(v) => Some(
+                        v.as_str()
+                            .ok_or_else(|| invalid("worldName must be a string"))?
+                            .to_owned(),
+                    ),
+                };
+                let run_immediately = boolean(p, "runImmediately", false)?;
+                let settled_gen =
+                    (!app.loading && !app.page_url.is_empty()).then_some(app.generation);
+                let identifier = self.runtime.add_preload_script(
+                    route,
+                    target,
+                    source,
+                    world_name,
+                    settled_gen,
+                    run_immediately,
+                );
+                Ok(json!({"identifier": identifier}))
+            }
+            "Page.removeScriptToEvaluateOnNewDocument" => {
+                keys(p, &["identifier"])?;
+                let identifier = string(p, "identifier")?;
+                self.runtime.remove_preload_script(route, identifier);
+                Ok(json!({}))
+            }
+            "Page.bringToFront" => {
                 keys(p, &[])?;
-                scope.page = method.ends_with("enable");
+                Ok(json!({}))
+            }
+            "Page.setBypassCSP" => {
+                keys(p, &["enabled"])?;
+                let _ = boolean(p, "enabled", false)?;
+                Ok(json!({}))
+            }
+            "Page.setFontFamilies" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                Ok(json!({}))
+            }
+            "Page.setInterceptFileChooserDialog" => {
+                keys(p, &["enabled", "cancel"])?;
+                let _ = boolean(p, "enabled", false)?;
+                Ok(json!({}))
+            }
+            "Page.getNavigationHistory" => {
+                keys(p, &[])?;
+                Ok(json!({
+                    "currentIndex": 0,
+                    "entries": [{
+                        "id": 1,
+                        "url": app.page_url,
+                        "userTypedURL": app.page_url,
+                        "title": app.document.title,
+                        "transitionType": "typed",
+                    }],
+                }))
+            }
+            "Page.stopScreencast" | "Page.screencastFrameAck" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                Ok(json!({}))
+            }
+            "Target.setAutoAttach" => {
+                keys(
+                    p,
+                    &["autoAttach", "waitForDebuggerOnStart", "flatten", "filter"],
+                )?;
+                Ok(json!({}))
+            }
+            "Browser.getWindowForTarget" => {
+                keys(p, &["targetId"])?;
+                Ok(json!({
+                    "windowId": 1,
+                    "bounds": {
+                        "left": 0,
+                        "top": 0,
+                        "width": app.width,
+                        "height": app.height,
+                        "windowState": "normal",
+                    }
+                }))
+            }
+            "Browser.getWindowBounds" => {
+                keys(p, &["windowId"])?;
+                Ok(json!({
+                    "bounds": {
+                        "left": 0,
+                        "top": 0,
+                        "width": app.width,
+                        "height": app.height,
+                        "windowState": "normal",
+                    }
+                }))
+            }
+            "Browser.setWindowBounds" => {
+                keys(p, &["windowId", "bounds"])?;
+                Ok(json!({}))
+            }
+            "Network.enable" | "Network.disable" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                self.scopes.get_mut(route).unwrap().network = method.ends_with("enable");
+                Ok(json!({}))
+            }
+            "Network.setExtraHTTPHeaders"
+            | "Network.setUserAgentOverride"
+            | "Network.setCacheDisabled"
+            | "Network.emulateNetworkConditions"
+            | "Network.emulateNetworkConditionsByRule"
+            | "Network.setBypassServiceWorker"
+            | "Network.setAttachDebugStack"
+            | "Network.setCookie"
+            | "Network.setCookies"
+            | "Network.deleteCookies"
+            | "Network.clearBrowserCookies"
+            | "Network.clearBrowserCache" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                if method == "Network.clearBrowserCookies" {
+                    app.session.clear_cookies();
+                }
+                Ok(json!({}))
+            }
+            "Network.getCookies" | "Network.getAllCookies" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                Ok(json!({"cookies": app.session.cdp_cookies()}))
+            }
+            "Network.getResponseBody" => {
+                keys(p, &["requestId"])?;
+                let _ = string(p, "requestId")?;
+                Ok(json!({
+                    "body": app.raw_page_html,
+                    "base64Encoded": false,
+                }))
+            }
+            "Storage.getCookies" => {
+                keys(p, &["browserContextId"])?;
+                Ok(json!({"cookies": app.session.cdp_cookies()}))
+            }
+            "Storage.setCookies" => {
+                keys(p, &["cookies", "browserContextId"])?;
+                Ok(json!({}))
+            }
+            "Storage.clearCookies" => {
+                keys(p, &["browserContextId"])?;
+                app.session.clear_cookies();
+                Ok(json!({}))
+            }
+            "Log.enable"
+            | "Log.disable"
+            | "Log.clear"
+            | "Log.startViolationsReport"
+            | "Log.stopViolationsReport" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                Ok(json!({}))
+            }
+            "Security.enable" | "Security.disable" | "Security.setIgnoreCertificateErrors" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                Ok(json!({}))
+            }
+            "Emulation.setDeviceMetricsOverride" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
+                if let Some(w) = p.get("width").and_then(Value::as_u64)
+                    && let Some(h) = p.get("height").and_then(Value::as_u64)
+                    && w > 0
+                    && h > 0
+                    && w <= 8192
+                    && h <= 8192
+                {
+                    let extra_h = app.page_top() as u32
+                        + app.page_footer()
+                        + app.devtools_bottom_height().unwrap_or(0);
+                    app.resize(w as u32, (h as u32).saturating_add(extra_h));
+                }
+                Ok(json!({}))
+            }
+            "Emulation.clearDeviceMetricsOverride"
+            | "Emulation.setFocusEmulationEnabled"
+            | "Emulation.setEmulatedMedia"
+            | "Emulation.setTouchEmulationEnabled"
+            | "Emulation.setEmitTouchEventsForMouse"
+            | "Emulation.setScriptExecutionDisabled"
+            | "Emulation.setUserAgentOverride"
+            | "Emulation.setLocaleOverride"
+            | "Emulation.setTimezoneOverride"
+            | "Emulation.setGeolocationOverride"
+            | "Emulation.clearGeolocationOverride"
+            | "Emulation.setDefaultBackgroundColorOverride"
+            | "Emulation.setPageScaleFactor" => {
+                p.as_object()
+                    .ok_or_else(|| invalid("params must be an object"))?;
                 Ok(json!({}))
             }
             "DOM.enable" | "DOM.disable" => {
-                keys(p, &[])?;
-                scope.dom = method.ends_with("enable");
+                keys(p, &["includeWhitespace"])?;
+                self.scopes.get_mut(route).unwrap().dom = method.ends_with("enable");
                 Ok(json!({}))
             }
             "Page.navigate" => {
-                keys(p, &["url", "frameId"])?;
-                if p.get("frameId").is_some() && string(p, "frameId")? != frame_id {
+                if auto_attached {
+                    keys(
+                        p,
+                        &[
+                            "url",
+                            "frameId",
+                            "referrer",
+                            "transitionType",
+                            "referrerPolicy",
+                        ],
+                    )?;
+                } else {
+                    keys(p, &["url", "frameId"])?;
+                }
+                if p.get("frameId").is_some() && string(p, "frameId")? != fid {
                     return Err(failed("Unknown frameId"));
                 }
-                let target = string(p, "url")?;
-                if target.len() > 16_384 {
+                let url_str = string(p, "url")?;
+                if url_str.len() > 16_384 {
                     return Err(invalid("URL too long"));
                 }
-                let url = url::Url::parse(target).map_err(|e| invalid(e.to_string()))?;
-                if !matches!(url.scheme(), "http" | "https") {
-                    return Err(invalid("Only HTTP and HTTPS navigation is supported"));
-                }
+                let nav_url = if auto_attached && url_str == "about:blank" {
+                    "about:blank".to_owned()
+                } else {
+                    let parsed = url::Url::parse(url_str).map_err(|e| invalid(e.to_string()))?;
+                    if !matches!(parsed.scheme(), "http" | "https") {
+                        return Err(invalid("Only HTTP and HTTPS navigation is supported"));
+                    }
+                    parsed.to_string()
+                };
                 if app.inflight >= 2 {
                     return Err(failed("Navigation busy; two requests are still finishing"));
                 }
-                app.navigate(url.to_string(), None, true);
-                Ok(json!({"frameId":frame_id}))
+                app.navigate(nav_url, None, true);
+                if auto_attached {
+                    Ok(json!({"frameId": fid, "loaderId": app.page_loader.to_string()}))
+                } else {
+                    Ok(json!({"frameId": fid}))
+                }
             }
             "Page.reload" => {
-                keys(p, &["ignoreCache"])?;
+                if auto_attached {
+                    keys(p, &["ignoreCache", "scriptToEvaluateOnLoad", "loaderId"])?;
+                } else {
+                    keys(p, &["ignoreCache"])?;
+                }
                 boolean(p, "ignoreCache", false)?; // No persistent resource cache exists yet.
                 if app.inflight >= 2 {
                     return Err(failed("Navigation busy"));
                 }
-                let target = if app.loading {
+                let reload_target = if app.loading {
                     &app.address
                 } else {
                     &app.page_url
                 };
-                let url = url::Url::parse(target).map_err(|e| failed(e.to_string()))?;
+                let url = url::Url::parse(reload_target).map_err(|e| failed(e.to_string()))?;
                 if !matches!(url.scheme(), "http" | "https") {
                     return Err(failed("No HTTP(S) page to reload yet"));
                 }
@@ -971,7 +2351,7 @@ impl BrowserCdp {
             }
             "Page.getFrameTree" => {
                 keys(p, &[])?;
-                Ok(json!({"frameTree":{"frame":frame_for(app, target)}}))
+                Ok(json!({"frameTree":{"frame":frame_for(app, target, auto_attached)}}))
             }
             "Page.getLayoutMetrics" => {
                 keys(p, &[])?;
@@ -979,24 +2359,46 @@ impl BrowserCdp {
                 Ok(app.metrics())
             }
             "Page.captureScreenshot" => {
-                keys(
-                    p,
-                    &["format", "fromSurface", "captureBeyondViewport", "clip"],
-                )?;
-                if p.get("format").is_some() && string(p, "format")? != "png" {
-                    return Err(invalid("Only PNG screenshots are supported"));
+                if auto_attached {
+                    keys(
+                        p,
+                        &[
+                            "format",
+                            "quality",
+                            "clip",
+                            "fromSurface",
+                            "captureBeyondViewport",
+                            "optimizeForSpeed",
+                        ],
+                    )?;
+                    let fmt = p.get("format").and_then(Value::as_str).unwrap_or("png");
+                    if !matches!(fmt, "png" | "jpeg") {
+                        return Err(invalid("Unsupported screenshot format"));
+                    }
+                    let _ = boolean(p, "fromSurface", true)?;
+                    let _ = boolean(p, "captureBeyondViewport", false)?;
+                    app.screenshot_clipped(p.get("clip"), fmt)
+                        .map(|data| json!({"data": data}))
+                } else {
+                    keys(
+                        p,
+                        &["format", "fromSurface", "captureBeyondViewport", "clip"],
+                    )?;
+                    if p.get("format").is_some() && string(p, "format")? != "png" {
+                        return Err(invalid("Only PNG screenshots are supported"));
+                    }
+                    boolean(p, "fromSurface", true)?;
+                    if p.get("clip").is_some() || boolean(p, "captureBeyondViewport", false)? {
+                        return Err(invalid(
+                            "Only the current viewport is supported; no clip or captureBeyondViewport:true",
+                        ));
+                    }
+                    app.screenshot().map(|data| json!({"data":data}))
                 }
-                boolean(p, "fromSurface", true)?;
-                if p.get("clip").is_some() || boolean(p, "captureBeyondViewport", false)? {
-                    return Err(invalid(
-                        "Only the current viewport is supported; no clip or captureBeyondViewport:true",
-                    ));
-                }
-                app.screenshot().map(|data| json!({"data":data}))
             }
             "DOM.getDocument" => {
                 keys(p, &["depth", "pierce"])?;
-                if boolean(p, "pierce", false)? {
+                if !auto_attached && boolean(p, "pierce", false)? {
                     return Err(invalid("Shadow DOM/frame piercing is not implemented"));
                 }
                 let depth = match p.get("depth") {
@@ -1008,7 +2410,7 @@ impl BrowserCdp {
                 if !(-1..=256).contains(&depth) {
                     return Err(invalid("depth must be -1 or 0..256"));
                 }
-                scope.dom = true;
+                self.scopes.get_mut(route).unwrap().dom = true;
                 let root = app.dom_node(0, if depth == -1 { 256 } else { depth as usize });
                 if root.to_string().len() > 4 * 1024 * 1024 {
                     return Err(failed(
@@ -1016,6 +2418,87 @@ impl BrowserCdp {
                     ));
                 }
                 Ok(json!({"root":root}))
+            }
+            "DOM.describeNode" => {
+                keys(
+                    p,
+                    &["nodeId", "backendNodeId", "objectId", "depth", "pierce"],
+                )?;
+                let node = self.resolve_dom_node_index(app, target, route, p)?;
+                let depth = match p.get("depth") {
+                    None => 0,
+                    Some(v) => v
+                        .as_i64()
+                        .ok_or_else(|| invalid("depth must be an integer"))?,
+                };
+                let max_depth = if depth < 0 {
+                    256
+                } else {
+                    (depth as usize).min(256)
+                };
+                let described = app.dom_node_described(node, max_depth, &fid);
+                Ok(json!({"node": described}))
+            }
+            "DOM.requestNode" => {
+                keys(p, &["objectId"])?;
+                let oid = string(p, "objectId")?;
+                let (t, g, node) = self
+                    .runtime
+                    .node_for_object(route, oid)
+                    .ok_or_else(|| failed("Could not find node with given objectId"))?;
+                if t != target || g != app.generation || node >= app.document.nodes.len() {
+                    return Ok(json!({"nodeId": 0}));
+                }
+                Ok(json!({"nodeId": app.node_id(node)}))
+            }
+            "DOM.getOuterHTML" => {
+                keys(p, &["nodeId", "backendNodeId", "objectId"])?;
+                let node = self.resolve_dom_node_index(app, target, route, p)?;
+                Ok(json!({"outerHTML": app.cdp_serialize_outer_html(node)}))
+            }
+            "DOM.getContentQuads" => {
+                keys(p, &["nodeId", "backendNodeId", "objectId"])?;
+                let node = self.resolve_dom_node_index(app, target, route, p)?;
+                if !App::connected(&app.document, node) {
+                    return Err(failed("Node is detached from document"));
+                }
+                app.refresh_layout();
+                let Some((x, y, right, bottom)) = app.node_layout_bounds(node) else {
+                    return Ok(json!({"quads": []}));
+                };
+                let quad = json!([
+                    x as f64,
+                    y as f64,
+                    right as f64,
+                    y as f64,
+                    right as f64,
+                    bottom as f64,
+                    x as f64,
+                    bottom as f64,
+                ]);
+                Ok(json!({"quads": [quad]}))
+            }
+            "DOM.scrollIntoViewIfNeeded" => {
+                keys(p, &["nodeId", "backendNodeId", "objectId", "rect"])?;
+                let node = self.resolve_dom_node_index(app, target, route, p)?;
+                if !App::connected(&app.document, node) {
+                    return Err(failed("Node is detached from document"));
+                }
+                app.refresh_layout();
+                let Some((_x, y, _right, bottom)) = app.node_layout_bounds(node) else {
+                    return Err(failed("Node does not have a layout object"));
+                };
+                let vh = app.viewport_height() as i32;
+                if y < 0 || bottom > vh {
+                    let target_scroll = (app.scroll + y - (vh - (bottom - y).min(vh)) / 2).max(0);
+                    let delta = target_scroll - app.scroll;
+                    if delta != 0 {
+                        app.scroll_by(delta);
+                        app.refresh_layout();
+                        app.sync_viewport_to_session();
+                    }
+                }
+                Ok(json!({}))
             }
             "DOM.querySelector" | "DOM.querySelectorAll" => {
                 keys(p, &["nodeId", "selector"])?;
@@ -1046,14 +2529,25 @@ impl BrowserCdp {
                 Ok(json!({"attributes":app.attributes(node)}))
             }
             "DOM.getBoxModel" => {
-                keys(p, &["nodeId"])?;
-                let node = app.node_index(p)?;
-                app.refresh_layout();
-                app.box_model(node)
+                if auto_attached {
+                    keys(p, &["nodeId", "backendNodeId", "objectId"])?;
+                    let node = self.resolve_dom_node_index(app, target, route, p)?;
+                    app.refresh_layout();
+                    app.box_model_any(node, true)
+                } else {
+                    keys(p, &["nodeId"])?;
+                    let node = app.node_index(p)?;
+                    app.refresh_layout();
+                    app.box_model(node)
+                }
             }
             "DOM.focus" => {
-                keys(p, &["nodeId"])?;
-                let node = app.node_index(p)?;
+                if auto_attached {
+                    keys(p, &["nodeId", "backendNodeId", "objectId"])?;
+                } else {
+                    keys(p, &["nodeId"])?;
+                }
+                let node = self.resolve_dom_node_index(app, target, route, p)?;
                 let item = app
                     .document
                     .item_nodes
@@ -1062,12 +2556,19 @@ impl BrowserCdp {
                     .find(|(i, n)| {
                         **n == node && matches!(app.document.items[*i], Item::Input { .. })
                     })
-                    .map(|(i, _)| i)
-                    .ok_or_else(|| failed("Node is not a supported editable input"))?;
-                app.focus = Focus::Input(app.document.item_nodes[item]);
-                app.select_all = false;
-                app.dirty = true;
-                Ok(json!({}))
+                    .map(|(i, _)| i);
+                if let Some(item) = item {
+                    app.focus = Focus::Input(app.document.item_nodes[item]);
+                    app.select_all = false;
+                    app.dirty = true;
+                    Ok(json!({}))
+                } else if auto_attached {
+                    app.focus = Focus::Page;
+                    app.dirty = true;
+                    Ok(json!({}))
+                } else {
+                    Err(failed("Node is not a supported editable input"))
+                }
             }
             "Input.insertText" => {
                 keys(p, &["text"])?;
@@ -1076,30 +2577,67 @@ impl BrowserCdp {
                 Ok(json!({}))
             }
             "Input.dispatchKeyEvent" => {
-                dispatch_key(app, p)?;
+                dispatch_key(app, p, auto_attached)?;
                 Ok(json!({}))
             }
             "Input.dispatchMouseEvent" => {
-                keys(
-                    p,
-                    &[
-                        "type",
-                        "x",
-                        "y",
-                        "button",
-                        "buttons",
-                        "clickCount",
-                        "modifiers",
-                        "deltaX",
-                        "deltaY",
-                    ],
-                )?;
+                if auto_attached {
+                    keys(
+                        p,
+                        &[
+                            "type",
+                            "x",
+                            "y",
+                            "button",
+                            "buttons",
+                            "clickCount",
+                            "modifiers",
+                            "deltaX",
+                            "deltaY",
+                            "force",
+                            "tangentialPressure",
+                            "tiltX",
+                            "tiltY",
+                            "twist",
+                            "pointerType",
+                            "timestamp",
+                        ],
+                    )?;
+                } else {
+                    keys(
+                        p,
+                        &[
+                            "type",
+                            "x",
+                            "y",
+                            "button",
+                            "buttons",
+                            "clickCount",
+                            "modifiers",
+                            "deltaX",
+                            "deltaY",
+                        ],
+                    )?;
+                }
                 let kind = string(p, "type")?;
                 if !matches!(
                     kind,
                     "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel"
                 ) {
                     return Err(invalid("Unsupported mouse event type"));
+                }
+                if auto_attached && kind == "mouseMoved" {
+                    let vx = p.get("x").and_then(Value::as_f64).unwrap_or(-1.0);
+                    let vy = p.get("y").and_then(Value::as_f64).unwrap_or(-1.0);
+                    if !vx.is_finite()
+                        || !vy.is_finite()
+                        || vx < 0.0
+                        || vy < 0.0
+                        || vx >= app.width as f64
+                        || vy >= app.viewport_height() as f64
+                    {
+                        return Ok(json!({}));
+                    }
                 }
                 let x = coordinate(p, "x", app.width as f64)?;
                 let y = coordinate(p, "y", app.viewport_height() as f64)?;
@@ -1108,24 +2646,26 @@ impl BrowserCdp {
                     .map(|_| string(p, "button"))
                     .transpose()?
                     .unwrap_or("none");
-                if !matches!(button, "left" | "none") {
-                    return Err(invalid("Only the left mouse button is implemented"));
-                }
-                if matches!(kind, "mousePressed" | "mouseReleased") && button != "left" {
-                    return Err(invalid("Press/release requires button:left"));
-                }
-                if p.get("clickCount")
-                    .is_some_and(|v| !matches!(v.as_u64(), Some(0 | 1)))
-                {
-                    return Err(invalid("Only single clicks are implemented"));
-                }
-                if p.get("buttons")
-                    .is_some_and(|v| !matches!(v.as_u64(), Some(0 | 1)))
-                {
-                    return Err(invalid("Only left/none buttons bitmasks are implemented"));
-                }
-                if p.get("modifiers").is_some_and(|v| v.as_u64() != Some(0)) {
-                    return Err(invalid("Modified mouse events are not implemented"));
+                if !auto_attached {
+                    if !matches!(button, "left" | "none") {
+                        return Err(invalid("Only the left mouse button is implemented"));
+                    }
+                    if matches!(kind, "mousePressed" | "mouseReleased") && button != "left" {
+                        return Err(invalid("Press/release requires button:left"));
+                    }
+                    if p.get("clickCount")
+                        .is_some_and(|v| !matches!(v.as_u64(), Some(0 | 1)))
+                    {
+                        return Err(invalid("Only single clicks are implemented"));
+                    }
+                    if p.get("buttons")
+                        .is_some_and(|v| !matches!(v.as_u64(), Some(0 | 1)))
+                    {
+                        return Err(invalid("Only left/none buttons bitmasks are implemented"));
+                    }
+                    if p.get("modifiers").is_some_and(|v| v.as_u64() != Some(0)) {
+                        return Err(invalid("Modified mouse events are not implemented"));
+                    }
                 }
                 let delta_x = p
                     .get("deltaX")
@@ -1137,14 +2677,25 @@ impl BrowserCdp {
                     .map(|v| v.as_f64().ok_or_else(|| invalid("deltaY must be a number")))
                     .transpose()?
                     .unwrap_or(0.);
-                if delta_x != 0. || !delta_y.is_finite() || delta_y.abs() > 100_000. {
+                if (!auto_attached && delta_x != 0.)
+                    || !delta_x.is_finite()
+                    || !delta_y.is_finite()
+                    || delta_y.abs() > 100_000.
+                {
                     return Err(invalid("Only bounded vertical scrolling is implemented"));
                 }
                 app.refresh_layout();
                 match kind {
-                    "mousePressed" => scope.pressed = Some((x, y, app.geometry_revision)),
+                    "mousePressed" => {
+                        if button == "left" {
+                            self.scopes.get_mut(route).unwrap().pressed =
+                                Some((x, y, app.geometry_revision));
+                        }
+                    }
                     "mouseReleased" => {
-                        if let Some((px, py, geometry)) = scope.pressed.take() {
+                        if let Some((px, py, geometry)) =
+                            self.scopes.get_mut(route).unwrap().pressed.take()
+                        {
                             if geometry == app.geometry_revision
                                 && (px - x).abs() <= 5
                                 && (py - y).abs() <= 5
@@ -1153,7 +2704,12 @@ impl BrowserCdp {
                             }
                         }
                     }
-                    "mouseWheel" => app.scroll_by(delta_y.round() as i32),
+                    "mouseWheel" => {
+                        app.scroll_by(delta_y.round() as i32);
+                        if auto_attached {
+                            app.sync_viewport_to_session();
+                        }
+                    }
                     _ => {}
                 }
                 Ok(json!({}))
@@ -1176,14 +2732,77 @@ fn page_method(method: &str) -> bool {
             method,
             "Page.enable"
                 | "Page.disable"
+                | "Page.setLifecycleEventsEnabled"
+                | "Page.createIsolatedWorld"
+                | "Page.addScriptToEvaluateOnNewDocument"
+                | "Page.removeScriptToEvaluateOnNewDocument"
+                | "Page.bringToFront"
+                | "Page.setBypassCSP"
+                | "Page.setFontFamilies"
+                | "Page.setInterceptFileChooserDialog"
+                | "Page.getNavigationHistory"
+                | "Page.stopScreencast"
+                | "Page.screencastFrameAck"
                 | "Page.navigate"
                 | "Page.reload"
                 | "Page.getFrameTree"
                 | "Page.getLayoutMetrics"
                 | "Page.captureScreenshot"
+                | "Target.setAutoAttach"
+                | "Browser.getWindowForTarget"
+                | "Browser.getWindowBounds"
+                | "Browser.setWindowBounds"
+                | "Network.enable"
+                | "Network.disable"
+                | "Network.setExtraHTTPHeaders"
+                | "Network.setUserAgentOverride"
+                | "Network.setCacheDisabled"
+                | "Network.emulateNetworkConditions"
+                | "Network.emulateNetworkConditionsByRule"
+                | "Network.setBypassServiceWorker"
+                | "Network.setAttachDebugStack"
+                | "Network.setCookie"
+                | "Network.setCookies"
+                | "Network.deleteCookies"
+                | "Network.clearBrowserCookies"
+                | "Network.clearBrowserCache"
+                | "Network.getCookies"
+                | "Network.getAllCookies"
+                | "Network.getResponseBody"
+                | "Storage.getCookies"
+                | "Storage.setCookies"
+                | "Storage.clearCookies"
+                | "Log.enable"
+                | "Log.disable"
+                | "Log.clear"
+                | "Log.startViolationsReport"
+                | "Log.stopViolationsReport"
+                | "Security.enable"
+                | "Security.disable"
+                | "Security.setIgnoreCertificateErrors"
+                | "Emulation.setDeviceMetricsOverride"
+                | "Emulation.clearDeviceMetricsOverride"
+                | "Emulation.setFocusEmulationEnabled"
+                | "Emulation.setEmulatedMedia"
+                | "Emulation.setTouchEmulationEnabled"
+                | "Emulation.setEmitTouchEventsForMouse"
+                | "Emulation.setScriptExecutionDisabled"
+                | "Emulation.setUserAgentOverride"
+                | "Emulation.setLocaleOverride"
+                | "Emulation.setTimezoneOverride"
+                | "Emulation.setGeolocationOverride"
+                | "Emulation.clearGeolocationOverride"
+                | "Emulation.setDefaultBackgroundColorOverride"
+                | "Emulation.setPageScaleFactor"
                 | "DOM.enable"
                 | "DOM.disable"
                 | "DOM.getDocument"
+                | "DOM.describeNode"
+                | "DOM.resolveNode"
+                | "DOM.requestNode"
+                | "DOM.getOuterHTML"
+                | "DOM.getContentQuads"
+                | "DOM.scrollIntoViewIfNeeded"
                 | "DOM.querySelector"
                 | "DOM.querySelectorAll"
                 | "DOM.getAttributes"
@@ -1205,21 +2824,45 @@ fn coordinate(p: &Value, key: &str, bound: f64) -> Result<i32, (i32, String)> {
     }
     Ok(value.floor() as i32)
 }
-fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
-    keys(
-        p,
-        &[
-            "type",
-            "key",
-            "code",
-            "text",
-            "unmodifiedText",
-            "windowsVirtualKeyCode",
-            "nativeVirtualKeyCode",
-            "modifiers",
-            "autoRepeat",
-        ],
-    )?;
+
+fn dispatch_key(app: &mut App, p: &Value, auto_attached: bool) -> Result<(), (i32, String)> {
+    if auto_attached {
+        keys(
+            p,
+            &[
+                "type",
+                "key",
+                "code",
+                "text",
+                "unmodifiedText",
+                "windowsVirtualKeyCode",
+                "nativeVirtualKeyCode",
+                "modifiers",
+                "autoRepeat",
+                "isKeypad",
+                "isSystemKey",
+                "location",
+                "commands",
+                "keyIdentifier",
+                "timestamp",
+            ],
+        )?;
+    } else {
+        keys(
+            p,
+            &[
+                "type",
+                "key",
+                "code",
+                "text",
+                "unmodifiedText",
+                "windowsVirtualKeyCode",
+                "nativeVirtualKeyCode",
+                "modifiers",
+                "autoRepeat",
+            ],
+        )?;
+    }
     let kind = string(p, "type")?;
     if !matches!(kind, "keyDown" | "rawKeyDown" | "keyUp" | "char") {
         return Err(invalid("Unsupported key event type"));
@@ -1230,12 +2873,12 @@ fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
             .as_u64()
             .ok_or_else(|| invalid("modifiers must be an integer"))?,
     };
-    if modifiers & !10 != 0 {
+    if !auto_attached && modifiers & !10 != 0 {
         return Err(invalid(
             "Only Control and Shift key modifiers are implemented",
         ));
     }
-    boolean(p, "autoRepeat", false)?;
+    let _ = boolean(p, "autoRepeat", false)?;
     for name in ["key", "code", "text", "unmodifiedText"] {
         if p.get(name).is_some() {
             string(p, name)?;
@@ -1266,18 +2909,30 @@ fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
         "PageDown" => 0xff56,
         "ArrowUp" => 0xff52,
         "ArrowDown" => 0xff54,
+        "ArrowLeft" if auto_attached => 0xff51,
+        "ArrowRight" if auto_attached => 0xff53,
+        "Home" if auto_attached => 0xff50,
+        "End" if auto_attached => 0xff57,
+        "Delete" if auto_attached => 0xffff,
+        "Escape" if auto_attached => 0xff1b,
         "Shift" | "Control" => return Ok(()),
+        "Alt" | "Meta" if auto_attached => return Ok(()),
         "" => match p.get("windowsVirtualKeyCode").and_then(Value::as_u64) {
             Some(13) => 0xff0d,
             Some(8) => 0xff08,
             Some(9) => 0xff09,
+            _ if auto_attached => return Ok(()),
             _ => return Err(invalid("Provide a supported key or virtual key code")),
         },
         value if value.chars().count() == 1 => value.chars().next().unwrap() as u32,
+        _ if auto_attached => return Ok(()),
         _ => return Err(invalid("Unsupported key")),
     };
     let ctrl = modifiers & 2 != 0;
     if ctrl && !matches!(sym, 65 | 97) {
+        if auto_attached {
+            return Ok(());
+        }
         return Err(invalid("Only Control+A is implemented for page input"));
     }
     if kind == "rawKeyDown" && !ctrl && sym < 0xff00 {
@@ -1285,7 +2940,9 @@ fn dispatch_key(app: &mut App, p: &Value) -> Result<(), (i32, String)> {
     }
     if !ctrl && sym < 0xff00 && p.get("text").is_some() {
         let text = string(p, "text")?;
-        app.insert_cdp_text(text)?;
+        if !text.is_empty() {
+            app.insert_cdp_text(text)?;
+        }
     } else if !ctrl && sym < 0xff00 {
         app.insert_cdp_text(
             &char::from_u32(sym)
@@ -1326,7 +2983,7 @@ impl App {
         self.type_text(text);
         Ok(())
     }
-    fn refresh_layout(&mut self) {
+    pub(crate) fn refresh_layout(&mut self) {
         if self.dirty {
             let _ = self.paint();
             self.dirty = true;
@@ -1354,6 +3011,16 @@ impl App {
             ));
         }
         Ok((id - first) as usize)
+    }
+    fn backend_node_index(&self, bid: u64) -> Result<usize, (i32, String)> {
+        if bid == 0 {
+            return Err(failed("Unknown backendNodeId"));
+        }
+        let idx = ((bid - 1) % NODE_STRIDE) as usize;
+        if idx >= self.document.nodes.len() {
+            return Err(failed("Unknown backendNodeId"));
+        }
+        Ok(idx)
     }
     fn attributes(&self, index: usize) -> Vec<String> {
         self.document.nodes[index]
@@ -1387,6 +3054,86 @@ impl App {
         }
         result
     }
+    fn dom_node_described(&self, index: usize, depth: usize, fid: &str) -> Value {
+        let mut result = self.dom_node(index, depth);
+        if index == 0
+            || (self.document.nodes[index].tag == "html" && self.document.nodes[index].parent == 0)
+        {
+            result["frameId"] = json!(fid);
+        }
+        result
+    }
+    fn cdp_serialize_outer_html(&self, index: usize) -> String {
+        let mut out = String::new();
+        self.cdp_append_outer_html(index, 0, &mut out);
+        out
+    }
+    fn cdp_append_outer_html(&self, index: usize, depth: usize, out: &mut String) {
+        if depth > 256 || out.len() > 2 * 1024 * 1024 || index >= self.document.nodes.len() {
+            return;
+        }
+        let node = &self.document.nodes[index];
+        match node.tag.as_str() {
+            "#document" => {
+                for &c in &node.children {
+                    self.cdp_append_outer_html(c, depth + 1, out);
+                }
+            }
+            "#text" => {
+                for ch in node.text.chars() {
+                    match ch {
+                        '&' => out.push_str("&amp;"),
+                        '<' => out.push_str("&lt;"),
+                        '>' => out.push_str("&gt;"),
+                        _ => out.push(ch),
+                    }
+                }
+            }
+            tag => {
+                out.push('<');
+                out.push_str(tag);
+                for (k, v) in &node.attributes {
+                    out.push(' ');
+                    out.push_str(k);
+                    out.push_str("=\"");
+                    for ch in v.chars() {
+                        match ch {
+                            '&' => out.push_str("&amp;"),
+                            '"' => out.push_str("&quot;"),
+                            _ => out.push(ch),
+                        }
+                    }
+                    out.push('"');
+                }
+                out.push('>');
+                if matches!(
+                    tag,
+                    "area"
+                        | "base"
+                        | "br"
+                        | "col"
+                        | "embed"
+                        | "hr"
+                        | "img"
+                        | "input"
+                        | "link"
+                        | "meta"
+                        | "param"
+                        | "source"
+                        | "track"
+                        | "wbr"
+                ) {
+                    return;
+                }
+                for &c in &node.children {
+                    self.cdp_append_outer_html(c, depth + 1, out);
+                }
+                out.push_str("</");
+                out.push_str(tag);
+                out.push('>');
+            }
+        }
+    }
     fn metrics(&self) -> Value {
         let page_width = self.page_viewport_width();
         let layout = json!({"pageX":0,"pageY":self.scroll,"clientWidth":page_width,"clientHeight":self.viewport_height()});
@@ -1401,7 +3148,44 @@ impl App {
         let device_content = json!({"x":0,"y":0,"width":physical(i64::from(page_width)),"height":physical(i64::from((self.content_height-self.page_top()).max(self.viewport_height() as i32)))});
         json!({"layoutViewport":device_layout,"visualViewport":device_visual,"contentSize":device_content,"cssLayoutViewport":layout,"cssVisualViewport":visual,"cssContentSize":content})
     }
+    fn node_layout_bounds(&self, node: usize) -> Option<(i32, i32, i32, i32)> {
+        if self.boxes.len() >= 100_000 {
+            return None;
+        }
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        let mut budget = 4_000_000usize;
+        for rect in &self.boxes {
+            let mut source = rect.node;
+            for _ in 0..=256 {
+                let Some(next) = budget.checked_sub(1) else {
+                    return None;
+                };
+                budget = next;
+                if source == node {
+                    let (x, y, right, bottom) = (
+                        rect.x,
+                        rect.y - self.page_top(),
+                        rect.x + rect.width as i32,
+                        rect.y - self.page_top() + rect.height as i32,
+                    );
+                    bounds = Some(match bounds {
+                        None => (x, y, right, bottom),
+                        Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(right), d.max(bottom)),
+                    });
+                    break;
+                }
+                if source == 0 {
+                    break;
+                }
+                source = self.document.nodes[source].parent;
+            }
+        }
+        bounds
+    }
     fn box_model(&self, node: usize) -> Reply {
+        self.box_model_any(node, false)
+    }
+    fn box_model_any(&self, node: usize, allow_offscreen: bool) -> Reply {
         if self.boxes.len() >= 100_000 {
             return Err(failed(
                 "Layout geometry limit reached; no partial box model is returned",
@@ -1436,10 +3220,11 @@ impl App {
         }
         let (x, y, right, bottom) = bounds
             .ok_or_else(|| failed("Node has no rendered layout box in this browser subset"))?;
-        if right <= 0
-            || x >= self.page_viewport_width() as i32
-            || bottom <= 0
-            || y >= self.viewport_height() as i32
+        if !allow_offscreen
+            && (right <= 0
+                || x >= self.page_viewport_width() as i32
+                || bottom <= 0
+                || y >= self.viewport_height() as i32)
         {
             return Err(failed("Node is outside the current viewport; scroll first"));
         }
@@ -1449,25 +3234,70 @@ impl App {
         )
     }
     fn screenshot(&mut self) -> Result<String, (i32, String)> {
+        self.screenshot_clipped(None, "png")
+    }
+    fn screenshot_clipped(
+        &mut self,
+        clip: Option<&Value>,
+        fmt: &str,
+    ) -> Result<String, (i32, String)> {
         let canvas = self.paint();
         self.dirty = true; // Inspection must not consume a pending native-window redraw.
         let top = canvas.physical_edge(i64::from(self.page_top())) as u32;
         let bottom = canvas
             .physical_edge(i64::from(self.page_top()) + i64::from(self.viewport_height()))
             as u32;
-        let height = bottom.min(canvas.height).saturating_sub(top);
-        let pixels: Vec<u8> = canvas
-            .pixels
-            .iter()
-            .skip(top as usize * canvas.width as usize)
-            .take(height as usize * canvas.width as usize)
-            .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])
-            .collect();
-        let image = image::RgbImage::from_raw(canvas.width, height, pixels)
+        let full_h = bottom.min(canvas.height).saturating_sub(top);
+        let full_w = canvas.width;
+        let (cx, cy, cw, ch) = if let Some(c) = clip {
+            let obj = c
+                .as_object()
+                .ok_or_else(|| invalid("clip must be an object"))?;
+            let x_css = obj.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let y_css =
+                obj.get("y").and_then(Value::as_f64).unwrap_or(0.0) - f64::from(self.scroll);
+            let w_css = obj
+                .get("width")
+                .and_then(Value::as_f64)
+                .unwrap_or(full_w as f64);
+            let h_css = obj
+                .get("height")
+                .and_then(Value::as_f64)
+                .unwrap_or(full_h as f64);
+            let scale = f64::from(self.effective_scale());
+            let px = (x_css.max(0.0) * scale).round() as u32;
+            let py = (y_css.max(0.0) * scale).round() as u32;
+            let pw = ((w_css.max(1.0) * scale).round() as u32).max(1);
+            let ph = ((h_css.max(1.0) * scale).round() as u32).max(1);
+            let clamped_x = px.min(full_w.saturating_sub(1));
+            let clamped_y = py.min(full_h.saturating_sub(1));
+            let clamped_w = pw.min(full_w.saturating_sub(clamped_x)).max(1);
+            let clamped_h = ph.min(full_h.saturating_sub(clamped_y)).max(1);
+            (clamped_x, clamped_y, clamped_w, clamped_h)
+        } else {
+            (0, 0, full_w, full_h)
+        };
+        let mut pixels = Vec::with_capacity(cw as usize * ch as usize * 3);
+        for row in 0..ch {
+            let src_y = top + cy + row;
+            let row_start = src_y as usize * canvas.width as usize + cx as usize;
+            let row_end = row_start + cw as usize;
+            if row_end <= canvas.pixels.len() {
+                for &p in &canvas.pixels[row_start..row_end] {
+                    pixels.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
+                }
+            }
+        }
+        let image = image::RgbImage::from_raw(cw, ch, pixels)
             .ok_or_else(|| failed("Invalid screenshot surface"))?;
         let mut output = Cursor::new(Vec::new());
+        let format = if fmt == "jpeg" {
+            image::ImageFormat::Jpeg
+        } else {
+            image::ImageFormat::Png
+        };
         image
-            .write_to(&mut output, image::ImageFormat::Png)
+            .write_to(&mut output, format)
             .map_err(|e| failed(e.to_string()))?;
         let encoded = base64::engine::general_purpose::STANDARD.encode(output.into_inner());
         if encoded.len() > 7 * 1024 * 1024 {
@@ -3684,6 +5514,219 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("ERR_ABORTED")
+        );
+    }
+
+    #[test]
+    fn playwright_auto_attach_downloads_dom_geometry_and_network_event_order() {
+        let mut app = fixture();
+        let mut cdp = BrowserCdp::bind(0).unwrap();
+        cdp.tick_pages(&mut [("page-1", &mut app)]).unwrap();
+        let mut socket = wire(&cdp, "/devtools/browser/browser-1");
+        let client = cdp.server.client_ids()[0];
+
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut app)],
+            client,
+            1,
+            "Target.createBrowserContext",
+            json!({}),
+            true,
+            None,
+        );
+        let ctx = target_reply(&mut socket);
+        let context_id = ctx["result"]["browserContextId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!context_id.is_empty());
+
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut app)],
+            client,
+            2,
+            "Browser.setDownloadBehavior",
+            json!({"behavior":"allowAndName","downloadPath":"/tmp/m4-dl","eventsEnabled":true}),
+            true,
+            None,
+        );
+        let dl_reply = target_reply(&mut socket);
+        assert!(dl_reply.get("error").is_none(), "{dl_reply}");
+        assert_eq!(
+            cdp.download_behavior()
+                .and_then(|d| d.download_path.as_deref()),
+            Some("/tmp/m4-dl")
+        );
+
+        target_command(
+            &mut cdp,
+            &mut [("page-1", &mut app)],
+            client,
+            3,
+            "Target.setAutoAttach",
+            json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}),
+            true,
+            None,
+        );
+        let m1 = target_reply(&mut socket);
+        let m2 = target_reply(&mut socket);
+        let attached = if m1["method"] == "Target.attachedToTarget" {
+            assert_eq!(m2["id"], 3);
+            m1
+        } else {
+            assert_eq!(m1["id"], 3);
+            assert_eq!(m2["method"], "Target.attachedToTarget");
+            m2
+        };
+        let session_id = attached["params"]["sessionId"].as_str().unwrap().to_owned();
+        let page_route = Route {
+            client,
+            session: Some(session_id.clone()),
+        };
+
+        cdp.dispatch(&mut app, &page_route, true, "Page.enable", &json!({}))
+            .unwrap();
+        cdp.dispatch(
+            &mut app,
+            &page_route,
+            true,
+            "Page.setLifecycleEventsEnabled",
+            &json!({"enabled":true}),
+        )
+        .unwrap();
+        cdp.dispatch(&mut app, &page_route, true, "Network.enable", &json!({}))
+            .unwrap();
+        let init = cdp
+            .dispatch(
+                &mut app,
+                &page_route,
+                true,
+                "Page.addScriptToEvaluateOnNewDocument",
+                &json!({"source":"window.__m4 = 1;","worldName":"__playwright_utility_world__"}),
+            )
+            .unwrap();
+        assert!(init["identifier"].as_str().is_some());
+
+        let doc = cdp
+            .dispatch(
+                &mut app,
+                &page_route,
+                true,
+                "DOM.getDocument",
+                &json!({"depth":-1}),
+            )
+            .unwrap();
+        let q = cdp
+            .dispatch(
+                &mut app,
+                &page_route,
+                true,
+                "DOM.querySelector",
+                &json!({"nodeId": doc["root"]["nodeId"], "selector": "button"}),
+            )
+            .unwrap();
+        let btn_id = q["nodeId"].as_u64().unwrap();
+        assert!(btn_id > 0);
+        let desc = cdp
+            .dispatch(
+                &mut app,
+                &page_route,
+                true,
+                "DOM.describeNode",
+                &json!({"nodeId": btn_id}),
+            )
+            .unwrap();
+        assert_eq!(desc["node"]["nodeName"], "BUTTON");
+        let quads = cdp
+            .dispatch(
+                &mut app,
+                &page_route,
+                true,
+                "DOM.getContentQuads",
+                &json!({"nodeId": btn_id}),
+            )
+            .unwrap();
+        assert_eq!(quads["quads"][0].as_array().unwrap().len(), 8);
+        cdp.dispatch(
+            &mut app,
+            &page_route,
+            true,
+            "DOM.scrollIntoViewIfNeeded",
+            &json!({"nodeId": btn_id}),
+        )
+        .unwrap();
+
+        // Drain initial lifecycle events emitted when setLifecycleEventsEnabled(true) ran.
+        std::thread::sleep(Duration::from_millis(50));
+        while let Ok(msg) = socket.read() {
+            let _ = msg;
+        }
+
+        // Verify Chromium-ordered Network + Page lifecycle sequencing.
+        app.cdp_events.push(Event::Started);
+        app.cdp_network_events.push(NetworkEvent::DocumentRequest {
+            request_id: "nav-1".into(),
+            url: "http://127.0.0.1/test".into(),
+            method: "GET".into(),
+        });
+        app.cdp_network_events.push(NetworkEvent::DocumentResponse {
+            request_id: "nav-1".into(),
+            url: "http://127.0.0.1/test".into(),
+            status: 200,
+            mime_type: "text/html".into(),
+            bytes: 64,
+        });
+        app.cdp_events.push(Event::Committed { frame: frame(&app) });
+        app.cdp_network_events.push(NetworkEvent::Subresources(vec![
+            crate::resources::ResourceTiming {
+                kind: "stylesheet",
+                url: "http://127.0.0.1/missing.css".into(),
+                status: Some(404),
+                content_type: "text/plain".into(),
+                bytes: 9,
+                start_ms: 0.0,
+                duration_ms: 1.0,
+                error: Some("HTTP 404".into()),
+            },
+        ]));
+        let now = Instant::now();
+        app.cdp_events.push(Event::DomContentLoaded { at: now });
+        app.cdp_events.push(Event::LoadComplete { at: now });
+        app.cdp_events.push(Event::Finished {
+            generation: app.generation,
+            error: None,
+        });
+        cdp.flush_events(&mut app);
+
+        let mut methods = Vec::new();
+        while methods.iter().all(|m| m != "Page.frameStoppedLoading") {
+            let msg = read_wire(&mut socket).unwrap();
+            let v: Value = serde_json::from_str(&msg.into_text().unwrap()).unwrap();
+            if let Some(m) = v["method"].as_str() {
+                methods.push(m.to_owned());
+            }
+        }
+        let doc_resp_pos = methods
+            .iter()
+            .position(|m| m == "Network.responseReceived")
+            .expect("document responseReceived");
+        let nav_pos = methods
+            .iter()
+            .position(|m| m == "Page.frameNavigated")
+            .expect("frameNavigated");
+        let sub_resp_pos = methods
+            .iter()
+            .rposition(|m| m == "Network.responseReceived")
+            .expect("subresource responseReceived");
+        let load_pos = methods
+            .iter()
+            .position(|m| m == "Page.loadEventFired")
+            .expect("loadEventFired");
+        assert!(
+            doc_resp_pos < nav_pos && nav_pos < sub_resp_pos && sub_resp_pos < load_pos,
+            "unexpected network/lifecycle order: {methods:?}"
         );
     }
 }

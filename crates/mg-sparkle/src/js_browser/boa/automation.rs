@@ -13,6 +13,8 @@ struct Root {
     #[unsafe_ignore_trace]
     published: bool,
     #[unsafe_ignore_trace]
+    world_id: u32,
+    #[unsafe_ignore_trace]
     group: Option<String>,
     value: Option<JsObject>,
 }
@@ -121,10 +123,24 @@ fn ensure_owner(
     }
     Ok(())
 }
-fn kind(object: &JsObject) -> ObjectKind {
+fn kind(realm: &mut BoaPageRealm, object: &JsObject) -> ObjectKind {
     if object.is_callable() {
         ObjectKind::Function
     } else if object.is::<modern::boa_engine::builtins::proxy::Proxy>() {
+        let brands = realm.state.borrow().brands.clone();
+        if let Ok(val) = brands.get(object, realm.engine.context_mut())
+            && let Some(s) = val.as_string()
+        {
+            let h = s.to_std_string_escaped();
+            if h == "document" {
+                return ObjectKind::Node { node: 0 };
+            }
+            if let Some(id_str) = h.strip_prefix("node:")
+                && let Ok(node) = id_str.parse::<usize>()
+            {
+                return ObjectKind::Node { node };
+            }
+        }
         ObjectKind::Proxy
     } else if object.is_array() {
         ObjectKind::Array
@@ -137,6 +153,22 @@ fn kind(object: &JsObject) -> ObjectKind {
     } else {
         ObjectKind::Other
     }
+}
+
+fn safe_thrown_diagnostic(value: &JsValue, fallback: &str) -> String {
+    if let Some(s) = value.as_string() {
+        return diagnostic(&s.to_std_string_escaped());
+    }
+    if let Some(obj) = value.as_object()
+        && obj.is::<modern::boa_engine::builtins::error::Error>()
+        && let Ok(desc) = descriptor(&obj, &js_string!("message").into())
+        && let Some(msg_val) = desc.value()
+        && let Some(msg_str) = msg_val.as_string()
+    {
+        let msg = msg_str.to_std_string_escaped();
+        return diagnostic(&format!("Error: {msg}"));
+    }
+    diagnostic(fallback)
 }
 fn inspectable(object: &JsObject) -> Result<(), String> {
     if object.is_ordinary() || object.is_array() {
@@ -292,7 +324,8 @@ impl Export<'_> {
         }
         let id = (base + 1) as u64;
         drop(data);
-        let kind = kind(&object);
+        let active_world = self.realm.state.borrow().active_world;
+        let kind = kind(self.realm, &object);
         let group = clone_group(self.realm, self.group.as_deref())?;
         reserve(self.realm, &mut self.pending, 1)?;
         // Reserve a permanent scalar tombstone before retaining the root. Failed
@@ -302,6 +335,7 @@ impl Export<'_> {
         data.roots.push(Root {
             owner: self.owner,
             published: false,
+            world_id: 0,
             group: None,
             value: None,
         });
@@ -311,6 +345,7 @@ impl Export<'_> {
             Root {
                 owner: self.owner,
                 published: true,
+                world_id: active_world,
                 group,
                 value: Some(object),
             },
@@ -604,6 +639,42 @@ fn perform(
             }
             return Ok(AutomationResult::Released);
         }
+        Operation::CreateIsolatedWorld { world } => {
+            realm.ensure_isolated_world(world)?;
+            return Ok(AutomationResult::Released);
+        }
+        Operation::ResolveNode { node, world, group } => {
+            let group = clone_group(realm, group.as_deref())?;
+            let wid = realm.resolve_world_id(world.as_deref())?;
+            let exists = *node < realm.state.borrow().host.document.nodes.len();
+            if !exists {
+                return Ok(AutomationResult::Value(RemoteValue::Null));
+            }
+            let prev_world = super::enter_world_in_context(wid, realm.engine.context_mut());
+            let handle = if *node == 0 {
+                "document".to_owned()
+            } else {
+                format!("node:{node}")
+            };
+            let wrapped = super::wrap(&handle, realm.engine.context_mut())
+                .map_err(|_| "Runtime DOM node resolution failed".to_string());
+            let res = match wrapped {
+                Ok(val) => {
+                    let mut export = Export {
+                        realm,
+                        registry,
+                        owner: request.owner,
+                        group,
+                        pending: Vec::new(),
+                    };
+                    let rv = export.value(&val, false)?;
+                    export.commit(AutomationResult::Value(rv), request)
+                }
+                Err(e) => Err(e),
+            };
+            super::enter_world_in_context(prev_world, realm.engine.context_mut());
+            return res;
+        }
         _ => {}
     }
     let (group, by_value) = match &request.operation {
@@ -641,22 +712,67 @@ fn perform(
         _ => unreachable!(),
     };
     if let Operation::GetOwnProperties { object } = request.operation {
-        let object = live(&registry.borrow(), request.owner, object)?;
-        let mut export = Export {
-            realm,
-            registry,
-            owner: request.owner,
-            group,
-            pending: Vec::new(),
+        let (object, wid) = {
+            let data = registry.borrow();
+            let root = lookup(&data, request.owner, object)?;
+            (
+                root.value.clone().ok_or("Released Runtime object")?,
+                root.world_id,
+            )
         };
-        let result = export.properties(&object)?;
-        return export.commit(result, request);
+        let prev_world = super::enter_world_in_context(wid, realm.engine.context_mut());
+        let res = (|| {
+            let mut export = Export {
+                realm,
+                registry,
+                owner: request.owner,
+                group,
+                pending: Vec::new(),
+            };
+            let result = export.properties(&object)?;
+            export.commit(result, request)
+        })();
+        super::enter_world_in_context(prev_world, realm.engine.context_mut());
+        return res;
     }
+    let (wid, await_promise) = match &request.operation {
+        Operation::Evaluate {
+            world,
+            await_promise,
+            ..
+        } => (realm.resolve_world_id(world.as_deref())?, *await_promise),
+        Operation::CallFunction {
+            world,
+            receiver,
+            arguments,
+            await_promise,
+            ..
+        } => {
+            let wid = if world.is_some() {
+                realm.resolve_world_id(world.as_deref())?
+            } else {
+                let data = registry.borrow();
+                if let Some(id) = receiver {
+                    lookup(&data, request.owner, *id)?.world_id
+                } else if let Some(id) = arguments.iter().find_map(|a| match a {
+                    Argument::Object(id) => Some(*id),
+                    _ => None,
+                }) {
+                    lookup(&data, request.owner, id)?.world_id
+                } else {
+                    0
+                }
+            };
+            (wid, *await_promise)
+        }
+        _ => unreachable!(),
+    };
     realm.state.borrow_mut().error_exposure_allowed = false;
     if realm.purge_private_notices().is_err() {
         realm.rejection_failure(&mut Vec::new());
         return Err(REJECTION_FAILURE.into());
     }
+    let _prev_world = super::enter_world_in_context(wid, realm.engine.context_mut());
     let mut not_callable = false;
     let evaluated = {
         let _ingress = Ingress::enter(realm.state.clone());
@@ -711,9 +827,40 @@ fn perform(
     // Keep the actual result/exception rooted across the ordinary checkpoint.
     // Runtime's caught exception is deliberately not sent to execution_failure.
     realm.checkpoint(errors);
+    super::enter_world_in_context(wid, realm.engine.context_mut());
     realm.engine.check().map_err(|e| e.to_string())?;
     if not_callable {
         return Err("Runtime function source did not evaluate to a callable".into());
+    }
+    let mut evaluated = evaluated;
+    if await_promise {
+        if let Ok(val) = &evaluated
+            && let Some(obj) = val.as_object()
+            && let Ok(js_promise) = JsPromise::from_object(obj.clone())
+        {
+            let mut steps = 0;
+            while matches!(js_promise.state(), PromiseState::Pending) && steps < 16 {
+                steps += 1;
+                if !realm.step_immediate_timer_for_await(errors) {
+                    break;
+                }
+                realm.engine.check().map_err(|e| e.to_string())?;
+            }
+            super::enter_world_in_context(wid, realm.engine.context_mut());
+            evaluated = match js_promise.state() {
+                PromiseState::Fulfilled(v) => Ok(v),
+                PromiseState::Rejected(reason) => {
+                    let js_error = JsError::from_opaque(reason);
+                    Err(modern::ExecutionFailure {
+                        diagnostic: modern::safe_error(&js_error),
+                        exception: Some(js_error),
+                    })
+                }
+                PromiseState::Pending => {
+                    return Err("Awaited Promise did not settle".into());
+                }
+            };
+        }
     }
     let mut export = Export {
         realm,
@@ -728,10 +875,15 @@ fn perform(
             let mut message = diagnostic(&failure.diagnostic.to_string());
             let exception = match failure.exception {
                 Some(error) => {
-                    let represented = error
+                    let opaque = error
                         .into_opaque(export.realm.engine.context_mut())
-                        .map_err(|_| "Runtime exception conversion failed".to_string())
-                        .and_then(|value| export.value(&value, false));
+                        .map_err(|_| "Runtime exception conversion failed".to_string());
+                    if let Ok(ref val) = opaque
+                        && failure.diagnostic.kind == "ThrownValue"
+                    {
+                        message = safe_thrown_diagnostic(val, &message);
+                    }
+                    let represented = opaque.and_then(|value| export.value(&value, false));
                     match represented {
                         Ok(value) => Some(value),
                         Err(reason) => {
@@ -859,6 +1011,7 @@ pub(super) fn run(
             } else {
                 data.host.attr(edit.node, "value", edit.value.clone())?;
             }
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
             reply.acknowledgements.push(ControlAck {
                 node: edit.node,
                 version: edit.version,
@@ -871,6 +1024,7 @@ pub(super) fn run(
         }
         perform(realm, &request, registry, &mut reply.errors)
     })();
+    super::enter_world_in_context(0, realm.engine.context_mut());
     let mut result = result.unwrap_or_else(rejected);
     realm.snapshot(&mut reply);
     if reply.state != RealmState::Ready {
@@ -924,6 +1078,9 @@ mod tests {
                 source: source.into(),
                 return_by_value: by_value,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -945,7 +1102,20 @@ mod tests {
             false,
         ));
         modern::boa_gc::force_collect();
-        let (_, result) = realm.automation(AutomationRequest { owner: 1, operation: Operation::CallFunction { source: "function(x){document.title='changed'; return this===x && this.n===7 && weak.deref()===this}".into(), receiver: Some(id), arguments: vec![Argument::Object(id)], return_by_value: false, group: None }, edits: vec![] });
+        let (_, result) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::CallFunction {
+                source: "function(x){document.title='changed'; return this===x && this.n===7 && weak.deref()===this}".into(),
+                receiver: Some(id),
+                arguments: vec![Argument::Object(id)],
+                return_by_value: false,
+                group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
         assert_eq!(result, AutomationResult::Value(RemoteValue::Boolean(true)));
         let (_, result) = realm.automation(AutomationRequest {
             owner: 1,
@@ -1086,6 +1256,9 @@ mod tests {
                 source: " ".repeat(MAX_SOURCE_BYTES + 1),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1116,11 +1289,32 @@ mod tests {
                 source: "({n:7})".into(),
                 return_by_value: false,
                 group: Some("".into()),
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
         let parent = object(result);
-        let (_,result)=realm.automation(AutomationRequest{owner:1,operation:Operation::CallFunction{source:"function(a,b,c,d){if(this.n!==7||a!==undefined||!Object.is(b,-0)||c!==Infinity||d!==9n)throw 'bad';return {child:this}}".into(),receiver:Some(parent),arguments:vec![Argument::Undefined,Argument::Number(Number::NegativeZero),Argument::Number(Number::PositiveInfinity),Argument::BigInt("9".into())],return_by_value:false,group:None},edits:vec![]});
+        let (_, result) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::CallFunction {
+                source: "function(a,b,c,d){if(this.n!==7||a!==undefined||!Object.is(b,-0)||c!==Infinity||d!==9n)throw 'bad';return {child:this}}".into(),
+                receiver: Some(parent),
+                arguments: vec![
+                    Argument::Undefined,
+                    Argument::Number(Number::NegativeZero),
+                    Argument::Number(Number::PositiveInfinity),
+                    Argument::BigInt("9".into()),
+                ],
+                return_by_value: false,
+                group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
         let child = object(result);
         let (_, result) = realm.automation(AutomationRequest {
             owner: 1,
@@ -1139,6 +1333,9 @@ mod tests {
                 arguments: vec![],
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1240,6 +1437,9 @@ mod tests {
                     source: "({})".into(),
                     return_by_value: false,
                     group: None,
+                    world: None,
+                    await_promise: false,
+                    user_gesture: false,
                 },
                 edits: vec![],
             });
@@ -1252,6 +1452,9 @@ mod tests {
                 source: "throw 'must not execute'".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1296,6 +1499,9 @@ mod tests {
                 source: "1".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1315,6 +1521,9 @@ mod tests {
                 source: "while(true){}".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1337,6 +1546,9 @@ mod tests {
                 source: "document.title='after fatal'".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1410,6 +1622,9 @@ mod tests {
                 source: "7".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1431,6 +1646,9 @@ mod tests {
                 source: "Promise.reject({}).catch(()=>{});9".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1491,6 +1709,9 @@ mod tests {
                 source: "throw 'not executed'".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1508,6 +1729,9 @@ mod tests {
                     source: "Object.fromEntries(Array.from({length:31},(_,i)=>['p'+i,{}]))".into(),
                     return_by_value: false,
                     group: Some("batch".into()),
+                    world: None,
+                    await_promise: false,
+                    user_gesture: false,
                 },
                 edits: vec![],
             });
@@ -1569,6 +1793,9 @@ mod tests {
                     source: "({})".into(),
                     return_by_value: false,
                     group: Some(group.to_string()),
+                    world: None,
+                    await_promise: false,
+                    user_gesture: false,
                 },
                 edits: vec![],
             });
@@ -1580,6 +1807,9 @@ mod tests {
                 source: "({})".into(),
                 return_by_value: false,
                 group: Some("overflow".into()),
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1676,6 +1906,9 @@ mod tests {
                 ],
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1751,6 +1984,9 @@ mod tests {
                 source: "document.title='before checkpoint';Promise.resolve().then(()=>{document.title='after checkpoint'});throw '\\uD800'".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1824,6 +2060,9 @@ mod tests {
                 arguments: vec![],
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -1834,6 +2073,158 @@ mod tests {
         assert_eq!(
             eval(&mut realm, "traps", false),
             AutomationResult::Value(RemoteValue::Number(Number::Finite(1.0)))
+        );
+    }
+
+    #[test]
+    fn isolated_worlds_await_promise_resolve_node_and_automation_only() {
+        let mut init = crate::page_session::platform::PlatformInit::default();
+        init.automation_only = true;
+        let (realm, mut reply) = super::super::BoaPageRealm::start_with_platform(
+            Request {
+                url: "https://example.test/pw".into(),
+                html: "<title>PW</title><button id='btn' onclick='window.leaked=1'>Go</button><input id='q'><script>window.leaked=1; document.title='SCRIPT_RAN';</script>".into(),
+                external_scripts: None,
+            },
+            crate::page_session::observer::ObserverInit::Disabled,
+            init,
+            [7u8; 32],
+        );
+        let mut realm = realm.unwrap();
+        while reply.lifecycle.unwrap().phase != LifecyclePhase::LoadComplete {
+            reply = realm.pump_tasks(TaskPump {
+                wake_token: reply.task_wake.unwrap().token,
+            });
+        }
+        assert_eq!(
+            eval(
+                &mut realm,
+                "document.title + ':' + typeof window.leaked",
+                false
+            ),
+            AutomationResult::Value(RemoteValue::String("PW:undefined".encode_utf16().collect()))
+        );
+        let (_, created) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::CreateIsolatedWorld {
+                world: "__playwright_utility_world__".into(),
+            },
+            edits: vec![],
+        });
+        assert_eq!(created, AutomationResult::Released);
+        // Set a global in main world and verify isolated world has separate global, own constructors, and shared DOM.
+        eval(&mut realm, "window.pageSecret = 99", false);
+        let (_, util_handle_res) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::Evaluate {
+                source: "window.utilState = 42; ({ check(el) { return typeof window.pageSecret === 'undefined' && window.utilState === 42 && (el instanceof HTMLElement) && (el instanceof Element) && (el instanceof Node); } })".into(),
+                return_by_value: false,
+                group: None,
+                world: Some("__playwright_utility_world__".into()),
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
+        let util_obj = object(util_handle_res);
+        // Query a DOM element in isolated world: must export ObjectKind::Node { node }!
+        let (_, btn_res) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::Evaluate {
+                source: "document.getElementById('btn')".into(),
+                return_by_value: false,
+                group: None,
+                world: Some("__playwright_utility_world__".into()),
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
+        let (btn_obj, btn_node) = match btn_res {
+            AutomationResult::Value(RemoteValue::Object {
+                object,
+                kind: ObjectKind::Node { node },
+            }) => (object, node),
+            other => panic!("expected Node object: {other:?}"),
+        };
+        // ResolveNode in isolated world returns the exact same node kind.
+        let (_, resolved) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::ResolveNode {
+                node: btn_node,
+                world: Some("__playwright_utility_world__".into()),
+                group: None,
+            },
+            edits: vec![],
+        });
+        assert!(matches!(
+            resolved,
+            AutomationResult::Value(RemoteValue::Object {
+                kind: ObjectKind::Node { node },
+                ..
+            }) if node == btn_node
+        ));
+        // CallFunction WITHOUT world inherits isolated world from receiver!
+        let (_, check_res) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::CallFunction {
+                source: "function(el) { return this.check(el); }".into(),
+                receiver: Some(util_obj),
+                arguments: vec![Argument::Object(btn_obj)],
+                return_by_value: false,
+                group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
+        assert_eq!(
+            check_res,
+            AutomationResult::Value(RemoteValue::Boolean(true))
+        );
+        // await_promise settles IntersectionObserver (microtask) + requestAnimationFrame (timer)!
+        let (_, async_res) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::CallFunction {
+                source: "async function(el) {
+                    const ratio = await new Promise(resolve => {
+                        const io = new IntersectionObserver(entries => { io.disconnect(); resolve(entries[0].intersectionRatio); });
+                        io.observe(el);
+                    });
+                    const rafOk = await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
+                    const hit = document.elementFromPoint(10, 10);
+                    return ratio > 0 && rafOk && hit !== null;
+                }".into(),
+                receiver: Some(util_obj),
+                arguments: vec![Argument::Object(btn_obj)],
+                return_by_value: false,
+                group: None,
+                world: None,
+                await_promise: true,
+                user_gesture: true,
+            },
+            edits: vec![],
+        });
+        assert_eq!(
+            async_res,
+            AutomationResult::Value(RemoteValue::Boolean(true))
+        );
+        // Rejected awaited promise surfaces Error message cleanly.
+        let (_, rej_res) = realm.automation(AutomationRequest {
+            owner: 1,
+            operation: Operation::Evaluate {
+                source: "Promise.reject(new Error('not visible yet'))".into(),
+                return_by_value: false,
+                group: None,
+                world: Some("__playwright_utility_world__".into()),
+                await_promise: true,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
+        assert!(
+            matches!(rej_res, AutomationResult::Exception { diagnostic, .. } if diagnostic.contains("not visible yet"))
         );
     }
 }

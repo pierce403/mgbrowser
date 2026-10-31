@@ -201,9 +201,9 @@ pub fn load_with_profile(
         }
         let node = &document.nodes[id];
         if node.tag == "img"
-            && let Some(src) = node.attr("src")
+            && let Some(src) = document.effective_image_reference(id, 1280.0, 1.0)
         {
-            image_urls.push((document.base_url.clone(), src.to_owned()));
+            image_urls.push((document.base_url.clone(), src));
         }
         if let Some(style) = node.attr("style") {
             for value in css_image_urls(style).0 {
@@ -268,7 +268,45 @@ pub fn load_with_profile(
         if loader.stopped() {
             break;
         }
-        let Ok(mut url) = Url::parse(&base).and_then(|base| base.join(reference.trim())) else {
+        let trimmed = reference.trim();
+        if trimmed.len() >= 5 && trimmed.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+            if !seen.insert(trimmed.to_owned()) {
+                continue;
+            }
+            let (content_type, bytes) = match mg_sparkle::images::decode_data_url(trimmed) {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    loader.warn(format!(
+                        "Unsupported data image resource: {err}: {}",
+                        label(trimmed)
+                    ));
+                    continue;
+                }
+            };
+            if let Err(err) = mg_sparkle::images::decode(&bytes, &content_type, None, None) {
+                loader.warn(format!(
+                    "Invalid data image resource: {err}: {}",
+                    label(trimmed)
+                ));
+                continue;
+            }
+            if !loader.admit(bytes.len()) {
+                loader.warn(format!(
+                    "Data image resource skipped after total budget rejection: {}",
+                    label(trimmed)
+                ));
+                continue;
+            }
+            document.resources.insert(
+                trimmed.to_owned(),
+                ResourceData {
+                    bytes,
+                    content_type,
+                },
+            );
+            continue;
+        }
+        let Ok(mut url) = Url::parse(&base).and_then(|base| base.join(trimmed)) else {
             loader.warn(format!(
                 "Invalid image resource URL; skipped: {} at {}",
                 label(&reference),
@@ -1750,5 +1788,31 @@ mod tests {
             ok_url,
             &"\x01".repeat(MAX_SOURCE)
         ));
+    }
+
+    #[test]
+    fn responsive_picture_and_data_images_load_supported_candidates_without_data_network_io() {
+        let (base, server) = server(vec![(
+            "200 OK",
+            "image/svg+xml",
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><defs><linearGradient id="g"><stop offset="0%" stop-color="#f60"/><stop offset="100%" stop-color="#06f"/></linearGradient></defs><rect width="12" height="12" fill="url(#g)"/></svg>"##,
+        )]);
+        let inline_svg = r##"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='6' height='6' fill='#00aa55'/%3E%3C/svg%3E"##;
+        let mut doc = parse(
+            &format!(
+                r#"<picture><source type="image/webp" srcset="/skip.webp 800w"><source srcset="/logo.svg 1x"><img src="/fallback.png"></picture><img src="{inline_svg}">"#
+            ),
+            &base,
+        );
+        load(&Session::new(), &mut doc, &base, || false);
+        assert!(
+            doc.resource_warnings.is_empty(),
+            "{:?}",
+            doc.resource_warnings
+        );
+        assert_eq!(doc.resources.len(), 2);
+        assert!(doc.resources.contains_key(&format!("{base}/logo.svg")));
+        assert!(doc.resources.contains_key(inline_svg));
+        assert_eq!(server.join().unwrap(), ["/logo.svg"]);
     }
 }

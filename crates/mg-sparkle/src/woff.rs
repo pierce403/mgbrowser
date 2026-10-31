@@ -218,6 +218,7 @@ impl<T> SliceWrapperMut<T> for VecCell<T> {
 
 struct BoundedU8Alloc {
     used: usize,
+    limit: usize,
 }
 
 impl Allocator<u8> for BoundedU8Alloc {
@@ -226,7 +227,7 @@ impl Allocator<u8> for BoundedU8Alloc {
         let Some(next) = self.used.checked_add(len) else {
             return VecCell(Vec::new());
         };
-        if next > MAX_BROTLI_U8_ALLOC_BYTES {
+        if next > self.limit {
             return VecCell(Vec::new());
         }
         self.used = next;
@@ -253,12 +254,68 @@ impl<T: Clone + Default> Allocator<T> for DefaultVecAlloc<T> {
     fn free_cell(&mut self, _data: VecCell<T>) {}
 }
 
+/// Decompress an RFC 7932 Brotli HTTP stream up to `max_body` output bytes.
+pub fn brotli_decompress_limited(compressed: &[u8], max_body: usize) -> Result<Vec<u8>, String> {
+    const MAX_HTTP_BROTLI_U8_ALLOC_BYTES: usize = 20 * 1024 * 1024;
+    let mut state = BrotliState::new_strict(
+        BoundedU8Alloc {
+            used: 0,
+            limit: MAX_HTTP_BROTLI_U8_ALLOC_BYTES,
+        },
+        DefaultVecAlloc::<u32>::new(),
+        DefaultVecAlloc::<HuffmanCode>::new(),
+    );
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut available_in = compressed.len();
+    let mut input_offset = 0usize;
+    let mut total_out = 0usize;
+    loop {
+        let mut available_out = chunk.len();
+        let mut output_offset = 0usize;
+        let result = BrotliDecompressStream(
+            &mut available_in,
+            &mut input_offset,
+            compressed,
+            &mut available_out,
+            &mut output_offset,
+            &mut chunk,
+            &mut total_out,
+            &mut state,
+        );
+        if output_offset > 0 {
+            if output_offset > max_body.saturating_sub(out.len()) {
+                return Err(format!("Response body exceeds {max_body} byte limit"));
+            }
+            out.extend_from_slice(&chunk[..output_offset]);
+        }
+        match result {
+            BrotliResult::ResultSuccess => {
+                if available_in != 0 {
+                    return Err("Trailing bytes after Brotli stream".into());
+                }
+                return Ok(out);
+            }
+            BrotliResult::NeedsMoreOutput => continue,
+            BrotliResult::NeedsMoreInput => {
+                return Err("Truncated Brotli response body".into());
+            }
+            BrotliResult::ResultFailure => {
+                return Err("Malformed or oversized Brotli response body".into());
+            }
+        }
+    }
+}
+
 fn brotli_decompress_bounded(compressed: &[u8], expected_len: usize) -> Result<Vec<u8>, String> {
     if expected_len > MAX_DECOMPRESSED_FONT_BYTES {
         return Err("WOFF2 stream exceeds 4 MiB limit".into());
     }
     let mut state = BrotliState::new_strict(
-        BoundedU8Alloc { used: 0 },
+        BoundedU8Alloc {
+            used: 0,
+            limit: MAX_BROTLI_U8_ALLOC_BYTES,
+        },
         DefaultVecAlloc::<u32>::new(),
         DefaultVecAlloc::<HuffmanCode>::new(),
     );
@@ -268,33 +325,27 @@ fn brotli_decompress_bounded(compressed: &[u8], expected_len: usize) -> Result<V
     let mut available_out = out.len();
     let mut output_offset = 0usize;
     let mut total_out = 0usize;
-    loop {
-        match BrotliDecompressStream(
-            &mut available_in,
-            &mut input_offset,
-            compressed,
-            &mut available_out,
-            &mut output_offset,
-            &mut out,
-            &mut total_out,
-            &mut state,
-        ) {
-            BrotliResult::ResultSuccess => {
-                if output_offset != expected_len {
-                    return Err("WOFF2 Brotli output length mismatch".into());
-                }
-                return Ok(out);
+    match BrotliDecompressStream(
+        &mut available_in,
+        &mut input_offset,
+        compressed,
+        &mut available_out,
+        &mut output_offset,
+        &mut out,
+        &mut total_out,
+        &mut state,
+    ) {
+        BrotliResult::ResultSuccess => {
+            if output_offset != expected_len {
+                return Err("WOFF2 Brotli output length mismatch".into());
             }
-            BrotliResult::NeedsMoreOutput => {
-                return Err("WOFF2 Brotli stream exceeds declared table length".into());
-            }
-            BrotliResult::NeedsMoreInput => {
-                return Err("Truncated WOFF2 Brotli stream".into());
-            }
-            BrotliResult::ResultFailure => {
-                return Err("Malformed or oversized WOFF2 Brotli stream".into());
-            }
+            Ok(out)
         }
+        BrotliResult::NeedsMoreOutput => {
+            Err("WOFF2 Brotli stream exceeds declared table length".into())
+        }
+        BrotliResult::NeedsMoreInput => Err("Truncated WOFF2 Brotli stream".into()),
+        BrotliResult::ResultFailure => Err("Malformed or oversized WOFF2 Brotli stream".into()),
     }
 }
 

@@ -10,10 +10,12 @@ where
     Option::deserialize(deserializer)
 }
 
-pub const MAX_SOURCE_BYTES: usize = 16 * 1024;
-pub const MAX_OPERATION_BYTES: usize = 32 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 384 * 1024;
+pub const MAX_OPERATION_BYTES: usize = 448 * 1024;
+pub const MAX_AUTOMATION_FRAME_BYTES: usize = 512 * 1024;
+pub const MAX_WORLD_BYTES: usize = 128;
 pub const MAX_EDITS_BYTES: usize = 24 * 1024;
-pub const MAX_ARGUMENT_BYTES: usize = 16 * 1024;
+pub const MAX_ARGUMENT_BYTES: usize = 64 * 1024;
 pub const MAX_RESULT_BYTES: usize = 128 * 1024;
 pub const MAX_STRING_UNITS: usize = 4096;
 pub const MAX_ROOTS: usize = 256;
@@ -25,7 +27,7 @@ pub const MAX_OWNER_IDENTITIES: usize = 64;
 pub const MAX_GROUPS: usize = 32;
 pub const MAX_GROUP_BYTES: usize = 64;
 pub const MAX_ARGUMENTS: usize = 32;
-pub const MAX_DEPTH: usize = 16;
+pub const MAX_DEPTH: usize = 64;
 pub const MAX_ENTRIES: usize = 512;
 pub const MAX_TREE_UNITS: usize = 16_384;
 pub const MAX_DIAGNOSTIC_BYTES: usize = 512;
@@ -46,6 +48,12 @@ pub enum Operation {
         return_by_value: bool,
         #[serde(deserialize_with = "required_option")]
         group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        await_promise: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        user_gesture: bool,
     },
     CallFunction {
         source: String,
@@ -53,6 +61,22 @@ pub enum Operation {
         receiver: Option<u64>,
         arguments: Vec<Argument>,
         return_by_value: bool,
+        #[serde(deserialize_with = "required_option")]
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        await_promise: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        user_gesture: bool,
+    },
+    CreateIsolatedWorld {
+        world: String,
+    },
+    ResolveNode {
+        node: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<String>,
         #[serde(deserialize_with = "required_option")]
         group: Option<String>,
     },
@@ -109,6 +133,7 @@ pub enum ObjectKind {
     Promise,
     Proxy,
     Error,
+    Node { node: usize },
     Other,
 }
 
@@ -351,19 +376,9 @@ impl AutomationRequest {
         )?;
         match &self.operation {
             Operation::Evaluate {
-                source, group: g, ..
-            } => {
-                require(
-                    source.len() <= MAX_SOURCE_BYTES,
-                    "Automation source limit exceeded",
-                )?;
-                group(g.as_deref())?;
-            }
-            Operation::CallFunction {
                 source,
-                receiver,
-                arguments,
                 group: g,
+                world: w,
                 ..
             } => {
                 require(
@@ -371,6 +386,30 @@ impl AutomationRequest {
                     "Automation source limit exceeded",
                 )?;
                 group(g.as_deref())?;
+                require(
+                    w.as_deref()
+                        .is_none_or(|s| !s.is_empty() && s.len() <= MAX_WORLD_BYTES),
+                    "Invalid automation world name",
+                )?;
+            }
+            Operation::CallFunction {
+                source,
+                receiver,
+                arguments,
+                group: g,
+                world: w,
+                ..
+            } => {
+                require(
+                    source.len() <= MAX_SOURCE_BYTES,
+                    "Automation source limit exceeded",
+                )?;
+                group(g.as_deref())?;
+                require(
+                    w.as_deref()
+                        .is_none_or(|s| !s.is_empty() && s.len() <= MAX_WORLD_BYTES),
+                    "Invalid automation world name",
+                )?;
                 require(
                     receiver.is_none_or(object_id) && arguments.len() <= MAX_ARGUMENTS,
                     "Invalid automation call arguments",
@@ -388,6 +427,25 @@ impl AutomationRequest {
                     }
                 }
                 encoded_size(arguments, MAX_ARGUMENT_BYTES)?;
+            }
+            Operation::CreateIsolatedWorld { world: w } => {
+                require(
+                    !w.is_empty() && w.len() <= MAX_WORLD_BYTES,
+                    "Invalid automation world name",
+                )?;
+            }
+            Operation::ResolveNode {
+                node,
+                world: w,
+                group: g,
+            } => {
+                require(*node < 50_000, "Invalid automation DOM node")?;
+                require(
+                    w.as_deref()
+                        .is_none_or(|s| !s.is_empty() && s.len() <= MAX_WORLD_BYTES),
+                    "Invalid automation world name",
+                )?;
+                group(g.as_deref())?;
             }
             Operation::GetOwnProperties { object } | Operation::ReleaseObject { object } => {
                 require(object_id(*object), "Invalid automation object")?
@@ -413,7 +471,7 @@ impl AutomationRequest {
             require(self.edits.is_empty(), "Cleanup cannot carry control edits")?;
         }
         encoded_size(&self.operation, MAX_OPERATION_BYTES)?;
-        encoded_size(self, super::MAX_EVENT_BYTES)?;
+        encoded_size(self, MAX_AUTOMATION_FRAME_BYTES)?;
         Ok(())
     }
 }
@@ -425,7 +483,10 @@ impl RemoteValue {
             Self::String(s) => units(s),
             Self::BigInt(n) => validate_bigint(n),
             Self::ByValue(v) => v.validate(),
-            Self::Object { object, .. } => {
+            Self::Object { object, kind } => {
+                if let ObjectKind::Node { node } = kind {
+                    require(*node < 50_000, "Invalid automation DOM node")?;
+                }
                 *roots += 1;
                 require(
                     object_id(*object) && *roots <= MAX_RESULT_ROOTS,
@@ -523,6 +584,17 @@ impl AutomationResult {
                 Self::Exception { .. },
             ) => true,
             (Operation::GetOwnProperties { .. }, Self::Properties(_)) => true,
+            (Operation::CreateIsolatedWorld { .. }, Self::Released) => true,
+            (
+                Operation::ResolveNode { .. },
+                Self::Value(
+                    RemoteValue::Object {
+                        kind: ObjectKind::Node { .. },
+                        ..
+                    }
+                    | RemoteValue::Null,
+                ),
+            ) => true,
             (
                 Operation::ReleaseObject { .. }
                 | Operation::ReleaseGroup { .. }
@@ -551,6 +623,9 @@ mod tests {
             source: "1".repeat(MAX_SOURCE_BYTES),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         });
         assert!(r.validate().is_ok());
         if let Operation::Evaluate { source, .. } = &mut r.operation {
@@ -558,9 +633,12 @@ mod tests {
         }
         assert!(r.validate().is_err());
         r = request(Operation::Evaluate {
-            source: "\0".repeat(6000),
+            source: "\0".repeat(80_000),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         });
         assert!(r.validate().is_err(), "encoded operation counts escaping");
         r = request(Operation::GetOwnProperties { object: 1 });
@@ -673,6 +751,9 @@ mod tests {
             source: "({})".into(),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         });
         assert!(
             AutomationResult::Value(RemoteValue::ByValue(SerializedValue::Object(vec![])))
@@ -683,6 +764,9 @@ mod tests {
             source: "({})".into(),
             return_by_value: true,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         });
         assert!(
             AutomationResult::Value(RemoteValue::Object {

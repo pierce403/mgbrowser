@@ -59,6 +59,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             script_worker::selftest()?;
             return Ok(());
         }
+        Some("--script-selftest") => {
+            script_worker::selftest()?;
+            script_worker::session_selftest()?;
+            return Ok(());
+        }
         _ => {}
     }
     let session = mg_chassis::net::Session::new();
@@ -73,21 +78,50 @@ fn main() -> Result<(), Box<dyn Error>> {
     let executable = std::env::current_exe()?;
     let mut auto_update = updater::automatic_enabled(&executable);
     let args: Vec<_> = std::env::args().skip(1).collect();
+    let automation_mode = args.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--remote-debugging-pipe"
+                | "--headless"
+                | "--no-startup-window"
+                | "--enable-automation"
+                | "--user-data-dir"
+        ) || arg.starts_with("--headless=")
+            || arg.starts_with("--user-data-dir=")
+    });
     let mut initial = "https://example.com/".to_string();
+    let mut has_initial_url = false;
     let mut restart_scripts = true;
     let mut restore_tabs = Vec::new();
     let mut debug_port: Option<u16> = None;
+    let mut remote_debugging_pipe = false;
+    let mut headless = false;
+    let mut no_startup_window = false;
     let mut profile_mode = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--no-auto-update" => auto_update = false,
+            "--remote-debugging-pipe" => remote_debugging_pipe = true,
+            "--headless" => headless = true,
+            value if value.starts_with("--headless=") => {
+                headless = value != "--headless=false" && value != "--headless=0";
+            }
+            "--no-startup-window" => no_startup_window = true,
+            "--enable-automation" => {}
+            "--user-data-dir" => {
+                if args.get(i + 1).is_some_and(|next| !next.starts_with('-')) {
+                    i += 1;
+                }
+            }
+            value if value.starts_with("--user-data-dir=") => {}
             "--profile" => {
                 profile_mode = true;
                 if let Some(next) = args.get(i + 1)
                     && !next.starts_with('-')
                 {
                     initial = next.clone();
+                    has_initial_url = true;
                     i += 1;
                 }
             }
@@ -150,10 +184,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 return Ok(());
             }
+            value if automation_mode && value.starts_with("--") => {}
             value if value.starts_with('-') => {
                 return Err(format!("Unknown option: {value}").into());
             }
-            value => initial = value.to_string(),
+            value => {
+                initial = value.to_string();
+                has_initial_url = true;
+            }
         }
         i += 1;
     }
@@ -206,7 +244,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     // Test journeys/CDP are deterministic and never initiate unattended updates.
-    if journey.query.is_some() || debug_port.is_some() {
+    if journey.query.is_some() || debug_port.is_some() || automation_mode {
         auto_update = false;
     }
     app.configure_journey(journey);
@@ -214,11 +252,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         app,
         desktop::Options {
             initial,
+            has_initial_url,
             restore_tabs,
             executable,
             scripts: restart_scripts,
             auto_update,
             debug_port,
+            remote_debugging_pipe,
+            headless,
+            no_startup_window,
             session,
         },
     )

@@ -72,6 +72,8 @@ pub struct PlatformInit {
     pub history_state_json: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub time_origin_ms: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation_only: bool,
 }
 
 impl PlatformInit {
@@ -350,9 +352,24 @@ pub fn base64_decode_forgiving(input: &str) -> Result<Vec<u8>, &'static str> {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum ScrollRequest {
-    Absolute { x: f32, y: f32 },
-    By { dx: f32, dy: f32 },
-    IntoView { node: usize, align_top: bool },
+    Absolute {
+        x: f32,
+        y: f32,
+    },
+    By {
+        dx: f32,
+        dy: f32,
+    },
+    IntoView {
+        node: usize,
+        align_top: bool,
+    },
+    FocusControl {
+        node: Option<usize>,
+        select_all: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        into_view: Option<(usize, bool)>,
+    },
 }
 
 impl ScrollRequest {
@@ -363,6 +380,13 @@ impl ScrollRequest {
             }
             Self::By { dx, dy } if !dx.is_finite() || !dy.is_finite() => {
                 Err("Non-finite relative scroll delta".into())
+            }
+            Self::FocusControl {
+                node, into_view, ..
+            } if node.is_some_and(|n| n >= 50_000)
+                || into_view.is_some_and(|(n, _)| n >= 50_000) =>
+            {
+                Err("Invalid focus control node".into())
             }
             _ => Ok(()),
         }

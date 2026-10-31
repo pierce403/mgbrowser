@@ -78,6 +78,7 @@ struct Registry {
     prototype: JsObject,
     brands: JsWeakMap,
     realm: Realm,
+    extra_realms: Vec<(Realm, JsObject)>,
 }
 
 #[derive(Trace, Finalize, JsData)]
@@ -98,12 +99,24 @@ fn registry(context: &mut Context) -> JsResult<Registry> {
     };
     // Context data is authority for this one owned page realm, not a way to
     // attach an imported native function to another Context's work ledger.
-    if registry.realm != *context.realm() {
-        return Err(JsNativeError::typ()
-            .with_message("DOMException requires its owning page realm")
-            .into());
+    if registry.realm == *context.realm() {
+        return Ok(registry);
     }
-    Ok(registry)
+    if let Some((_, prototype)) = registry
+        .extra_realms
+        .iter()
+        .find(|(realm, _)| realm == context.realm())
+    {
+        return Ok(Registry {
+            prototype: prototype.clone(),
+            brands: registry.brands,
+            realm: context.realm().clone(),
+            extra_realms: Vec::new(),
+        });
+    }
+    Err(JsNativeError::typ()
+        .with_message("DOMException requires its owning page realm")
+        .into())
 }
 
 fn instance_admission(
@@ -242,12 +255,7 @@ fn getter(this: &JsValue, field: u8, context: &mut Context) -> JsResult<JsValue>
     }
 }
 
-/// Install once, after the parent-owned page State and before any page code.
-pub(super) fn register(context: &mut Context) -> JsResult<()> {
-    modern::check_context(context)?;
-    if !context.has_data::<super::Shared>() || context.has_data::<Registry>() {
-        return Err(invariant(context));
-    }
+fn build_dom_exception_realm(context: &mut Context) -> JsResult<JsObject> {
     let property_storage = (LEGACY_CONSTANTS.len() * 2 + 6)
         .checked_mul(std::mem::size_of::<PropertyDescriptor>())
         .ok_or_else(|| invariant(context))?;
@@ -331,19 +339,62 @@ pub(super) fn register(context: &mut Context) -> JsResult<()> {
             .configurable(true),
         context,
     )?;
-    let registry = Registry {
-        prototype,
-        brands: JsWeakMap::new(context),
-        realm: context.realm().clone(),
-    };
     modern::check_context(context)?;
     context.register_global_property(
         js_string!("DOMException"),
         constructor,
         Attribute::WRITABLE | Attribute::CONFIGURABLE,
     )?;
+    Ok(prototype)
+}
+
+/// Install once, after the parent-owned page State and before any page code.
+pub(super) fn register(context: &mut Context) -> JsResult<()> {
+    modern::check_context(context)?;
+    if !context.has_data::<super::Shared>() || context.has_data::<Registry>() {
+        return Err(invariant(context));
+    }
+    let prototype = build_dom_exception_realm(context)?;
+    let registry = Registry {
+        prototype,
+        brands: JsWeakMap::new(context),
+        realm: context.realm().clone(),
+        extra_realms: Vec::new(),
+    };
     context.insert_data(registry);
     Ok(())
+}
+
+/// Install `DOMException` in an owned isolated-world realm sharing the same page brands.
+pub(super) fn register_extra_realm(context: &mut Context) -> JsResult<()> {
+    modern::check_context(context)?;
+    let Some(mut registry) = context.get_data::<Registry>().cloned() else {
+        return Err(invariant(context));
+    };
+    if !context.has_data::<super::Shared>()
+        || registry.realm == *context.realm()
+        || registry
+            .extra_realms
+            .iter()
+            .any(|(realm, _)| realm == context.realm())
+    {
+        return Err(invariant(context));
+    }
+    let prototype = build_dom_exception_realm(context)?;
+    registry
+        .extra_realms
+        .push((context.realm().clone(), prototype));
+    context.insert_data(registry);
+    Ok(())
+}
+
+pub(super) fn clear_extra_realms(context: &mut Context) {
+    if let Some(mut registry) = context.get_data::<Registry>().cloned()
+        && !registry.extra_realms.is_empty()
+    {
+        registry.extra_realms.clear();
+        context.insert_data(registry);
+    }
 }
 
 /// Make an ordinary catchable host exception without invoking page code.

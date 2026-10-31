@@ -365,6 +365,31 @@ pub fn render_scaled_cached(
     timings.total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
     (frame, timings)
 }
+pub(crate) fn compute_unstyled_boxes(
+    document: &Document,
+    fonts: &mut Fonts,
+    width: u32,
+) -> (Vec<LayoutBox>, f32) {
+    let frame = Renderer {
+        document,
+        fonts,
+        width,
+        height: 0,
+        scroll: 0,
+        values: None,
+        checked: None,
+        focused_input: None,
+        select_all: false,
+        input_selection: None,
+        hits: Vec::new(),
+        boxes: Vec::new(),
+        text_runs: Vec::new(),
+        scale: 1.0,
+    }
+    .paint();
+    (frame.boxes, frame.content_height as f32)
+}
+
 struct Renderer<'a> {
     document: &'a Document,
     fonts: &'a mut Fonts,
@@ -622,7 +647,7 @@ impl Renderer<'_> {
                         y += row;
                     }
                     self.layout_box(i, x, y, ww.max(1) as u32, row as u32);
-                    if y + row > 0 {
+                    if y + row > 0 && y < self.height as i32 - 1 {
                         c.text(self.fonts, x, y, &label, 14., 0x667164);
                     }
                     x += ww + 8;

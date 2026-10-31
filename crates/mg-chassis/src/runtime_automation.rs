@@ -39,7 +39,7 @@ pub(super) fn has_handles(result: &AutomationResult) -> bool {
 impl Browser {
     pub(crate) fn runtime_identity(&self) -> Option<(u64, u64)> {
         if !self.cdp_enabled
-            || !self.scripts_enabled
+            || (!self.scripts_enabled && !self.automation_only_session)
             || self.loading
             || self.fetching
             || self.script_blocked
@@ -291,6 +291,9 @@ mod tests {
                 source: "globalThis.arbitraryState = 11".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
         }
     }
@@ -624,6 +627,9 @@ mod tests {
             source: " ".repeat(mg_sparkle::page_session::automation::MAX_SOURCE_BYTES + 1),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         };
         assert!(app.dispatch_automation(invalid, 1).is_err());
         assert!(state.lock().unwrap().requests.is_empty());

@@ -15,6 +15,152 @@ pub struct RasterImage {
     pub pixels: Vec<u8>,
 }
 
+/// Parse and decode a bounded `data:image/{png,jpeg,gif,svg+xml}` URL in memory
+/// (`<= 512 KiB` decoded bytes), without performing any file or network I/O.
+pub fn decode_data_url(url: &str) -> Result<(String, Vec<u8>), String> {
+    let trimmed = url.trim_matches(|c: char| c.is_ascii_whitespace());
+    if trimmed.len() < 5 || !trimmed.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+        return Err("Not a data: URL".into());
+    }
+    if trimmed.len() > MAX_SOURCE * 2 {
+        return Err("Data image URL exceeds 512 KiB budget".into());
+    }
+    let (meta, payload) = trimmed[5..]
+        .split_once(',')
+        .ok_or_else(|| "Malformed data: URL".to_owned())?;
+    let mut parts = meta.split(';');
+    let raw_mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+    let content_type = match raw_mime.as_str() {
+        "image/png" | "image/jpeg" | "image/gif" | "image/svg+xml" => raw_mime,
+        "image/jpg" => "image/jpeg".to_owned(),
+        _ => return Err("Unsupported data: image MIME type".into()),
+    };
+    let mut is_base64 = false;
+    for param in parts {
+        if param.trim().eq_ignore_ascii_case("base64") {
+            is_base64 = true;
+        }
+    }
+    let bytes = if is_base64 {
+        decode_forgiving_base64(payload, MAX_SOURCE)?
+    } else {
+        decode_percent_bytes(payload, MAX_SOURCE)?
+    };
+    Ok((content_type, bytes))
+}
+
+fn decode_forgiving_base64(input: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut quad = [0u8; 4];
+    let mut qlen = 0usize;
+    let mut pad = 0usize;
+    let mut finished = false;
+    for b in input.bytes() {
+        if matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ') {
+            continue;
+        }
+        if finished {
+            return Err("Unexpected data after base64 padding".into());
+        }
+        if b == b'=' {
+            pad += 1;
+            if pad > 2 || qlen < 2 || qlen + pad > 4 {
+                return Err("Invalid base64 padding in data: URL".into());
+            }
+            if qlen + pad == 4 {
+                let n = 3 - pad;
+                if out.len().saturating_add(n) > max_bytes {
+                    return Err("Image source exceeds 512 KiB".into());
+                }
+                let v = (u32::from(quad[0]) << 18)
+                    | (u32::from(quad[1]) << 12)
+                    | (u32::from(quad[2]) << 6);
+                out.push((v >> 16) as u8);
+                if n >= 2 {
+                    out.push((v >> 8) as u8);
+                }
+                qlen = 0;
+                pad = 0;
+                finished = true;
+            }
+            continue;
+        }
+        if pad > 0 {
+            return Err("Unexpected data after base64 padding".into());
+        }
+        let sextet = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return Err("Invalid base64 character in data: URL".into()),
+        };
+        quad[qlen] = sextet;
+        qlen += 1;
+        if qlen == 4 {
+            if out.len().saturating_add(3) > max_bytes {
+                return Err("Image source exceeds 512 KiB".into());
+            }
+            let v = (u32::from(quad[0]) << 18)
+                | (u32::from(quad[1]) << 12)
+                | (u32::from(quad[2]) << 6)
+                | u32::from(quad[3]);
+            out.push((v >> 16) as u8);
+            out.push((v >> 8) as u8);
+            out.push(v as u8);
+            qlen = 0;
+        }
+    }
+    if pad != 0 || qlen == 1 {
+        return Err("Truncated base64 payload in data: URL".into());
+    }
+    if qlen == 2 {
+        if out.len().saturating_add(1) > max_bytes {
+            return Err("Image source exceeds 512 KiB".into());
+        }
+        let v = (u32::from(quad[0]) << 18) | (u32::from(quad[1]) << 12);
+        out.push((v >> 16) as u8);
+    } else if qlen == 3 {
+        if out.len().saturating_add(2) > max_bytes {
+            return Err("Image source exceeds 512 KiB".into());
+        }
+        let v = (u32::from(quad[0]) << 18) | (u32::from(quad[1]) << 12) | (u32::from(quad[2]) << 6);
+        out.push((v >> 16) as u8);
+        out.push((v >> 8) as u8);
+    }
+    Ok(out)
+}
+
+fn decode_percent_bytes(input: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let raw = input.as_bytes();
+    let mut out = Vec::with_capacity(raw.len().min(max_bytes));
+    let mut i = 0usize;
+    while i < raw.len() {
+        let byte = if raw[i] == b'%' && i + 2 < raw.len() {
+            let hi = (raw[i + 1] as char).to_digit(16);
+            let lo = (raw[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                i += 3;
+                ((h << 4) | l) as u8
+            } else {
+                let b = raw[i];
+                i += 1;
+                b
+            }
+        } else {
+            let b = raw[i];
+            i += 1;
+            b
+        };
+        if out.len() >= max_bytes {
+            return Err("Image source exceeds 512 KiB".into());
+        }
+        out.push(byte);
+    }
+    Ok(out)
+}
+
 /// Decode supplied bytes only. Missing target dimensions use the intrinsic size;
 /// one specified dimension preserves aspect ratio. Explicit zero paints nothing.
 pub fn decode(
@@ -165,8 +311,9 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
         if node.ancestors().take(34).count() > 33 {
             return Err("SVG nesting exceeds 32 levels".into());
         }
+        let tag = node.tag_name().name();
         if !matches!(
-            node.tag_name().name(),
+            tag,
             "svg"
                 | "g"
                 | "path"
@@ -178,14 +325,30 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
                 | "polygon"
                 | "title"
                 | "desc"
+                | "defs"
+                | "clipPath"
+                | "linearGradient"
+                | "radialGradient"
+                | "stop"
+                | "symbol"
+                | "mask"
+                | "metadata"
         ) {
             return Err("Unsupported SVG element; only simple shapes are supported".into());
         }
         for attribute in node.attributes() {
-            if attribute.name() == "href"
-                || attribute.name().starts_with("on")
-                || attribute.value().to_ascii_lowercase().contains("url(")
-                || attribute.value().len() > 32 * 1024
+            let attr_name = attribute.name();
+            let attr_val = attribute.value();
+            let invalid_href = if attr_name == "href" {
+                !matches!(tag, "linearGradient" | "radialGradient")
+                    || !is_internal_svg_fragment_id(attr_val.trim())
+            } else {
+                false
+            };
+            if invalid_href
+                || attr_name.starts_with("on")
+                || has_disallowed_svg_url(attr_val)
+                || attr_val.len() > 32 * 1024
             {
                 return Err("Unsupported SVG reference, event or oversized attribute".into());
             }
@@ -228,6 +391,40 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
         height,
         pixels,
     })
+}
+
+fn is_internal_svg_fragment_id(value: &str) -> bool {
+    let Some(id) = value.strip_prefix('#') else {
+        return false;
+    };
+    !id.is_empty()
+        && id.len() <= 256
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn has_disallowed_svg_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    let mut orig = value;
+    while let Some(pos) = rest.find("url(") {
+        let after = &orig[pos + 4..];
+        let Some(end) = after.find(')') else {
+            return true;
+        };
+        let inner = after[..end]
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            .trim();
+        if !is_internal_svg_fragment_id(inner) {
+            return true;
+        }
+        let step = pos + 4 + end + 1;
+        rest = &rest[step..];
+        orig = &orig[step..];
+    }
+    false
 }
 
 /// Blend a logical-size image onto the scaled surface, clipping in wide signed
@@ -552,5 +749,75 @@ mod tests {
         blit(&mut canvas, &image, i32::MAX, i32::MAX);
         blit(&mut canvas, &image, i32::MIN, i32::MIN);
         assert_eq!(before, canvas.pixels);
+    }
+
+    #[test]
+    fn svg_gradients_defs_and_clip_paths_render_with_internal_fragment_urls_only() {
+        let icon = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+            <defs>
+                <clipPath id="clip-box"><rect x="2" y="2" width="12" height="12"/></clipPath>
+                <linearGradient id="brand_grad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#ff4500"/>
+                    <stop offset="100%" stop-color="#0079d3"/>
+                </linearGradient>
+            </defs>
+            <g clip-path="url(#clip-box)">
+                <rect width="16" height="16" fill="url(#brand_grad)"/>
+            </g>
+        </svg>"##;
+        let image = decode(icon, "image/svg+xml", None, None).unwrap();
+        assert_eq!((image.width, image.height), (16, 16));
+        // Clipped corner (0, 0) stays transparent while center (8, 8) is opaque gradient fill.
+        assert_eq!(image.pixels[3], 0);
+        assert_eq!(image.pixels[(8 * 16 + 8) * 4 + 3], 255);
+        // External or malformed url() references remain rejected.
+        for bad in [
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://evil.test/#g)"/></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(data:image/png;base64,AAAA)"/></svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#bad:colon)"/></svg>"#,
+        ] {
+            assert!(decode(bad.as_bytes(), "image/svg+xml", None, None).is_err());
+        }
+    }
+
+    #[test]
+    fn data_image_urls_decode_base64_and_percent_encoded_sources_within_limits() {
+        let svg_url = r##"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='4'%3E%3Crect width='8' height='4' fill='#ff6600'/%3E%3C/svg%3E"##;
+        let (mime, bytes) = decode_data_url(svg_url).unwrap();
+        assert_eq!(mime, "image/svg+xml");
+        let img = decode(&bytes, &mime, None, None).unwrap();
+        assert_eq!((img.width, img.height), (8, 4));
+        assert_eq!(&img.pixels[..4], &[255, 102, 0, 255]);
+
+        let pixels = image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 200, 30, 255]));
+        let mut png = Cursor::new(Vec::new());
+        pixels.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut b64 = String::from("data:image/png;base64,");
+        for chunk in png.get_ref().chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            let v = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+            b64.push(alphabet[((v >> 18) & 63) as usize] as char);
+            b64.push(alphabet[((v >> 12) & 63) as usize] as char);
+            b64.push(if chunk.len() > 1 {
+                alphabet[((v >> 6) & 63) as usize] as char
+            } else {
+                '='
+            });
+            b64.push(if chunk.len() > 2 {
+                alphabet[(v & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+        let (mime, bytes) = decode_data_url(&b64).unwrap();
+        assert_eq!(mime, "image/png");
+        let decoded = decode(&bytes, &mime, None, None).unwrap();
+        assert_eq!(&decoded.pixels[..4], &[10, 200, 30, 255]);
+
+        assert!(decode_data_url("data:image/webp;base64,AAAA").is_err());
+        assert!(decode_data_url("https://example.org/a.png").is_err());
     }
 }
