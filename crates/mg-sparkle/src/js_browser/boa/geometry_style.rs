@@ -27,6 +27,8 @@ pub(super) const WINDOW_SCROLL_BY: &str = "host.window.scrollBy";
 pub(super) const EL_GET_BCR: &str = "host.m2.getBoundingClientRect";
 pub(super) const EL_GET_CLIENT_RECTS: &str = "host.m2.getClientRects";
 pub(super) const EL_SCROLL_INTO_VIEW: &str = "host.m2.scrollIntoView";
+pub(super) const DOC_ELEMENT_FROM_POINT: &str = "host.m4.elementFromPoint";
+pub(super) const DOC_ELEMENTS_FROM_POINT: &str = "host.m4.elementsFromPoint";
 
 pub(super) const CS_GET_PROPERTY_VALUE: &str = "host.m2.cs.getPropertyValue";
 pub(super) const CS_GET_PROPERTY_PRIORITY: &str = "host.m2.cs.getPropertyPriority";
@@ -81,6 +83,7 @@ const COMPUTED_PROP_NAMES: &[&str] = &[
     "vertical-align",
     "white-space",
     "pointer-events",
+    "cursor",
     "flex-direction",
     "flex-wrap",
     "flex-grow",
@@ -102,6 +105,7 @@ pub(super) struct CachedLayout {
     pub epoch: u64,
     pub width: u32,
     pub height: u32,
+    pub unstyled: bool,
     pub styles: Arc<[ComputedStyle]>,
     pub boxes: Vec<LayoutBox>,
     pub borders: Vec<(usize, (f32, f32, f32, f32))>,
@@ -117,6 +121,8 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         EL_GET_BCR => Some(("getBoundingClientRect", 0)),
         EL_GET_CLIENT_RECTS => Some(("getClientRects", 0)),
         EL_SCROLL_INTO_VIEW => Some(("scrollIntoView", 0)),
+        DOC_ELEMENT_FROM_POINT => Some(("elementFromPoint", 2)),
+        DOC_ELEMENTS_FROM_POINT => Some(("elementsFromPoint", 2)),
         CS_GET_PROPERTY_VALUE => Some(("getPropertyValue", 1)),
         CS_GET_PROPERTY_PRIORITY => Some(("getPropertyPriority", 1)),
         CS_SET_PROPERTY => Some(("setProperty", 2)),
@@ -253,6 +259,14 @@ fn ensure_layout_cached(data: &mut State) {
     }
 
     let sheets = collect_live_stylesheets(data);
+    let styled = !sheets.is_empty()
+        || !data.host.document.resources.is_empty()
+        || data
+            .host
+            .document
+            .nodes
+            .iter()
+            .any(|node| node.has("style") || node.tag == "svg");
     let styles_vec =
         crate::style::compute_styles(&data.host.document, &sheets, (w as f32, h as f32))
             .unwrap_or_else(|_| {
@@ -265,19 +279,31 @@ fn ensure_layout_cached(data: &mut State) {
             });
     let styles: Arc<[ComputedStyle]> = styles_vec.into();
     let mut fonts = crate::paint::Fonts::fallback_metrics();
-    let vp = Viewport {
-        width: w,
-        height: h,
-        scroll: data.viewport.scroll_y.round() as i32,
+    let (unstyled, boxes, borders, scroll_height) = if styled {
+        let vp = Viewport {
+            width: w,
+            height: h,
+            scroll: data.viewport.scroll_y.round() as i32,
+        };
+        let (boxes, borders, scroll_height) = crate::styled_layout::compute_boxes(
+            &data.host.document,
+            &mut fonts,
+            vp,
+            styles.clone(),
+        )
+        .unwrap_or_else(|| (Vec::new(), Vec::new(), h as f32));
+        (false, boxes, borders, scroll_height)
+    } else {
+        let (boxes, scroll_height) =
+            crate::render::compute_unstyled_boxes(&data.host.document, &mut fonts, w);
+        (true, boxes, Vec::new(), scroll_height)
     };
-    let (boxes, borders, scroll_height) =
-        crate::styled_layout::compute_boxes(&data.host.document, &mut fonts, vp, styles.clone())
-            .unwrap_or_else(|| (Vec::new(), Vec::new(), h as f32));
 
     data.cached_layout = Some(CachedLayout {
         epoch,
         width: w,
         height: h,
+        unstyled,
         styles,
         boxes,
         borders,
@@ -300,7 +326,363 @@ fn node_rect(data: &mut State, id: usize) -> Option<(f32, f32, f32, f32)> {
     if let Some(b) = cached.boxes.iter().rev().find(|b| b.node == id) {
         return Some((b.x as f32, b.y as f32, b.width as f32, b.height as f32));
     }
+    if cached.unstyled {
+        let nodes = &data.host.document.nodes;
+        let mut union_bounds: Option<(i32, i32, i32, i32)> = None;
+        for b in &cached.boxes {
+            let mut src = b.node;
+            for _ in 0..=crate::document::MAX_DEPTH {
+                if src == id {
+                    let (x0, y0, x1, y1) = (b.x, b.y, b.x + b.width as i32, b.y + b.height as i32);
+                    union_bounds = Some(match union_bounds {
+                        None => (x0, y0, x1, y1),
+                        Some((a0, b0, a1, b1)) => (a0.min(x0), b0.min(y0), a1.max(x1), b1.max(y1)),
+                    });
+                    break;
+                }
+                if src == 0 || src >= nodes.len() {
+                    break;
+                }
+                let p = nodes[src].parent;
+                if p == src {
+                    break;
+                }
+                src = p;
+            }
+        }
+        if let Some((x0, y0, x1, y1)) = union_bounds {
+            return Some((x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32));
+        }
+    }
     None
+}
+
+pub(super) fn node_center_coords(data: &mut State, id: usize) -> Option<(f64, f64, f64, f64)> {
+    let (rx, ry, rw, rh) = node_rect(data, id)?;
+    let is_fixed = data
+        .cached_layout
+        .as_ref()
+        .and_then(|c| c.styles.get(id))
+        .is_some_and(|s| s.layout.position == Position::Fixed);
+    let (sx, sy) = if is_fixed {
+        (0.0, 0.0)
+    } else {
+        (data.viewport.scroll_x, data.viewport.scroll_y)
+    };
+    let cx = (rx - sx + rw * 0.5) as f64;
+    let cy = (ry - sy + rh * 0.5) as f64;
+    let px = cx + data.viewport.scroll_x as f64;
+    let py = cy + data.viewport.scroll_y as f64;
+    Some((cx, cy, px, py))
+}
+
+fn ancestor_chain(nodes: &[crate::document::Node], mut id: usize) -> Vec<usize> {
+    let mut chain = Vec::new();
+    for _ in 0..=crate::document::MAX_DEPTH {
+        if id == 0 || id >= nodes.len() {
+            break;
+        }
+        chain.push(id);
+        let p = nodes[id].parent;
+        if p == id {
+            break;
+        }
+        id = p;
+    }
+    chain.reverse();
+    chain
+}
+
+fn negative_z_between(
+    nodes: &[crate::document::Node],
+    styles: &[ComputedStyle],
+    mut desc: usize,
+    anc: usize,
+) -> bool {
+    for _ in 0..=crate::document::MAX_DEPTH {
+        if desc == 0 || desc == anc || desc >= nodes.len() {
+            break;
+        }
+        if let Some(st) = styles.get(desc)
+            && st.layout.position != Position::Static
+            && st.layout.z_index.is_some_and(|z| z < 0)
+        {
+            return true;
+        }
+        let p = nodes[desc].parent;
+        if p == desc {
+            break;
+        }
+        desc = p;
+    }
+    false
+}
+
+fn comes_in_front(
+    nodes: &[crate::document::Node],
+    styles: &[ComputedStyle],
+    cand: usize,
+    existing: usize,
+) -> bool {
+    let c_chain = ancestor_chain(nodes, cand);
+    let e_chain = ancestor_chain(nodes, existing);
+    let common_len = c_chain
+        .iter()
+        .zip(&e_chain)
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common_len == e_chain.len() && c_chain.len() > e_chain.len() {
+        // `existing` is a strict ancestor of `cand`: descendant paints in front unless negative z-index.
+        return !negative_z_between(nodes, styles, cand, existing);
+    }
+    if common_len == c_chain.len() && e_chain.len() > c_chain.len() {
+        // `cand` is a strict ancestor of `existing`: only in front if `existing` has negative z-index.
+        return negative_z_between(nodes, styles, existing, cand);
+    }
+    if common_len > 0 && common_len < c_chain.len() && common_len < e_chain.len() {
+        let lca = c_chain[common_len - 1];
+        let c_branch = c_chain[common_len];
+        let e_branch = e_chain[common_len];
+        let c_st = styles.get(c_branch);
+        let e_st = styles.get(e_branch);
+        let c_z = c_st
+            .filter(|s| {
+                s.layout.position != Position::Static
+                    || styles.get(lca).is_some_and(|p| {
+                        matches!(
+                            p.display,
+                            Display::Flex
+                                | Display::InlineFlex
+                                | Display::Grid
+                                | Display::InlineGrid
+                        )
+                    })
+            })
+            .and_then(|s| s.layout.z_index)
+            .unwrap_or(0);
+        let e_z = e_st
+            .filter(|s| {
+                s.layout.position != Position::Static
+                    || styles.get(lca).is_some_and(|p| {
+                        matches!(
+                            p.display,
+                            Display::Flex
+                                | Display::InlineFlex
+                                | Display::Grid
+                                | Display::InlineGrid
+                        )
+                    })
+            })
+            .and_then(|s| s.layout.z_index)
+            .unwrap_or(0);
+        if c_z != e_z {
+            return c_z > e_z;
+        }
+        let c_pos = c_st.is_some_and(|s| s.layout.position != Position::Static);
+        let e_pos = e_st.is_some_and(|s| s.layout.position != Position::Static);
+        if c_pos != e_pos {
+            return c_pos;
+        }
+        if styles.get(lca).is_some_and(|p| {
+            matches!(
+                p.display,
+                Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+            )
+        }) {
+            let c_ord = c_st.map_or(0, |s| s.layout.order);
+            let e_ord = e_st.map_or(0, |s| s.layout.order);
+            if c_ord != e_ord {
+                return c_ord > e_ord;
+            }
+        }
+    }
+    false
+}
+
+fn insert_hit_ordered(
+    hits: &mut Vec<usize>,
+    nodes: &[crate::document::Node],
+    styles: &[ComputedStyle],
+    id: usize,
+) {
+    if hits.contains(&id) {
+        return;
+    }
+    if let Some(pos) = hits
+        .iter()
+        .position(|&existing| comes_in_front(nodes, styles, id, existing))
+    {
+        hits.insert(pos, id);
+    } else {
+        hits.push(id);
+    }
+}
+
+fn elements_from_point(data: &mut State, vx: f64, vy: f64) -> Vec<usize> {
+    let vw = data.viewport.inner_width as f64;
+    let vh = data.viewport.inner_height as f64;
+    if vx < 0.0 || vy < 0.0 || vx > vw || vy > vh {
+        return Vec::new();
+    }
+    ensure_layout_cached(data);
+    let Some(cached) = data.cached_layout.as_ref() else {
+        return Vec::new();
+    };
+    let nodes = &data.host.document.nodes;
+    let scroll_x = data.viewport.scroll_x;
+    let scroll_y = data.viewport.scroll_y;
+    let mut hits: Vec<usize> = Vec::new();
+
+    for b in cached.boxes.iter().rev() {
+        if b.width == 0 || b.height == 0 || b.node >= nodes.len() {
+            continue;
+        }
+        let mut el_id = b.node;
+        if nodes[el_id].tag.starts_with('#') {
+            if cached.styles.get(el_id).is_some_and(|s| !s.visible) {
+                continue;
+            }
+            let p = nodes[el_id].parent;
+            if p == 0 || p == el_id || nodes[p].tag.starts_with('#') {
+                continue;
+            }
+            el_id = p;
+        }
+        if el_id == 0 || !dom_ops::is_connected_node(nodes, el_id) {
+            continue;
+        }
+        // Check if el_id or a fixed ancestor gives fixed viewport coordinates.
+        let mut is_fixed = false;
+        let mut anc = el_id;
+        for _ in 0..=crate::document::MAX_DEPTH {
+            if anc == 0 || anc >= nodes.len() {
+                break;
+            }
+            if cached
+                .styles
+                .get(anc)
+                .is_some_and(|s| s.layout.position == Position::Fixed)
+            {
+                is_fixed = true;
+                break;
+            }
+            let p = nodes[anc].parent;
+            if p == anc {
+                break;
+            }
+            anc = p;
+        }
+        let (sx, sy) = if is_fixed {
+            (0.0, 0.0)
+        } else {
+            (scroll_x, scroll_y)
+        };
+        let bx = (b.x as f32 - sx) as f64;
+        let by = (b.y as f32 - sy) as f64;
+        let bw = b.width as f64;
+        let bh = b.height as f64;
+        if vx < bx || vx > bx + bw || vy < by || vy > by + bh {
+            continue;
+        }
+
+        // Walk up if el_id has pointer-events: none to find nearest pointer-events-enabled ancestor.
+        let mut target = el_id;
+        let mut chosen = None;
+        for _ in 0..=crate::document::MAX_DEPTH {
+            if target == 0 || target >= nodes.len() || nodes[target].tag.starts_with('#') {
+                break;
+            }
+            if let Some(st) = cached.styles.get(target) {
+                if st.display == Display::None {
+                    break;
+                }
+                if st.visible && st.pointer_events {
+                    chosen = Some(target);
+                    break;
+                }
+            }
+            let p = nodes[target].parent;
+            if p == target {
+                break;
+            }
+            target = p;
+        }
+        let Some(hit_id) = chosen else {
+            continue;
+        };
+        insert_hit_ordered(&mut hits, nodes, &cached.styles, hit_id);
+        // Include inline/contents ancestors immediately enclosing this box so <a>/<label> wrappers are hit.
+        let mut inl = nodes[hit_id].parent;
+        for _ in 0..=crate::document::MAX_DEPTH {
+            if inl == 0 || inl >= nodes.len() || nodes[inl].tag.starts_with('#') {
+                break;
+            }
+            let Some(st) = cached.styles.get(inl) else {
+                break;
+            };
+            if !matches!(st.display, Display::Inline | Display::Contents) {
+                break;
+            }
+            if st.visible && st.pointer_events {
+                insert_hit_ordered(&mut hits, nodes, &cached.styles, inl);
+            }
+            let p = nodes[inl].parent;
+            if p == inl {
+                break;
+            }
+            inl = p;
+        }
+    }
+
+    // Ensure ancestor chain of the frontmost hit (plus documentElement) is included in rootward order.
+    if let Some(&front) = hits.first() {
+        let mut anc = nodes[front].parent;
+        for _ in 0..=crate::document::MAX_DEPTH {
+            if anc == 0 || anc >= nodes.len() || nodes[anc].tag.starts_with('#') {
+                break;
+            }
+            if let Some(st) = cached.styles.get(anc)
+                && st.display != Display::None
+                && st.visible
+                && st.pointer_events
+                && !hits.contains(&anc)
+            {
+                hits.push(anc);
+            }
+            let p = nodes[anc].parent;
+            if p == anc {
+                break;
+            }
+            anc = p;
+        }
+    } else if let Some(&html_id) = nodes[0].children.iter().find(|&&c| nodes[c].tag == "html")
+        && cached
+            .styles
+            .get(html_id)
+            .is_some_and(|st| st.display != Display::None && st.visible && st.pointer_events)
+    {
+        if let Some(&body_id) = nodes[html_id]
+            .children
+            .iter()
+            .find(|&&c| nodes[c].tag == "body")
+            && cached
+                .styles
+                .get(body_id)
+                .is_some_and(|st| st.display != Display::None && st.visible && st.pointer_events)
+        {
+            hits.push(body_id);
+        }
+        hits.push(html_id);
+    } else if let Some(&body_id) = nodes[0].children.iter().find(|&&c| nodes[c].tag == "body")
+        && cached
+            .styles
+            .get(body_id)
+            .is_some_and(|st| st.display != Display::None && st.visible && st.pointer_events)
+    {
+        hits.push(body_id);
+    }
+
+    hits
 }
 
 fn build_dom_rect(x: f64, y: f64, width: f64, height: f64, context: &mut Context) -> JsObject {
@@ -387,6 +769,17 @@ pub(super) fn try_get(
     name: &str,
     context: &mut Context,
 ) -> JsResult<Option<JsValue>> {
+    if handle == "document" || handle.starts_with("subdoc:") {
+        match name {
+            "elementFromPoint" => {
+                return super::method(DOC_ELEMENT_FROM_POINT, context).map(|o| Some(o.into()));
+            }
+            "elementsFromPoint" => {
+                return super::method(DOC_ELEMENTS_FROM_POINT, context).map(|o| Some(o.into()));
+            }
+            _ => return Ok(None),
+        }
+    }
     if !handle.starts_with("node:") {
         return Ok(None);
     }
@@ -600,6 +993,11 @@ pub(super) fn try_set(
 }
 
 pub(super) fn try_has(handle: &str, name: &str, context: &mut Context) -> JsResult<Option<bool>> {
+    if (handle == "document" || handle.starts_with("subdoc:"))
+        && matches!(name, "elementFromPoint" | "elementsFromPoint")
+    {
+        return Ok(Some(true));
+    }
     if !handle.starts_with("node:") {
         return Ok(None);
     }
@@ -944,6 +1342,45 @@ fn computed_property_value(
         }
         .into(),
         "pointer-events" => if s.pointer_events { "auto" } else { "none" }.into(),
+        "cursor" => {
+            let mut cur = id;
+            let mut cursor = None;
+            for _ in 0..=crate::document::MAX_DEPTH {
+                if cur == 0 || cur >= data.host.document.nodes.len() {
+                    break;
+                }
+                let n = &data.host.document.nodes[cur];
+                if let Some(inline) = n.attr("style")
+                    && let Ok(v) =
+                        crate::style::declarations::declared_value(inline, "cursor", &data.host.url)
+                    && !v.is_empty()
+                    && v != "inherit"
+                {
+                    cursor = Some(v);
+                    break;
+                }
+                if (n.tag == "a" && n.has("href")) || n.tag == "summary" {
+                    cursor = Some("pointer".into());
+                    break;
+                }
+                if n.tag == "textarea"
+                    || (n.tag == "input"
+                        && matches!(
+                            super::dom_ops::effective_input_type(n),
+                            "text" | "search" | "url" | "tel" | "email" | "password" | "number"
+                        ))
+                {
+                    cursor = Some("text".into());
+                    break;
+                }
+                let p = n.parent;
+                if p == cur {
+                    break;
+                }
+                cur = p;
+            }
+            cursor.unwrap_or_else(|| "auto".into())
+        }
         "flex-direction" => match s.layout.flex_direction {
             FlexDirection::Row => "row",
             FlexDirection::RowReverse => "row-reverse",
@@ -1423,11 +1860,61 @@ pub(super) fn call(
                 };
                 data.viewport.scroll_y = target_y;
             }
-            data.scroll_request = Some(ScrollRequest::IntoView {
-                node: id,
-                align_top,
-            });
+            match &mut data.scroll_request {
+                Some(ScrollRequest::FocusControl { into_view, .. }) => {
+                    *into_view = Some((id, align_top));
+                }
+                slot => {
+                    *slot = Some(ScrollRequest::IntoView {
+                        node: id,
+                        align_top,
+                    });
+                }
+            }
             Ok(JsValue::undefined())
+        }
+        DOC_ELEMENT_FROM_POINT | DOC_ELEMENTS_FROM_POINT => {
+            let Value::Host(handle) = receiver(this, context)? else {
+                return Err(failure("Document method requires a Document receiver"));
+            };
+            if handle != "document" && !handle.starts_with("subdoc:") {
+                return Err(failure("Document method requires a Document receiver"));
+            }
+            if args.len() < 2 {
+                return Err(failure(
+                    "elementFromPoint/elementsFromPoint requires 2 arguments",
+                ));
+            }
+            let x = args[0].to_number(context)?;
+            let y = args[1].to_number(context)?;
+            if !x.is_finite() || !y.is_finite() {
+                return Err(failure(
+                    "elementFromPoint/elementsFromPoint requires finite coordinates",
+                ));
+            }
+            modern::check_context(context)?;
+            if handle.starts_with("subdoc:") {
+                if name == DOC_ELEMENT_FROM_POINT {
+                    return Ok(JsValue::null());
+                }
+                return Ok(JsArray::new(context)?.into());
+            }
+            let hits = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                elements_from_point(&mut data, x, y)
+            };
+            if name == DOC_ELEMENT_FROM_POINT {
+                return match hits.first().copied() {
+                    Some(id) => wrap(&format!("node:{id}"), context),
+                    None => Ok(JsValue::null()),
+                };
+            }
+            let mut js_items = Vec::with_capacity(hits.len());
+            for id in hits {
+                js_items.push(wrap(&format!("node:{id}"), context)?);
+            }
+            Ok(JsArray::from_iter(js_items, context).into())
         }
         WINDOW_SCROLL_TO | WINDOW_SCROLL | WINDOW_SCROLL_BY => {
             let is_by = name == WINDOW_SCROLL_BY;

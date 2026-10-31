@@ -791,7 +791,7 @@ const USER_AGENT_CSS: &str = r#"
 html, body, div, p, section, article, aside, header, footer, main, nav,
 details, summary, fieldset, legend, figure, figcaption, form, center,
 blockquote, pre, ul, ol, dl, dt, dd, h1, h2, h3, h4, h5, h6 { display: block }
-head, title, style, script, meta, link, template, [hidden], input[type=hidden], dialog:not([open]) { display: none }
+head, title, style, script, meta, link, source, track, template, [hidden], input[type=hidden], dialog:not([open]) { display: none }
 dialog[open] { display: block; border: 2px solid #202124; padding: 16px; background: #ffffff; color: #202124 }
 body { margin: 8px; font-family: sans-serif; color: black }
 p, blockquote, ul, ol, dl, pre { margin-top: 1em; margin-bottom: 1em }
@@ -814,6 +814,7 @@ col { display: table-column } colgroup { display: table-column-group }
 li { display: list-item }
 input, button, select, textarea { display: inline-block; font-size: 13.3333px }
 input, button, select, textarea { padding: 1px 2px; border: 2px solid #888 }
+select { box-sizing: border-box }
 input[type=checkbox], input[type=radio] { padding: 0; border: 1px solid #666 }
 form { margin-bottom: 1em }
 hr { display: block; margin: .5em auto; border: 1px solid #888 }

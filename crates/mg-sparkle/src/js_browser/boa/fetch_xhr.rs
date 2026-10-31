@@ -349,9 +349,16 @@ fn wrap_handle_with_proto(
 ) -> JsResult<JsValue> {
     modern::check_context(context)?;
     let shared = state(context);
+    let cache_key = {
+        let data = shared.borrow();
+        super::world_cache_key(data.active_world, &handle).into_owned()
+    };
     let (old, deref) = {
         let data = shared.borrow();
-        (data.wrappers.get(&handle).cloned(), data.weak_deref.clone())
+        (
+            data.wrappers.get(&cache_key).cloned(),
+            data.weak_deref.clone(),
+        )
     };
     if let Some(old) = old {
         let object = deref.call(&old.into(), &[], context)?;
@@ -391,7 +398,7 @@ fn wrap_handle_with_proto(
         .into();
     brands.set(&object, JsString::from(handle.as_str()).into(), context)?;
     let weak = constructor.construct(&[object.clone().into()], None, context)?;
-    shared.borrow_mut().wrappers.insert(handle, weak);
+    shared.borrow_mut().wrappers.insert(cache_key, weak);
     Ok(object.into())
 }
 

@@ -219,6 +219,9 @@ fn evaluate(source: &str) -> Operation {
         source: source.into(),
         return_by_value: false,
         group: None,
+        world: None,
+        await_promise: false,
+        user_gesture: false,
     }
 }
 fn cumulative(before: &SessionReply, after: &SessionReply) {
@@ -251,6 +254,9 @@ fn retained_automation_calls_properties_release_and_dom_share_the_real_child() {
         )],
         return_by_value: false,
         group: None,
+        world: None,
+        await_promise: false,
+        user_gesture: false,
     };
     let (b, result) = p.automation(4, &a, call);
     assert_eq!(result, AutomationResult::Value(RemoteValue::Boolean(true)));

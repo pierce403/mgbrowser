@@ -103,6 +103,48 @@ impl DownloadStore {
     pub fn directory(&self) -> Option<&Path> {
         self.dir.as_deref()
     }
+
+    pub fn save_exact_named(dir: &Path, exact_name: &str, body: &[u8]) -> Result<PathBuf, String> {
+        if body.len() > MAX_DOWNLOAD_BYTES {
+            return Err("Download exceeds 8 MiB limit".into());
+        }
+        if !dir.is_absolute() {
+            return Err("Downloads target must be an absolute directory".into());
+        }
+        if exact_name.is_empty()
+            || exact_name == "."
+            || exact_name == ".."
+            || exact_name.contains('/')
+            || exact_name.contains('\\')
+            || exact_name.chars().any(char::is_control)
+        {
+            return Err("Invalid download target filename".into());
+        }
+        fs::create_dir_all(dir)
+            .map_err(|e| format!("Cannot create Downloads directory {}: {e}", dir.display()))?;
+        let meta = fs::symlink_metadata(dir)
+            .map_err(|e| format!("Cannot inspect Downloads directory: {e}"))?;
+        if !meta.is_dir() {
+            return Err("Downloads target must be a real directory, not a symlink".into());
+        }
+        let target = dir.join(exact_name);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&target)
+            .map_err(|err| format!("Cannot create download file {}: {err}", target.display()))?;
+        let write_res = (|| -> std::io::Result<()> {
+            file.write_all(body)?;
+            file.sync_all()
+        })();
+        if let Err(err) = write_res {
+            let _ = fs::remove_file(&target);
+            return Err(format!("Failed writing download: {err}"));
+        }
+        Ok(target)
+    }
 }
 
 fn split_stem_ext(name: &str) -> (&str, &str) {

@@ -140,6 +140,40 @@ impl Session {
         }
     }
 
+    pub(crate) fn cdp_cookies(&self) -> Vec<serde_json::Value> {
+        let Ok(mut jar) = self.cookies.lock() else {
+            return Vec::new();
+        };
+        jar.prune();
+        jar.cookies
+            .iter()
+            .map(|c| {
+                let expires = c
+                    .expires
+                    .and_then(|exp| exp.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(-1.0);
+                let domain = if c.host_only {
+                    c.domain.clone()
+                } else {
+                    format!(".{}", c.domain)
+                };
+                serde_json::json!({
+                    "name": c.name,
+                    "value": c.value,
+                    "domain": domain,
+                    "path": c.path,
+                    "expires": expires,
+                    "size": c.name.len() + c.value.len(),
+                    "httpOnly": c.http_only,
+                    "secure": c.secure,
+                    "session": c.expires.is_none(),
+                    "sameSite": "Lax",
+                })
+            })
+            .collect()
+    }
+
     pub fn clear_local_storage(&self) {
         if let Ok(mut map) = self.local_storage.lock() {
             map.clear();
@@ -1261,7 +1295,7 @@ fn script_request_bytes(
     if !has_accept_lang {
         head.push_str("Accept-Language: en-US,en;q=0.8\r\n");
     }
-    head.push_str("Accept-Encoding: gzip, deflate, identity\r\nConnection: close\r\n");
+    head.push_str("Accept-Encoding: br, gzip, deflate\r\nConnection: close\r\n");
     if no_cache && !has_cache_ctrl {
         head.push_str("Cache-Control: no-cache\r\nPragma: no-cache\r\n");
     }
@@ -1482,7 +1516,7 @@ fn request_bytes_with_options(
     }
     let method = if body.is_some() { "POST" } else { "GET" };
     let mut request = format!(
-        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: identity\r\nConnection: close\r\n"
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: br, gzip, deflate\r\nConnection: close\r\n"
     );
     if no_cache {
         request.push_str("Cache-Control: no-cache\r\nPragma: no-cache\r\n");
@@ -1784,27 +1818,45 @@ fn decode_content(bytes: Vec<u8>, encoding: Option<&str>) -> Result<Vec<u8>, Str
 }
 
 fn decode_content_limited(
-    bytes: Vec<u8>,
+    mut bytes: Vec<u8>,
     encoding: Option<&str>,
     max_body: usize,
 ) -> Result<Vec<u8>, String> {
-    match encoding
-        .map(str::trim)
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "" | "identity" => Ok(bytes),
-        "gzip" => read_limited(
-            &mut flate2::read::MultiGzDecoder::new(bytes.as_slice()),
-            max_body,
-        ),
-        "deflate" => read_limited(
-            &mut flate2::read::ZlibDecoder::new(bytes.as_slice()),
-            max_body,
-        ),
-        other => Err(format!("Unsupported content encoding: {other}")),
+    let raw = encoding.map(str::trim).unwrap_or("");
+    if raw.is_empty() {
+        return Ok(bytes);
     }
+    let codings: Vec<String> = raw
+        .split(',')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if codings.len() > 3 {
+        return Err("Too many chained content encodings".into());
+    }
+    for coding in codings.into_iter().rev() {
+        bytes = match coding.as_str() {
+            "identity" => bytes,
+            "br" => mg_sparkle::brotli_decompress_limited(&bytes, max_body)?,
+            "gzip" | "x-gzip" => read_limited(
+                &mut flate2::read::MultiGzDecoder::new(bytes.as_slice()),
+                max_body,
+            )?,
+            "deflate" => match read_limited(
+                &mut flate2::read::ZlibDecoder::new(bytes.as_slice()),
+                max_body,
+            ) {
+                Ok(out) => out,
+                Err(err) if err.contains("byte limit") => return Err(err),
+                Err(_) => read_limited(
+                    &mut flate2::read::DeflateDecoder::new(bytes.as_slice()),
+                    max_body,
+                )?,
+            },
+            other => return Err(format!("Unsupported content encoding: {other}")),
+        };
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -1965,8 +2017,32 @@ mod tests {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         encoder.write_all(&vec![b'x'; MAX_BODY + 1]).unwrap();
         assert!(decode_content(encoder.finish().unwrap(), Some("gzip")).is_err());
+
+        // RFC 7932 Brotli decompression + independent output cap.
+        let br_plain = vec![
+            11, 9, 128, 112, 108, 97, 105, 110, 32, 72, 84, 77, 76, 32, 100, 111, 99, 117, 109,
+            101, 110, 116, 3,
+        ];
+        assert_eq!(
+            decode_content(br_plain, Some("br")).unwrap(),
+            b"plain HTML document"
+        );
+        let br_bomb = vec![
+            203, 255, 255, 63, 248, 37, 240, 226, 177, 64, 32, 247, 254, 15, 0, 0, 1, 120, 3,
+        ];
+        assert!(decode_content(br_bomb, Some("br")).is_err());
+
+        // Both RFC 1950 zlib-wrapped and raw RFC 1951 deflate streams decode cleanly.
+        let mut raw_def =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        raw_def.write_all(b"raw deflate payload").unwrap();
+        assert_eq!(
+            decode_content(raw_def.finish().unwrap(), Some("deflate")).unwrap(),
+            b"raw deflate payload"
+        );
+
         assert!(
-            decode_content(vec![], Some("br"))
+            decode_content(vec![], Some("zstd"))
                 .unwrap_err()
                 .contains("Unsupported")
         );
@@ -2803,6 +2879,99 @@ mod tests {
                 }
             }
             server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn http_transport_decodes_br_gzip_deflate_and_strips_script_encoding_headers() {
+        let br_payload = vec![
+            11, 9, 128, 112, 108, 97, 105, 110, 32, 72, 84, 77, 76, 32, 100, 111, 99, 117, 109,
+            101, 110, 116, 3,
+        ];
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&br_payload).unwrap();
+        let br_then_gz = gz.finish().unwrap();
+
+        let mut raw_def =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        raw_def.write_all(b"{\"status\":\"ok\"}").unwrap();
+        let deflate_payload = raw_def.finish().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let mut seen_accept = Vec::new();
+            for (encoding, ct, body) in [
+                ("br", "text/html; charset=utf-8", br_payload),
+                ("br, gzip", "text/html; charset=utf-8", br_then_gz),
+                ("deflate", "application/json", deflate_payload),
+            ] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut socket);
+                let mut req_text = String::new();
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap();
+                    if n == 0 || line == "\r\n" {
+                        break;
+                    }
+                    req_text.push_str(&line);
+                }
+                seen_accept.push(req_text);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Encoding: {encoding}\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(head.as_bytes()).unwrap();
+                socket.write_all(&body).unwrap();
+                socket.flush().unwrap();
+            }
+            seen_accept
+        });
+
+        let client = Session::new();
+        let page_url = format!("http://127.0.0.1:{port}/page");
+        let resp1 = client.fetch(&page_url).unwrap();
+        assert_eq!(resp1.body, b"plain HTML document");
+
+        let resp2 = client
+            .fetch(&format!("http://127.0.0.1:{port}/chained"))
+            .unwrap();
+        assert_eq!(resp2.body, b"plain HTML document");
+
+        let script_resp = client.fetch_script_same_origin(
+            &page_url,
+            mg_sparkle::page_session::ScriptFetchRequest {
+                request_id: 7,
+                method: "GET".into(),
+                url: format!("http://127.0.0.1:{port}/api.json"),
+                headers: Vec::new(),
+                body_b64: None,
+            },
+        );
+        assert!(script_resp.error.is_none(), "{script_resp:?}");
+        let decoded = base64_decode_forgiving(&script_resp.body_b64).unwrap();
+        assert_eq!(decoded, b"{\"status\":\"ok\"}");
+        assert!(
+            !script_resp.headers.iter().any(|(k, _)| {
+                k.eq_ignore_ascii_case("content-encoding")
+                    || k.eq_ignore_ascii_case("content-length")
+            }),
+            "decoded script responses must strip transport framing headers: {:?}",
+            script_resp.headers
+        );
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        for req in requests {
+            assert!(
+                req.to_ascii_lowercase()
+                    .contains("accept-encoding: br, gzip, deflate"),
+                "expected Accept-Encoding header in {req:?}"
+            );
         }
     }
 }

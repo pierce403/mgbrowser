@@ -23,11 +23,15 @@ use x11rb::{
 
 pub struct Options {
     pub initial: String,
+    pub has_initial_url: bool,
     pub restore_tabs: Vec<String>,
     pub executable: PathBuf,
     pub scripts: bool,
     pub auto_update: bool,
     pub debug_port: Option<u16>,
+    pub remote_debugging_pipe: bool,
+    pub headless: bool,
+    pub no_startup_window: bool,
     pub session: mg_chassis::net::Session,
 }
 
@@ -1641,14 +1645,314 @@ fn set_size_hints<C: Connection>(
     Ok(())
 }
 
+static NEXT_DOWNLOAD_GUID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn bind_debugging_pipe() -> Result<BrowserCdp, String> {
+    use std::os::fd::FromRawFd;
+    let valid =
+        unsafe { libc::fcntl(3, libc::F_GETFD) != -1 && libc::fcntl(4, libc::F_GETFD) != -1 };
+    if !valid {
+        return Err("--remote-debugging-pipe requires open file descriptors 3 and 4".into());
+    }
+    let reader = unsafe { std::fs::File::from_raw_fd(3) };
+    let writer = unsafe { std::fs::File::from_raw_fd(4) };
+    Ok(BrowserCdp::bind_pipe(Box::new(reader), Box::new(writer)))
+}
+
+fn save_cdp_or_user_download(
+    pending: &mg_chassis::downloads::PendingDownload,
+    downloads: &crate::downloads::DownloadStore,
+    cdp: Option<&BrowserCdp>,
+    frame_id: &str,
+) -> Result<PathBuf, String> {
+    let seq = NEXT_DOWNLOAD_GUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let guid = format!("{:08x}-0000-4000-8000-{seq:012x}", std::process::id());
+    if let Some(protocol) = cdp
+        && let Some(cfg) = protocol.download_behavior()
+    {
+        match cfg.behavior.as_str() {
+            "deny" => {
+                protocol.emit_download_events(
+                    frame_id,
+                    &guid,
+                    &pending.url,
+                    &pending.suggested_filename,
+                    "canceled",
+                    pending.body.len(),
+                );
+                return Err("Download denied by Browser.setDownloadBehavior".into());
+            }
+            "allowAndName" => {
+                let dir = cfg
+                    .download_path
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .or_else(|| downloads.directory())
+                    .ok_or("No downloadPath configured for allowAndName")?;
+                let res =
+                    crate::downloads::DownloadStore::save_exact_named(dir, &guid, &pending.body);
+                let state = if res.is_ok() { "completed" } else { "canceled" };
+                protocol.emit_download_events(
+                    frame_id,
+                    &guid,
+                    &pending.url,
+                    &pending.suggested_filename,
+                    state,
+                    pending.body.len(),
+                );
+                return res;
+            }
+            "allow" => {
+                let store = cfg
+                    .download_path
+                    .as_deref()
+                    .map(|p| crate::downloads::DownloadStore::from_dir(Some(PathBuf::from(p))));
+                let res = store.as_ref().unwrap_or(downloads).save(pending);
+                let state = if res.is_ok() { "completed" } else { "canceled" };
+                protocol.emit_download_events(
+                    frame_id,
+                    &guid,
+                    &pending.url,
+                    &pending.suggested_filename,
+                    state,
+                    pending.body.len(),
+                );
+                return res;
+            }
+            _ => {}
+        }
+    }
+    let res = downloads.save(pending);
+    if let Some(protocol) = cdp {
+        let state = if res.is_ok() { "completed" } else { "canceled" };
+        protocol.emit_download_events(
+            frame_id,
+            &guid,
+            &pending.url,
+            &pending.suggested_filename,
+            state,
+            pending.body.len(),
+        );
+    }
+    res
+}
+
+struct HeadlessRuntime {
+    initial: String,
+    has_initial_url: bool,
+    restore_tabs: Vec<String>,
+    scripts: bool,
+    cdp: Option<BrowserCdp>,
+    remote_debugging_pipe: bool,
+    no_startup_window: bool,
+    session: mg_chassis::net::Session,
+    bookmarks: crate::bookmarks::BookmarkStore,
+    history: crate::history::HistoryStore,
+    downloads: crate::downloads::DownloadStore,
+}
+
+fn new_headless_page(
+    session: &mg_chassis::net::Session,
+    bookmarks: &crate::bookmarks::BookmarkStore,
+    scripts: bool,
+    debugging: bool,
+    blank: bool,
+) -> Result<App, String> {
+    let fonts = platform::load_fonts().map_err(|error| error.to_string())?;
+    let runtime = std::sync::Arc::new(platform::LinuxScripts::default());
+    let mut page = if blank {
+        App::new_blank_with_session(fonts, runtime, session.clone())
+    } else {
+        App::new_with_session(fonts, runtime, session.clone())
+    };
+    page.set_build_info(env!("CARGO_PKG_VERSION"), crate::COMPILED, crate::REVISION);
+    page.set_chrome(false);
+    page.resize_surface(1280, 720);
+    page.set_scripts_enabled(scripts);
+    page.set_debugging(debugging);
+    match bookmarks.load() {
+        Ok(entries) => page.set_bookmarks(entries),
+        Err(error) => page.set_bookmark_status(error),
+    }
+    Ok(page)
+}
+
+fn run_headless(mut initial_app: App, mut rt: HeadlessRuntime) -> Result<(), Box<dyn Error>> {
+    let mut pages: BTreeMap<u64, App> = BTreeMap::new();
+    let mut next_id: u64 = 1;
+    let debugging = rt.cdp.is_some();
+    if !rt.no_startup_window || rt.has_initial_url {
+        initial_app.set_chrome(false);
+        initial_app.resize_surface(1280, 720);
+        initial_app.set_debugging(debugging);
+        initial_app.navigate(rt.initial.clone(), None, true);
+        let id = next_id;
+        next_id += 1;
+        pages.insert(id, initial_app);
+    }
+    for url in rt.restore_tabs.drain(..) {
+        if pages.len() >= Limits::default().tabs {
+            break;
+        }
+        let mut page = new_headless_page(&rt.session, &rt.bookmarks, rt.scripts, debugging, false)?;
+        page.navigate(url, None, true);
+        let id = next_id;
+        next_id += 1;
+        pages.insert(id, page);
+    }
+    loop {
+        for page in pages.values_mut() {
+            page.poll();
+        }
+        let ids: Vec<u64> = pages.keys().copied().collect();
+        for id in ids {
+            let new_tab = pages.get_mut(&id).and_then(App::take_new_tab_request_full);
+            if let Some(req) = new_tab
+                && pages.len() < Limits::default().tabs
+                && let Ok(mut page) =
+                    new_headless_page(&rt.session, &rt.bookmarks, rt.scripts, debugging, false)
+            {
+                page.navigate(req.url, None, true);
+                let new_id = next_id;
+                next_id += 1;
+                pages.insert(new_id, page);
+            }
+            let hist_changes = pages
+                .get_mut(&id)
+                .map(App::take_history_changes)
+                .unwrap_or_default();
+            if !hist_changes.is_empty()
+                && let Ok(updated) = rt.history.apply_batch(&hist_changes)
+            {
+                for page in pages.values_mut() {
+                    page.set_browsing_history(updated.clone());
+                }
+            }
+            let pending_downloads = pages
+                .get_mut(&id)
+                .map(App::take_pending_downloads)
+                .unwrap_or_default();
+            let frame_id = format!("page-{id}");
+            for pending in pending_downloads {
+                match save_cdp_or_user_download(&pending, &rt.downloads, rt.cdp.as_ref(), &frame_id)
+                {
+                    Ok(saved_path) => {
+                        if let Some(page) = pages.get_mut(&id) {
+                            page.complete_download(
+                                pending.id,
+                                Ok(saved_path.display().to_string()),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(page) = pages.get_mut(&id) {
+                            page.complete_download(pending.id, Err(error));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(protocol) = &mut rt.cdp {
+            let names: Vec<String> = pages.keys().map(|id| format!("page-{id}")).collect();
+            let mut roster: Vec<(&str, &mut App)> = pages
+                .values_mut()
+                .zip(&names)
+                .map(|(page, name)| (name.as_str(), page))
+                .collect();
+            protocol.tick_pages_with_target_host(&mut roster)?;
+            drop(roster);
+            if let Some(request) = protocol.take_target_request() {
+                let outcome = match request.action() {
+                    TargetAction::Create { url } => {
+                        if pages.len() >= Limits::default().tabs {
+                            Err("Maximum16 tabs reached".into())
+                        } else {
+                            match new_headless_page(
+                                &rt.session,
+                                &rt.bookmarks,
+                                rt.scripts,
+                                true,
+                                true,
+                            ) {
+                                Ok(mut page) => {
+                                    let id = next_id;
+                                    next_id += 1;
+                                    if !url.is_empty() && url != "about:blank" {
+                                        page.navigate(url.clone(), None, true);
+                                    }
+                                    let name = format!("page-{id}");
+                                    eprintln!("TAB opened={id} pane=1");
+                                    pages.insert(id, page);
+                                    Ok(TargetOutcome::Created(name))
+                                }
+                                Err(err) => Err(err),
+                            }
+                        }
+                    }
+                    TargetAction::Close { target } => {
+                        let parsed = target
+                            .strip_prefix("page-")
+                            .and_then(|n| n.parse::<u64>().ok())
+                            .filter(|&id| {
+                                format!("page-{id}") == *target && pages.contains_key(&id)
+                            });
+                        match parsed {
+                            Some(id) => {
+                                pages.remove(&id);
+                                Ok(TargetOutcome::Closed)
+                            }
+                            None => Err("Unknown or closed target".into()),
+                        }
+                    }
+                    TargetAction::Activate { target } => {
+                        let exists = target
+                            .strip_prefix("page-")
+                            .and_then(|n| n.parse::<u64>().ok())
+                            .is_some_and(|id| {
+                                format!("page-{id}") == *target && pages.contains_key(&id)
+                            });
+                        if exists {
+                            Ok(TargetOutcome::Activated)
+                        } else {
+                            Err("Unknown or closed target".into())
+                        }
+                    }
+                };
+                let names: Vec<String> = pages.keys().map(|id| format!("page-{id}")).collect();
+                let mut roster: Vec<(&str, &mut App)> = pages
+                    .values_mut()
+                    .zip(&names)
+                    .map(|(page, name)| (name.as_str(), page))
+                    .collect();
+                protocol.complete_target_request(request, outcome, &mut roster)?;
+            }
+            if protocol.take_close_request() || (rt.remote_debugging_pipe && protocol.pipe_eof()) {
+                return Ok(());
+            }
+        }
+        let journey_result = pages.values().find_map(App::journey_result);
+        if let Some(success) = journey_result {
+            if !success {
+                std::process::exit(2);
+            }
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
 pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
     let Options {
         initial,
+        has_initial_url,
         restore_tabs,
         executable,
         scripts: restart_scripts,
         auto_update,
         debug_port,
+        remote_debugging_pipe,
+        headless,
+        no_startup_window,
         session,
     } = options;
     let settings = Settings::user();
@@ -1686,8 +1990,35 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         }
         .into(),
     );
-    let mut cdp = debug_port.map(BrowserCdp::bind).transpose()?;
+    let mut cdp = if remote_debugging_pipe {
+        Some(bind_debugging_pipe()?)
+    } else {
+        debug_port.map(BrowserCdp::bind).transpose()?
+    };
+    if let Some(protocol) = &mut cdp
+        && (headless || no_startup_window || remote_debugging_pipe)
+    {
+        protocol.set_allow_zero_targets(true);
+    }
     app.set_debugging(cdp.is_some());
+    if headless {
+        return run_headless(
+            app,
+            HeadlessRuntime {
+                initial,
+                has_initial_url,
+                restore_tabs,
+                scripts: restart_scripts,
+                cdp,
+                remote_debugging_pipe,
+                no_startup_window,
+                session,
+                bookmarks,
+                history,
+                downloads,
+            },
+        );
+    }
     let (conn, screen_num) = x11rb::connect(None).map_err(|error| {
         format!("Cannot open X11 display: {error}. Run inside an X11 or XWayland desktop with DISPLAY set.")
     })?;
@@ -1812,7 +2143,9 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         .get_keyboard_mapping(first, conn.setup().max_keycode - first + 1)?
         .reply()?;
     eprintln!("WINDOW id={window} pid={}", std::process::id());
-    app.navigate(initial, None, true);
+    if !no_startup_window || has_initial_url {
+        app.navigate(initial, None, true);
+    }
     let mut space = Workspace::new(Limits::default())?;
     let opened = space.open_window(app).map_err(|error| error.error)?;
     let atoms = Atoms {
@@ -2032,8 +2365,9 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                 }
             }
             let pending_downloads = desktop.space.get_mut(id).unwrap().take_pending_downloads();
+            let frame_id = target_name(desktop.initial_tab, id);
             for pending in pending_downloads {
-                match downloads.save(&pending) {
+                match save_cdp_or_user_download(&pending, &downloads, cdp.as_ref(), &frame_id) {
                     Ok(saved_path) => {
                         let name = saved_path
                             .file_name()
@@ -2303,6 +2637,10 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                     app.set_debugging(false);
                 }
                 desktop.notify(format!("Remote debugging stopped: {error}"));
+            } else if protocol.take_close_request()
+                || (remote_debugging_pipe && protocol.pipe_eof())
+            {
+                return Ok(());
             }
         }
         desktop.paint(&conn, depth)?;
@@ -2317,7 +2655,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
             }
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(16));
+        thread::sleep(Duration::from_millis(if cdp.is_some() { 2 } else { 16 }));
     }
 }
 

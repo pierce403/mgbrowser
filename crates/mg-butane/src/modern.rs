@@ -553,6 +553,20 @@ impl Engine {
         &mut self.context
     }
 
+    pub fn realm(&self) -> Realm {
+        self.context.realm().clone()
+    }
+
+    pub fn create_realm(&mut self) -> Result<Realm, Error> {
+        self.check()?;
+        let created = self.context.create_realm();
+        self.finish(created)
+    }
+
+    pub fn enter_realm(&mut self, realm: Realm) -> Realm {
+        self.context.enter_realm(realm)
+    }
+
     /// Whether this worker has reached Boa's dynamic-string compilation hook.
     ///
     /// This monotonic, worker-local observation includes failed source admission

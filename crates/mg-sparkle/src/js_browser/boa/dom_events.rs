@@ -23,6 +23,7 @@ pub(super) const DISPATCH_EVENT: &str = "host.m2.dispatchEvent";
 pub(super) const ELEMENT_CLICK: &str = "host.m2.click";
 pub(super) const ELEMENT_FOCUS: &str = "host.m2.focus";
 pub(super) const ELEMENT_BLUR: &str = "host.m2.blur";
+pub(super) const ELEMENT_SELECT: &str = "host.m2.select";
 pub(super) const ELEMENT_FORM_SUBMIT: &str = "host.m2.form.submit";
 pub(super) const ELEMENT_FORM_RESET: &str = "host.m2.form.reset";
 pub(super) const ELEMENT_FORM_REQUEST_SUBMIT: &str = "host.m2.form.requestSubmit";
@@ -232,6 +233,7 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         ELEMENT_CLICK => Some(("click", 0)),
         ELEMENT_FOCUS => Some(("focus", 0)),
         ELEMENT_BLUR => Some(("blur", 0)),
+        ELEMENT_SELECT => Some(("select", 0)),
         ELEMENT_FORM_SUBMIT => Some(("submit", 0)),
         ELEMENT_FORM_RESET => Some(("reset", 0)),
         ELEMENT_FORM_REQUEST_SUBMIT => Some(("requestSubmit", 0)),
@@ -652,9 +654,16 @@ pub(super) fn wrap_modern_event(
     modern::check_context(context)?;
     let handle = format!("mevent:{id}");
     let shared = state(context);
+    let cache_key = {
+        let data = shared.borrow();
+        super::world_cache_key(data.active_world, &handle).into_owned()
+    };
     let (old, deref) = {
         let data = shared.borrow();
-        (data.wrappers.get(&handle).cloned(), data.weak_deref.clone())
+        (
+            data.wrappers.get(&cache_key).cloned(),
+            data.weak_deref.clone(),
+        )
     };
     if let Some(old) = old {
         let object = deref.call(&old.into(), &[], context)?;
@@ -697,7 +706,7 @@ pub(super) fn wrap_modern_event(
         .into();
     brands.set(&object, JsString::from(handle.as_str()).into(), context)?;
     let weak = constructor.construct(&[object.clone().into()], None, context)?;
-    shared.borrow_mut().wrappers.insert(handle, weak);
+    shared.borrow_mut().wrappers.insert(cache_key, weak);
     Ok(object.into())
 }
 
@@ -803,8 +812,10 @@ pub(super) fn listener_call(
         return Ok(JsValue::undefined());
     }
 
+    let active_world = data.active_world;
     let index = data.listeners.iter().position(|l| {
         !l.property
+            && l.world_id == active_world
             && l.target == target
             && l.event_type == event_type
             && l.capture == capture
@@ -819,12 +830,13 @@ pub(super) fn listener_call(
             return Err(failure("Listener limit exceeded"));
         }
         data.host.charge(128 + event_type.len()).map_err(failure)?;
-        if let Target::Node(nid) = target
+        if active_world == 0
+            && !data.automation_only
+            && let Target::Node(nid) = target
             && has_uncompiled_inline_handler(&data, nid, &event_type)
-            && !data
-                .listeners
-                .iter()
-                .any(|l| l.property && l.target == target && l.event_type == event_type)
+            && !data.listeners.iter().any(|l| {
+                l.property && l.world_id == 0 && l.target == target && l.event_type == event_type
+            })
             && data.listeners.len() + 1 < MAX_BOA_LISTENERS
         {
             data.listeners.push(Listener {
@@ -835,6 +847,7 @@ pub(super) fn listener_call(
                 once: false,
                 passive: false,
                 property: true,
+                world_id: 0,
             });
         }
         let slot = data.listeners.len();
@@ -846,6 +859,7 @@ pub(super) fn listener_call(
             once,
             passive,
             property: false,
+            world_id: active_world,
         });
         if let Some(sid) = signal_id
             && let Some(sig) = data.abort_signals.get_mut(sid)
@@ -940,6 +954,20 @@ pub(super) fn try_get(
                     return super::method(m, context).map(|o| Some(o.into()));
                 }
             }
+            "select" => {
+                let is_text_ctrl = {
+                    let shared = state(context);
+                    let data = shared.borrow();
+                    let id = data.host.node(handle).map_err(failure)?;
+                    matches!(
+                        data.host.document.nodes[id].tag.as_str(),
+                        "input" | "textarea"
+                    )
+                };
+                if is_text_ctrl {
+                    return super::method(ELEMENT_SELECT, context).map(|o| Some(o.into()));
+                }
+            }
             _ => {}
         }
     }
@@ -973,8 +1001,24 @@ pub(super) fn event_extra_property(
         "returnValue" => Ok(Some((!canceled).into())),
         "srcElement" => from_host(target.value(), context).map(Some),
         "composedPath" => super::method(MEVENT_COMPOSED_PATH, context).map(|o| Some(o.into())),
-        "button" | "buttons" | "clientX" | "clientY" | "pageX" | "pageY" if is_click => {
-            Ok(Some(0.into()))
+        "button" | "buttons" if is_click => Ok(Some(0.into())),
+        "clientX" | "clientY" | "pageX" | "pageY" if is_click => {
+            let coords = match target {
+                super::Target::Node(nid) => {
+                    let mut data = shared.borrow_mut();
+                    super::geometry_style::node_center_coords(&mut data, nid)
+                }
+                _ => None,
+            };
+            let (cx, cy, px, py) = coords.unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let val = match name {
+                "clientX" => cx,
+                "clientY" => cy,
+                "pageX" => px,
+                "pageY" => py,
+                _ => 0.0,
+            };
+            Ok(Some(val.into()))
         }
         "detail" if is_click => Ok(Some(1.into())),
         "ctrlKey" | "shiftKey" | "altKey" | "metaKey" if is_click => Ok(Some(false.into())),
@@ -1172,6 +1216,17 @@ pub(super) fn try_has(handle: &str, name: &str, context: &mut Context) -> JsResu
                 return Ok(Some(true));
             }
         }
+        if name == "select" {
+            let shared = state(context);
+            let data = shared.borrow();
+            let id = data.host.node(handle).map_err(failure)?;
+            if matches!(
+                data.host.document.nodes[id].tag.as_str(),
+                "input" | "textarea"
+            ) {
+                return Ok(Some(true));
+            }
+        }
     }
     Ok(None)
 }
@@ -1277,6 +1332,26 @@ pub(super) fn call(
         ELEMENT_BLUR => {
             let id = element_receiver(this, context)?;
             blur_element(id, context)?;
+            Ok(JsValue::undefined())
+        }
+        ELEMENT_SELECT => {
+            let id = element_receiver(this, context)?;
+            let is_text_ctrl = matches!(
+                state(context).borrow().host.document.nodes[id].tag.as_str(),
+                "input" | "textarea"
+            );
+            if !is_text_ctrl {
+                return Err(failure("select requires an input or textarea receiver"));
+            }
+            focus_element(id, context)?;
+            {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                if data.focused_node == Some(id) {
+                    record_focus_control(&mut data, Some(id), true);
+                }
+            }
+            queue_or_fire_simple_event(id, "select", true, false, context)?;
             Ok(JsValue::undefined())
         }
         ELEMENT_FORM_SUBMIT => {
@@ -1594,7 +1669,7 @@ pub(super) fn has_uncompiled_inline_handler(
     node_id: usize,
     event_type: &str,
 ) -> bool {
-    if node_id == 0 || node_id >= data.host.document.nodes.len() {
+    if data.automation_only || node_id == 0 || node_id >= data.host.document.nodes.len() {
         return false;
     }
     let node = &data.host.document.nodes[node_id];
@@ -1622,7 +1697,11 @@ pub(super) fn invalidate_inline_handler(data: &mut State, node_id: usize, attr_n
     data.suppressed_inline_handlers
         .remove(&(node_id, event_type.to_owned()));
     for l in &mut data.listeners {
-        if l.property && l.target == Target::Node(node_id) && l.event_type == event_type {
+        if l.property
+            && l.world_id == 0
+            && l.target == Target::Node(node_id)
+            && l.event_type == event_type
+        {
             l.callback = None;
         }
     }
@@ -1643,7 +1722,8 @@ pub(super) fn ensure_inline_handler_compiled(
     let raw_body = {
         let shared = state(context);
         let mut data = shared.borrow_mut();
-        if node_id == 0
+        if data.automation_only
+            || node_id == 0
             || node_id >= data.host.document.nodes.len()
             || data.host.document.nodes[node_id].tag.starts_with('#')
             || super::inert(&data.host.document.nodes, node_id)
@@ -1657,7 +1737,11 @@ pub(super) fn ensure_inline_handler_compiled(
             return Ok(());
         }
         if data.listeners.iter().any(|l| {
-            l.property && l.target == target && l.event_type == event_type && l.callback.is_some()
+            l.property
+                && l.world_id == 0
+                && l.target == target
+                && l.event_type == event_type
+                && l.callback.is_some()
         }) {
             return Ok(());
         }
@@ -1678,17 +1762,19 @@ pub(super) fn ensure_inline_handler_compiled(
         body
     };
     modern::check_context(context)?;
+    let prev_world = super::enter_world_in_context(0, context);
     let wrapped = format!("(function(event) {{\n{raw_body}\n}})");
     let parsed = modern::boa_engine::Script::parse(
         modern::boa_engine::Source::from_bytes(wrapped.as_bytes()),
         None,
         context,
     );
-    let Ok(script) = parsed else {
-        modern::check_context(context)?;
-        return Ok(());
+    let eval_res = match parsed {
+        Ok(script) => script.evaluate(context),
+        Err(e) => Err(e),
     };
-    let Ok(val) = script.evaluate(context) else {
+    super::enter_world_in_context(prev_world, context);
+    let Ok(val) = eval_res else {
         modern::check_context(context)?;
         return Ok(());
     };
@@ -1699,7 +1785,11 @@ pub(super) fn ensure_inline_handler_compiled(
     let shared = state(context);
     let mut data = shared.borrow_mut();
     if let Some(slot) = data.listeners.iter_mut().find(|l| {
-        l.property && l.target == target && l.event_type == event_type && l.callback.is_none()
+        l.property
+            && l.world_id == 0
+            && l.target == target
+            && l.event_type == event_type
+            && l.callback.is_none()
     }) {
         slot.callback = Some(fn_obj);
     } else if data.listeners.len() < MAX_BOA_LISTENERS {
@@ -1711,6 +1801,7 @@ pub(super) fn ensure_inline_handler_compiled(
             property: true,
             once: false,
             passive: false,
+            world_id: 0,
         });
     }
     Ok(())
@@ -1750,7 +1841,8 @@ fn dispatch_modern_at(
     if ids.is_empty() {
         return Ok(());
     }
-    let this_val = from_host(owner.value(), context)?;
+    let caller_world = state(context).borrow().active_world;
+    let flavor = state(context).borrow().modern_events[mevent_id].flavor;
     for id in ids {
         modern::check_context(context)?;
         if state(context).borrow().modern_events[mevent_id].immediate {
@@ -1765,13 +1857,26 @@ fn dispatch_modern_at(
             };
             let prop = l.property;
             let passive = l.passive;
+            let world_id = l.world_id;
             if l.once {
                 l.callback = None;
             }
-            (cb, prop, passive)
+            (cb, prop, passive, world_id)
         };
-        let returned_false =
-            invoke_callback_object(&entry.0, &this_val, wrapper, entry.1, entry.2, context)?;
+        let invoke_res = if entry.3 == caller_world {
+            let this_val = from_host(owner.value(), context)?;
+            invoke_callback_object(&entry.0, &this_val, wrapper, entry.1, entry.2, context)
+        } else {
+            super::enter_world_in_context(entry.3, context);
+            let r = (|| {
+                let this_val = from_host(owner.value(), context)?;
+                let ev_wrap = wrap_modern_event(mevent_id, flavor, context)?;
+                invoke_callback_object(&entry.0, &this_val, &ev_wrap, entry.1, entry.2, context)
+            })();
+            super::enter_world_in_context(caller_world, context);
+            r
+        };
+        let returned_false = invoke_res?;
         if returned_false && cancelable && !entry.2 {
             state(context).borrow_mut().modern_events[mevent_id].canceled = true;
         }
@@ -1858,6 +1963,24 @@ pub(super) fn is_disabled_element(nodes: &[Node], id: usize) -> bool {
     false
 }
 
+fn record_focus_control(data: &mut State, node: Option<usize>, select_all: bool) {
+    use crate::page_session::platform::ScrollRequest;
+    let (keep_select_all, into_view) = match data.scroll_request {
+        Some(ScrollRequest::IntoView { node: n, align_top }) => (false, Some((n, align_top))),
+        Some(ScrollRequest::FocusControl {
+            node: prev_n,
+            select_all: prev_sel,
+            into_view,
+        }) => (prev_n == node && prev_sel, into_view),
+        _ => (false, None),
+    };
+    data.scroll_request = Some(ScrollRequest::FocusControl {
+        node,
+        select_all: select_all || keep_select_all,
+        into_view,
+    });
+}
+
 fn focus_element(id: usize, context: &mut Context) -> JsResult<()> {
     let (prev, can_focus) = {
         let shared = state(context);
@@ -1866,15 +1989,31 @@ fn focus_element(id: usize, context: &mut Context) -> JsResult<()> {
             && !is_disabled_element(&data.host.document.nodes, id);
         (data.focused_node, can)
     };
-    if !can_focus || prev == Some(id) {
+    if !can_focus {
+        return Ok(());
+    }
+    if prev == Some(id) {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        record_focus_control(&mut data, Some(id), false);
         return Ok(());
     }
     if let Some(old) = prev {
-        state(context).borrow_mut().focused_node = None;
+        {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.focused_node = None;
+            record_focus_control(&mut data, None, false);
+        }
         queue_or_fire_simple_event(old, "blur", false, false, context)?;
         queue_or_fire_simple_event(old, "focusout", true, false, context)?;
     }
-    state(context).borrow_mut().focused_node = Some(id);
+    {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        data.focused_node = Some(id);
+        record_focus_control(&mut data, Some(id), false);
+    }
     queue_or_fire_simple_event(id, "focus", false, false, context)?;
     queue_or_fire_simple_event(id, "focusin", true, false, context)?;
     Ok(())
@@ -1885,7 +2024,12 @@ fn blur_element(id: usize, context: &mut Context) -> JsResult<()> {
     if !is_focused {
         return Ok(());
     }
-    state(context).borrow_mut().focused_node = None;
+    {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        data.focused_node = None;
+        record_focus_control(&mut data, None, false);
+    }
     queue_or_fire_simple_event(id, "blur", false, false, context)?;
     queue_or_fire_simple_event(id, "focusout", true, false, context)?;
     Ok(())

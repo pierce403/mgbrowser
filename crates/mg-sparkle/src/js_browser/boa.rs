@@ -25,6 +25,7 @@ use modern::boa_engine::{
         builtins::{JsPromise, JsProxy, JsWeakMap},
     },
     property::{Attribute, PropertyDescriptor, PropertyKey},
+    realm::Realm,
 };
 use modern::boa_gc::{Finalize, Gc, GcRefCell, Trace};
 use std::{
@@ -167,6 +168,8 @@ struct Listener {
     once: bool,
     passive: bool,
     property: bool,
+    #[unsafe_ignore_trace]
+    world_id: u32,
 }
 
 #[derive(Trace, Finalize)]
@@ -184,9 +187,25 @@ struct Timer {
     #[unsafe_ignore_trace]
     is_raf: bool,
     #[unsafe_ignore_trace]
+    world_id: u32,
+    #[unsafe_ignore_trace]
     permit: modern::WorkPermit,
     callback: JsObject,
     arguments: Vec<JsValue>,
+}
+
+#[derive(Trace, Finalize)]
+struct IsolatedWorld {
+    #[unsafe_ignore_trace]
+    id: u32,
+    #[unsafe_ignore_trace]
+    name: String,
+    realm: Realm,
+    weak_constructor: JsObject,
+    weak_deref: JsObject,
+    reflect_get: JsObject,
+    event_prototypes: Option<dom_events::EventPrototypes>,
+    fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
 }
 
 #[derive(Clone, Copy)]
@@ -327,6 +346,19 @@ struct State {
     xhr_instances: Vec<fetch_xhr::XhrRecord>,
     #[unsafe_ignore_trace]
     pending_xhr_delivery: Option<(usize, page_session::platform::ScriptFetchResponse)>,
+    #[unsafe_ignore_trace]
+    automation_only: bool,
+    #[unsafe_ignore_trace]
+    enable_network: bool,
+    #[unsafe_ignore_trace]
+    active_world: u32,
+    main_realm: Realm,
+    main_weak_constructor: JsObject,
+    main_weak_deref: JsObject,
+    main_reflect_get: JsObject,
+    main_event_prototypes: Option<dom_events::EventPrototypes>,
+    main_fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
+    isolated_worlds: Vec<IsolatedWorld>,
 }
 type Shared = Gc<GcRefCell<State>>;
 
@@ -353,6 +385,7 @@ impl State {
         Vec<fetch_xhr::PendingFetch>,
         Vec<fetch_xhr::AbortSignalRecord>,
         Vec<fetch_xhr::XhrRecord>,
+        Vec<IsolatedWorld>,
     ) {
         self.armed_wake = None;
         self.console.clear_roots();
@@ -367,6 +400,7 @@ impl State {
             std::mem::take(&mut self.pending_fetches),
             std::mem::take(&mut self.abort_signals),
             std::mem::take(&mut self.xhr_instances),
+            std::mem::take(&mut self.isolated_worlds),
         )
     }
 }
@@ -654,6 +688,91 @@ fn event_target(value: &JsValue, context: &mut Context) -> JsResult<Target> {
     }
 }
 
+pub(super) fn world_cache_key(active_world: u32, handle: &str) -> std::borrow::Cow<'_, str> {
+    if active_world == 0 {
+        std::borrow::Cow::Borrowed(handle)
+    } else {
+        std::borrow::Cow::Owned(format!("w{active_world}:{handle}"))
+    }
+}
+
+pub(super) fn enter_world_in_context(target_world: u32, context: &mut Context) -> u32 {
+    let Some(shared) = context.get_data::<Shared>().cloned() else {
+        return 0;
+    };
+    enter_world_with_shared(&shared, target_world, context)
+}
+
+fn enter_world_with_shared(shared: &Shared, target_world: u32, context: &mut Context) -> u32 {
+    let (prev_world, target_realm) = {
+        let mut data = shared.borrow_mut();
+        let prev = data.active_world;
+        if prev == target_world {
+            return prev;
+        }
+        // Save outgoing world's intrinsics/prototypes
+        let out_wc = data.weak_constructor.clone();
+        let out_wd = data.weak_deref.clone();
+        let out_rg = data.reflect_get.clone();
+        let out_ep = data.event_prototypes.clone();
+        let out_fp = data.fetch_xhr_prototypes.clone();
+        if prev == 0 {
+            data.main_weak_constructor = out_wc;
+            data.main_weak_deref = out_wd;
+            data.main_reflect_get = out_rg;
+            data.main_event_prototypes = out_ep;
+            data.main_fetch_xhr_prototypes = out_fp;
+        } else if let Some(w) = data.isolated_worlds.iter_mut().find(|w| w.id == prev) {
+            w.weak_constructor = out_wc;
+            w.weak_deref = out_wd;
+            w.reflect_get = out_rg;
+            w.event_prototypes = out_ep;
+            w.fetch_xhr_prototypes = out_fp;
+        }
+        // Load incoming world's intrinsics/prototypes
+        let (eff_world, realm, wc, wd, rg, ep, fp) = if target_world == 0 {
+            (
+                0,
+                data.main_realm.clone(),
+                data.main_weak_constructor.clone(),
+                data.main_weak_deref.clone(),
+                data.main_reflect_get.clone(),
+                data.main_event_prototypes.clone(),
+                data.main_fetch_xhr_prototypes.clone(),
+            )
+        } else if let Some(w) = data.isolated_worlds.iter().find(|w| w.id == target_world) {
+            (
+                w.id,
+                w.realm.clone(),
+                w.weak_constructor.clone(),
+                w.weak_deref.clone(),
+                w.reflect_get.clone(),
+                w.event_prototypes.clone(),
+                w.fetch_xhr_prototypes.clone(),
+            )
+        } else {
+            (
+                0,
+                data.main_realm.clone(),
+                data.main_weak_constructor.clone(),
+                data.main_weak_deref.clone(),
+                data.main_reflect_get.clone(),
+                data.main_event_prototypes.clone(),
+                data.main_fetch_xhr_prototypes.clone(),
+            )
+        };
+        data.active_world = eff_world;
+        data.weak_constructor = wc;
+        data.weak_deref = wd;
+        data.reflect_get = rg;
+        data.event_prototypes = ep;
+        data.fetch_xhr_prototypes = fp;
+        (prev, realm)
+    };
+    let _ = context.enter_realm(target_realm);
+    prev_world
+}
+
 fn wrap(handle: &str, context: &mut Context) -> JsResult<JsValue> {
     wrap_payload(handle, None, context)
 }
@@ -692,9 +811,14 @@ fn wrap_all_payloads(
         return Ok(context.global_object().into());
     }
     let shared = state(context);
-    let (old, deref) = {
+    let (active_world, old, deref) = {
         let data = shared.borrow();
-        (data.wrappers.get(handle).cloned(), data.weak_deref.clone())
+        let ck = world_cache_key(data.active_world, handle);
+        (
+            data.active_world,
+            data.wrappers.get(ck.as_ref()).cloned(),
+            data.weak_deref.clone(),
+        )
     };
     if let Some(old) = old {
         // This is the captured native intrinsic, not a page-controlled lookup.
@@ -744,7 +868,8 @@ fn wrap_all_payloads(
     let object: JsObject = proxy_builder.build(context)?.into();
     brands.set(&object, JsString::from(handle).into(), context)?;
     let weak = constructor.construct(&[object.clone().into()], None, context)?;
-    shared.borrow_mut().wrappers.insert(handle.into(), weak);
+    let cache_key = world_cache_key(active_world, handle).into_owned();
+    shared.borrow_mut().wrappers.insert(cache_key, weak);
     Ok(object.into())
 }
 
@@ -764,7 +889,9 @@ fn from_host(value: Value, context: &mut Context) -> JsResult<JsValue> {
 
 fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     let shared = state(context);
-    if let Some(function) = shared.borrow().methods.get(name).cloned() {
+    let active_world = shared.borrow().active_world;
+    let cache_key = world_cache_key(active_world, name);
+    if let Some(function) = shared.borrow().methods.get(cache_key.as_ref()).cloned() {
         return Ok(function);
     }
     let (public_name, arity) = cssom::method_metadata(name)
@@ -790,19 +917,24 @@ fn method(name: &str, context: &mut Context) -> JsResult<JsObject> {
     shared
         .borrow_mut()
         .methods
-        .insert(name.into(), function.clone());
+        .insert(cache_key.into_owned(), function.clone());
     Ok(function)
 }
 
 fn property_callback(target: Target, property: &str, context: &mut Context) -> Option<JsObject> {
     let event_type = dom_events::is_event_handler_property(property)?;
     let _ = dom_events::ensure_inline_handler_compiled(target, event_type, context);
-    state(context)
-        .borrow()
-        .listeners
+    let shared = state(context);
+    let data = shared.borrow();
+    let active_world = data.active_world;
+    data.listeners
         .iter()
         .find(|l| {
-            l.property && l.target == target && l.event_type == event_type && l.callback.is_some()
+            l.world_id == active_world
+                && l.property
+                && l.target == target
+                && l.event_type == event_type
+                && l.callback.is_some()
         })
         .and_then(|l| l.callback.clone())
 }
@@ -818,12 +950,19 @@ fn property_set(
     let callback = value.as_callable();
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    if let Target::Node(nid) = target {
+    let active_world = data.active_world;
+    if active_world == 0
+        && let Target::Node(nid) = target
+    {
         data.suppressed_inline_handlers
             .insert((nid, event_type.to_owned()));
     }
     if let Some(listener) = data.listeners.iter_mut().find(|l| {
-        l.property && l.target == target && l.event_type == event_type && l.callback.is_some()
+        l.world_id == active_world
+            && l.property
+            && l.target == target
+            && l.event_type == event_type
+            && l.callback.is_some()
     }) {
         listener.callback = callback;
     } else if callback.is_some() {
@@ -839,6 +978,7 @@ fn property_set(
             property: true,
             once: false,
             passive: false,
+            world_id: active_world,
         });
     }
     Ok(())
@@ -1285,6 +1425,7 @@ fn timer_call(
         .ok_or_else(|| failure("Timer deadline overflow"))?;
     data.next_timer = id;
     data.next_handle = handle;
+    let world_id = data.active_world;
     data.timers.push(Timer {
         id,
         handle,
@@ -1292,6 +1433,7 @@ fn timer_call(
         nesting: nesting + 1,
         repeat_ms: is_interval.then_some(raw_delay),
         is_raf,
+        world_id,
         permit,
         callback,
         arguments: extra_args,
@@ -1506,7 +1648,11 @@ impl BoaPageRealm {
             return (None, reply);
         }
         let url = match url::Url::parse(&request.url) {
-            Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+            Ok(url)
+                if matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank" =>
+            {
+                url
+            }
             _ => {
                 reply
                     .errors
@@ -1514,7 +1660,11 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        let document = document::parse_with_scripting(&request.html, url.as_str(), true);
+        let document = document::parse_with_scripting(
+            &request.html,
+            url.as_str(),
+            !platform_init.automation_only,
+        );
         let allocated = match request.validate_modern_external_sources(&document) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -1536,7 +1686,10 @@ impl BoaPageRealm {
         let mut deferred = Vec::new();
         let mut count = 0;
         for (index, node) in document.nodes.iter().enumerate() {
-            if node.tag != "script" || inert(&document.nodes, index) {
+            if platform_init.automation_only
+                || node.tag != "script"
+                || inert(&document.nodes, index)
+            {
                 continue;
             }
             let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
@@ -1730,6 +1883,7 @@ impl BoaPageRealm {
         enable_network: bool,
     ) -> Result<Self, String> {
         let mut engine = Engine::new().map_err(|e| e.to_string())?;
+        let main_realm = engine.realm();
         let context = engine.context_mut();
         let constructor = context.intrinsics().constructors().weak_ref().constructor();
         let deref = context
@@ -1787,9 +1941,9 @@ impl BoaPageRealm {
             wrappers: HashMap::new(),
             methods: HashMap::new(),
             brands: JsWeakMap::new(context),
-            weak_constructor: constructor,
-            weak_deref: deref,
-            reflect_get,
+            weak_constructor: constructor.clone(),
+            weak_deref: deref.clone(),
+            reflect_get: reflect_get.clone(),
             finalized: Rc::new(Cell::new(0)),
             wrappers_created: 0,
             dom_epoch: 1,
@@ -1833,6 +1987,16 @@ impl BoaPageRealm {
             abort_signals: Vec::new(),
             xhr_instances: Vec::new(),
             pending_xhr_delivery: None,
+            automation_only: platform_init.automation_only,
+            enable_network,
+            active_world: 0,
+            main_realm,
+            main_weak_constructor: constructor,
+            main_weak_deref: deref,
+            main_reflect_get: reflect_get,
+            main_event_prototypes: None,
+            main_fetch_xhr_prototypes: None,
+            isolated_worlds: Vec::new(),
         }));
         {
             let mut data = shared.borrow_mut();
@@ -1840,7 +2004,47 @@ impl BoaPageRealm {
             dom_events::snapshot_initial_form_defaults(&mut data);
         }
         context.insert_data(shared.clone());
-        dom_exception::register(context).map_err(|_| "DOMException binding failed")?;
+        Self::install_world_bindings(context, enable_network, false)?;
+        {
+            let mut data = shared.borrow_mut();
+            data.main_event_prototypes = data.event_prototypes.clone();
+            data.main_fetch_xhr_prototypes = data.fetch_xhr_prototypes.clone();
+        }
+        if let Some(json_str) = initial_history_json
+            && let Ok(restored) = message_clone::restore_json_str(&json_str, context)
+        {
+            shared.borrow_mut().cached_history_state = Some(restored);
+        }
+        engine
+            .set_rejection_observer(observe_rejection)
+            .map_err(|e| e.to_string())?;
+        engine.check().map_err(|e| e.to_string())?;
+        Ok(Self {
+            engine,
+            state: shared,
+            revision: 0,
+            closed: false,
+            closed_work_latched: false,
+            lifecycle: LifecycleProgress {
+                phase: LifecyclePhase::Initializing,
+                initial_failure: false,
+            },
+            pending_milestone: None,
+            automation_registry: None,
+        })
+    }
+
+    fn install_world_bindings(
+        context: &mut Context,
+        enable_network: bool,
+        is_extra_realm: bool,
+    ) -> Result<(), String> {
+        if is_extra_realm {
+            dom_exception::register_extra_realm(context)
+                .map_err(|_| "DOMException extra realm binding failed")?;
+        } else {
+            dom_exception::register(context).map_err(|_| "DOMException binding failed")?;
+        }
         let global = context.global_object();
         for name in ["window", "self", "globalThis", "parent"] {
             context
@@ -1944,28 +2148,186 @@ impl BoaPageRealm {
         web_apis::register(context)?;
         geometry_style::register(context)?;
         fetch_xhr::register(context, enable_network)?;
-        if let Some(json_str) = initial_history_json
-            && let Ok(restored) = message_clone::restore_json_str(&json_str, context)
-        {
-            shared.borrow_mut().cached_history_state = Some(restored);
+        Ok(())
+    }
+
+    pub(super) fn ensure_isolated_world(&mut self, name: &str) -> Result<u32, String> {
+        if name.is_empty() {
+            return Err("Isolated world name must not be empty".into());
         }
-        engine
-            .set_rejection_observer(observe_rejection)
-            .map_err(|e| e.to_string())?;
-        engine.check().map_err(|e| e.to_string())?;
-        Ok(Self {
-            engine,
-            state: shared,
-            revision: 0,
-            closed: false,
-            closed_work_latched: false,
-            lifecycle: LifecycleProgress {
-                phase: LifecyclePhase::Initializing,
-                initial_failure: false,
-            },
-            pending_milestone: None,
-            automation_registry: None,
-        })
+        if let Some(existing) = self
+            .state
+            .borrow()
+            .isolated_worlds
+            .iter()
+            .find(|w| w.name == name)
+            .map(|w| w.id)
+        {
+            return Ok(existing);
+        }
+        let (new_id, enable_network) = {
+            let mut data = self.state.borrow_mut();
+            if data.isolated_worlds.len() >= 16 {
+                return Err("Isolated world limit exceeded".into());
+            }
+            data.host.charge(2048 + name.len())?;
+            ((data.isolated_worlds.len() + 1) as u32, data.enable_network)
+        };
+        let prev_world = enter_world_in_context(0, self.engine.context_mut());
+        let new_realm = self.engine.create_realm().map_err(|e| e.to_string())?;
+        let _ = self.engine.enter_realm(new_realm.clone());
+        let init_res: Result<(), String> = (|| {
+            let context = self.engine.context_mut();
+            let constructor = context.intrinsics().constructors().weak_ref().constructor();
+            let deref = context
+                .intrinsics()
+                .constructors()
+                .weak_ref()
+                .prototype()
+                .get(js_string!("deref"), context)
+                .map_err(|_| "WeakRef intrinsic unavailable")?
+                .as_callable()
+                .ok_or("WeakRef intrinsic is not callable")?;
+            let reflect_get = context
+                .intrinsics()
+                .objects()
+                .reflect()
+                .get(js_string!("get"), context)
+                .map_err(|_| "Reflect.get intrinsic unavailable")?
+                .as_callable()
+                .ok_or("Reflect.get intrinsic is not callable")?;
+            {
+                let mut data = self.state.borrow_mut();
+                data.active_world = new_id;
+                data.weak_constructor = constructor.clone();
+                data.weak_deref = deref.clone();
+                data.reflect_get = reflect_get.clone();
+                data.event_prototypes = None;
+                data.fetch_xhr_prototypes = None;
+                data.isolated_worlds.push(IsolatedWorld {
+                    id: new_id,
+                    name: name.to_owned(),
+                    realm: new_realm,
+                    weak_constructor: constructor,
+                    weak_deref: deref,
+                    reflect_get,
+                    event_prototypes: None,
+                    fetch_xhr_prototypes: None,
+                });
+            }
+            Self::install_world_bindings(self.engine.context_mut(), enable_network, true)?;
+            {
+                let mut data = self.state.borrow_mut();
+                let ep = data.event_prototypes.clone();
+                let fp = data.fetch_xhr_prototypes.clone();
+                if let Some(w) = data.isolated_worlds.iter_mut().find(|w| w.id == new_id) {
+                    w.event_prototypes = ep;
+                    w.fetch_xhr_prototypes = fp;
+                }
+            }
+            Ok(())
+        })();
+        enter_world_in_context(prev_world, self.engine.context_mut());
+        if let Err(err) = init_res {
+            self.state
+                .borrow_mut()
+                .isolated_worlds
+                .retain(|w| w.id != new_id);
+            return Err(err);
+        }
+        self.engine.check().map_err(|e| e.to_string())?;
+        Ok(new_id)
+    }
+
+    pub(super) fn resolve_world_id(&mut self, world: Option<&str>) -> Result<u32, String> {
+        match world {
+            None => Ok(0),
+            Some(name) => self.ensure_isolated_world(name),
+        }
+    }
+
+    pub(super) fn step_immediate_timer_for_await(&mut self, errors: &mut Vec<String>) -> bool {
+        if self.closed || self.engine.is_fatal() {
+            return false;
+        }
+        let chosen = {
+            let mut data = self.state.borrow_mut();
+            let now = data.now();
+            let cutoff = now + Duration::from_millis(20);
+            let idx = data
+                .timers
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.is_raf || t.deadline <= cutoff)
+                .min_by_key(|(_, t)| (t.deadline, t.handle))
+                .map(|(i, _)| i);
+            idx.map(|i| data.timers.swap_remove(i))
+        };
+        let Some(mut timer) = chosen else {
+            return false;
+        };
+        if let Err(error) = modern::begin_host_task(self.engine.context_mut(), &mut timer.permit) {
+            self.closed = true;
+            if errors.len() < 64 {
+                errors.push(bounded(&modern::safe_error(&error).to_string(), 512));
+            }
+            return false;
+        }
+        let prev_world = enter_world_in_context(timer.world_id, self.engine.context_mut());
+        self.state.borrow_mut().timer_nesting = Some(timer.nesting);
+        let this = self.engine.context().global_object().into();
+        let call_res = if timer.is_raf {
+            let ts = JsValue::from(dom_events::elapsed_ms(&self.state.borrow()));
+            self.call_function(&timer.callback, &this, &[ts])
+        } else {
+            self.call_function(&timer.callback, &this, &timer.arguments)
+        };
+        enter_world_in_context(prev_world, self.engine.context_mut());
+        if let Err(error) = call_res {
+            self.execution_failure("Timer callback", error, errors);
+        }
+        self.checkpoint(errors);
+        self.state.borrow_mut().timer_nesting = None;
+        if let Some(repeat_ms) = timer.repeat_ms
+            && !self.closed
+            && !self.engine.is_fatal()
+        {
+            let should_repeat = {
+                let data = self.state.borrow();
+                data.host.navigation.is_none() && !data.cancelled_intervals.contains(&timer.id)
+            };
+            if should_repeat && let Ok(permit) = modern::admit_host_task(self.engine.context_mut())
+            {
+                let mut data = self.state.borrow_mut();
+                let delay = if timer.nesting > 5 {
+                    repeat_ms.max(4)
+                } else {
+                    repeat_ms
+                };
+                if let (Some(handle), Some(deadline)) = (
+                    data.next_handle.checked_add(1),
+                    data.now().checked_add(Duration::from_millis(delay)),
+                ) {
+                    data.next_handle = handle;
+                    data.timers.push(Timer {
+                        id: timer.id,
+                        handle,
+                        deadline,
+                        nesting: timer.nesting.saturating_add(1),
+                        repeat_ms: Some(repeat_ms),
+                        is_raf: false,
+                        world_id: timer.world_id,
+                        permit,
+                        callback: timer.callback.clone(),
+                        arguments: timer.arguments.clone(),
+                    });
+                } else {
+                    drop(data);
+                    drop(permit);
+                }
+            }
+        }
+        true
     }
     fn empty_reply() -> SessionReply {
         SessionReply {
@@ -2112,16 +2474,18 @@ impl BoaPageRealm {
                         let l = &mut data.listeners[id];
                         let prop = l.property;
                         let passive = l.passive;
+                        let wid = l.world_id;
                         let cb = if l.once {
                             l.callback.take()
                         } else {
                             l.callback.clone()
                         };
-                        cb.map(|callback| (callback, prop, passive))
+                        cb.map(|callback| (callback, prop, passive, wid))
                     };
-                    let Some((callback, property, passive)) = listener else {
+                    let Some((callback, property, passive, wid)) = listener else {
                         continue;
                     };
+                    let prev_world = enter_world_in_context(wid, self.engine.context_mut());
                     let arguments = if property {
                         vec![
                             message.clone().into(),
@@ -2138,6 +2502,7 @@ impl BoaPageRealm {
                         self.state.borrow_mut().passive_listener_depth += 1;
                     }
                     let res = self.call_listener_object(&callback, &this, &arguments);
+                    enter_world_in_context(prev_world, self.engine.context_mut());
                     if passive {
                         let mut data = self.state.borrow_mut();
                         data.passive_listener_depth = data.passive_listener_depth.saturating_sub(1);
@@ -2195,6 +2560,8 @@ impl BoaPageRealm {
     }
 
     fn clear_work(&mut self) {
+        enter_world_with_shared(&self.state, 0, self.engine.context_mut());
+        dom_exception::clear_extra_realms(self.engine.context_mut());
         if let Some(registry) = &self.automation_registry {
             automation::clear(registry);
         }
@@ -2525,22 +2892,25 @@ impl BoaPageRealm {
                     let l = &mut data.listeners[id];
                     let prop = l.property;
                     let passive = l.passive;
+                    let wid = l.world_id;
                     let cb = if l.once {
                         l.callback.take()
                     } else {
                         l.callback.clone()
                     };
-                    cb.map(|callback| (callback, prop, passive))
+                    cb.map(|callback| (callback, prop, passive, wid))
                 };
-                let Some((callback, property, passive)) = listener else {
+                let Some((callback, property, passive, wid)) = listener else {
                     continue;
                 };
+                let prev_world = enter_world_in_context(wid, self.engine.context_mut());
                 let this = self.engine.context().global_object().into();
                 if passive {
                     self.state.borrow_mut().passive_listener_depth += 1;
                 }
                 let res =
                     self.call_listener_object(&callback, &this, std::slice::from_ref(&wrapper));
+                enter_world_in_context(prev_world, self.engine.context_mut());
                 if passive {
                     let mut data = self.state.borrow_mut();
                     data.passive_listener_depth = data.passive_listener_depth.saturating_sub(1);
@@ -3111,6 +3481,8 @@ impl BoaPageRealm {
             SelectedTask::Timer(mut timer) => {
                 match modern::begin_host_task(self.engine.context_mut(), &mut timer.permit) {
                     Ok(()) => {
+                        let prev_world =
+                            enter_world_in_context(timer.world_id, self.engine.context_mut());
                         self.state.borrow_mut().timer_nesting = Some(timer.nesting);
                         let this = self.engine.context().global_object().into();
                         let call_res = if timer.is_raf {
@@ -3119,6 +3491,7 @@ impl BoaPageRealm {
                         } else {
                             self.call_function(&timer.callback, &this, &timer.arguments)
                         };
+                        enter_world_in_context(prev_world, self.engine.context_mut());
                         if let Err(error) = call_res {
                             self.execution_failure("Timer callback", error, &mut reply.errors);
                         }
@@ -3156,6 +3529,7 @@ impl BoaPageRealm {
                                                 nesting: timer.nesting.saturating_add(1),
                                                 repeat_ms: Some(repeat_ms),
                                                 is_raf: false,
+                                                world_id: timer.world_id,
                                                 permit,
                                                 callback: timer.callback.clone(),
                                                 arguments: timer.arguments.clone(),
@@ -3336,22 +3710,26 @@ impl BoaPageRealm {
                 let l = &mut data.listeners[id];
                 let prop = l.property;
                 let passive = l.passive;
+                let wid = l.world_id;
                 let cb = if l.once {
                     l.callback.take()
                 } else {
                     l.callback.clone()
                 };
-                cb.map(|callback| (callback, prop, passive))
+                cb.map(|callback| (callback, prop, passive, wid))
             };
-            if let Some((callback, property, passive)) = listener {
-                if self.invoke(
+            if let Some((callback, property, passive, wid)) = listener {
+                let prev_world = enter_world_in_context(wid, self.engine.context_mut());
+                let canceled = self.invoke(
                     callback,
                     target,
                     &format!("event:{event}"),
                     property,
                     passive,
                     errors,
-                ) {
+                );
+                enter_world_in_context(prev_world, self.engine.context_mut());
+                if canceled {
                     let mut data = self.state.borrow_mut();
                     if matches!(data.host.events[event].kind, Kind::Click | Kind::Submit) {
                         data.host.events[event].canceled = true;

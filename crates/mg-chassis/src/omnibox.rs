@@ -555,6 +555,8 @@ impl crate::Browser {
         if let Some(session) = self.page_session.take() {
             session.cancel();
         }
+        self.automation_only_session = false;
+        self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.console_detached_dom = false;
         self.queued_console.clear();
@@ -600,6 +602,11 @@ impl crate::Browser {
         self.edit_versions.clear();
         self.devtools.new_navigation_to(&canonical);
         self.devtools.set_page_source(&html);
+        self.raw_page_html = if html.len() <= mg_sparkle::js_browser::MAX_SOURCE {
+            html.clone()
+        } else {
+            String::new()
+        };
         self.document = mg_sparkle::document::parse(&html, &canonical);
         self.page_url = canonical.clone();
         self.page_mime = "text/html".into();
@@ -609,6 +616,21 @@ impl crate::Browser {
         self.style_cache.clear();
         self.last_load_ok = true;
         self.status = format!("Internal page · {canonical}");
+        if self.cdp_enabled {
+            let at = std::time::Instant::now();
+            self.cdp_events.push(crate::cdp_browser::Event::Started);
+            self.cdp_events.push(crate::cdp_browser::Event::Committed {
+                frame: crate::cdp_browser::frame(self),
+            });
+            self.cdp_events
+                .push(crate::cdp_browser::Event::DomContentLoaded { at });
+            self.cdp_events
+                .push(crate::cdp_browser::Event::LoadComplete { at });
+            self.cdp_events.push(crate::cdp_browser::Event::Finished {
+                generation: self.generation,
+                error: None,
+            });
+        }
         self.next_doc_group_id += 1;
         let doc_group = self.next_doc_group_id;
         self.active_doc_group_id = doc_group;

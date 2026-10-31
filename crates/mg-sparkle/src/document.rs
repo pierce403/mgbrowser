@@ -275,6 +275,130 @@ impl Document {
             .collect()
     }
 
+    /// Select the preferred image URL reference for an `<img>` element, honoring
+    /// enclosing `<picture><source srcset type media>` and `<img srcset>` while
+    /// skipping unsupported image formats (such as WebP/AVIF) when a supported
+    /// PNG/JPEG/GIF/SVG candidate or `<img src>` fallback is available.
+    pub fn effective_image_reference(
+        &self,
+        img_id: usize,
+        viewport_w: f32,
+        dpr: f32,
+    ) -> Option<String> {
+        let img = self.nodes.get(img_id)?;
+        if img.tag != "img" {
+            return None;
+        }
+        let viewport_w = viewport_w.max(1.0);
+        let dpr = dpr.clamp(0.5, 4.0);
+        let raw_src = img.attr("src").map(str::trim).filter(|s| !s.is_empty());
+        let src_is_supported = raw_src.is_some_and(|s| !is_likely_unsupported_image_url(s));
+
+        let parent_id = img.parent;
+        if parent_id != img_id
+            && let Some(parent) = self.nodes.get(parent_id)
+            && parent.tag == "picture"
+        {
+            for &sibling_id in &parent.children {
+                if sibling_id == img_id {
+                    break;
+                }
+                let Some(source) = self.nodes.get(sibling_id) else {
+                    continue;
+                };
+                if source.tag != "source" {
+                    continue;
+                }
+                if let Some(mime_attr) = source.attr("type")
+                    && !is_supported_image_mime(mime_attr)
+                {
+                    continue;
+                }
+                if let Some(media) = source.attr("media")
+                    && !picture_media_matches(media, viewport_w)
+                {
+                    continue;
+                }
+                let Some(srcset) = source.attr("srcset") else {
+                    continue;
+                };
+                let sizes_w = source
+                    .attr("sizes")
+                    .or_else(|| img.attr("sizes"))
+                    .map_or(viewport_w, |s| parse_sizes_width(s, viewport_w));
+                if let Some(chosen) = select_srcset_candidate(srcset, sizes_w, dpr, true) {
+                    return Some(chosen);
+                }
+            }
+        }
+
+        if let Some(srcset) = img.attr("srcset") {
+            let sizes_w = img
+                .attr("sizes")
+                .map_or(viewport_w, |s| parse_sizes_width(s, viewport_w));
+            if let Some(chosen) = select_srcset_candidate(srcset, sizes_w, dpr, src_is_supported) {
+                return Some(chosen);
+            }
+        }
+
+        raw_src.map(str::to_owned)
+    }
+
+    /// Return all candidate URL references declared for an `<img>` (across
+    /// enclosing `<picture><source>` siblings, `<img srcset>`, and `<img src>`),
+    /// bounded to 32 candidates.
+    pub fn all_image_candidate_references(&self, img_id: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(img) = self.nodes.get(img_id) else {
+            return out;
+        };
+        if img.tag != "img" {
+            return out;
+        }
+        let parent_id = img.parent;
+        if parent_id != img_id
+            && let Some(parent) = self.nodes.get(parent_id)
+            && parent.tag == "picture"
+        {
+            for &sibling_id in &parent.children {
+                if sibling_id == img_id || out.len() >= 32 {
+                    break;
+                }
+                let Some(source) = self.nodes.get(sibling_id) else {
+                    continue;
+                };
+                if source.tag != "source" {
+                    continue;
+                }
+                if let Some(mime_attr) = source.attr("type")
+                    && !is_supported_image_mime(mime_attr)
+                {
+                    continue;
+                }
+                if let Some(srcset) = source.attr("srcset") {
+                    for (url, _) in parse_srcset_candidates(srcset) {
+                        if out.len() < 32 {
+                            out.push(url);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(srcset) = img.attr("srcset") {
+            for (url, _) in parse_srcset_candidates(srcset) {
+                if out.len() < 32 {
+                    out.push(url);
+                }
+            }
+        }
+        if out.len() < 32
+            && let Some(src) = img.attr("src").map(str::trim).filter(|s| !s.is_empty())
+        {
+            out.push(src.to_owned());
+        }
+        out
+    }
+
     /// Return the first matching descendant in tree order. The root itself is
     /// excluded, as with DOM Element.querySelector. Matching may use ancestors
     /// outside the root's subtree, as ordinary descendant selectors do.
@@ -1997,6 +2121,314 @@ fn entity_char(value: u32) -> char {
     char::from_u32(value).unwrap_or('\u{fffd}')
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SrcsetDescriptor {
+    Density(f32),
+    Width(u32),
+}
+
+fn is_supported_image_mime(mime: &str) -> bool {
+    let essence = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        essence.as_str(),
+        "" | "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/svg+xml"
+    )
+}
+
+fn is_likely_unsupported_image_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.len() >= 5 && trimmed.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+        let rest = &trimmed[5..];
+        let meta = rest.split(',').next().unwrap_or("");
+        let mime = meta.split(';').next().unwrap_or("");
+        return !is_supported_image_mime(mime);
+    }
+    let no_frag = trimmed.split('#').next().unwrap_or(trimmed);
+    let (path, query) = no_frag
+        .split_once('?')
+        .map_or((no_frag, ""), |(p, q)| (p, q));
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.ends_with(".webp")
+        || lower_path.ends_with(".avif")
+        || lower_path.ends_with(".jxl")
+        || lower_path.ends_with(".heic")
+        || lower_path.ends_with(".heif")
+        || lower_path.ends_with(".bmp")
+        || lower_path.ends_with(".ico")
+        || lower_path.ends_with(".tif")
+        || lower_path.ends_with(".tiff")
+    {
+        return true;
+    }
+    let lower_q = query.to_ascii_lowercase();
+    lower_q.split('&').any(|kv| {
+        matches!(
+            kv,
+            "format=webp" | "format=avif" | "fm=webp" | "fm=avif" | "f=webp" | "f=avif"
+        )
+    })
+}
+
+fn picture_media_matches(media: &str, viewport_w: f32) -> bool {
+    let trimmed = media.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    trimmed
+        .split(',')
+        .take(16)
+        .any(|item| picture_single_media_matches(item.trim(), viewport_w))
+}
+
+fn picture_single_media_matches(query: &str, viewport_w: f32) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let lower = query.to_ascii_lowercase();
+    let (negated, mut rest) = if let Some(after) = lower
+        .strip_prefix("not")
+        .filter(|s| s.starts_with(char::is_whitespace) || s.starts_with('('))
+    {
+        (true, after.trim_start())
+    } else if let Some(after) = lower
+        .strip_prefix("only")
+        .filter(|s| s.starts_with(char::is_whitespace))
+    {
+        (false, after.trim_start())
+    } else {
+        (false, lower.as_str())
+    };
+    let mut matched = true;
+    if !rest.starts_with('(') {
+        let token_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '(')
+            .unwrap_or(rest.len());
+        let media_type = &rest[..token_end];
+        match media_type {
+            "all" | "screen" => {}
+            _ => matched = false,
+        }
+        rest = rest[token_end..].trim_start();
+        if let Some(after_and) = rest
+            .strip_prefix("and")
+            .filter(|s| s.starts_with(char::is_whitespace) || s.starts_with('('))
+        {
+            rest = after_and.trim_start();
+        }
+    }
+    while !rest.is_empty() && matched {
+        let Some(open) = rest.find('(') else {
+            break;
+        };
+        let Some(close_rel) = rest[open + 1..].find(')') else {
+            matched = false;
+            break;
+        };
+        let cond = rest[open + 1..open + 1 + close_rel].trim();
+        if let Some((prop, val)) = cond.split_once(':') {
+            let prop = prop.trim();
+            let px = parse_media_px(val.trim(), viewport_w);
+            match (prop, px) {
+                ("min-width", Some(min_w)) => matched &= viewport_w >= min_w,
+                ("max-width", Some(max_w)) => matched &= viewport_w <= max_w,
+                ("width", Some(exact_w)) => matched &= (viewport_w - exact_w).abs() < 0.5,
+                ("prefers-color-scheme", _) => {
+                    if val.trim() == "dark" {
+                        matched = false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = rest[open + 1 + close_rel + 1..].trim_start();
+        if let Some(after_and) = rest
+            .strip_prefix("and")
+            .filter(|s| s.starts_with(char::is_whitespace) || s.starts_with('('))
+        {
+            rest = after_and.trim_start();
+        }
+    }
+    if negated { !matched } else { matched }
+}
+
+fn parse_media_px(value: &str, viewport_w: f32) -> Option<f32> {
+    let v = value.trim().to_ascii_lowercase();
+    if let Some(num) = v.strip_suffix("px") {
+        num.trim().parse::<f32>().ok()
+    } else if let Some(num) = v.strip_suffix("rem").or_else(|| v.strip_suffix("em")) {
+        num.trim().parse::<f32>().ok().map(|n| n * 16.0)
+    } else if let Some(num) = v.strip_suffix("vw") {
+        num.trim()
+            .parse::<f32>()
+            .ok()
+            .map(|n| n * 0.01 * viewport_w)
+    } else {
+        v.parse::<f32>().ok()
+    }
+}
+
+fn parse_sizes_width(sizes: &str, viewport_w: f32) -> f32 {
+    for entry in sizes.split(',').take(16) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        if let Some(close) = entry.rfind(')') {
+            let cond = entry[..=close].trim();
+            let size_token = entry[close + 1..].trim();
+            if picture_single_media_matches(cond, viewport_w)
+                && let Some(px) = parse_media_px(size_token, viewport_w)
+                && px > 0.0
+            {
+                return px;
+            }
+        } else if let Some(px) = parse_media_px(entry, viewport_w)
+            && px > 0.0
+        {
+            return px;
+        }
+    }
+    viewport_w
+}
+
+fn parse_srcset_candidates(srcset: &str) -> Vec<(String, SrcsetDescriptor)> {
+    let mut out = Vec::new();
+    let bytes = srcset.as_bytes();
+    let len = bytes.len().min(32 * 1024);
+    let mut i = 0usize;
+    while i < len && out.len() < 32 {
+        while i < len && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+        let url_start = i;
+        while i < len && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut raw_url = &srcset[url_start..i];
+        let mut desc_str = "";
+        if raw_url.ends_with(',') {
+            raw_url = raw_url.trim_end_matches(',');
+        } else {
+            while i < len && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let desc_start = i;
+            let mut paren = 0usize;
+            while i < len {
+                match bytes[i] {
+                    b'(' => paren += 1,
+                    b')' => paren = paren.saturating_sub(1),
+                    b',' if paren == 0 => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+            desc_str = srcset[desc_start..i].trim();
+            if i < len && bytes[i] == b',' {
+                i += 1;
+            }
+        }
+        if raw_url.is_empty() {
+            continue;
+        }
+        let descriptor = parse_srcset_descriptor(desc_str);
+        if let Some(d) = descriptor {
+            out.push((raw_url.to_owned(), d));
+        }
+    }
+    out
+}
+
+fn parse_srcset_descriptor(desc: &str) -> Option<SrcsetDescriptor> {
+    let d = desc.trim();
+    if d.is_empty() {
+        return Some(SrcsetDescriptor::Density(1.0));
+    }
+    // Ignore multiple unknown tokens? HTML5 rejects invalid descriptors; handle single w or x token.
+    if d.split_ascii_whitespace().count() > 1 {
+        return None;
+    }
+    let lower = d.to_ascii_lowercase();
+    if let Some(w_str) = lower.strip_suffix('w') {
+        let w = w_str.parse::<u32>().ok().filter(|&w| w > 0)?;
+        Some(SrcsetDescriptor::Width(w))
+    } else if let Some(x_str) = lower.strip_suffix('x') {
+        let x = x_str
+            .parse::<f32>()
+            .ok()
+            .filter(|&x| x.is_finite() && x > 0.0)?;
+        Some(SrcsetDescriptor::Density(x))
+    } else {
+        None
+    }
+}
+
+fn select_srcset_candidate(
+    srcset: &str,
+    sizes_w: f32,
+    dpr: f32,
+    has_fallback: bool,
+) -> Option<String> {
+    let candidates = parse_srcset_candidates(srcset);
+    if candidates.is_empty() {
+        return None;
+    }
+    let supported: Vec<&(String, SrcsetDescriptor)> = candidates
+        .iter()
+        .filter(|(u, _)| !is_likely_unsupported_image_url(u))
+        .collect();
+    let pool: Vec<&(String, SrcsetDescriptor)> = if !supported.is_empty() {
+        supported
+    } else if has_fallback {
+        return None;
+    } else {
+        candidates.iter().collect()
+    };
+
+    // Prefer candidates within Mg's bounded 1M-pixel small-image decoder cap (~1280w max)
+    // when at least one such candidate exists.
+    let within_cap: Vec<&(String, SrcsetDescriptor)> = pool
+        .iter()
+        .copied()
+        .filter(|(_, d)| match d {
+            SrcsetDescriptor::Width(w) => *w <= 1280,
+            SrcsetDescriptor::Density(x) => *x <= 2.0,
+        })
+        .collect();
+    let active = if within_cap.is_empty() {
+        &pool
+    } else {
+        &within_cap
+    };
+    let effective_target_w = sizes_w.clamp(1.0, 1024.0);
+    let density_of = |d: SrcsetDescriptor| match d {
+        SrcsetDescriptor::Density(x) => x,
+        SrcsetDescriptor::Width(w) => (w as f32) / effective_target_w,
+    };
+
+    let mut best_ge: Option<(&str, f32)> = None;
+    let mut best_lt: Option<(&str, f32)> = None;
+    for &&(ref url, desc) in active {
+        let eff = density_of(desc);
+        if eff >= dpr {
+            if best_ge.is_none_or(|(_, prev)| eff < prev) {
+                best_ge = Some((url.as_str(), eff));
+            }
+        } else if best_lt.is_none_or(|(_, prev)| eff > prev) {
+            best_lt = Some((url.as_str(), eff));
+        }
+    }
+    best_ge.or(best_lt).map(|(url, _)| url.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,6 +2882,48 @@ mod tests {
                 ),
                 ("FallbackWoff".to_owned(), "/fonts/mono.woff".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn responsive_picture_and_srcset_skip_unsupported_formats_and_preserve_comma_urls() {
+        let doc = parse(
+            r#"<picture>
+                <source type="image/avif" srcset="/hero.avif 1x, /hero@2x.avif 2x">
+                <source type="image/webp" srcset="/hero.webp 800w">
+                <source media="(max-width: 600px)" srcset="/mobile.png 480w">
+                <source media="(min-width: 601px)" srcset="/cdn/w_400,c_fill/card.jpg 400w, /cdn/w_960,c_fill/card.jpg 960w, /cdn/w_2400,c_fill/card.jpg 2400w">
+                <img id="pic" src="/fallback.png" alt="Hero">
+            </picture>
+            <img id="only-webp-srcset" src="/safe.png" srcset="/a.webp 1x, /b.webp 2x">
+            <img id="density" src="/low.png" srcset="/std.png 1x, /hi.png 2x">"#,
+            "https://example.org/",
+        );
+        let pic = doc.query_selector(0, "#pic").unwrap().unwrap();
+        assert_eq!(
+            doc.effective_image_reference(pic, 1280.0, 1.0).as_deref(),
+            Some("/cdn/w_960,c_fill/card.jpg")
+        );
+        assert_eq!(
+            doc.effective_image_reference(pic, 480.0, 1.0).as_deref(),
+            Some("/mobile.png")
+        );
+        let fallback_img = doc.query_selector(0, "#only-webp-srcset").unwrap().unwrap();
+        assert_eq!(
+            doc.effective_image_reference(fallback_img, 1280.0, 1.0)
+                .as_deref(),
+            Some("/safe.png")
+        );
+        let density = doc.query_selector(0, "#density").unwrap().unwrap();
+        assert_eq!(
+            doc.effective_image_reference(density, 1280.0, 1.0)
+                .as_deref(),
+            Some("/std.png")
+        );
+        assert_eq!(
+            doc.effective_image_reference(density, 1280.0, 2.0)
+                .as_deref(),
+            Some("/hi.png")
         );
     }
 }

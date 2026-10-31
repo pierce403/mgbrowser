@@ -4,7 +4,9 @@ use super::super::linux::{
 use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
 use mg_chassis::scripts::SessionContinuation;
-use mg_sparkle::page_session::automation::{AutomationRequest, AutomationResult};
+use mg_sparkle::page_session::automation::{
+    AutomationRequest, AutomationResult, MAX_AUTOMATION_FRAME_BYTES,
+};
 use mg_sparkle::page_session::console::{ConsoleCommand, ConsoleResult, ConsoleWireEntry};
 use mg_sparkle::page_session::observer::{ObserverInit, ObserverReply};
 use mg_sparkle::page_session::platform::{PlatformCommand, PlatformInit};
@@ -1178,13 +1180,10 @@ impl Worker {
         let deadline = started
             .checked_add(shared.remaining()?)
             .ok_or("Script active deadline exceeds the monotonic clock range")?;
-        let limit = if matches!(
-            request.command,
-            FrameCommand::Init(_) | FrameCommand::Platform(_)
-        ) {
-            INPUT_LIMIT
-        } else {
-            MAX_EVENT_BYTES
+        let limit = match request.command {
+            FrameCommand::Init(_) | FrameCommand::Platform(_) => INPUT_LIMIT,
+            FrameCommand::Automation(_) => MAX_AUTOMATION_FRAME_BYTES,
+            _ => MAX_EVENT_BYTES,
         };
         let (init_plat, init_seed) = self
             .init_platform
@@ -2088,7 +2087,12 @@ fn child_loop_for(
             return Ok(());
         };
         let (event, _, _, _) = decode_request_frame_full(&payload, legacy)?;
-        if !matches!(event.command, FrameCommand::Platform(_)) && payload.len() > MAX_EVENT_BYTES {
+        let event_limit = match event.command {
+            FrameCommand::Platform(_) => INPUT_LIMIT,
+            FrameCommand::Automation(_) if automation_enabled => MAX_AUTOMATION_FRAME_BYTES,
+            _ => MAX_EVENT_BYTES,
+        };
+        if payload.len() > event_limit {
             return Err("Script-session event payload exceeds 64 KiB limit".into());
         }
         if event.version != version
@@ -2286,6 +2290,9 @@ pub fn session_selftest() -> Result<(), String> {
                 source: "1".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         };
@@ -2787,6 +2794,9 @@ mod tests {
                 source: "1".into(),
                 return_by_value: false,
                 group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
             },
             edits: vec![],
         });
@@ -2903,6 +2913,9 @@ mod tests {
             source: format!("{}{}", "\0".repeat(padding / 6), "x".repeat(padding % 6)),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         };
         assert_eq!(
             encoded_size(&input.operation, MAX_OPERATION_BYTES).unwrap(),
@@ -2923,8 +2936,8 @@ mod tests {
         }
         assert_eq!(left, 0);
         input.validate().unwrap();
-        let bytes = encode_request_frame(&frame, false, MAX_EVENT_BYTES).unwrap();
-        assert!(bytes.len() <= MAX_EVENT_BYTES);
+        let bytes = encode_request_frame(&frame, false, MAX_AUTOMATION_FRAME_BYTES).unwrap();
+        assert!(bytes.len() <= MAX_AUTOMATION_FRAME_BYTES);
         assert_eq!(
             encode_request_frame(&frame, false, bytes.len()).unwrap(),
             bytes
@@ -2950,8 +2963,11 @@ mod tests {
             source: String::new(),
             return_by_value: false,
             group: None,
+            world: None,
+            await_promise: false,
+            user_gesture: false,
         };
-        let base = encode_request_frame(&frame, false, MAX_EVENT_BYTES)
+        let base = encode_request_frame(&frame, false, MAX_AUTOMATION_FRAME_BYTES)
             .unwrap()
             .len();
         let FrameCommand::Automation(input) = &mut frame.command else {
@@ -2960,15 +2976,15 @@ mod tests {
         let Operation::Evaluate { source, .. } = &mut input.operation else {
             unreachable!()
         };
-        *source = "x".repeat(MAX_EVENT_BYTES - base);
+        *source = "x".repeat(MAX_AUTOMATION_FRAME_BYTES - base);
         // Serialization-only boundary: source admission independently rejects
         // this payload; no larger executable source allowance is implied.
         assert!(input.validate().is_err());
         assert_eq!(
-            encode_request_frame(&frame, false, MAX_EVENT_BYTES)
+            encode_request_frame(&frame, false, MAX_AUTOMATION_FRAME_BYTES)
                 .unwrap()
                 .len(),
-            MAX_EVENT_BYTES
+            MAX_AUTOMATION_FRAME_BYTES
         );
         let FrameCommand::Automation(input) = &mut frame.command else {
             unreachable!()
@@ -2976,7 +2992,7 @@ mod tests {
         if let Operation::Evaluate { source, .. } = &mut input.operation {
             source.push('x');
         }
-        assert!(encode_request_frame(&frame, false, MAX_EVENT_BYTES).is_err());
+        assert!(encode_request_frame(&frame, false, MAX_AUTOMATION_FRAME_BYTES).is_err());
     }
 
     #[test]

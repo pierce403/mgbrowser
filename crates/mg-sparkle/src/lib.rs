@@ -12,5 +12,7 @@ pub mod style;
 mod styled_layout;
 mod woff;
 
+pub use woff::brotli_decompress_limited;
+
 pub const USER_AGENT: &str =
     "mgbrowser/0.1 (experimental Rust research browser; +https://mgbrowser.org)";

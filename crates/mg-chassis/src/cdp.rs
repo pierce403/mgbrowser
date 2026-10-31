@@ -21,7 +21,7 @@ use tungstenite::{
 
 const MAX_CLIENTS: usize = 4;
 const MAX_HANDSHAKE: usize = 16 * 1024;
-const MAX_COMMAND: usize = 256 * 1024;
+const MAX_COMMAND: usize = 512 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const MAX_QUEUED_BYTES: u64 = 16 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -58,6 +58,7 @@ pub struct Server {
 struct Shared {
     port: u16,
     stop: AtomicBool,
+    pipe_eof: AtomicBool,
     next_client: AtomicU64,
     pages: Mutex<Vec<PageInfo>>,
     clients: Mutex<HashMap<u64, Client>>,
@@ -67,7 +68,7 @@ struct Shared {
 struct Client {
     output: mpsc::SyncSender<String>,
     queued_bytes: Arc<AtomicU64>,
-    socket: TcpStream,
+    socket: Option<TcpStream>,
     endpoint: Option<Endpoint>,
 }
 
@@ -89,10 +90,11 @@ impl Server {
         listener
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;
-        let (send, commands) = mpsc::sync_channel(64);
+        let (send, commands) = mpsc::sync_channel(512);
         let shared = Arc::new(Shared {
             port,
             stop: AtomicBool::new(false),
+            pipe_eof: AtomicBool::new(false),
             next_client: AtomicU64::new(1),
             pages: Mutex::new(vec![PageInfo {
                 id: "page-1".into(),
@@ -109,6 +111,45 @@ impl Server {
             commands,
             listener: Some(listener),
         })
+    }
+
+    /// Bind a `\0`-delimited UTF-8 JSON pipe transport (e.g. FDs 3 and 4).
+    pub fn bind_pipe(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Self {
+        let (send, commands) = mpsc::sync_channel(512);
+        let (out_tx, out_rx) = mpsc::sync_channel::<String>(256);
+        let queued_bytes = Arc::new(AtomicU64::new(0));
+        let mut initial_clients = HashMap::new();
+        initial_clients.insert(
+            1,
+            Client {
+                output: out_tx,
+                queued_bytes: queued_bytes.clone(),
+                socket: None,
+                endpoint: Some(Endpoint::Browser),
+            },
+        );
+        let shared = Arc::new(Shared {
+            port: 0,
+            stop: AtomicBool::new(false),
+            pipe_eof: AtomicBool::new(false),
+            next_client: AtomicU64::new(2),
+            pages: Mutex::new(Vec::new()),
+            clients: Mutex::new(initial_clients),
+            commands: send,
+        });
+        let read_state = shared.clone();
+        thread::spawn(move || pipe_read_loop(reader, read_state));
+        let write_state = shared.clone();
+        thread::spawn(move || pipe_write_loop(writer, out_rx, queued_bytes, write_state));
+        Self {
+            shared,
+            commands,
+            listener: None,
+        }
+    }
+
+    pub fn pipe_eof(&self) -> bool {
+        self.shared.pipe_eof.load(Ordering::Acquire)
     }
 
     pub fn port(&self) -> u16 {
@@ -176,7 +217,9 @@ impl Server {
         if reserved {
             connection.queued_bytes.fetch_sub(length, Ordering::AcqRel);
         }
-        let _ = connection.socket.shutdown(Shutdown::Both);
+        if let Some(socket) = &connection.socket {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
         clients.remove(&client);
     }
 
@@ -222,7 +265,9 @@ impl Server {
             let stale = matches!(&client.endpoint, Some(Endpoint::Page(target))
                 if !published.iter().any(|page| &page.id == target));
             if stale {
-                let _ = client.socket.shutdown(Shutdown::Both);
+                if let Some(socket) = &client.socket {
+                    let _ = socket.shutdown(Shutdown::Both);
+                }
             }
             !stale
         });
@@ -235,11 +280,94 @@ impl Drop for Server {
         self.shared.stop.store(true, Ordering::Release);
         if let Ok(mut clients) = self.shared.clients.lock() {
             for (_, client) in clients.drain() {
-                let _ = client.socket.shutdown(Shutdown::Both);
+                if let Some(socket) = &client.socket {
+                    let _ = socket.shutdown(Shutdown::Both);
+                }
             }
         }
         if let Some(listener) = self.listener.take() {
             let _ = listener.join();
+        }
+    }
+}
+
+fn pipe_read_loop(mut reader: Box<dyn Read + Send>, shared: Arc<Shared>) {
+    let mut pending = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 8192];
+    'outer: while !shared.stop.load(Ordering::Acquire) {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                let mut start = 0usize;
+                while start < count {
+                    if let Some(rel_zero) = chunk[start..count].iter().position(|&b| b == 0) {
+                        if pending.len() + rel_zero > MAX_COMMAND {
+                            break 'outer;
+                        }
+                        pending.extend_from_slice(&chunk[start..start + rel_zero]);
+                        start += rel_zero + 1;
+                        let Ok(text) = std::str::from_utf8(&pending) else {
+                            break 'outer;
+                        };
+                        let Ok(message) = serde_json::from_str::<Value>(text) else {
+                            break 'outer;
+                        };
+                        pending.clear();
+                        if !message.is_object() {
+                            break 'outer;
+                        }
+                        if shared
+                            .commands
+                            .send(Command {
+                                client: 1,
+                                browser: true,
+                                target: None,
+                                message,
+                            })
+                            .is_err()
+                        {
+                            break 'outer;
+                        }
+                    } else {
+                        let rem = count - start;
+                        if pending.len() + rem > MAX_COMMAND {
+                            break 'outer;
+                        }
+                        pending.extend_from_slice(&chunk[start..count]);
+                        break;
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    shared.pipe_eof.store(true, Ordering::Release);
+    if let Ok(mut clients) = shared.clients.lock() {
+        clients.remove(&1);
+    }
+}
+
+fn pipe_write_loop(
+    mut writer: Box<dyn Write + Send>,
+    output: mpsc::Receiver<String>,
+    queued_bytes: Arc<AtomicU64>,
+    shared: Arc<Shared>,
+) {
+    while let Ok(text) = output.recv() {
+        queued_bytes.fetch_sub(text.len() as u64, Ordering::AcqRel);
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
+        if writer.write_all(text.as_bytes()).is_err()
+            || writer.write_all(&[0u8]).is_err()
+            || writer.flush().is_err()
+        {
+            shared.pipe_eof.store(true, Ordering::Release);
+            if let Ok(mut clients) = shared.clients.lock() {
+                clients.remove(&1);
+            }
+            break;
         }
     }
 }
@@ -272,14 +400,14 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                     continue;
                 };
                 let client = shared.next_client.fetch_add(1, Ordering::Relaxed);
-                let (send, receive) = mpsc::sync_channel(8);
+                let (send, receive) = mpsc::sync_channel(256);
                 let queued_bytes = Arc::new(AtomicU64::new(0));
                 clients.insert(
                     client,
                     Client {
                         output: send,
                         queued_bytes: queued_bytes.clone(),
-                        socket: control_socket,
+                        socket: Some(control_socket),
                         endpoint: None,
                     },
                 );
@@ -547,7 +675,7 @@ fn handle_client(
                 "webSocketDebuggerUrl": format!("ws://{address}/devtools/browser/browser-1"),
                 "mgbrowserProtocol": "Experimental CDP subset; no Chromium or V8 engine",
             }),
-            "/json" | "/json/list" => {
+            "/json" | "/json/" | "/json/list" | "/json/list/" => {
                 json!(pages.iter().map(|page| json!({
             "id": page.id, "type": "page", "title": page.title, "url": page.url,
             "description": "mgbrowser experimental HTML-flow page",
@@ -599,7 +727,7 @@ fn websocket_loop(
     let mut last_command = Instant::now();
     while !shared.stop.load(Ordering::Acquire) && last_command.elapsed() < Duration::from_secs(300)
     {
-        for _ in 0..8 {
+        for _ in 0..64 {
             let Ok(text) = output.try_recv() else {
                 break;
             };
