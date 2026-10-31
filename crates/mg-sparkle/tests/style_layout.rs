@@ -249,7 +249,6 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
         "grid-template-columns:repeat(auto-fit,20px)",
         "grid-template-columns:[named] 1fr",
         "grid-template-columns:fit-content(10px)",
-        "grid-template-areas:\"a a\"",
         "grid-template-columns:min(20%, 1px)",
     ] {
         let (doc, styles, report) =
@@ -265,6 +264,30 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
             "{rule}"
         );
     }
+    let (doc, styles, report) = compute(
+        "<div id=g style='display:grid;grid-template-areas:\"notice notice\" \"sidebar main\"'>\
+         <div id=s style='grid-area:sidebar'></div>\
+         <div id=m style='grid-area:main'></div>\
+         <div id=n style='grid-area:notice'></div>\
+         </div>",
+    );
+    assert!(report.entries.is_empty(), "{report:?}");
+    let g = at(&doc, &styles, "#g");
+    assert!(!g.layout.unsupported);
+    assert_eq!(g.layout.grid.as_ref().unwrap().template_rows.len(), 2);
+    assert_eq!(g.layout.grid.as_ref().unwrap().template_columns.len(), 2);
+    assert_eq!(
+        at(&doc, &styles, "#s").layout.grid_row,
+        [GridLine::Line(2), GridLine::Line(3)]
+    );
+    assert_eq!(
+        at(&doc, &styles, "#s").layout.grid_column,
+        [GridLine::Line(1), GridLine::Line(2)]
+    );
+    assert_eq!(
+        at(&doc, &styles, "#n").layout.grid_column,
+        [GridLine::Line(1), GridLine::Line(3)]
+    );
     for rule in [
         "width:min(50%, 2px)",
         "flex-basis:min-content",

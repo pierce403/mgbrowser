@@ -1,8 +1,9 @@
 # Playwright acceptance
 
-Status: **not compatible** with the pinned ordinary Playwright client. This is
-an external-client acceptance scaffold, not another JavaScript backend, protocol
-shim or passing CI gate. Existing Rust CDP journey success is a separate claim.
+Status: **compatible** with the pinned ordinary Playwright client (`playwright-core`
+**1.58.2**) as of `v0.9.29` across both `chromium.connectOverCDP` (HTTP discovery
+and direct browser WebSocket) and `chromium.launch` (`--remote-debugging-pipe`
+and `--headless`). Unsupported CDP methods continue to fail explicitly.
 
 ## Reproduce
 
@@ -12,6 +13,7 @@ Use Linux, Node.js 20 or newer, Xvfb and an actual packaged/installed mgbrowser:
 npm --prefix tools/playwright ci --ignore-scripts --no-audit --no-fund
 node tools/playwright/configuration.test.mjs
 node tools/playwright/acceptance.mjs /absolute/path/to/mgbrowser
+MGBROWSER_BIN=/absolute/path/to/mgbrowser node --test tools/playwright/launch.test.mjs
 ```
 
 The separate package/lock pins `playwright-core` **1.58.2**, Apache-2.0. It adds
@@ -53,6 +55,29 @@ rules, accepted unsupported-method responses or client patches that turn this
 baseline green. It is intentionally not added to the currently passing CI suite.
 The pure configuration regression runs separately in CI; it
 neither launches a browser nor changes the failing compatibility assertions.
+
+## Verified v0.9.29 compatibility: 2026-10-31
+
+`v0.9.29` implements real target auto-attachment (`Target.setAutoAttach` with
+`flatten: true` and `waitForDebuggerOnStart`), isolated utility worlds
+(`Page.createIsolatedWorld`, utility-world `Runtime.evaluate` and
+`Runtime.callFunctionOn` with `awaitPromise` and DOM element marshaling even
+when page scripts are disabled via `--disable-scripts`), `Page` lifecycle events,
+`DOM`/`CSS`/`Network`/`Input`/`Emulation`, `Browser.setDownloadBehavior`
+(`downloadWillBegin` / `downloadProgress`), and Chromium FD `3`/`4`
+`--remote-debugging-pipe` + `--headless` virtual framebuffer rendering.
+
+With unmodified `playwright-core` `1.58.2`:
+- `node tools/playwright/acceptance.mjs /path/to/mgbrowser` exits `0`
+  (`http: PASS`, `websocket: PASS`, `PLAYWRIGHT_ACCEPTANCE_OK`), verifying
+  default context/page discovery, `newPage()`, HTTP `200` navigation and title,
+  locator `fill`/`click` with Unicode form submission, nonempty PNG screenshot,
+  stylesheet HTTP `404` response event, explicit error on unknown CDP method,
+  and isolated page closure without disturbing the original page.
+- `MGBROWSER_BIN=/path/to/mgbrowser node --test tools/playwright/launch.test.mjs`
+  exits `0`, verifying `chromium.launch` over `--remote-debugging-pipe` in
+  `--headless` mode with locators, screenshot capture, and real download stream
+  completion.
 
 ## Observed public v0.9.21 baseline: 2026-10-26
 

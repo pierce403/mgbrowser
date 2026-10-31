@@ -1452,7 +1452,16 @@ impl Layout<'_, '_> {
 
     fn is_aspect_ratio_only_svg(&self, id: usize) -> bool {
         let node = &self.document.nodes[id];
-        if node.tag != "img" || node.has("width") || node.has("height") {
+        if node.has("width") || node.has("height") {
+            return false;
+        }
+        if node.tag == "svg" {
+            return node
+                .attributes
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("viewbox"));
+        }
+        if node.tag != "img" {
             return false;
         }
         let Some(url) = self.image_url(id) else {
@@ -1723,7 +1732,11 @@ impl Layout<'_, '_> {
         } else if self.document.nodes[id].tag == "#text" {
             let mut tokens = Vec::new();
             self.tokens(id, &mut tokens, depth + 1);
-            self.flow_tokens::<false>(
+            let saved_floats = (
+                std::mem::take(&mut self.floats),
+                std::mem::replace(&mut self.last_float_top, 0.0),
+            );
+            let h = self.flow_tokens::<false>(
                 id,
                 0.0,
                 0.0,
@@ -1731,16 +1744,28 @@ impl Layout<'_, '_> {
                 definite_content_height,
                 tokens,
                 depth + 1,
-            )
+            );
+            let float_bottom = self.floats.iter().map(|f| f.y + f.h).fold(0.0f32, f32::max);
+            self.floats = saved_floats.0;
+            self.last_float_top = saved_floats.1;
+            h.max(float_bottom)
         } else {
-            self.flow::<false>(
+            let saved_floats = (
+                std::mem::take(&mut self.floats),
+                std::mem::replace(&mut self.last_float_top, 0.0),
+            );
+            let h = self.flow::<false>(
                 id,
                 0.0,
                 0.0,
                 content_width,
                 definite_content_height,
                 depth + 1,
-            )
+            );
+            let float_bottom = self.floats.iter().map(|f| f.y + f.h).fold(0.0f32, f32::max);
+            self.floats = saved_floats.0;
+            self.last_float_top = saved_floats.1;
+            h.max(float_bottom)
         };
         if self.exhausted {
             return None;
@@ -1785,6 +1810,7 @@ impl Layout<'_, '_> {
         {
             return None;
         }
+        let saved_floats = (self.floats.clone(), self.last_float_top);
         let (w, h) = self.block_layout::<false>(
             id,
             0.0,
@@ -1794,6 +1820,8 @@ impl Layout<'_, '_> {
             forced_border_width,
             depth,
         );
+        self.floats = saved_floats.0;
+        self.last_float_top = saved_floats.1;
         (!self.exhausted).then_some((w, h.max(0.0)))
     }
     fn line_height(&self, node: usize) -> f32 {
@@ -2057,15 +2085,19 @@ impl Layout<'_, '_> {
             );
         }
         if self.styles[id].layout.box_sizing == crate::style::BoxSizing::BorderBox {
-            let (_, p) = self.edges(id, basis);
+            let (m, p) = self.edges(id, basis);
             let horizontal = p[1] + p[3];
             let vertical = p[0] + p[2];
-            let width = self.styles[id]
+            let explicit_width = self.styles[id]
                 .width
                 .resolve(basis)
                 .map(|n| (n - horizontal).max(0.0));
             let height = height_length(self.styles[id].height, containing_height)
                 .map(|n| (n - vertical).max(0.0));
+            let width = explicit_width.or_else(|| {
+                (height.is_none() && basis > 0.0 && self.is_aspect_ratio_only_svg(id))
+                    .then_some((basis - m[1] - m[3] - horizontal).max(0.0))
+            });
             let (natural_w, natural_h) = if width.is_some() && height.is_some() {
                 (0.0, 0.0)
             } else {
@@ -2114,14 +2146,22 @@ impl Layout<'_, '_> {
             let h = (constrain_height(s, h + vertical, containing_height) - vertical).max(0.0);
             return (w, h);
         }
-        let width = self.styles[id].width.resolve(basis);
+        let explicit_width = self.styles[id].width.resolve(basis);
         let height = height_length(self.styles[id].height, containing_height);
-        if let (Some(width), Some(height)) = (width, height) {
+        if let (Some(width), Some(height)) = (explicit_width, height) {
             return (
                 width.clamp(0.0, MAX_EXTENT),
                 constrain_height(&self.styles[id], height, containing_height),
             );
         }
+        let width = explicit_width.or_else(|| {
+            if height.is_none() && basis > 0.0 && self.is_aspect_ratio_only_svg(id) {
+                let (m, p) = self.edges(id, basis);
+                Some((basis - m[1] - m[3] - p[1] - p[3]).max(0.0))
+            } else {
+                None
+            }
+        });
         let (default_w, default_h) =
             self.natural_replaced_size(id, width != Some(0.0) && height != Some(0.0));
         let node = &self.document.nodes[id];
@@ -4024,8 +4064,13 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> f32 {
         if self.styles[id].layout.width_max_content && !self.is_replaced(id) {
-            self.block_layout::<false>(id, 0.0, 0.0, width, containing_height, None, depth + 1)
-                .0
+            let saved_floats = (self.floats.clone(), self.last_float_top);
+            let w = self
+                .block_layout::<false>(id, 0.0, 0.0, width, containing_height, None, depth + 1)
+                .0;
+            self.floats = saved_floats.0;
+            self.last_float_top = saved_floats.1;
+            w
         } else if self.is_structured_button(id) {
             self.inline_button::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
@@ -4605,6 +4650,10 @@ impl Layout<'_, '_> {
         self.scene.border_for(id, r);
         self.decorate(id, r, padding);
         let children_start = self.scene.mark();
+        let saved_floats = (
+            std::mem::take(&mut self.floats),
+            std::mem::replace(&mut self.last_float_top, content.y),
+        );
         match self.styles[id].display {
             display if is_format(display) => {
                 formatting::run::<true>(
@@ -4649,6 +4698,8 @@ impl Layout<'_, '_> {
                 );
             }
         }
+        self.floats = saved_floats.0;
+        self.last_float_top = saved_floats.1;
         formatting::record_abspos_children(self, id, content);
         if let Some(clip) = self.clip_for(id, r) {
             self.scene.clip(children_start, clip);

@@ -199,13 +199,19 @@ fn serialize(
     if parent.is_some_and(|parent| node.parent != parent) {
         return Err("Inline SVG contains an inconsistent DOM parent".into());
     }
+    let is_computed = matches!(paint, PaintSource::Computed(_));
     if node.tag == "#text" {
         if !node.children.is_empty() || !node.attributes.is_empty() {
             return Err("Inline SVG text node has unexpected content".into());
         }
-        if parent
-            .is_some_and(|parent| matches!(document.nodes[parent].tag.as_str(), "title" | "desc"))
-        {
+        if parent.is_some_and(|parent| {
+            matches!(document.nodes[parent].tag.as_str(), "title" | "desc")
+                || (is_computed && document.nodes[parent].tag == "metadata")
+        }) {
+            if is_computed && parent.is_some_and(|parent| document.nodes[parent].tag == "metadata")
+            {
+                return Ok(());
+            }
             return output.escaped(&node.text);
         }
         if node.text.chars().all(char::is_whitespace) {
@@ -213,7 +219,7 @@ fn serialize(
         }
         return Err("Inline SVG text is supported only in title or description".into());
     }
-    if !matches!(
+    let allowed_tag = matches!(
         node.tag.as_str(),
         "svg"
             | "g"
@@ -226,18 +232,26 @@ fn serialize(
             | "polygon"
             | "title"
             | "desc"
-    ) {
+    ) || (is_computed
+        && matches!(node.tag.as_str(), "defs" | "symbol" | "metadata"));
+    if !allowed_tag {
         return Err("Unsupported inline SVG element; only simple shapes are supported".into());
     }
     if let Some(parent) = parent {
         match document.nodes[parent].tag.as_str() {
             "svg" | "g" => {}
+            "defs" | "symbol" if is_computed => {}
+            "metadata" if is_computed => return Ok(()),
             "title" | "desc" => {
                 return Err("Inline SVG title or description contains an element".into());
             }
-            _ if matches!(node.tag.as_str(), "title" | "desc") => {}
+            _ if matches!(node.tag.as_str(), "title" | "desc")
+                || (is_computed && node.tag == "metadata") => {}
             _ => return Err("Inline SVG shape contains unsupported element children".into()),
         }
+    }
+    if is_computed && node.tag == "metadata" {
+        return Ok(());
     }
     if !node.text.is_empty() {
         return Err("Inline SVG element has unexpected direct text".into());
@@ -280,20 +294,27 @@ fn serialize(
             } else {
                 " visibility=\"hidden\""
             })?;
+            if parent.is_some()
+                && node.attr("opacity").is_none()
+                && style.opacity.is_finite()
+                && (0.0..1.0).contains(&style.opacity)
+            {
+                output.push(&format!(" opacity=\"{}\"", style.opacity))?;
+            }
         }
         #[cfg(test)]
         PaintSource::Original(_) => {}
     }
     for (name, value) in &node.attributes {
-        attribute(name, value)?;
+        attribute(name, value, is_computed)?;
         if parent.is_none() && matches!(name.as_str(), "xmlns" | "color") {
             continue;
         }
         if parent.is_none() && viewport.is_some() && matches!(name.as_str(), "width" | "height") {
             continue;
         }
-        if matches!(paint, PaintSource::Computed(_))
-            && matches!(
+        if is_computed
+            && (matches!(
                 name.as_str(),
                 "color"
                     | "fill"
@@ -302,7 +323,11 @@ fn serialize(
                     | "stroke-opacity"
                     | "display"
                     | "visibility"
-            )
+                    | "xmlns:xlink"
+                    | "xmlns:svg"
+                    | "xml:space"
+                    | "xml:lang"
+            ) || name.eq_ignore_ascii_case("style"))
         {
             continue;
         }
@@ -335,7 +360,31 @@ fn serialize(
     output.push(">")
 }
 
-fn attribute(name: &str, value: &str) -> Result<(), String> {
+fn attribute(name: &str, value: &str, is_computed: bool) -> Result<(), String> {
+    if is_computed {
+        if value.len() > MAX_ATTRIBUTE {
+            return Err("Inline SVG attribute name or size is unsupported".into());
+        }
+        if value.contains('\0') {
+            return Err("Inline SVG contains an invalid XML character".into());
+        }
+        if (name == "xmlns:xlink" && value == "http://www.w3.org/1999/xlink")
+            || (name == "xmlns:svg" && value == SVG_NAMESPACE)
+            || (name == "xml:space" && matches!(value, "preserve" | "default"))
+            || (name == "xml:lang"
+                && !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+        {
+            return Ok(());
+        }
+        if name.eq_ignore_ascii_case("style") {
+            // Computed styles already resolved cascade/!important/paint/box sizing;
+            // raw style text is never forwarded into the serialized SVG XML.
+            return Ok(());
+        }
+    }
     if name.is_empty()
         || name.len() > MAX_ATTRIBUTE
         || value.len() > MAX_ATTRIBUTE

@@ -951,7 +951,12 @@ impl State {
             .iter()
             .filter(|entry| entry.level == ConsoleLevel::Warning)
             .count()
-            + self.rendering.entries.len();
+            + self
+                .rendering
+                .entries
+                .iter()
+                .filter(|entry| entry.kind != "css-parse")
+                .count();
         (errors, warnings)
     }
 }
@@ -3716,7 +3721,13 @@ impl Browser {
             }
         }
         if matches!(filter, ConsoleFilter::All | ConsoleFilter::Warnings) {
-            for entry in &self.devtools.rendering.entries {
+            for entry in self
+                .devtools
+                .rendering
+                .entries
+                .iter()
+                .filter(|entry| entry.kind != "css-parse")
+            {
                 let location = match (entry.line, entry.column) {
                     (Some(line), Some(column)) => format!(":{line}:{column}"),
                     _ => String::new(),
@@ -3892,7 +3903,12 @@ impl Browser {
         }
 
         if matches!(filter, ConsoleFilter::All | ConsoleFilter::Warnings) {
-            for (css_idx, entry) in rendering_snapshot.entries.iter().enumerate() {
+            for (css_idx, entry) in rendering_snapshot
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.kind != "css-parse")
+            {
                 let location = match (entry.line, entry.column) {
                     (Some(line), Some(column)) => format!(":{line}:{column}"),
                     _ => String::new(),
@@ -8222,5 +8238,33 @@ mod tests {
             app.activate(Action::DevToolsAppSection(sec));
             app.paint();
         }
+    }
+
+    #[cfg(feature = "chrome")]
+    #[test]
+    fn ignored_css_parse_declarations_do_not_clutter_devtools_console() {
+        let mut app = fixture();
+        app.document = document::parse(
+            "<style>div { font-weignt: normal; padding-top: 1; !important; color: #123456; }</style><div>Slashdot clean console</div>",
+            "https://slashdot.org/",
+        );
+        app.paint();
+        assert!(
+            app.devtools
+                .rendering
+                .entries
+                .iter()
+                .any(|e| e.kind == "css-parse"),
+            "StyleDiagnostics retains css-parse internally for inspection"
+        );
+        let (_errs, warns) = app.devtools.console_counts();
+        assert_eq!(warns, 0, "css-parse must not count as Console warnings");
+        app.toggle_devtools();
+        app.activate(Action::DevToolsTab(Tab::Console));
+        let lines = app.inspector_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("css-parse")),
+            "DevTools Console must not emit css-parse noise: {lines:?}"
+        );
     }
 }

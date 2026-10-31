@@ -848,6 +848,10 @@ fn run_inner<const EMIT: bool>(
                 }
                 Kind::Anonymous { .. } => {
                     let tokens = adapter.anonymous_tokens(index)?;
+                    let saved_floats = (
+                        std::mem::take(&mut adapter.layout.floats),
+                        std::mem::replace(&mut adapter.layout.last_float_top, rect.y),
+                    );
                     adapter.layout.flow_tokens::<true>(
                         id,
                         rect.x,
@@ -857,6 +861,8 @@ fn run_inner<const EMIT: bool>(
                         tokens,
                         depth + 1,
                     );
+                    adapter.layout.floats = saved_floats.0;
+                    adapter.layout.last_float_top = saved_floats.1;
                 }
                 Kind::Root => unreachable!(),
             }
@@ -1084,7 +1090,11 @@ impl Adapter<'_, '_, '_> {
             0.0
         } else if anonymous {
             let tokens = self.anonymous_tokens(index)?;
-            self.layout.flow_tokens::<false>(
+            let saved_floats = (
+                std::mem::take(&mut self.layout.floats),
+                std::mem::replace(&mut self.layout.last_float_top, 0.0),
+            );
+            let h = self.layout.flow_tokens::<false>(
                 self.slots[0].node,
                 0.0,
                 0.0,
@@ -1092,7 +1102,16 @@ impl Adapter<'_, '_, '_> {
                 definite_height,
                 tokens,
                 self.depth + 1,
-            )
+            );
+            let float_bottom = self
+                .layout
+                .floats
+                .iter()
+                .map(|f| f.y + f.h)
+                .fold(0.0f32, f32::max);
+            self.layout.floats = saved_floats.0;
+            self.layout.last_float_top = saved_floats.1;
+            h.max(float_bottom)
         } else {
             self.layout
                 .measure_content_height(node, width, definite_height, self.depth + 1)?

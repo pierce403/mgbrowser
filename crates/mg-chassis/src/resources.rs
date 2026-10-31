@@ -1,8 +1,7 @@
-//! Small, bounded author stylesheet, image, font, and classic external script
-//! loading. No CSS @imports or data URLs are enabled. Stylesheets remain
-//! same-origin; cross-origin HTTPS images and scripts are credential-free,
-//! including later redirects. All fetches use the browser session's verified
-//! Rust TLS transport.
+//! Small, bounded author stylesheet, `@import`, image, font, and classic
+//! external script loading. Cross-origin HTTPS stylesheets, fonts, images, and
+//! scripts are credential-free, including later redirects. All fetches use the
+//! browser session's verified Rust TLS transport.
 
 use crate::net::{ResourceKind, Response, Session};
 use mg_sparkle::document::{Document, Node, ResourceData, StylesheetRequest, StylesheetSource};
@@ -101,10 +100,13 @@ pub fn load_with_profile(
     };
     let mut image_urls = Vec::new();
     let mut font_urls = Vec::new();
-    let mut css_cache = HashMap::<String, usize>::new();
+    let mut css_cache = HashMap::<String, StylesheetSource>::new();
+    let mut sheet_limit_warned = false;
     for (index, request) in requests.into_iter().enumerate() {
-        if index == MAX_SHEETS {
-            loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+        if document.stylesheets.len() >= MAX_SHEETS {
+            if !sheet_limit_warned {
+                loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+            }
             break;
         }
         if loader.stopped() {
@@ -130,69 +132,26 @@ pub fn load_with_profile(
                 sheet
             }
             StylesheetRequest::Linked { url, media } => {
-                if let Some(&index) = css_cache.get(&url) {
-                    let previous = &document.stylesheets[index];
-                    // Repeated author sheets still participate in source order;
-                    // charge the retained duplicate as well as the first source.
-                    if !loader.admit(previous.css.len()) {
-                        continue;
-                    }
-                    StylesheetSource {
-                        css: previous.css.clone(),
-                        base_url: previous.base_url.clone(),
-                        media,
-                    }
-                } else {
-                    let Some(response) =
-                        loader.fetch(&url, MAX_CSS, ResourceKind::Stylesheet, "stylesheet")
-                    else {
-                        continue;
-                    };
-                    if mime(&response.content_type) != "text/css" {
-                        loader.warn(format!(
-                            "Stylesheet has unsupported content type: {} at {}",
-                            label(&response.content_type),
-                            label(&url)
-                        ));
-                        continue;
-                    }
-                    let css = match String::from_utf8(response.body) {
-                        Ok(css) => css,
-                        Err(_) => {
-                            loader
-                                .warn(format!("Stylesheet is not UTF-8; skipped: {}", label(&url)));
-                            continue;
-                        }
-                    };
-                    let base_url = response.url.to_string();
-                    css_cache.insert(url, document.stylesheets.len());
-                    css_cache.insert(base_url.clone(), document.stylesheets.len());
-                    StylesheetSource {
-                        css,
-                        base_url,
-                        media,
-                    }
-                }
+                let Some(sheet) =
+                    fetch_or_clone_linked_sheet(&mut loader, &mut css_cache, &url, media)
+                else {
+                    continue;
+                };
+                sheet
             }
         };
-        let (urls, imports) = css_image_urls(&sheet.css);
-        if imports {
-            loader.warn(format!(
-                "CSS @import is not loaded in this preview: {}",
-                label(&sheet.base_url)
-            ));
-        }
-        for value in urls {
-            if image_urls.len() < MAX_REQUESTS * 2 {
-                image_urls.push((sheet.base_url.clone(), value));
-            }
-        }
-        for (_, value) in mg_sparkle::document::font_face_rules(&sheet.css) {
-            if font_urls.len() < MAX_REQUESTS * 2 {
-                font_urls.push((sheet.base_url.clone(), value));
-            }
-        }
-        document.stylesheets.push(sheet);
+        let mut import_stack = vec![sheet.base_url.clone()];
+        push_sheet_with_imports(
+            sheet,
+            0,
+            &mut import_stack,
+            &mut loader,
+            &mut css_cache,
+            &mut document.stylesheets,
+            &mut image_urls,
+            &mut font_urls,
+            &mut sheet_limit_warned,
+        );
     }
     for id in document.resource_nodes() {
         if image_urls.len() == MAX_REQUESTS * 2 {
@@ -846,6 +805,327 @@ fn css_image_urls(css: &str) -> (Vec<String>, bool) {
     (urls, imports)
 }
 
+fn fetch_or_clone_linked_sheet<F: Fn() -> bool>(
+    loader: &mut Loader<'_, F>,
+    css_cache: &mut HashMap<String, StylesheetSource>,
+    url: &str,
+    media: String,
+) -> Option<StylesheetSource> {
+    if let Some(previous) = css_cache.get(url) {
+        // Repeated author sheets still participate in source order;
+        // charge the retained duplicate as well as the first source.
+        if !loader.admit(previous.css.len()) {
+            return None;
+        }
+        return Some(StylesheetSource {
+            css: previous.css.clone(),
+            base_url: previous.base_url.clone(),
+            media,
+        });
+    }
+    let response = loader.fetch(url, MAX_CSS, ResourceKind::Stylesheet, "stylesheet")?;
+    if mime(&response.content_type) != "text/css" {
+        loader.warn(format!(
+            "Stylesheet has unsupported content type: {} at {}",
+            label(&response.content_type),
+            label(url)
+        ));
+        return None;
+    }
+    let css = match String::from_utf8(response.body) {
+        Ok(css) => css,
+        Err(_) => {
+            loader.warn(format!("Stylesheet is not UTF-8; skipped: {}", label(url)));
+            return None;
+        }
+    };
+    let base_url = response.url.to_string();
+    let stored = StylesheetSource {
+        css: css.clone(),
+        base_url: base_url.clone(),
+        media: String::new(),
+    };
+    css_cache.insert(url.to_owned(), stored.clone());
+    css_cache.insert(base_url.clone(), stored);
+    Some(StylesheetSource {
+        css,
+        base_url,
+        media,
+    })
+}
+
+fn combine_import_media(parent: &str, child: &str) -> String {
+    let p = parent.trim();
+    let c = child.trim();
+    if p.is_empty() {
+        c.to_owned()
+    } else if c.is_empty() {
+        p.to_owned()
+    } else if !p.contains(',') && !c.contains(',') {
+        format!("{p} and {c}")
+    } else {
+        c.to_owned()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_sheet_with_imports<F: Fn() -> bool>(
+    mut sheet: StylesheetSource,
+    depth: usize,
+    import_stack: &mut Vec<String>,
+    loader: &mut Loader<'_, F>,
+    css_cache: &mut HashMap<String, StylesheetSource>,
+    out_sheets: &mut Vec<StylesheetSource>,
+    image_urls: &mut Vec<(String, String)>,
+    font_urls: &mut Vec<(String, String)>,
+    sheet_limit_warned: &mut bool,
+) {
+    const MAX_IMPORT_DEPTH: usize = 4;
+    let (imports, cleaned_css) = css_leading_imports(&sheet.css);
+    sheet.css = cleaned_css;
+    if !imports.is_empty() && depth < MAX_IMPORT_DEPTH {
+        for (href, import_media) in imports {
+            if loader.stopped() {
+                break;
+            }
+            // Reserve 1 slot for the enclosing stylesheet itself so out_sheets never exceeds MAX_SHEETS.
+            if out_sheets.len() + 1 >= MAX_SHEETS {
+                if !*sheet_limit_warned {
+                    loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+                    *sheet_limit_warned = true;
+                }
+                break;
+            }
+            let Ok(mut resolved) =
+                Url::parse(&sheet.base_url).and_then(|base| base.join(href.trim()))
+            else {
+                loader.warn(format!(
+                    "Invalid @import URL; skipped: {} at {}",
+                    label(&href),
+                    label(&sheet.base_url)
+                ));
+                continue;
+            };
+            resolved.set_fragment(None);
+            let url = resolved.to_string();
+            if import_stack.contains(&url) {
+                continue;
+            }
+            let combined_media = combine_import_media(&sheet.media, &import_media);
+            let Some(child) = fetch_or_clone_linked_sheet(loader, css_cache, &url, combined_media)
+            else {
+                continue;
+            };
+            import_stack.push(url);
+            push_sheet_with_imports(
+                child,
+                depth + 1,
+                import_stack,
+                loader,
+                css_cache,
+                out_sheets,
+                image_urls,
+                font_urls,
+                sheet_limit_warned,
+            );
+            import_stack.pop();
+        }
+    }
+    if out_sheets.len() >= MAX_SHEETS {
+        if !*sheet_limit_warned {
+            loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+            *sheet_limit_warned = true;
+        }
+        return;
+    }
+    let (urls, _) = css_image_urls(&sheet.css);
+    for value in urls {
+        if image_urls.len() < MAX_REQUESTS * 2 {
+            image_urls.push((sheet.base_url.clone(), value));
+        }
+    }
+    for (_, value) in mg_sparkle::document::font_face_rules(&sheet.css) {
+        if font_urls.len() < MAX_REQUESTS * 2 {
+            font_urls.push((sheet.base_url.clone(), value));
+        }
+    }
+    out_sheets.push(sheet);
+}
+
+/// Extract valid leading `@import` rules (preceded only by whitespace, comments,
+/// `@charset`, or statement `@layer` rules) and blank them out with spaces while
+/// preserving line/column offsets for the remainder of the stylesheet.
+fn css_leading_imports(css: &str) -> (Vec<(String, String)>, String) {
+    let mut imports = Vec::new();
+    let mut spans = Vec::new();
+    let mut at = 0usize;
+    while at < css.len() && imports.len() < MAX_SHEETS {
+        css_space(css, &mut at);
+        if at >= css.len() {
+            break;
+        }
+        if css[at..].starts_with("/*") {
+            at = css[at..].find("*/").map_or(css.len(), |end| at + end + 2);
+            continue;
+        }
+        let rest = &css[at..];
+        if rest
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("@charset"))
+            && rest
+                .get(8..)
+                .and_then(|s| s.chars().next())
+                .is_none_or(|c| !identifier(c))
+        {
+            while at < css.len() {
+                let ch = css[at..].chars().next().unwrap();
+                if matches!(ch, '\'' | '"') {
+                    skip_string(css, &mut at, ch);
+                } else {
+                    at += ch.len_utf8();
+                    if ch == ';' {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if rest
+            .get(..6)
+            .is_some_and(|s| s.eq_ignore_ascii_case("@layer"))
+            && rest
+                .get(6..)
+                .and_then(|s| s.chars().next())
+                .is_none_or(|c| !identifier(c))
+        {
+            let mut probe = at + 6;
+            let mut is_statement = false;
+            while probe < css.len() {
+                if css[probe..].starts_with("/*") {
+                    probe = css[probe..].find("*/").map_or(css.len(), |e| probe + e + 2);
+                    continue;
+                }
+                let ch = css[probe..].chars().next().unwrap();
+                probe += ch.len_utf8();
+                if ch == ';' {
+                    is_statement = true;
+                    break;
+                }
+                if ch == '{' {
+                    break;
+                }
+            }
+            if is_statement {
+                at = probe;
+                continue;
+            }
+            break;
+        }
+        if rest
+            .get(..7)
+            .is_some_and(|s| s.eq_ignore_ascii_case("@import"))
+            && rest
+                .get(7..)
+                .and_then(|s| s.chars().next())
+                .is_none_or(|c| !identifier(c))
+        {
+            let rule_start = at;
+            at += 7;
+            while at < css.len() {
+                css_space(css, &mut at);
+                if css[at..].starts_with("/*") {
+                    at = css[at..].find("*/").map_or(css.len(), |end| at + end + 2);
+                } else {
+                    break;
+                }
+            }
+            let href = if css[at..]
+                .get(..4)
+                .is_some_and(|s| s.eq_ignore_ascii_case("url("))
+            {
+                at += 4;
+                url_token(css, &mut at)
+            } else if let Some(q) = css[at..].chars().next().filter(|c| matches!(c, '\'' | '"')) {
+                let str_start = at;
+                skip_string(css, &mut at, q);
+                let inner = &css[str_start + 1..at.saturating_sub(1)];
+                (!inner.is_empty()).then(|| inner.to_owned())
+            } else {
+                None
+            };
+            let media_start = at;
+            let mut media_end = at;
+            let mut valid_terminator = false;
+            let mut paren_depth = 0usize;
+            while at < css.len() {
+                if css[at..].starts_with("/*") {
+                    at = css[at..].find("*/").map_or(css.len(), |end| at + end + 2);
+                    media_end = at;
+                    continue;
+                }
+                let ch = css[at..].chars().next().unwrap();
+                if matches!(ch, '\'' | '"') {
+                    skip_string(css, &mut at, ch);
+                    media_end = at;
+                    continue;
+                }
+                if ch == '(' {
+                    paren_depth += 1;
+                } else if ch == ')' {
+                    paren_depth = paren_depth.saturating_sub(1);
+                } else if paren_depth == 0 && ch == ';' {
+                    media_end = at;
+                    at += 1;
+                    valid_terminator = true;
+                    break;
+                } else if paren_depth == 0 && ch == '{' {
+                    // Unsupported/block @import syntax (`layer(...)` with block or malformed)
+                    while at < css.len() {
+                        let c2 = css[at..].chars().next().unwrap();
+                        at += c2.len_utf8();
+                        if c2 == '}' {
+                            break;
+                        }
+                    }
+                    break;
+                }
+                at += ch.len_utf8();
+                media_end = at;
+            }
+            if at >= css.len() && paren_depth == 0 {
+                valid_terminator = true;
+            }
+            if valid_terminator {
+                spans.push((rule_start, at));
+                if let Some(href) = href {
+                    let raw_media = css[media_start..media_end].trim();
+                    // Skip conditional @import supports(...) / layer(...) prefixes we don't model yet;
+                    // plain media queries (like `(prefers-color-scheme: dark)` or `screen`) pass to Stylo.
+                    let lower_media = raw_media.to_ascii_lowercase();
+                    if !lower_media.starts_with("supports(") && !lower_media.starts_with("layer") {
+                        imports.push((href, raw_media.to_owned()));
+                    }
+                }
+            }
+            continue;
+        }
+        break;
+    }
+    if spans.is_empty() {
+        return (imports, css.to_owned());
+    }
+    let mut cleaned = css.as_bytes().to_vec();
+    for (start, end) in spans {
+        for b in &mut cleaned[start..end] {
+            if *b != b'\n' && *b != b'\r' {
+                *b = b' ';
+            }
+        }
+    }
+    let cleaned_str = String::from_utf8(cleaned).unwrap_or_else(|_| css.to_owned());
+    (imports, cleaned_str)
+}
+
 fn identifier(ch: char) -> bool {
     ch.is_alphanumeric() || matches!(ch, '-' | '_') || !ch.is_ascii()
 }
@@ -1076,7 +1356,7 @@ mod tests {
         assert!(
             doc.resource_warnings
                 .iter()
-                .any(|warning| warning.contains("page origin"))
+                .any(|warning| warning.contains("Stylesheets require HTTPS"))
         );
         assert_eq!(server.join().unwrap(), ["/redirect"]);
     }
@@ -1814,5 +2094,59 @@ mod tests {
         assert!(doc.resources.contains_key(&format!("{base}/logo.svg")));
         assert!(doc.resources.contains_key(inline_svg));
         assert_eq!(server.join().unwrap(), ["/logo.svg"]);
+    }
+
+    #[test]
+    fn css_import_rules_load_in_cascade_order_preserve_media_and_prevent_cycles() {
+        let (base, server) = server(vec![
+            (
+                "200 OK",
+                "text/css",
+                "@import url('/theme.css');\n@import '/cycle.css' screen;\nbody { background: var(--bg); }\n",
+            ),
+            (
+                "200 OK",
+                "text/css",
+                ":root { --bg: #112233; --fg: #eef; }\n",
+            ),
+            (
+                "200 OK",
+                "text/css",
+                "@import url('/main.css');\np { color: var(--fg); }\n",
+            ),
+        ]);
+        let mut doc = parse(
+            r#"<link rel="stylesheet" href="/main.css"><p>Lobsters theme test</p>"#,
+            &base,
+        );
+        load(&Session::new(), &mut doc, &base, || false);
+        assert!(
+            doc.resource_warnings.is_empty(),
+            "{:?}",
+            doc.resource_warnings
+        );
+        assert_eq!(doc.stylesheets.len(), 3);
+        assert!(doc.stylesheets[0].css.contains("--bg: #112233"));
+        assert_eq!(doc.stylesheets[1].media.as_str(), "screen");
+        assert!(doc.stylesheets[1].css.contains("color: var(--fg)"));
+        assert!(!doc.stylesheets[2].css.contains("@import"));
+        assert!(doc.stylesheets[2].css.contains("background: var(--bg)"));
+        assert_eq!(
+            server.join().unwrap(),
+            ["/main.css", "/theme.css", "/cycle.css"]
+        );
+        let mut diagnostics = mg_sparkle::style::StyleDiagnostics::default();
+        mg_sparkle::style::compute_styles_with_diagnostics(
+            &doc,
+            &doc.stylesheets,
+            (800.0, 600.0),
+            &mut diagnostics,
+        )
+        .unwrap();
+        assert!(
+            diagnostics.entries.is_empty(),
+            "blanked @import rules must not emit css-parse diagnostics: {:?}",
+            diagnostics.entries
+        );
     }
 }

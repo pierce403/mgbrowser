@@ -32,12 +32,18 @@ pub(super) const COMPARE_DOCUMENT_POSITION: &str = "host.dom.compareDocumentPosi
 pub(super) const GET_ROOT_NODE: &str = "host.dom.getRootNode";
 pub(super) const CREATE_TREE_WALKER: &str = "host.dom.createTreeWalker";
 pub(super) const DOC_HAS_FOCUS: &str = "host.dom.hasFocus";
+pub(super) const DOC_WRITE: &str = "host.dom.write";
+pub(super) const DOC_WRITELN: &str = "host.dom.writeln";
+pub(super) const DOC_OPEN: &str = "host.dom.docOpen";
+pub(super) const DOC_CLOSE: &str = "host.dom.docClose";
 
 pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
     match name {
         "host.dom.appendChild" => Some(("appendChild", 1)),
         "host.dom.removeChild" => Some(("removeChild", 1)),
         "host.dom.getElementById" => Some(("getElementById", 1)),
+        "host.dom.getElementsByTagName" => Some(("getElementsByTagName", 1)),
+        "host.dom.getElementsByClassName" => Some(("getElementsByClassName", 1)),
         "host.dom.createElement" => Some(("createElement", 1)),
         "host.dom.createTextNode" => Some(("createTextNode", 1)),
         CREATE_DOCUMENT_FRAGMENT => Some(("createDocumentFragment", 0)),
@@ -69,6 +75,10 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         GET_ROOT_NODE => Some(("getRootNode", 0)),
         CREATE_TREE_WALKER => Some(("createTreeWalker", 1)),
         DOC_HAS_FOCUS => Some(("hasFocus", 0)),
+        DOC_WRITE => Some(("write", 0)),
+        DOC_WRITELN => Some(("writeln", 0)),
+        DOC_OPEN => Some(("open", 0)),
+        DOC_CLOSE => Some(("close", 0)),
         _ => None,
     }
 }
@@ -1406,6 +1416,17 @@ pub(super) fn try_get(
             "hasFocus" => {
                 return method(DOC_HAS_FOCUS, context).map(|o| Some(o.into()));
             }
+            "write" => return method(DOC_WRITE, context).map(|o| Some(o.into())),
+            "writeln" => return method(DOC_WRITELN, context).map(|o| Some(o.into())),
+            "open" => return method(DOC_OPEN, context).map(|o| Some(o.into())),
+            "close" => return method(DOC_CLOSE, context).map(|o| Some(o.into())),
+            "currentScript" => {
+                let cs = state(context).borrow().current_script;
+                return match cs {
+                    Some(sid) => wrap(&format!("node:{sid}"), context).map(Some),
+                    None => Ok(Some(JsValue::null())),
+                };
+            }
             "defaultView" => return Ok(Some(context.global_object().into())),
             "documentElement" => {
                 let target = {
@@ -1949,7 +1970,89 @@ pub(super) fn try_get(
         "insertAdjacentText" => {
             return method(INSERT_ADJACENT_TEXT, context).map(|o| Some(o.into()));
         }
-        _ => Ok(None),
+        "contentDocument" if matches!(tag.as_str(), "iframe" | "frame" | "object") => {
+            if tag == "object" {
+                return Ok(Some(JsValue::null()));
+            }
+            let sub_opt = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                ensure_iframe_document(&mut data, id)
+            }
+            .map_err(|e| into_js_err(e, context))?;
+            return match sub_opt {
+                Some(sub_id) => wrap(&format!("subdoc:{sub_id}"), context).map(Some),
+                None => Ok(Some(JsValue::null())),
+            };
+        }
+        "contentWindow" if matches!(tag.as_str(), "iframe" | "frame") => {
+            let sub_opt = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                ensure_iframe_document(&mut data, id)
+            }
+            .map_err(|e| into_js_err(e, context))?;
+            let Some(sub_id) = sub_opt else {
+                return Ok(Some(JsValue::null()));
+            };
+            let subdoc_js = wrap(&format!("subdoc:{sub_id}"), context)?;
+            let cw = JsObject::with_object_proto(context.intrinsics());
+            cw.define_property_or_throw(
+                js_string!("document"),
+                PropertyDescriptor::builder()
+                    .value(subdoc_js)
+                    .writable(false)
+                    .enumerable(true)
+                    .configurable(true),
+                context,
+            )?;
+            let cw_val: JsValue = cw.clone().into();
+            for alias in ["window", "self", "frames"] {
+                cw.define_property_or_throw(
+                    JsString::from(alias),
+                    PropertyDescriptor::builder()
+                        .value(cw_val.clone())
+                        .writable(false)
+                        .enumerable(true)
+                        .configurable(true),
+                    context,
+                )?;
+            }
+            let top_val: JsValue = context.global_object().into();
+            for alias in ["parent", "top"] {
+                cw.define_property_or_throw(
+                    JsString::from(alias),
+                    PropertyDescriptor::builder()
+                        .value(top_val.clone())
+                        .writable(false)
+                        .enumerable(true)
+                        .configurable(true),
+                    context,
+                )?;
+            }
+            return Ok(Some(cw_val));
+        }
+        _ => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if let Some(attr) = reflected_string_attr(tag.as_str(), name, is_svg) {
+                let val = state(context).borrow().host.document.nodes[id]
+                    .attr(attr)
+                    .unwrap_or("")
+                    .to_owned();
+                return Ok(Some(JsString::from(val.as_str()).into()));
+            }
+            if !is_svg
+                && let Some((attr, def_val, non_zero)) = reflected_uint_attr(tag.as_str(), name)
+            {
+                let v = state(context).borrow().host.document.nodes[id]
+                    .attr(attr)
+                    .and_then(parse_non_negative_uint)
+                    .filter(|&n| !non_zero || n > 0)
+                    .unwrap_or(def_val);
+                return Ok(Some((v as f64).into()));
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -1959,6 +2062,21 @@ pub(super) fn try_set(
     value: &JsValue,
     context: &mut Context,
 ) -> JsResult<Option<()>> {
+    if handle == "document" && name == "dir" {
+        let text = utf8(value, context)?;
+        modern::check_context(context)?;
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        if let Some(&hid) = data.host.document.nodes[0]
+            .children
+            .iter()
+            .find(|&&c| data.host.document.nodes[c].tag == "html")
+        {
+            data.host.attr(hid, "dir", text).map_err(failure)?;
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        }
+        return Ok(Some(()));
+    }
     if let Some(sub_id) = handle
         .strip_prefix("subdoc:")
         .and_then(|s| s.parse::<usize>().ok())
@@ -2000,8 +2118,8 @@ pub(super) fn try_set(
         (id, data.host.document.nodes[id].tag.clone())
     };
 
-    if tag == "#text" && matches!(name, "data" | "nodeValue") {
-        let text = if value.is_null() && name == "nodeValue" {
+    if tag == "#text" && matches!(name, "data" | "nodeValue" | "textContent") {
+        let text = if value.is_null() && matches!(name, "nodeValue" | "textContent") {
             String::new()
         } else {
             utf8(value, context)?
@@ -2009,12 +2127,16 @@ pub(super) fn try_set(
         modern::check_context(context)?;
         let shared = state(context);
         let mut data = shared.borrow_mut();
-        data.host.replace_text(id, text).map_err(failure)?;
+        data.host.charge(text.len()).map_err(failure)?;
+        data.host.document.nodes[id].text = text;
         data.dom_epoch = data.dom_epoch.wrapping_add(1);
         return Ok(Some(()));
     }
 
-    if tag == "#document-fragment" && matches!(name, "textContent") {
+    if (tag == "#document-fragment" && matches!(name, "textContent"))
+        || (matches!(tag.as_str(), "script" | "style")
+            && matches!(name, "textContent" | "innerText" | "innerHTML"))
+    {
         let text = if value.is_null() {
             String::new()
         } else {
@@ -2210,8 +2332,210 @@ pub(super) fn try_set(
             data.dom_epoch = data.dom_epoch.wrapping_add(1);
             return Ok(Some(()));
         }
+        "tabIndex" if !tag.starts_with('#') => {
+            let ti = value.to_i32(context)?;
+            modern::check_context(context)?;
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.host
+                .attr(id, "tabindex", ti.to_string())
+                .map_err(failure)?;
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            return Ok(Some(()));
+        }
+        "contentEditable" if !tag.starts_with('#') => {
+            let raw = utf8(value, context)?;
+            modern::check_context(context)?;
+            let norm = raw.trim().to_ascii_lowercase();
+            if !matches!(
+                norm.as_str(),
+                "true" | "false" | "plaintext-only" | "inherit"
+            ) {
+                return Err(dom_exception::exception(
+                    "SyntaxError",
+                    "Invalid contentEditable value",
+                    context,
+                )?);
+            }
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            if norm == "inherit" {
+                data.host.document.nodes[id]
+                    .attributes
+                    .retain(|(n, _)| n != "contenteditable");
+            } else {
+                data.host
+                    .attr(id, "contenteditable", norm)
+                    .map_err(failure)?;
+            }
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            return Ok(Some(()));
+        }
+        "slot" if !tag.starts_with('#') => {
+            let s = utf8(value, context)?;
+            modern::check_context(context)?;
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.host.attr(id, "slot", s).map_err(failure)?;
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            return Ok(Some(()));
+        }
+        _ if !tag.starts_with('#') => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if let Some(attr) = reflected_string_attr(tag.as_str(), name, is_svg) {
+                let text = utf8(value, context)?;
+                modern::check_context(context)?;
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                if matches!(tag.as_str(), "iframe" | "frame") && matches!(attr, "src" | "srcdoc") {
+                    data.iframe_documents.remove(&id);
+                }
+                data.host.attr(id, attr, text).map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                return Ok(Some(()));
+            }
+            if !is_svg
+                && let Some((attr, def_val, non_zero)) = reflected_uint_attr(tag.as_str(), name)
+            {
+                let v = value.to_u32(context)?;
+                modern::check_context(context)?;
+                let effective = if non_zero && v == 0 { def_val } else { v };
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                data.host
+                    .attr(id, attr, effective.to_string())
+                    .map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                return Ok(Some(()));
+            }
+            Ok(None)
+        }
         _ => Ok(None),
     }
+}
+
+fn parse_non_negative_uint(raw: &str) -> Option<u32> {
+    let trimmed = raw.trim_start_matches(['\t', '\n', '\x0C', '\r', ' ']);
+    let trimmed = trimmed.strip_prefix('+').unwrap_or(trimmed);
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok()
+}
+
+fn reflected_string_attr(tag: &str, prop: &str, is_svg: bool) -> Option<&'static str> {
+    match prop {
+        "title" => return Some("title"),
+        "lang" => return Some("lang"),
+        "dir" => return Some("dir"),
+        "role" => return Some("role"),
+        "ariaLabel" => return Some("aria-label"),
+        "ariaHidden" => return Some("aria-hidden"),
+        _ => {}
+    }
+    if is_svg {
+        return None;
+    }
+    match (tag, prop) {
+        ("img" | "area" | "input", "alt") => Some("alt"),
+        ("a" | "area" | "form" | "base", "target") => Some("target"),
+        ("a" | "area" | "link" | "form", "rel") => Some("rel"),
+        ("a" | "area", "download") => Some("download"),
+        ("input" | "textarea", "placeholder") => Some("placeholder"),
+        ("input" | "meter", "min") => Some("min"),
+        ("input" | "meter" | "progress", "max") => Some("max"),
+        ("input", "step") => Some("step"),
+        ("input", "pattern") => Some("pattern"),
+        ("input" | "select" | "textarea" | "form", "autocomplete") => Some("autocomplete"),
+        ("img" | "iframe", "loading") => Some("loading"),
+        ("img", "decoding") => Some("decoding"),
+        ("img" | "source", "srcset") => Some("srcset"),
+        ("img" | "source" | "link", "sizes") => Some("sizes"),
+        ("img" | "script" | "link" | "audio" | "video", "crossOrigin") => Some("crossorigin"),
+        ("a" | "area" | "img" | "iframe" | "script" | "link", "referrerPolicy") => {
+            Some("referrerpolicy")
+        }
+        ("iframe", "sandbox") => Some("sandbox"),
+        ("iframe", "allow") => Some("allow"),
+        ("iframe", "srcdoc") => Some("srcdoc"),
+        ("iframe" | "frame", "frameBorder") => Some("frameborder"),
+        ("iframe" | "frame", "scrolling") => Some("scrolling"),
+        (
+            "iframe" | "embed" | "object" | "table" | "td" | "th" | "col" | "colgroup" | "hr"
+            | "tr",
+            "width",
+        ) => Some("width"),
+        (
+            "iframe" | "embed" | "object" | "table" | "td" | "th" | "col" | "colgroup" | "hr"
+            | "tr",
+            "height",
+        ) => Some("height"),
+        ("td" | "th", "headers") => Some("headers"),
+        ("td" | "th", "scope") => Some("scope"),
+        ("blockquote" | "q" | "del" | "ins", "cite") => Some("cite"),
+        ("time" | "del" | "ins", "dateTime") => Some("datetime"),
+        ("form", "enctype" | "encoding") => Some("enctype"),
+        ("form", "acceptCharset") => Some("accept-charset"),
+        ("link" | "style" | "source", "media") => Some("media"),
+        ("link", "as") => Some("as"),
+        ("script" | "link", "integrity") => Some("integrity"),
+        ("script" | "meta", "charset") => Some("charset"),
+        ("meta", "content") => Some("content"),
+        ("meta", "httpEquiv") => Some("http-equiv"),
+        _ => None,
+    }
+}
+
+fn reflected_uint_attr(tag: &str, prop: &str) -> Option<(&'static str, u32, bool)> {
+    match (tag, prop) {
+        ("img" | "canvas" | "video" | "input", "width") => Some(("width", 0, false)),
+        ("img" | "canvas" | "video" | "input", "height") => Some(("height", 0, false)),
+        ("textarea", "rows") => Some(("rows", 2, true)),
+        ("textarea", "cols") => Some(("cols", 20, true)),
+        ("input", "size") => Some(("size", 20, true)),
+        ("select", "size") => Some(("size", 0, false)),
+        ("col" | "colgroup", "span") => Some(("span", 1, true)),
+        ("td" | "th", "colSpan") => Some(("colspan", 1, true)),
+        ("td" | "th", "rowSpan") => Some(("rowspan", 1, false)),
+        _ => None,
+    }
+}
+
+fn ensure_iframe_document(data: &mut State, iframe_id: usize) -> Result<Option<usize>, DomOpErr> {
+    if !is_connected_node(&data.host.document.nodes, iframe_id) {
+        return Ok(None);
+    }
+    let is_blank_or_srcdoc = match data.host.document.nodes[iframe_id].attr("src") {
+        None => true,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            trimmed.is_empty() || trimmed.eq_ignore_ascii_case("about:blank")
+        }
+    };
+    if !is_blank_or_srcdoc {
+        return Ok(None);
+    }
+    if let Some(&existing) = data.iframe_documents.get(&iframe_id)
+        && existing < data.host.document.nodes.len()
+    {
+        return Ok(Some(existing));
+    }
+    let srcdoc = data.host.document.nodes[iframe_id]
+        .attr("srcdoc")
+        .map(str::to_owned);
+    let sub_root = data
+        .host
+        .new_node("#document-subroot".into(), String::new())
+        .map_err(DomOpErr::Host)?;
+    let top_nodes = if let Some(html) = srcdoc {
+        parse_html_into_fragment_children(data, &html).map_err(DomOpErr::Host)?
+    } else {
+        Vec::new()
+    };
+    ensure_html_skeleton(data, sub_root, top_nodes)?;
+    data.iframe_documents.insert(iframe_id, sub_root);
+    Ok(Some(sub_root))
 }
 
 fn find_in_subtree(
@@ -2320,6 +2644,12 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
         "contains" => method(CONTAINS, context).map(Into::into),
         "hasChildNodes" => method(HAS_CHILD_NODES, context).map(Into::into),
         "cloneNode" => method(CLONE_NODE, context).map(Into::into),
+        "write" => method(DOC_WRITE, context).map(Into::into),
+        "writeln" => method(DOC_WRITELN, context).map(Into::into),
+        "open" => method(DOC_OPEN, context).map(Into::into),
+        "close" => method(DOC_CLOSE, context).map(Into::into),
+        "currentScript" => Ok(JsValue::null()),
+        "readyState" => Ok(js_string!("complete").into()),
         _ => Ok(JsValue::undefined()),
     }
 }
@@ -2423,6 +2753,86 @@ pub(super) fn call(
                 Some(id) => wrap(&format!("node:{id}"), context),
                 None => Ok(JsValue::null()),
             }
+        }
+        "host.dom.getElementsByTagName" => {
+            let root = receiver_node(this, context)?;
+            if state(context).borrow().host.document.nodes[root].tag == "#text" {
+                return Err(failure(
+                    "getElementsByTagName requires a Document or Element receiver",
+                ));
+            }
+            let first = args
+                .first()
+                .ok_or_else(|| failure("getElementsByTagName requires 1 argument"))?;
+            let q = utf8(first, context)?;
+            modern::check_context(context)?;
+            let wanted = q.to_ascii_lowercase();
+            let col = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let mut ids = Vec::new();
+                if !wanted.is_empty() {
+                    let mut pending: Vec<usize> = data.host.document.nodes[root]
+                        .children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .collect();
+                    for _ in 0..crate::document::MAX_NODES {
+                        let Some(id) = pending.pop() else { break };
+                        let node = &data.host.document.nodes[id];
+                        if !node.tag.starts_with('#') && (wanted == "*" || node.tag == wanted) {
+                            ids.push(id);
+                        }
+                        pending.extend(node.children.iter().rev().copied());
+                    }
+                }
+                data.host.collection(ids).map_err(failure)?
+            };
+            from_host(col, context)
+        }
+        "host.dom.getElementsByClassName" => {
+            let root = receiver_node(this, context)?;
+            if state(context).borrow().host.document.nodes[root].tag == "#text" {
+                return Err(failure(
+                    "getElementsByClassName requires a Document or Element receiver",
+                ));
+            }
+            let first = args
+                .first()
+                .ok_or_else(|| failure("getElementsByClassName requires 1 argument"))?;
+            let q = utf8(first, context)?;
+            modern::check_context(context)?;
+            let col = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let wanted: Vec<&str> = q.split_ascii_whitespace().collect();
+                let mut ids = Vec::new();
+                if !wanted.is_empty() {
+                    let mut pending: Vec<usize> = data.host.document.nodes[root]
+                        .children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .collect();
+                    for _ in 0..crate::document::MAX_NODES {
+                        let Some(id) = pending.pop() else { break };
+                        let node = &data.host.document.nodes[id];
+                        if !node.tag.starts_with('#') {
+                            let classes = node.attr("class").unwrap_or("");
+                            if wanted
+                                .iter()
+                                .all(|w| classes.split_ascii_whitespace().any(|c| c == *w))
+                            {
+                                ids.push(id);
+                            }
+                        }
+                        pending.extend(node.children.iter().rev().copied());
+                    }
+                }
+                data.host.collection(ids).map_err(failure)?
+            };
+            from_host(col, context)
         }
         "host.dom.createElement" => {
             let doc = receiver_node(this, context)?;
@@ -3050,6 +3460,168 @@ pub(super) fn call(
             };
             modern::check_context(context)?;
             build_tree_walker(root_arg.clone(), what_to_show, filter_val, context)
+        }
+        DOC_OPEN => {
+            let Value::Host(doc_h) = receiver(this, context)? else {
+                return Err(failure("Document.open requires a Document receiver"));
+            };
+            if doc_h != "document" && !doc_h.starts_with("subdoc:") {
+                return Err(failure("Document.open requires a Document receiver"));
+            }
+            if let Some(sub_id) = doc_h
+                .strip_prefix("subdoc:")
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                let res: Result<(), DomOpErr> = {
+                    let shared = state(context);
+                    let mut data = shared.borrow_mut();
+                    for old in std::mem::take(&mut data.host.document.nodes[sub_id].children) {
+                        data.host.document.nodes[old].parent = old;
+                    }
+                    ensure_html_skeleton(&mut data, sub_id, Vec::new())
+                };
+                res.map_err(|e| into_js_err(e, context))?;
+            }
+            Ok(this.clone())
+        }
+        DOC_CLOSE => {
+            let Value::Host(doc_h) = receiver(this, context)? else {
+                return Err(failure("Document.close requires a Document receiver"));
+            };
+            if doc_h != "document" && !doc_h.starts_with("subdoc:") {
+                return Err(failure("Document.close requires a Document receiver"));
+            }
+            Ok(JsValue::undefined())
+        }
+        DOC_WRITE | DOC_WRITELN => {
+            let Value::Host(doc_h) = receiver(this, context)? else {
+                return Err(failure("Document.write requires a Document receiver"));
+            };
+            if doc_h != "document" && !doc_h.starts_with("subdoc:") {
+                return Err(failure("Document.write requires a Document receiver"));
+            }
+            let mut combined = String::new();
+            for arg in args {
+                combined.push_str(&utf8(arg, context)?);
+                modern::check_context(context)?;
+            }
+            if name == DOC_WRITELN {
+                combined.push('\n');
+            }
+            if combined.is_empty() {
+                return Ok(JsValue::undefined());
+            }
+            if let Some(sub_id) = doc_h
+                .strip_prefix("subdoc:")
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                let res: Result<(), DomOpErr> = (|| {
+                    let shared = state(context);
+                    let mut data = shared.borrow_mut();
+                    let top_nodes = parse_html_into_fragment_children(&mut data, &combined)
+                        .map_err(DomOpErr::Host)?;
+                    let head_id =
+                        find_in_subtree(&data.host.document.nodes, sub_id, |n| n.tag == "head");
+                    let body_id =
+                        find_in_subtree(&data.host.document.nodes, sub_id, |n| n.tag == "body");
+                    if head_id.is_none() || body_id.is_none() {
+                        for old in std::mem::take(&mut data.host.document.nodes[sub_id].children) {
+                            data.host.document.nodes[old].parent = old;
+                        }
+                        ensure_html_skeleton(&mut data, sub_id, top_nodes)
+                    } else {
+                        let (hid, bid) = (head_id.unwrap(), body_id.unwrap());
+                        let mut queue = top_nodes;
+                        let mut expanded = Vec::new();
+                        for nid in queue.drain(..) {
+                            let t = data.host.document.nodes[nid].tag.clone();
+                            if t == "html" {
+                                expanded.extend(data.host.document.nodes[nid].children.clone());
+                            } else {
+                                expanded.push(nid);
+                            }
+                        }
+                        for nid in expanded {
+                            let t = data.host.document.nodes[nid].tag.clone();
+                            if t == "head" {
+                                let kids = data.host.document.nodes[nid].children.clone();
+                                for k in kids {
+                                    insert_node_before(&mut data, hid, k, None)?;
+                                }
+                            } else if t == "body" {
+                                let kids = data.host.document.nodes[nid].children.clone();
+                                for k in kids {
+                                    insert_node_before(&mut data, bid, k, None)?;
+                                }
+                            } else if matches!(
+                                t.as_str(),
+                                "title" | "meta" | "link" | "style" | "base"
+                            ) {
+                                insert_node_before(&mut data, hid, nid, None)?;
+                            } else {
+                                insert_node_before(&mut data, bid, nid, None)?;
+                            }
+                        }
+                        Ok(())
+                    }
+                })();
+                res.map_err(|e| into_js_err(e, context))?;
+                return Ok(JsValue::undefined());
+            }
+            let res: Result<(), DomOpErr> = (|| {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                if data.host.ready != "loading" {
+                    return Ok(());
+                }
+                let children = parse_html_into_fragment_children(&mut data, &combined)
+                    .map_err(DomOpErr::Host)?;
+                let all_head_meta = !children.is_empty()
+                    && children.iter().all(|&cid| {
+                        matches!(
+                            data.host.document.nodes[cid].tag.as_str(),
+                            "title" | "meta" | "link" | "style" | "base"
+                        )
+                    });
+                let script_insertion = data.current_script.and_then(|sid| {
+                    if !is_connected_node(&data.host.document.nodes, sid) {
+                        return None;
+                    }
+                    let p = data.host.document.nodes[sid].parent;
+                    if p == sid {
+                        return None;
+                    }
+                    if data.host.document.nodes[p].tag == "head" && !all_head_meta {
+                        return None;
+                    }
+                    let kids = &data.host.document.nodes[p].children;
+                    let idx = kids.iter().position(|&c| c == sid)?;
+                    Some((p, kids.get(idx + 1).copied()))
+                });
+                if let Some((parent, next_sib)) = script_insertion {
+                    for ch in children {
+                        insert_node_before(&mut data, parent, ch, next_sib)?;
+                    }
+                } else {
+                    let fallback_parent = if all_head_meta {
+                        data.host
+                            .find_connected(|n| n.tag == "head")
+                            .or_else(|| data.host.find_connected(|n| n.tag == "body"))
+                            .unwrap_or(0)
+                    } else {
+                        data.host
+                            .find_connected(|n| n.tag == "body")
+                            .or_else(|| data.host.find_connected(|n| n.tag == "html"))
+                            .unwrap_or(0)
+                    };
+                    for ch in children {
+                        insert_node_before(&mut data, fallback_parent, ch, None)?;
+                    }
+                }
+                Ok(())
+            })();
+            res.map_err(|e| into_js_err(e, context))?;
+            Ok(JsValue::undefined())
         }
         _ => Err(failure("Unknown DOM operation")),
     }

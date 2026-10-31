@@ -1615,6 +1615,132 @@ fn svg_presentation_hints(
     css
 }
 
+/// Alias legacy vendor-prefixed declaration property names dropped by modern
+/// Stylo (`-moz-border-radius*`, `-moz-box-sizing`, `-webkit-box-sizing`,
+/// `-moz-opacity`, `-moz-box-shadow`) into space-padded standard names of the
+/// exact same byte length so 1-based line and column offsets stay identical.
+fn normalize_legacy_vendor_css(css: &str) -> std::borrow::Cow<'_, str> {
+    let raw = css.as_bytes();
+    let has_candidate = raw
+        .windows(5)
+        .any(|w| w.eq_ignore_ascii_case(b"-moz-") || w.eq_ignore_ascii_case(b"-webk"));
+    if !has_candidate {
+        return std::borrow::Cow::Borrowed(css);
+    }
+    let mut out: Option<Vec<u8>> = None;
+    let mut i = 0usize;
+    let mut brace_depth = 0usize;
+    let mut expect_prop = false;
+    while i < raw.len() {
+        if raw[i..].starts_with(b"/*") {
+            i = raw[i + 2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(raw.len(), |p| i + 2 + p + 2);
+            continue;
+        }
+        let b = raw[i];
+        if b == b'\'' || b == b'"' {
+            expect_prop = false;
+            let quote = b;
+            i += 1;
+            while i < raw.len() {
+                let c = raw[i];
+                i += 1;
+                if c == quote {
+                    break;
+                }
+                if c == b'\\' && i < raw.len() {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b == b'{' {
+            brace_depth += 1;
+            expect_prop = true;
+            i += 1;
+            continue;
+        }
+        if b == b'}' {
+            brace_depth = brace_depth.saturating_sub(1);
+            expect_prop = brace_depth > 0;
+            i += 1;
+            continue;
+        }
+        if b == b';' {
+            expect_prop = brace_depth > 0;
+            i += 1;
+            continue;
+        }
+        if brace_depth > 0 && expect_prop && b == b'-' {
+            let start = i;
+            while i < raw.len() && (raw[i].is_ascii_alphanumeric() || raw[i] == b'-') {
+                i += 1;
+            }
+            let ident_end = i;
+            let mut probe = i;
+            loop {
+                while probe < raw.len() && raw[probe].is_ascii_whitespace() {
+                    probe += 1;
+                }
+                if probe < raw.len() && raw[probe..].starts_with(b"/*") {
+                    probe = raw[probe + 2..]
+                        .windows(2)
+                        .position(|w| w == b"*/")
+                        .map_or(raw.len(), |p| probe + 2 + p + 2);
+                } else {
+                    break;
+                }
+            }
+            expect_prop = false;
+            if probe < raw.len() && raw[probe] == b':' {
+                let name = &css[start..ident_end];
+                let replacement: Option<&[u8]> = if name.eq_ignore_ascii_case("-moz-border-radius")
+                {
+                    Some(b"     border-radius")
+                } else if name.eq_ignore_ascii_case("-moz-border-radius-topleft") {
+                    Some(b"    border-top-left-radius")
+                } else if name.eq_ignore_ascii_case("-moz-border-radius-topright") {
+                    Some(b"    border-top-right-radius")
+                } else if name.eq_ignore_ascii_case("-moz-border-radius-bottomright") {
+                    Some(b"    border-bottom-right-radius")
+                } else if name.eq_ignore_ascii_case("-moz-border-radius-bottomleft") {
+                    Some(b"    border-bottom-left-radius")
+                } else if name.eq_ignore_ascii_case("-moz-box-sizing") {
+                    Some(b"     box-sizing")
+                } else if name.eq_ignore_ascii_case("-webkit-box-sizing") {
+                    Some(b"        box-sizing")
+                } else if name.eq_ignore_ascii_case("-moz-opacity") {
+                    Some(b"     opacity")
+                } else if name.eq_ignore_ascii_case("-moz-box-shadow") {
+                    Some(b"     box-shadow")
+                } else {
+                    None
+                };
+                if let Some(rep) = replacement {
+                    debug_assert_eq!(rep.len(), ident_end - start);
+                    let buf = out.get_or_insert_with(|| raw.to_vec());
+                    buf[start..ident_end].copy_from_slice(rep);
+                }
+            }
+            continue;
+        }
+        expect_prop = false;
+        i += css[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    match out {
+        Some(bytes) => {
+            std::borrow::Cow::Owned(String::from_utf8(bytes).unwrap_or_else(|_| css.to_owned()))
+        }
+        None => std::borrow::Cow::Borrowed(css),
+    }
+}
+
 /// Compute a fresh static style snapshot with no network or script capability.
 /// Stylesheets must be supplied in document order, including inline style blocks.
 /// CSS imports, animations, pseudo-element boxes and visited history are absent.
@@ -1811,9 +1937,10 @@ pub fn compute_styles_with_diagnostics(
             label: &label,
             node: None,
         };
+        let normalized_css = normalize_legacy_vendor_css(&source.css);
         stylist.append_stylesheet(
             sheet(
-                &source.css,
+                &normalized_css,
                 base,
                 Origin::Author,
                 &source.media,
@@ -1928,6 +2055,7 @@ pub fn compute_styles_with_diagnostics(
         snapshot.layout = renderer_layout(
             &computed,
             snapshot.display,
+            active_grid_areas(parent, output[parent_id].display),
             remaining,
             id,
             &document.base_url,
@@ -2037,6 +2165,7 @@ pub fn compute_styles_with_diagnostics(
                 pseudo_snapshot.layout = renderer_layout(
                     &pseudo_computed,
                     pseudo_snapshot.display,
+                    active_grid_areas(Some(computed.as_ref()), snapshot.display),
                     pseudo_remaining,
                     id,
                     &document.base_url,
@@ -2781,8 +2910,89 @@ fn layout_overflow(value: style::values::specified::box_::Overflow) -> Overflow 
         O::Scroll => Overflow::Scroll,
     }
 }
-fn grid_line(value: &style::values::computed::GridLine) -> Mapping<GridLine> {
+#[derive(Clone, Copy)]
+enum GridAxis {
+    Row,
+    Column,
+}
+#[derive(Clone, Copy)]
+enum GridSide {
+    Start,
+    End,
+}
+fn active_grid_areas(
+    parent_values: Option<&ComputedValues>,
+    parent_display: Display,
+) -> Option<&style::values::specified::position::TemplateAreas> {
+    use style::values::computed::GridTemplateAreas;
+    if !matches!(parent_display, Display::Grid | Display::InlineGrid) {
+        return None;
+    }
+    match &parent_values?.get_position().grid_template_areas {
+        GridTemplateAreas::Areas(areas) => Some(&areas.0),
+        GridTemplateAreas::None => None,
+    }
+}
+fn grid_line(
+    value: &style::values::computed::GridLine,
+    axis: GridAxis,
+    side: GridSide,
+    parent_areas: Option<&style::values::specified::position::TemplateAreas>,
+) -> Mapping<GridLine> {
     if !value.ident.0.is_empty() {
+        if value.line_num == 0
+            && !value.is_span
+            && let Some(areas) = parent_areas
+        {
+            if let Some(area) = areas.areas.iter().find(|area| area.name == value.ident.0) {
+                let range = match axis {
+                    GridAxis::Row => &area.rows,
+                    GridAxis::Column => &area.columns,
+                };
+                return match side {
+                    GridSide::Start => {
+                        if range.start == 0 || range.start as usize > MAX_GRID_TRACKS {
+                            Err(MappingFailure::Limit(
+                                "computed grid line/span bound exceeded",
+                            ))
+                        } else {
+                            Ok(GridLine::Line(range.start as i16))
+                        }
+                    }
+                    GridSide::End => {
+                        let span = range.end.saturating_sub(range.start);
+                        if span == 0 || span as usize > MAX_GRID_TRACKS {
+                            Err(MappingFailure::Limit(
+                                "computed grid line/span bound exceeded",
+                            ))
+                        } else if range.end as usize <= MAX_GRID_TRACKS {
+                            Ok(GridLine::Line(range.end as i16))
+                        } else {
+                            Ok(GridLine::Span(span as u16))
+                        }
+                    }
+                };
+            }
+            let ident_str: &str = value.ident.0.as_ref();
+            if let Some((stem, is_start)) = ident_str
+                .strip_suffix("-start")
+                .map(|s| (s, true))
+                .or_else(|| ident_str.strip_suffix("-end").map(|s| (s, false)))
+                && let Some(area) = areas.areas.iter().find(|area| area.name.as_ref() == stem)
+            {
+                let range = match axis {
+                    GridAxis::Row => &area.rows,
+                    GridAxis::Column => &area.columns,
+                };
+                let line = if is_start { range.start } else { range.end };
+                if line == 0 || line as usize > MAX_GRID_TRACKS {
+                    return Err(MappingFailure::Limit(
+                        "computed grid line/span bound exceeded",
+                    ));
+                }
+                return Ok(GridLine::Line(line as i16));
+            }
+        }
         return Err(MappingFailure::Unsupported("named grid placement"));
     }
     if value.is_auto() {
@@ -2891,11 +3101,21 @@ fn grid_style(
     remaining: usize,
 ) -> Mapping<Box<GridStyle>> {
     use style::values::computed::{GridAutoFlow as F, GridTemplateAreas};
-    if !matches!(position.grid_template_areas, GridTemplateAreas::None) {
-        return Err(MappingFailure::Unsupported("named grid areas"));
-    }
+    let (area_rows, area_columns) = match &position.grid_template_areas {
+        GridTemplateAreas::None => (0usize, 0usize),
+        GridTemplateAreas::Areas(areas) => {
+            let r = areas.0.strings.len();
+            let c = areas.0.width as usize;
+            if r > MAX_GRID_TRACKS || c > MAX_GRID_TRACKS {
+                return Err(MappingFailure::Limit("computed grid track bound exceeded"));
+            }
+            (r, c)
+        }
+    };
     let rows = template_count(&position.grid_template_rows)?;
     let columns = template_count(&position.grid_template_columns)?;
+    let explicit_rows = rows.max(area_rows);
+    let explicit_columns = columns.max(area_columns);
     let auto_rows = position.grid_auto_rows.0.len();
     let auto_columns = position.grid_auto_columns.0.len();
     if auto_rows > MAX_GRID_TRACKS || auto_columns > MAX_GRID_TRACKS {
@@ -2903,7 +3123,7 @@ fn grid_style(
             "computed implicit grid track bound exceeded",
         ));
     }
-    let bytes = (rows + columns + auto_rows + auto_columns)
+    let bytes = (explicit_rows + explicit_columns + auto_rows + auto_columns)
         .checked_mul(std::mem::size_of::<TrackSize>())
         .and_then(|n| n.checked_add(std::mem::size_of::<GridStyle>()))
         .filter(|n| *n <= remaining)
@@ -2926,11 +3146,33 @@ fn grid_style(
         (true, false) => GridAutoFlow::Column,
         (true, true) => GridAutoFlow::ColumnDense,
     };
+    let auto_rows_vec = implicit(&position.grid_auto_rows)?;
+    let auto_columns_vec = implicit(&position.grid_auto_columns)?;
+    let mut template_rows = template_tracks(&position.grid_template_rows, explicit_rows)?;
+    while template_rows.len() < explicit_rows {
+        let idx = template_rows.len() - rows;
+        let track = if auto_rows_vec.is_empty() {
+            TrackSize::Breadth(TrackBreadth::Auto)
+        } else {
+            auto_rows_vec[idx % auto_rows_vec.len()]
+        };
+        template_rows.push(track);
+    }
+    let mut template_columns = template_tracks(&position.grid_template_columns, explicit_columns)?;
+    while template_columns.len() < explicit_columns {
+        let idx = template_columns.len() - columns;
+        let track = if auto_columns_vec.is_empty() {
+            TrackSize::Breadth(TrackBreadth::Auto)
+        } else {
+            auto_columns_vec[idx % auto_columns_vec.len()]
+        };
+        template_columns.push(track);
+    }
     Ok(Box::new(GridStyle {
-        template_rows: template_tracks(&position.grid_template_rows, rows)?,
-        template_columns: template_tracks(&position.grid_template_columns, columns)?,
-        auto_rows: implicit(&position.grid_auto_rows)?,
-        auto_columns: implicit(&position.grid_auto_columns)?,
+        template_rows,
+        template_columns,
+        auto_rows: auto_rows_vec,
+        auto_columns: auto_columns_vec,
         auto_flow,
     }))
 }
@@ -2989,6 +3231,7 @@ impl LayoutReporter<'_> {
 fn renderer_layout(
     values: &ComputedValues,
     display: Display,
+    parent_areas: Option<&style::values::specified::position::TemplateAreas>,
     remaining: usize,
     node: usize,
     source: &str,
@@ -3232,17 +3475,25 @@ fn renderer_layout(
     ] {
         report.convert_length(name, outer_layout_length(&value.0, true), Length::Px(0.))?;
     }
-    for (slot, (name, value)) in output.grid_row.iter_mut().zip([
-        ("grid-row-start", &p.grid_row_start),
-        ("grid-row-end", &p.grid_row_end),
+    for (slot, (name, side, value)) in output.grid_row.iter_mut().zip([
+        ("grid-row-start", GridSide::Start, &p.grid_row_start),
+        ("grid-row-end", GridSide::End, &p.grid_row_end),
     ]) {
-        *slot = report.convert(name, grid_line(value), GridLine::Auto)?;
+        *slot = report.convert(
+            name,
+            grid_line(value, GridAxis::Row, side, parent_areas),
+            GridLine::Auto,
+        )?;
     }
-    for (slot, (name, value)) in output.grid_column.iter_mut().zip([
-        ("grid-column-start", &p.grid_column_start),
-        ("grid-column-end", &p.grid_column_end),
+    for (slot, (name, side, value)) in output.grid_column.iter_mut().zip([
+        ("grid-column-start", GridSide::Start, &p.grid_column_start),
+        ("grid-column-end", GridSide::End, &p.grid_column_end),
     ]) {
-        *slot = report.convert(name, grid_line(value), GridLine::Auto)?;
+        *slot = report.convert(
+            name,
+            grid_line(value, GridAxis::Column, side, parent_areas),
+            GridLine::Auto,
+        )?;
     }
     if matches!(display, Display::Grid | Display::InlineGrid) {
         output.grid = report.convert("grid-template", grid_style(p, remaining).map(Some), None)?;

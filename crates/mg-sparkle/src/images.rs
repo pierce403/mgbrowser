@@ -261,6 +261,55 @@ fn target_size(
     Ok((w, h))
 }
 
+fn svg_target_size(
+    nw: f32,
+    nh: f32,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<(u32, u32), String> {
+    if !nw.is_finite() || !nh.is_finite() || nw <= 0.0 || nh <= 0.0 {
+        return Err("Image dimensions exceed the small-image limit".into());
+    }
+    let (w, h) = match (width, height) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (
+            w,
+            (f64::from(nh) * f64::from(w) / f64::from(nw))
+                .round()
+                .max(1.0) as u32,
+        ),
+        (None, Some(h)) => (
+            (f64::from(nw) * f64::from(h) / f64::from(nh))
+                .round()
+                .max(1.0) as u32,
+            h,
+        ),
+        (None, None) => {
+            let cw = nw.ceil() as u64;
+            let ch = nh.ceil() as u64;
+            if cw <= u64::from(MAX_SIDE)
+                && ch <= u64::from(MAX_SIDE)
+                && cw.saturating_mul(ch) <= MAX_PIXELS
+            {
+                (cw as u32, ch as u32)
+            } else {
+                // Vector coordinate-space viewBoxes (e.g. 0 260 1792 1260 or 0 0 4096 4096)
+                // do not allocate source pixels; scale default natural rasterization down
+                // proportionally to fit within MAX_SIDE and MAX_PIXELS while preserving aspect ratio.
+                let side_scale =
+                    (f64::from(MAX_SIDE) / f64::from(nw)).min(f64::from(MAX_SIDE) / f64::from(nh));
+                let area_scale = ((MAX_PIXELS as f64) / (f64::from(nw) * f64::from(nh))).sqrt();
+                let scale = side_scale.min(area_scale);
+                let sw = (f64::from(nw) * scale).floor().max(1.0) as u32;
+                let sh = (f64::from(nh) * scale).floor().max(1.0) as u32;
+                (sw, sh)
+            }
+        }
+    };
+    check_size(w, h)?;
+    Ok((w, h))
+}
+
 pub(crate) fn svg_is_aspect_ratio_only(bytes: &[u8], content_type: &str) -> bool {
     if content_type.split(';').next() != Some("image/svg+xml")
         && bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'<')
@@ -365,12 +414,7 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
     };
     let tree = resvg::usvg::Tree::from_str(source, &options).map_err(|e| e.to_string())?;
     let natural = tree.size();
-    let (width, height) = target_size(
-        natural.width().ceil() as u32,
-        natural.height().ceil() as u32,
-        width,
-        height,
-    )?;
+    let (width, height) = svg_target_size(natural.width(), natural.height(), width, height)?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).ok_or("Cannot allocate image")?;
     let transform = resvg::tiny_skia::Transform::from_scale(
         width as f32 / natural.width(),

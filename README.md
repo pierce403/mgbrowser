@@ -2,7 +2,29 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.28
+## Latest verified release: v0.9.29
+
+v0.9.29 delivers pinned unmodified Playwright `1.58.2` browser automation parity
+(`chromium.connectOverCDP` over HTTP and WebSocket plus `chromium.launch` over
+`--remote-debugging-pipe` and `--headless`, with real `Target.setAutoAttach`,
+isolated utility worlds even under `--disable-scripts`, locator `fill`/`click`,
+screenshots, HTTP 404 response events, and download streaming) alongside
+real-site transport, CSS, SVG, layout, and Boa DOM compatibility: pure-Rust HTTP
+`gzip`/`deflate`/`br` decompression, responsive `<picture>`/`srcset` and
+`data:image/*` decoding, credential-free cross-origin HTTPS `<link
+rel="stylesheet">` and bounded `@import` loading, byte-length-preserving legacy
+`-moz-border-radius` aliasing and Chromium-aligned DevTools Console `css-parse`
+filtering, Stylo `style="..."` and `xmlns:xlink` on inline `<svg>` with
+large-`viewBox` and `viewBox`-only container-width sizing, CSS Grid
+`grid-template-areas` / `grid-area` 2-column desktop layout (rendering
+Wikipedia's Vector 2022 desktop layout), inline `position: relative`
+containing-block fallback, isolated float state across `Taffy` flex/grid item
+measurement (`lobste.rs`), and ECMAScript Annex B `<!--`/`-->` script comments,
+DOM wrapper expandos, reflected HTML attributes, `document.currentScript`,
+`document.write`, and blank/srcdoc `<iframe>` subdocuments.
+[Release notes](docs/RELEASE-v0.9.29.md).
+
+## Previous release: v0.9.28
 
 v0.9.28 adds interactive HTML forms and standalone controls (`checkbox`, `radio`,
 `<select>` dropdown popup, `<button>`, `<textarea>`, `<label>`, `<details>`/

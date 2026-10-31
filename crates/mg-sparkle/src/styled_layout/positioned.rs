@@ -207,21 +207,76 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
     }
 }
 
-fn border(
+fn resolve_containing_box(
     layout: &mut Layout<'_, '_>,
     border_boxes: &[Option<Rect>],
-    id: usize,
-    missing: &'static str,
+    ancestor: usize,
 ) -> Option<Rect> {
     if !layout.spend(0) {
-        layout.fail(id, "positioned border lookup work limit");
+        layout.fail(ancestor, "positioned border lookup work limit");
         return None;
     }
-    let rect = border_boxes.get(id).copied().flatten();
-    if rect.is_none() {
-        layout.fail(id, missing);
+    if let Some(r) = border_boxes.get(ancestor).copied().flatten() {
+        let b = layout.styles[ancestor].border_width;
+        return Some(Rect {
+            x: r.x + b[3],
+            y: r.y + b[0],
+            w: (r.w - b[1] - b[3]).max(0.0),
+            h: (r.h - b[0] - b[2]).max(0.0),
+        });
     }
-    rect
+    // CSS 2.1 §10.1: if the positioned ancestor is an inline element (or other
+    // box without a block border-box record), form the containing block from
+    // its recorded fragment boxes, or walk up to the nearest enclosing border
+    // box / initial containing block rather than aborting the whole page.
+    let mut frag_union: Option<(f32, f32, f32, f32)> = None;
+    for bx in &layout.scene.boxes {
+        if bx.node == ancestor {
+            let x0 = bx.x as f32;
+            let y0 = bx.y as f32;
+            let x1 = x0 + bx.width as f32;
+            let y1 = y0 + bx.height as f32;
+            frag_union = Some(match frag_union {
+                None => (x0, y0, x1, y1),
+                Some((lx, ty, rx, by)) => (lx.min(x0), ty.min(y0), rx.max(x1), by.max(y1)),
+            });
+        }
+    }
+    if let Some((lx, ty, rx, by)) = frag_union {
+        let b = layout.styles[ancestor].border_width;
+        return Some(Rect {
+            x: lx + b[3],
+            y: ty + b[0],
+            w: (rx - lx - b[1] - b[3]).max(0.0),
+            h: (by - ty - b[0] - b[2]).max(0.0),
+        });
+    }
+    let mut cur = layout.document.nodes.get(ancestor).map_or(0, |n| n.parent);
+    for _ in 0..=MAX_DEPTH {
+        if cur == 0 {
+            break;
+        }
+        if let Some(r) = border_boxes.get(cur).copied().flatten() {
+            let b = layout.styles[cur].border_width;
+            return Some(Rect {
+                x: r.x + b[3],
+                y: r.y + b[0],
+                w: (r.w - b[1] - b[3]).max(0.0),
+                h: (r.h - b[0] - b[2]).max(0.0),
+            });
+        }
+        let next = layout.document.nodes.get(cur).map_or(0, |n| n.parent);
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    Some(Rect {
+        x: 0.0,
+        y: 0.0,
+        w: layout.viewport.width as f32,
+        h: layout.viewport.height as f32,
+    })
 }
 
 fn resolve_axis_align(
@@ -251,21 +306,10 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
     let style = layout.styles[id].clone();
     let fixed = style.layout.position == Position::Fixed;
     let containing = if !fixed && let Some(ancestor) = entry.containing {
-        let Some(r) = border(
-            layout,
-            border_boxes,
-            ancestor,
-            "positioned containing border box missing",
-        ) else {
+        let Some(c) = resolve_containing_box(layout, border_boxes, ancestor) else {
             return false;
         };
-        let b = layout.styles[ancestor].border_width;
-        Rect {
-            x: r.x + b[3],
-            y: r.y + b[0],
-            w: (r.w - b[1] - b[3]).max(0.0),
-            h: (r.h - b[0] - b[2]).max(0.0),
-        }
+        c
     } else {
         Rect {
             x: 0.0,
@@ -664,19 +708,17 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
                 .iter()
                 .any(|overflow| !matches!(overflow, crate::style::Overflow::Visible))
             {
-                let Some(r) = border(
-                    layout,
-                    border_boxes,
-                    ancestor,
-                    "positioned overflow ancestor box missing",
-                ) else {
+                if !layout.spend(0) {
+                    layout.fail(ancestor, "positioned border lookup work limit");
                     return false;
-                };
-                if let Some(next) = layout.clip_for(ancestor, r) {
-                    clip = Some(clip.map_or(next, |r| r.intersect(next)));
                 }
-                if let Some(rr) = layout.rounded_clip_for(ancestor, r) {
-                    rounded_clips.push(rr);
+                if let Some(r) = border_boxes.get(ancestor).copied().flatten() {
+                    if let Some(next) = layout.clip_for(ancestor, r) {
+                        clip = Some(clip.map_or(next, |r| r.intersect(next)));
+                    }
+                    if let Some(rr) = layout.rounded_clip_for(ancestor, r) {
+                        rounded_clips.push(rr);
+                    }
                 }
             }
             if ancestor == 0 || ends_clipping {

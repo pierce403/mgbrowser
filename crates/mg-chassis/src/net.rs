@@ -605,8 +605,8 @@ impl Session {
         )
     }
 
-    /// Bounded automatic request. Stylesheets stay same-origin; images may use
-    /// credential-free cross-origin HTTPS. Every redirect is checked before I/O.
+    /// Bounded automatic request. Cross-origin stylesheets, images and scripts
+    /// use credential-free HTTPS. Every redirect is checked before I/O.
     pub(crate) fn fetch_resource(
         &self,
         url: &str,
@@ -773,10 +773,13 @@ fn submit_with_limits_recorded(
             let same_origin = origin.origin() == url.origin();
             resource_same_origin_chain &= same_origin;
             match limits.resource_kind {
-                ResourceKind::Stylesheet if !same_origin => {
-                    return Err(
-                        "Stylesheets are limited to the page origin, including redirects".into(),
-                    );
+                ResourceKind::Stylesheet => {
+                    if url.scheme() != "https" && (!same_origin || visited_https) {
+                        return Err(
+                            "Stylesheets require HTTPS across origins and cannot downgrade from HTTPS, including redirects".into(),
+                        );
+                    }
+                    credentials_allowed &= same_origin;
                 }
                 ResourceKind::Image => {
                     if url.scheme() != "https" && (!same_origin || visited_https) {
@@ -794,7 +797,6 @@ fn submit_with_limits_recorded(
                     }
                     credentials_allowed &= same_origin;
                 }
-                _ => {}
             }
         }
         visited_https |= url.scheme() == "https";
@@ -2594,7 +2596,11 @@ mod tests {
 
     #[test]
     fn direct_cross_origin_images_and_scripts_verify_tls_and_never_use_matching_domain_cookies() {
-        for kind in [ResourceKind::Image, ResourceKind::Script] {
+        for kind in [
+            ResourceKind::Image,
+            ResourceKind::Script,
+            ResourceKind::Stylesheet,
+        ] {
             for (host, trusted, succeeds) in [
                 ("localhost", true, true),
                 ("localhost", false, false),
@@ -2654,7 +2660,6 @@ mod tests {
             ("http", ResourceKind::Image),
             ("http", ResourceKind::Script),
             ("http", ResourceKind::Stylesheet),
-            ("https", ResourceKind::Stylesheet),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
@@ -2674,7 +2679,7 @@ mod tests {
                 error.contains(match kind {
                     ResourceKind::Image => "Images require HTTPS",
                     ResourceKind::Script => "Scripts require HTTPS",
-                    ResourceKind::Stylesheet => "page origin",
+                    ResourceKind::Stylesheet => "Stylesheets require HTTPS",
                 }),
                 "{error}"
             );
@@ -2709,7 +2714,11 @@ mod tests {
 
     #[test]
     fn image_and_script_https_redirect_cannot_return_to_same_origin_http_exception() {
-        for kind in [ResourceKind::Image, ResourceKind::Script] {
+        for kind in [
+            ResourceKind::Image,
+            ResourceKind::Script,
+            ResourceKind::Stylesheet,
+        ] {
             let (client, tls) = resource_test_tls(true);
             let http = TcpListener::bind("127.0.0.1:0").unwrap();
             http.set_nonblocking(true).unwrap();
@@ -2741,36 +2750,81 @@ mod tests {
     }
 
     #[test]
-    fn stylesheet_tls_redirect_to_another_origin_is_rejected_before_connection() {
+    fn stylesheet_tls_redirect_to_http_or_foreign_origin_enforces_https_and_cookie_isolation() {
         let (client, tls) = resource_test_tls(true);
         let origin = TcpListener::bind("127.0.0.1:0").unwrap();
         let page = format!("https://localhost:{}/", origin.local_addr().unwrap().port());
-        let other = TcpListener::bind("127.0.0.1:0").unwrap();
-        other.set_nonblocking(true).unwrap();
-        let cross = format!(
-            "https://localhost:{}/style.css",
-            other.local_addr().unwrap().port()
+        let insecure = TcpListener::bind("127.0.0.1:0").unwrap();
+        insecure.set_nonblocking(true).unwrap();
+        let downgrade = format!(
+            "http://localhost:{}/style.css",
+            insecure.local_addr().unwrap().port()
         );
         let server = resource_tls_server(
             origin,
-            tls,
+            tls.clone(),
             vec![format!(
-                "HTTP/1.1 302 Found\r\nLocation: {cross}\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 302 Found\r\nLocation: {downgrade}\r\nContent-Length: 0\r\n\r\n"
             )],
         );
         let error = submit_with_limits(
             &page,
             None,
-            client,
+            client.clone(),
             &Mutex::new(CookieJar::default()),
             resource_limits(&page, ResourceKind::Stylesheet),
         )
         .unwrap_err();
-        assert!(error.contains("page origin"), "{error}");
+        assert!(error.contains("Stylesheets require HTTPS"), "{error}");
         assert_eq!(server.join().unwrap().len(), 1);
         assert_eq!(
-            other.accept().unwrap_err().kind(),
+            insecure.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock
+        );
+
+        let origin2 = TcpListener::bind("127.0.0.1:0").unwrap();
+        let page2 = format!(
+            "https://localhost:{}/",
+            origin2.local_addr().unwrap().port()
+        );
+        let cdn = TcpListener::bind("127.0.0.1:0").unwrap();
+        let cross = format!(
+            "https://localhost:{}/style.css",
+            cdn.local_addr().unwrap().port()
+        );
+        let first = resource_tls_server(
+            origin2,
+            tls.clone(),
+            vec![format!(
+                "HTTP/1.1 302 Found\r\nLocation: {cross}\r\nContent-Length: 0\r\n\r\n"
+            )],
+        );
+        let second = resource_tls_server(
+            cdn,
+            tls,
+            vec!["HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nSet-Cookie: cdn=ignored; Path=/; Secure\r\nContent-Length: 8\r\n\r\na{top:0}".into()],
+        );
+        let cookies = Mutex::new(CookieJar::default());
+        cookies.lock().unwrap().store(
+            &Url::parse(&cross).unwrap(),
+            "cdn_existing=not-sent; Path=/",
+        );
+        let resp = submit_with_limits(
+            &page2,
+            None,
+            client,
+            &cookies,
+            resource_limits(&page2, ResourceKind::Stylesheet),
+        )
+        .unwrap();
+        assert_eq!(resp.body, b"a{top:0}");
+        let cdn_reqs = second.join().unwrap();
+        assert_eq!(cdn_reqs.len(), 1);
+        assert!(!cdn_reqs[0].contains("Cookie:"));
+        assert_eq!(first.join().unwrap().len(), 1);
+        assert_eq!(
+            cookies.lock().unwrap().header(&Url::parse(&cross).unwrap()),
+            "cdn_existing=not-sent"
         );
     }
 

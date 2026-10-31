@@ -347,6 +347,10 @@ struct State {
     #[unsafe_ignore_trace]
     pending_xhr_delivery: Option<(usize, page_session::platform::ScriptFetchResponse)>,
     #[unsafe_ignore_trace]
+    current_script: Option<usize>,
+    #[unsafe_ignore_trace]
+    iframe_documents: HashMap<usize, usize>,
+    #[unsafe_ignore_trace]
     automation_only: bool,
     #[unsafe_ignore_trace]
     enable_network: bool,
@@ -1164,6 +1168,58 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             .host
             .string_assignment(&handle, &name);
         if !is_string {
+            if handle.starts_with("node:")
+                || handle == "document"
+                || handle.starts_with("subdoc:")
+                || handle.starts_with("event:")
+                || handle.starts_with("mevent:")
+            {
+                let is_readonly_idl = error_property(&args[0], &name).is_some()
+                    || rejection_property(&args[0], &name).is_some()
+                    || message_property(&args[0], &name).is_some()
+                    || fetch_xhr::try_get(&handle, &name, context)?.is_some()
+                    || dom_events::try_get(&handle, &name, context)?.is_some()
+                    || dom_ops::try_get(&handle, &name, context)?.is_some()
+                    || web_apis::try_get(&handle, &name, context)?.is_some()
+                    || geometry_style::try_get(&handle, &name, context)?.is_some()
+                    || matches!(
+                        state(context).borrow_mut().host.get(&handle, &name),
+                        Ok(val) if !matches!(val, Value::Undefined)
+                    );
+                if is_readonly_idl {
+                    return Ok(false.into());
+                }
+                let holder = if let Some(recv) = args.get(3)
+                    && !matches!(receiver(recv, context), Ok(Value::Host(ref h)) if h == &handle)
+                {
+                    let Some(recv_obj) = recv.as_object() else {
+                        return Ok(false.into());
+                    };
+                    recv_obj
+                } else {
+                    args[0]
+                        .as_object()
+                        .ok_or_else(|| failure("Invalid DOM wrapper target"))?
+                };
+                let prop_key = PropertyKey::from(JsString::from(name.as_str()));
+                if !holder.has_own_property(prop_key.clone(), context)? {
+                    state(context)
+                        .borrow_mut()
+                        .host
+                        .charge(name.len() + 32)
+                        .map_err(failure)?;
+                }
+                holder.define_property_or_throw(
+                    prop_key,
+                    PropertyDescriptor::builder()
+                        .value(args[2].clone())
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true),
+                    context,
+                )?;
+                return Ok(true.into());
+            }
             return Err(failure(format!(
                 "Setting DOM property {name} is not implemented"
             )));
@@ -1600,6 +1656,302 @@ fn fallback_crypto_seed() -> [u8; 32] {
     seed
 }
 
+/// Normalize ECMAScript Annex B.1.1 HTML-like comments (`<!--` and line-leading `-->`)
+/// in classic scripts while preserving exact byte length, UTF-8 validity, and line/column offsets.
+fn normalize_classic_html_comments(source: &str) -> std::borrow::Cow<'_, str> {
+    if !source.contains("<!--") && !source.contains("-->") {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    fn line_term_len(bytes: &[u8], i: usize) -> usize {
+        match bytes.get(i) {
+            Some(b'\n') => 1,
+            Some(b'\r') => {
+                if bytes.get(i + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                }
+            }
+            Some(0xE2)
+                if bytes.get(i + 1) == Some(&0x80)
+                    && matches!(bytes.get(i + 2), Some(0xA8 | 0xA9)) =>
+            {
+                3
+            }
+            _ => 0,
+        }
+    }
+    fn ws_len(bytes: &[u8], i: usize) -> usize {
+        match bytes.get(i) {
+            Some(b' ' | b'\t' | 0x0B | 0x0C) => 1,
+            Some(0xC2) if bytes.get(i + 1) == Some(&0xA0) => 2,
+            Some(0xEF) if bytes.get(i + 1) == Some(&0xBB) && bytes.get(i + 2) == Some(&0xBF) => 3,
+            _ => 0,
+        }
+    }
+    fn skip_to_line_end(bytes: &[u8], mut i: usize) -> usize {
+        while i < bytes.len() && line_term_len(bytes, i) == 0 {
+            i += 1;
+        }
+        i
+    }
+    fn scan_template_segment(
+        bytes: &[u8],
+        mut i: usize,
+        tpl_brace_stack: &mut Vec<usize>,
+        can_start_regex: &mut bool,
+        line_start: &mut bool,
+    ) -> usize {
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            if bytes[i] == b'`' {
+                *can_start_regex = false;
+                *line_start = false;
+                return i + 1;
+            }
+            if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                tpl_brace_stack.push(0);
+                *can_start_regex = true;
+                *line_start = false;
+                return i + 2;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    let mut out = source.as_bytes().to_vec();
+    let mut changed = false;
+    let mut i = 0usize;
+    let mut line_start = true;
+    let mut can_start_regex = true;
+    let mut prev_was_dot = false;
+    let mut tpl_brace_stack: Vec<usize> = Vec::new();
+
+    while i < out.len() {
+        let lt = line_term_len(&out, i);
+        if lt > 0 {
+            line_start = true;
+            i += lt;
+            continue;
+        }
+        let ws = ws_len(&out, i);
+        if ws > 0 {
+            i += ws;
+            continue;
+        }
+        if out[i..].starts_with(b"//") {
+            i = skip_to_line_end(&out, i + 2);
+            continue;
+        }
+        if out[i..].starts_with(b"/*") {
+            i += 2;
+            while i < out.len() && !out[i..].starts_with(b"*/") {
+                let clt = line_term_len(&out, i);
+                if clt > 0 {
+                    line_start = true;
+                    i += clt;
+                } else {
+                    i += 1;
+                }
+            }
+            i = (i + 2).min(out.len());
+            continue;
+        }
+        if out[i..].starts_with(b"<!--") {
+            out[i..i + 4].copy_from_slice(b"//--");
+            changed = true;
+            i = skip_to_line_end(&out, i + 4);
+            continue;
+        }
+        if line_start && out[i..].starts_with(b"-->") {
+            out[i..i + 3].copy_from_slice(b"//>");
+            changed = true;
+            i = skip_to_line_end(&out, i + 3);
+            continue;
+        }
+        let b = out[i];
+        if b == b'\'' || b == b'"' {
+            let quote = b;
+            i += 1;
+            while i < out.len() {
+                if out[i] == b'\\' {
+                    i = (i + 2).min(out.len());
+                    continue;
+                }
+                if out[i] == quote || line_term_len(&out, i) > 0 {
+                    if out.get(i) == Some(&quote) {
+                        i += 1;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            line_start = false;
+            can_start_regex = false;
+            prev_was_dot = false;
+            continue;
+        }
+        if b == b'`' {
+            prev_was_dot = false;
+            i = scan_template_segment(
+                &out,
+                i + 1,
+                &mut tpl_brace_stack,
+                &mut can_start_regex,
+                &mut line_start,
+            );
+            continue;
+        }
+        if b == b'/' && can_start_regex {
+            i += 1;
+            let mut in_class = false;
+            while i < out.len() {
+                if line_term_len(&out, i) > 0 {
+                    break;
+                }
+                if out[i] == b'\\' {
+                    i = (i + 2).min(out.len());
+                    continue;
+                }
+                if out[i] == b'[' {
+                    in_class = true;
+                } else if out[i] == b']' {
+                    in_class = false;
+                } else if out[i] == b'/' && !in_class {
+                    i += 1;
+                    while i < out.len() && out[i].is_ascii_alphabetic() {
+                        i += 1;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            line_start = false;
+            can_start_regex = false;
+            prev_was_dot = false;
+            continue;
+        }
+        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+            let start = i;
+            i += 1;
+            while i < out.len()
+                && (out[i].is_ascii_alphanumeric() || out[i] == b'_' || out[i] == b'$')
+            {
+                i += 1;
+            }
+            let ident = &out[start..i];
+            can_start_regex = !prev_was_dot
+                && matches!(
+                    ident,
+                    b"return"
+                        | b"throw"
+                        | b"case"
+                        | b"delete"
+                        | b"void"
+                        | b"typeof"
+                        | b"instanceof"
+                        | b"in"
+                        | b"of"
+                        | b"new"
+                        | b"yield"
+                        | b"await"
+                        | b"else"
+                        | b"do"
+                );
+            prev_was_dot = false;
+            line_start = false;
+            continue;
+        }
+        if b.is_ascii_digit() {
+            i += 1;
+            while i < out.len() && (out[i].is_ascii_alphanumeric() || out[i] == b'_') {
+                i += 1;
+            }
+            can_start_regex = false;
+            prev_was_dot = false;
+            line_start = false;
+            continue;
+        }
+        if b == b'{' {
+            if let Some(depth) = tpl_brace_stack.last_mut() {
+                *depth += 1;
+            }
+            can_start_regex = true;
+            prev_was_dot = false;
+            line_start = false;
+            i += 1;
+            continue;
+        }
+        if b == b'}' {
+            prev_was_dot = false;
+            if tpl_brace_stack.last() == Some(&0) {
+                tpl_brace_stack.pop();
+                i = scan_template_segment(
+                    &out,
+                    i + 1,
+                    &mut tpl_brace_stack,
+                    &mut can_start_regex,
+                    &mut line_start,
+                );
+                continue;
+            }
+            if let Some(depth) = tpl_brace_stack.last_mut() {
+                *depth -= 1;
+            }
+            can_start_regex = true;
+            line_start = false;
+            i += 1;
+            continue;
+        }
+        if b == b')' || b == b']' {
+            can_start_regex = false;
+            prev_was_dot = false;
+            line_start = false;
+            i += 1;
+            continue;
+        }
+        if (b == b'+' && out.get(i + 1) == Some(&b'+'))
+            || (b == b'-' && out.get(i + 1) == Some(&b'-'))
+        {
+            can_start_regex = false;
+            prev_was_dot = false;
+            line_start = false;
+            i += 2;
+            continue;
+        }
+        if b == b'.' {
+            prev_was_dot = true;
+            can_start_regex = true;
+            line_start = false;
+            i += 1;
+            continue;
+        }
+        if b < 0x80 {
+            can_start_regex = true;
+            prev_was_dot = false;
+            line_start = false;
+            i += 1;
+        } else {
+            let ch_len = source[i..].chars().next().map_or(1, char::len_utf8);
+            can_start_regex = false;
+            prev_was_dot = false;
+            line_start = false;
+            i += ch_len;
+        }
+    }
+    if !changed {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    match String::from_utf8(out) {
+        Ok(s) => std::borrow::Cow::Owned(s),
+        Err(_) => std::borrow::Cow::Borrowed(source),
+    }
+}
+
 impl BoaPageRealm {
     pub fn start(request: Request) -> (Option<Self>, SessionReply) {
         Self::start_with_observer(request, page_session::observer::ObserverInit::Disabled)
@@ -1813,9 +2165,13 @@ impl BoaPageRealm {
             } else {
                 "Inline"
             };
+            let normalized = normalize_classic_html_comments(&source.source);
             let result = {
                 let _ingress = Ingress::enter(realm.state.clone());
-                realm.engine.evaluate_raw(&source.source)
+                realm.state.borrow_mut().current_script = Some(source.node);
+                let res = realm.engine.evaluate_raw(&normalized);
+                realm.state.borrow_mut().current_script = None;
+                res
             };
             match result {
                 Ok(_) => reply.scripts_executed += 1,
@@ -1987,6 +2343,8 @@ impl BoaPageRealm {
             abort_signals: Vec::new(),
             xhr_instances: Vec::new(),
             pending_xhr_delivery: None,
+            current_script: None,
+            iframe_documents: HashMap::new(),
             automation_only: platform_init.automation_only,
             enable_network,
             active_world: 0,

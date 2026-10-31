@@ -6,6 +6,45 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-032 : Real-site compatibility, HTTP decompression & cross-origin/@import CSS
+
+Stability: stable
+
+### Dependencies
+
+F-003 local document rendering, F-005 styled text and images, F-007 Rust TLS, F-014 Stylo CSS, F-016 JavaScript/DOM worker isolation, F-022 diagnostics, F-024 Playwright control.
+
+### Properties
+
+Pure-Rust transport, resource, CSS/SVG, layout, DevTools, and Boa DOM/JS
+compatibility upgrades across `mg-chassis`, `mg-sparkle`, and `mg-browser`
+within unchanged resource and worker isolation limits (`MAX_SHEETS = 16`,
+`MAX_REQUESTS = 32`, `MAX_TOTAL = 2 MiB`, `MAX_SIDE = 2048`, `MAX_PIXELS =
+1,048,576`, `RLIMIT_NOFILE = 3`, `RLIMIT_FSIZE = 0`): `Accept-Encoding: gzip,
+deflate, br` HTTP decompression with decoded-byte caps; credential-free
+cross-origin HTTPS `<link rel="stylesheet">` and bounded `@import` loading
+(depth `<= 4`, cycle-checked); responsive `<img srcset>` / `<picture><source>`
+selection and `data:image/*` decoding; byte-length-preserving legacy
+`-moz-border-radius` / `-moz-box-sizing` / `-webkit-box-sizing` / `-moz-opacity`
+/ `-moz-box-shadow` author CSS normalization and Chromium-aligned DevTools
+Console filtering of CSS Syntax §5 `css-parse` ignored declarations; Stylo
+`style="..."` and `xmlns:xlink` on inline `<svg>`, proportional `svg_target_size`
+scaling for large-`viewBox` icons, and containing-width sizing for `viewBox`-only
+inline `<svg>` elements; CSS Grid `grid-template-areas` / `grid-area` 2-column
+desktop layout, inline `position: relative` containing-block fragment fallback,
+and isolated float state across `Taffy` flex/grid item measurement and BFC
+painting; and ECMAScript Annex B `<!--`/`-->` script comments, DOM wrapper
+expandos, reflected HTML attributes, `document.currentScript`, `document.write`,
+and `subdoc:`-backed blank/srcdoc `<iframe>` `contentDocument`/`contentWindow`.
+See [docs/RELEASE-v0.9.29.md](docs/RELEASE-v0.9.29.md).
+
+### Test criteria
+
+- [x] HTTP `gzip`/`deflate`/`br` decompression, `<picture>`/`srcset`, `data:image/*`, credential-free cross-origin HTTPS CSS, and bounded `@import` pass unit and integration suites (`resources`, `net`, `real_site_compat`).
+- [x] Slashdot `-moz-border-radius` aliasing, DevTools `css-parse` filtering, inline `<svg style=... xmlns:xlink=...>`, large/viewBox-only SVG sizing, Lobsters flex-item float isolation, and Wikipedia Vector 2022 `grid-template-areas` + inline `position: relative` layout pass regression suites and live desktop screenshot inspection (`real_site_compat`, `style_layout`).
+- [x] Annex B `<!--`/`-->` script comments, DOM wrapper expandos, strict/sloppy read-only IDL attributes, `document.currentScript`/`document.write`, and blank/srcdoc `<iframe>` subdocuments pass isolated Boa worker suites (`real_site_compat`).
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, both WPT score lanes, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-031 : HTML forms, interactive controls & modern DOM/Web Platform APIs
 
 Stability: stable
@@ -360,7 +399,7 @@ posting and voting are separate later interaction work, not implied support.
 
 ## F-024 : Pinned Playwright browser control
 
-Stability: in-progress
+Stability: stable
 
 ### Dependencies
 
@@ -368,26 +407,24 @@ F-011 truthful CDP, F-023 stable tab targets, isolated Runtime/DOM support.
 
 ### Properties
 
-Unmodified pinned Playwright client: attachment is not locator compatibility.
-Unsupported commands and browser capabilities must fail explicitly.
+Unmodified pinned Playwright client (`playwright-core` `1.58.2`): attachment is
+not locator compatibility, and unsupported CDP commands must fail explicitly.
+Shipped in `v0.9.29` with real target auto-attachment (`Target.setAutoAttach`
+with `flatten: true` and `waitForDebuggerOnStart`), isolated utility worlds
+(`Page.createIsolatedWorld`, `Runtime.evaluate`, `Runtime.callFunctionOn` with
+`awaitPromise`, element handle marshaling, and `executionContextCreated`/
+`Destroyed`/`Cleared` even when page scripts are disabled via `--disable-scripts`),
+`Page`/`DOM`/`CSS`/`Network`/`Input`/`Emulation`/`Browser.setDownloadBehavior`
+events, and FD `3`/`4` `--remote-debugging-pipe` + `--headless` virtual
+framebuffer mode. See [docs/PLAYWRIGHT.md](docs/PLAYWRIGHT.md) and
+[docs/RELEASE-v0.9.29.md](docs/RELEASE-v0.9.29.md).
 
 ### Test criteria
 
-- [ ] Actual client connects and enumerates/creates/selects/closes stable page targets.
-- [ ] Navigation/title, locator fill/click, real result, screenshot and error reporting pass.
-- [ ] Target identity survives switching/detachment; stale/closed targets reject.
-- [ ] Packaged/public release journey and all existing resource/isolation gates pass.
-
-The pinned, unmodified playwright-core 1.58.2 probe is checked in under
-tools/playwright. The latest ordinary-client baseline is public v0.9.21:
-discovery succeeds, but auto-attachment and download-policy initialization fail
-before title or locators. See docs/PLAYWRIGHT.md for that explicit
-scripts-disabled baseline. No acceptance checkbox changes; a passing custom CDP
-client is not a substitute for this gate.
-The next connection/title/initialized-blank-page increment and its still-open
-permission/world/download requirements are scoped in docs/PLAYWRIGHT.md;
-docs/AUTOMATION_STARTUP.md freezes the native pre-navigation barrier contract.
-This is planning, not shipped autoattachment or a completed client criterion.
+- [x] Actual client connects and enumerates/creates/selects/closes stable page targets (`tools/playwright/acceptance.mjs`, HTTP + WebSocket `connectOverCDP`).
+- [x] Navigation/title, locator fill/click, real result, screenshot and error reporting pass (`tools/playwright/acceptance.mjs` + `tools/playwright/launch.test.mjs`).
+- [x] Target identity survives switching/detachment; stale/closed targets and unknown CDP methods reject explicitly (`tools/playwright/acceptance.mjs`).
+- [x] Packaged/public release journey and all existing resource/isolation gates pass (`v0.9.29`).
 v0.9.20 at `28413873dc1c19cae537af9158899760c40dc7f7` ships the bounded
 [synchronous main-world Runtime foundation](docs/RUNTIME_AUTOMATION.md).
 Packaged and public native/CDP proofs verify real worker roots, newer edits and

@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 417,
-    "PASS": 532,
+    "FAIL": 408,
+    "PASS": 541,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -707,11 +707,11 @@
       "test": "css/css-flexbox/dynamic-isize-change-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/dynamic-isize-change-002.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/dynamic-isize-change-003.html"
     },
     {
@@ -883,7 +883,7 @@
       "test": "css/css-flexbox/flex-aspect-ratio-img-column-016.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-aspect-ratio-img-column-018.html"
     },
     {
@@ -1867,19 +1867,19 @@
       "test": "css/css-flexbox/flexbox-flex-basis-content-002b.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-flex-basis-content-003a.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-flex-basis-content-003b.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-flex-basis-content-004a.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-flex-basis-content-004b.html"
     },
     {
@@ -3895,7 +3895,7 @@
       "test": "css/css-flexbox/svg-no-natural-size-grandchild.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/svg-root-as-flex-item-001.html"
     },
     {
@@ -3907,7 +3907,7 @@
       "test": "css/css-flexbox/svg-root-as-flex-item-003.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/svg-root-as-flex-item-004.html"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "0cc4f2194100a859468472624f61bded8e2ef4736aee60f6ac3800a6012e8143",
+  "source_sha256": "f275bb60480a7d243342cd6f7b7bd869f958525f30fb885b530fea9b0b4299bb",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }
