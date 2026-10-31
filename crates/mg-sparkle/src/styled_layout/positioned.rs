@@ -27,7 +27,12 @@ pub(super) fn is_inset_zero_passthrough(layout: &Layout<'_, '_>, id: usize) -> b
         && style.padding == [Length::Px(0.0); 4]
         && style.border_width == [0.0; 4]
         && style.background_color.alpha == 0.0
+        && style.background_gradient.is_none()
         && style.background_images.is_empty()
+        && style.box_shadows.is_empty()
+        && !style.has_transform
+        && style.clip_rect.is_none()
+        && style.clip_path_inset.is_none()
         && !node.children.is_empty()
         && node.children.iter().all(|&child| {
             layout.document.nodes[child].tag == "#text"
@@ -91,6 +96,7 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         {
             continue;
         }
+        let is_fixed = layout.styles[id].layout.position == Position::Fixed;
         let mut cursor = id;
         let mut depth = 0;
         let mut hidden = false;
@@ -108,7 +114,12 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
                 || (cursor != id && is_collapsed_ancestor(layout, cursor));
             if cursor != id && !is_inset_zero_passthrough(layout, cursor) {
                 fixed_ancestor |= style.layout.position == Position::Fixed;
-                if containing.is_none() && style.layout.position != Position::Static {
+                let forms_cb = if is_fixed {
+                    style.has_transform
+                } else {
+                    style.layout.position != Position::Static || style.has_transform
+                };
+                if containing.is_none() && forms_cb {
                     containing = Some(cursor);
                 }
                 if dependency.is_none()
@@ -305,7 +316,8 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
     let id = entry.id;
     let style = layout.styles[id].clone();
     let fixed = style.layout.position == Position::Fixed;
-    let containing = if !fixed && let Some(ancestor) = entry.containing {
+    let viewport_fixed = fixed && entry.containing.is_none();
+    let containing = if !viewport_fixed && let Some(ancestor) = entry.containing {
         let Some(c) = resolve_containing_box(layout, border_boxes, ancestor) else {
             return false;
         };
@@ -313,7 +325,7 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
     } else {
         Rect {
             x: 0.0,
-            y: if fixed {
+            y: if viewport_fixed {
                 layout.viewport.scroll as f32
             } else {
                 0.0
@@ -359,7 +371,11 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         value.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT)
     };
     let explicit_h = style.height.resolve(containing.h);
-    let stretch_h = top.zip(bottom);
+    let stretch_h = if style.layout.height_intrinsic.is_some() {
+        None
+    } else {
+        top.zip(bottom)
+    };
     let height_is_definite = explicit_h.is_some() || stretch_h.is_some();
     let definite_border_h = height_is_definite.then(|| {
         let raw_h = if let Some(h) = explicit_h {
@@ -377,17 +393,17 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
         )
     });
     let is_replaced = layout.is_replaced(id);
-    let is_image_or_svg = matches!(layout.document.nodes[id].tag.as_str(), "img" | "svg");
+    let is_image_or_svg = matches!(
+        layout.document.nodes[id].tag.as_str(),
+        "img" | "svg" | "canvas"
+    );
+    let has_intrinsic_w = style.layout.width_intrinsic.is_some();
 
     let width = if let Some(width) = style.width.resolve(containing.w) {
         sizing(width, horizontal)
-    } else if !style.layout.width_fit_content
-        && !style.layout.width_max_content
-        && let (Some(left), Some(right)) = (left, right)
-    {
+    } else if !has_intrinsic_w && let (Some(left), Some(right)) = (left, right) {
         (containing.w - left - right - margin[1] - margin[3]).max(horizontal)
-    } else if !style.layout.width_fit_content
-        && !style.layout.width_max_content
+    } else if !has_intrinsic_w
         && let Some(used_h) = definite_border_h
         && (style.layout.aspect_ratio.is_some() || (is_replaced && is_image_or_svg))
     {
@@ -423,7 +439,10 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             }
         }
     } else {
-        let intrinsic = if style.layout.width_fit_content || style.layout.width_max_content {
+        let intrinsic = if matches!(
+            style.layout.width_intrinsic,
+            Some(IntrinsicSize::FitContent | IntrinsicSize::MaxContent)
+        ) {
             layout.measure_fit_content_intrinsic(
                 id,
                 containing.w,
@@ -444,19 +463,24 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             - margin[3]
             - horizontal)
             .max(0.0);
-        if style.layout.width_max_content {
-            intrinsic.max + horizontal
-        } else {
-            intrinsic.max.min(available).max(intrinsic.min) + horizontal
+        match style.layout.width_intrinsic {
+            Some(IntrinsicSize::MinContent) => intrinsic.min + horizontal,
+            Some(IntrinsicSize::MaxContent) => intrinsic.max + horizontal,
+            _ => intrinsic.max.min(available).max(intrinsic.min) + horizontal,
         }
     };
-    let width = if style.layout.max_width_fit_content {
-        let Some(intrinsic) = layout.measure_fit_content_intrinsic(
-            id,
-            containing.w,
-            Some(containing.h),
-            entry.depth + 1,
-        ) else {
+    let width = if let Some(maximum) = style.layout.max_width_intrinsic {
+        let intrinsic = if maximum == IntrinsicSize::FitContent {
+            layout.measure_fit_content_intrinsic(
+                id,
+                containing.w,
+                Some(containing.h),
+                entry.depth + 1,
+            )
+        } else {
+            layout.measure_content_intrinsic(id, entry.depth + 1)
+        };
+        let Some(intrinsic) = intrinsic else {
             layout.fail(id, "positioned fit-content maximum measurement rejected");
             return false;
         };
@@ -467,7 +491,12 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             - margin[3]
             - horizontal)
             .max(0.0);
-        width.min(intrinsic.max.min(intrinsic.min.max(stretch)) + horizontal)
+        let cap = match maximum {
+            IntrinsicSize::MinContent => intrinsic.min,
+            IntrinsicSize::MaxContent => intrinsic.max,
+            IntrinsicSize::FitContent => intrinsic.max.min(intrinsic.min.max(stretch)),
+        };
+        width.min(cap + horizontal)
     } else {
         width
     };
@@ -592,6 +621,37 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             vertical,
         )
     };
+    let height = if style.layout.min_height_intrinsic.is_some()
+        || style.layout.max_height_intrinsic.is_some()
+    {
+        let intrinsic_content_h = if is_replaced {
+            let Some((_, nat_h)) = layout.measure_natural_replaced(id, entry.depth + 1) else {
+                layout.fail(id, "positioned replaced content measurement rejected");
+                return false;
+            };
+            nat_h
+        } else {
+            let Some(ch) = layout.measure_content_height(id, content_width, None, entry.depth + 1)
+            else {
+                layout.fail(id, "positioned content height measurement rejected");
+                return false;
+            };
+            ch
+        };
+        let intrinsic_border_h = (intrinsic_content_h + vertical).clamp(0.0, MAX_EXTENT);
+        let capped = if style.layout.max_height_intrinsic.is_some() {
+            height.min(intrinsic_border_h)
+        } else {
+            height
+        };
+        if style.layout.min_height_intrinsic.is_some() {
+            capped.max(intrinsic_border_h)
+        } else {
+            capped
+        }
+    } else {
+        height
+    };
     // Auto margins only consume free space when both insets are definite.
     for (start, end, before, after, extent, size) in [
         (3, 1, left, right, containing.w, width),
@@ -610,7 +670,7 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             }
         }
     }
-    let fixed_scroll = if fixed {
+    let fixed_scroll = if viewport_fixed {
         layout.viewport.scroll as f32
     } else {
         0.0
@@ -693,7 +753,7 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
     };
     let mut clip: Option<Rect> = None;
     let mut rounded_clips: Vec<crate::paint::RoundedRect> = Vec::new();
-    if !fixed {
+    if !viewport_fixed {
         let mut ancestor = layout.document.nodes[id].parent;
         for depth in 0..=MAX_DEPTH {
             if !layout.spend(depth) {
@@ -702,22 +762,35 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             }
             let ancestor_style = &layout.styles[ancestor];
             let ends_clipping = ancestor_style.layout.position == Position::Fixed;
-            if ancestor_style
+            let has_overflow_clip = ancestor_style
                 .layout
                 .overflow
                 .iter()
-                .any(|overflow| !matches!(overflow, crate::style::Overflow::Visible))
-            {
+                .any(|overflow| !matches!(overflow, crate::style::Overflow::Visible));
+            let has_self_clip =
+                ancestor_style.clip_rect.is_some() || ancestor_style.clip_path_inset.is_some();
+            if has_overflow_clip || has_self_clip {
                 if !layout.spend(0) {
                     layout.fail(ancestor, "positioned border lookup work limit");
                     return false;
                 }
                 if let Some(r) = border_boxes.get(ancestor).copied().flatten() {
-                    if let Some(next) = layout.clip_for(ancestor, r) {
-                        clip = Some(clip.map_or(next, |r| r.intersect(next)));
+                    if has_overflow_clip {
+                        if let Some(next) = layout.clip_for(ancestor, r) {
+                            clip = Some(clip.map_or(next, |r| r.intersect(next)));
+                        }
+                        if let Some(rr) = layout.rounded_clip_for(ancestor, r) {
+                            rounded_clips.push(rr);
+                        }
                     }
-                    if let Some(rr) = layout.rounded_clip_for(ancestor, r) {
-                        rounded_clips.push(rr);
+                    if has_self_clip {
+                        let (sc, sr) = layout.self_clip_for(ancestor, r);
+                        if let Some(next) = sc {
+                            clip = Some(clip.map_or(next, |r| r.intersect(next)));
+                        }
+                        if let Some(rr) = sr {
+                            rounded_clips.push(rr);
+                        }
                     }
                 }
             }
@@ -736,7 +809,7 @@ fn paint(layout: &mut Layout<'_, '_>, border_boxes: &mut [Option<Rect>], entry: 
             *slot = Some(r);
         }
     }
-    if fixed || entry.fixed_ancestor {
+    if viewport_fixed || entry.fixed_ancestor {
         layout.scene.box_scroll[mark.1..].fill(false);
     }
     if let Some(clip) = clip {

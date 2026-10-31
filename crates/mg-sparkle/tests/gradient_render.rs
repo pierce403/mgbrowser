@@ -101,3 +101,20 @@ fn positioned_gradient_tracks_flex_shift_scroll_scaling_and_link_hit() {
         }
     }
 }
+
+#[test]
+fn multi_stop_repeating_and_radial_gradients_render_expected_stops() {
+    let f = frame(
+        "<div style='width:20px;height:4px;background:repeating-linear-gradient(90deg,#ff0000 0px,#ff0000 4px,#0000ff 4px,#0000ff 8px)'></div>\
+         <div style='width:20px;height:16px;background:radial-gradient(circle 6px at 10px 8px,#00ff00 0px,#00ff00 3px,#000000 6px)'></div>",
+        1.,
+        0,
+    );
+    assert_eq!(pixel(&f, 1, 1), 0xff0000);
+    assert_eq!(pixel(&f, 5, 1), 0x0000ff);
+    assert_eq!(pixel(&f, 9, 1), 0xff0000);
+    assert_eq!(pixel(&f, 13, 1), 0x0000ff);
+    // Radial center at (10, 4 + 8) = (10, 12) is green, outside radius 6 at (1, 12) is black.
+    assert_eq!(pixel(&f, 10, 12), 0x00ff00);
+    assert_eq!(pixel(&f, 1, 12), 0x000000);
+}

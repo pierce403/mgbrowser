@@ -252,7 +252,7 @@ pub fn render_scaled_cached(
         || document
             .nodes
             .iter()
-            .any(|node| node.has("style") || node.tag == "svg");
+            .any(|node| node.has("style") || matches!(node.tag.as_str(), "svg" | "canvas"));
     if styled {
         let cache_key = (doc_key, viewport.width, viewport.height);
         let computed = if doc_key != 0

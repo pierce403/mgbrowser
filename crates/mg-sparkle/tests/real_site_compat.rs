@@ -420,3 +420,58 @@ fn vector_2022_grid_template_areas_renders_two_column_desktop_layout() {
     assert_eq!(content_box.y, 20);
     assert_eq!(footer_box.y, 320);
 }
+
+#[test]
+fn mdn_named_grid_lines_place_content_and_full_columns_accurately() {
+    let html = r#"<!doctype html><html><head><style>
+        html, body { margin: 0; }
+        .reference-layout {
+            display: grid;
+            grid-template-columns:
+                [extended-full-start] 16px
+                [full-start] 1fr
+                [content-start] minmax(0, 768px)
+                [content-end] 1fr
+                [full-end] 16px
+                [extended-full-end];
+        }
+        #bleed { grid-column: extended-full; height: 24px; }
+        #full { grid-column: full; height: 32px; }
+        #content { grid-column: content; height: 120px; }
+    </style></head><body>
+        <main class="reference-layout">
+            <div id="bleed">Banner</div>
+            <div id="full">Header</div>
+            <article id="content">Article</article>
+        </main>
+    </body></html>"#;
+    let doc = parse(html, "https://developer.mozilla.example/en-US/docs/Web/CSS");
+    let mut fonts = fonts();
+    let frame = render_scaled(
+        &doc,
+        &mut fonts,
+        Viewport {
+            width: 1200,
+            height: 600,
+            scroll: 0,
+        },
+        &Controls::default(),
+        1.0,
+    );
+    assert!(
+        frame.diagnostics.entries.is_empty(),
+        "expected zero diagnostics on MDN named-line grid: {:?}",
+        frame.diagnostics.entries
+    );
+    let box_of = |id: &str| {
+        let node = doc.query_selector(0, id).unwrap().unwrap();
+        frame.boxes.iter().find(|b| b.node == node).unwrap()
+    };
+    let bleed = box_of("#bleed");
+    let full = box_of("#full");
+    let content = box_of("#content");
+    assert_eq!((bleed.x, bleed.width, bleed.y), (0, 1200, 0));
+    assert_eq!((full.x, full.width, full.y), (16, 1168, 24));
+    // Remaining 1168 - 768 = 400px split across two 1fr gutters => 200px each, so 16 + 200 = 216.
+    assert_eq!((content.x, content.width, content.y), (216, 768, 56));
+}

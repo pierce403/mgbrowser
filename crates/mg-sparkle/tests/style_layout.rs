@@ -145,7 +145,11 @@ fn intrinsic_minimum_width_is_explicit_and_unrelated_loss_stays_unsupported() {
     assert!(!at(&doc, &styles, "#a").layout.unsupported);
     assert!(!at(&doc, &styles, "#b").layout.unsupported);
     assert!(at(&doc, &styles, "#c").layout.unsupported);
-    assert!(at(&doc, &styles, "#d").layout.unsupported);
+    assert!(!at(&doc, &styles, "#d").layout.unsupported);
+    assert_eq!(
+        at(&doc, &styles, "#d").layout.width_intrinsic,
+        Some(IntrinsicSize::MinContent)
+    );
     assert!(!at(&doc, &styles, "#e").layout.unsupported);
 }
 
@@ -245,11 +249,22 @@ fn text_inherits_typography_but_not_owned_grid_vectors_or_item_constraints() {
 
 #[test]
 fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
-    for rule in [
+    for supported_grid in [
         "grid-template-columns:repeat(auto-fit,20px)",
         "grid-template-columns:[named] 1fr",
         "grid-template-columns:fit-content(10px)",
+    ] {
+        let (doc, styles, report) = compute(&format!(
+            "<div id=x style='display:grid;{supported_grid}'></div>"
+        ));
+        let x = at(&doc, &styles, "#x");
+        assert!(!x.layout.unsupported, "{supported_grid}: {report:?}");
+        assert!(x.layout.grid.is_some(), "{supported_grid}");
+        assert!(report.entries.is_empty(), "{supported_grid}: {report:?}");
+    }
+    for rule in [
         "grid-template-columns:min(20%, 1px)",
+        "grid-template-rows:max(10%, 4px)",
     ] {
         let (doc, styles, report) =
             compute(&format!("<div id=x style='display:grid;{rule}'></div>"));
@@ -288,12 +303,20 @@ fn unsupported_grid_and_mixed_lengths_are_diagnosed_not_silently_admitted() {
         at(&doc, &styles, "#n").layout.grid_column,
         [GridLine::Line(1), GridLine::Line(3)]
     );
+    for supported_item in ["flex-basis:min-content", "grid-column:named"] {
+        let (doc, styles, report) = compute(&format!(
+            "<div id=x style='display:flex;{supported_item}'></div>"
+        ));
+        assert!(
+            !at(&doc, &styles, "#x").layout.unsupported,
+            "{supported_item}"
+        );
+        assert!(report.entries.is_empty(), "{supported_item}: {report:?}");
+    }
     for rule in [
         "width:min(50%, 2px)",
-        "flex-basis:min-content",
         "left:max(20%, 4px)",
         "gap:min(1px, 2%)",
-        "grid-column:named",
         "padding:max(10%, 2px)",
     ] {
         let (doc, styles, report) =

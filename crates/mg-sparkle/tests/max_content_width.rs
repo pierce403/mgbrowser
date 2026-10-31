@@ -85,11 +85,27 @@ fn max_content_snapshot_is_distinct_from_fit_content_numeric_and_auto() {
 
 #[test]
 fn unsupported_sizing_values_still_produce_explicit_diagnostics() {
-    for unsupported in [
+    for supported in [
         "width:min-content",
         "max-width:max-content",
         "height:max-content",
+        "min-height:min-content",
+        "max-height:fit-content",
+    ] {
+        let doc = document(&format!("<div id=subject style='{supported}'>text</div>"));
+        let styles = style::compute_styles(&doc, &doc.stylesheets, (320., 300.)).unwrap();
+        let node = doc.query_selector(0, "#subject").unwrap().unwrap();
+        assert!(!styles[node].layout.unsupported, "{supported}");
+        let f = raw_frame(&doc, 320, 1.0);
+        assert!(
+            f.diagnostics.entries.is_empty(),
+            "{supported}: {:?}",
+            f.diagnostics
+        );
+    }
+    for unsupported in [
         "width:fit-content(50px)",
+        "max-width:fit-content(50px)",
         "width:max-content;height:min(50%, 3px)",
     ] {
         let doc = document(&format!("<div id=subject style='{unsupported}'>text</div>"));

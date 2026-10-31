@@ -78,7 +78,7 @@ fn parse_errors_identify_sheet_and_attribute_without_losing_neighboring_styles()
 #[test]
 fn unsupported_computed_properties_report_actual_fallback_and_node() {
     let document = parse(
-        "<div id=legacy style='display:flow-root;background-image:linear-gradient(red,blue,green)'>Text</div><div id=nonlinear style='width:min(50%, 10px)'>Calc</div>",
+        "<div id=legacy style='display:flow-root;background-image:conic-gradient(red,blue)'>Text</div><div id=nonlinear style='width:min(50%, 10px)'>Calc</div>",
         "https://example.test/",
     );
     let mut report = StyleDiagnostics::default();

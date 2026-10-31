@@ -241,6 +241,8 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         let creates_real = is_element
             && (matches!(style.layout.position, Position::Fixed | Position::Sticky)
                 || style.own_opacity < 1.0
+                || style.has_transform
+                || style.clip_path_inset.is_some()
                 || (z_applies && style.layout.z_index.is_some()));
 
         let (next_real, next_scope) = if creates_real {
@@ -398,7 +400,8 @@ pub(super) fn run(layout: &mut Layout<'_, '_>) {
         let scope = &scopes[scope_idx];
         let is_decoration_op = matches!(
             layout.scene.paints[index],
-            Paint::Background(..)
+            Paint::BoxShadow { .. }
+                | Paint::Background(..)
                 | Paint::RoundedDecoration(..)
                 | Paint::Rect(..)
                 | Paint::Image(..)

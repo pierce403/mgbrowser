@@ -133,6 +133,70 @@ impl RoundedRect {
         Self::from_raw(nx, ny, nw, nh, inner)
     }
 
+    /// Offset by `(dx, dy)` and expand/contract by `spread` per CSS Backgrounds 3 §7.1.2.
+    pub fn offset_and_spread(&self, dx: f32, dy: f32, spread: f32) -> Self {
+        let nw = (self.w + 2.0 * spread).max(0.0);
+        let nh = (self.h + 2.0 * spread).max(0.0);
+        let nx = self.x + dx - spread;
+        let ny = self.y + dy - spread;
+        if nw <= 0.0 || nh <= 0.0 {
+            return Self::from_raw(nx, ny, 0.0, 0.0, [(0.0, 0.0); 4]);
+        }
+        let adj = |r: f32| -> f32 {
+            if r <= 0.0 {
+                0.0
+            } else if spread >= 0.0 {
+                if r >= spread || spread <= 0.0 {
+                    r + spread
+                } else {
+                    let ratio = r / spread - 1.0;
+                    r + spread * (1.0 + ratio * ratio * ratio)
+                }
+            } else {
+                (r + spread).max(0.0)
+            }
+        };
+        let radii = self.radii.map(|(rx, ry)| {
+            if rx <= 0.0 || ry <= 0.0 {
+                (0.0, 0.0)
+            } else {
+                (adj(rx), adj(ry))
+            }
+        });
+        Self::from_raw(nx, ny, nw, nh, radii)
+    }
+
+    #[inline]
+    fn horizontal_chord(&self, y: f32) -> (f32, f32) {
+        let x0 = self.x;
+        let y0 = self.y;
+        let x1 = x0 + self.w;
+        let y1 = y0 + self.h;
+        if y <= y0 || y >= y1 {
+            return (x0, x0);
+        }
+        let [(tl_x, tl_y), (tr_x, tr_y), (br_x, br_y), (bl_x, bl_y)] = self.radii;
+        let mut xl = x0;
+        let mut xr = x1;
+        if tl_x > 0.0 && tl_y > 0.0 && y < y0 + tl_y {
+            let dy = (y0 + tl_y - y) / tl_y;
+            xl = xl.max(x0 + tl_x * (1.0 - (1.0 - dy * dy).max(0.0).sqrt()));
+        }
+        if bl_x > 0.0 && bl_y > 0.0 && y > y1 - bl_y {
+            let dy = (y - (y1 - bl_y)) / bl_y;
+            xl = xl.max(x0 + bl_x * (1.0 - (1.0 - dy * dy).max(0.0).sqrt()));
+        }
+        if tr_x > 0.0 && tr_y > 0.0 && y < y0 + tr_y {
+            let dy = (y0 + tr_y - y) / tr_y;
+            xr = xr.min(x1 - tr_x * (1.0 - (1.0 - dy * dy).max(0.0).sqrt()));
+        }
+        if br_x > 0.0 && br_y > 0.0 && y > y1 - br_y {
+            let dy = (y - (y1 - br_y)) / br_y;
+            xr = xr.min(x1 - br_x * (1.0 - (1.0 - dy * dy).max(0.0).sqrt()));
+        }
+        (xl, xr.max(xl))
+    }
+
     /// Snap logical box edges to physical canvas coordinates and scale radii.
     pub fn to_physical(&self, canvas: &Canvas, scroll: i32) -> Self {
         let x0 = canvas.physical_edge(self.x.round() as i64) as f32;
@@ -936,6 +1000,636 @@ impl Canvas {
         }
     }
 
+    /// Paint a CSS `box-shadow` (outer or `inset`) using CSS Backgrounds 3 §7.1
+    /// geometry: outer shadows mask out `border_logical`'s interior even when the
+    /// element background is transparent; `inset` shadows clip strictly to
+    /// `padding_logical`'s interior.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_box_shadow(
+        &mut self,
+        border_logical: RoundedRect,
+        padding_logical: RoundedRect,
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        spread_radius: f32,
+        color: u32,
+        alpha: f32,
+        inset: bool,
+        scroll: i32,
+    ) {
+        let base_alpha = alpha.clamp(0.0, 1.0);
+        if base_alpha <= 0.0 || !offset_x.is_finite() || !offset_y.is_finite() {
+            return;
+        }
+        let blur_phys = if blur_radius.is_finite() {
+            (blur_radius.max(0.0) * self.scale).min(256.0)
+        } else {
+            return;
+        };
+        if !spread_radius.is_finite() {
+            return;
+        }
+        let sigma = blur_phys * 0.5;
+        let pad_blur = (sigma * 3.0).ceil();
+        let fg_rgb = [
+            ((color >> 16) & 255) as f32,
+            ((color >> 8) & 255) as f32,
+            (color & 255) as f32,
+        ];
+        let clamp_x = |v: f32| {
+            if v.is_finite() {
+                v.clamp(self.clip.left as f32, self.clip.right as f32) as usize
+            } else {
+                self.clip.left as usize
+            }
+        };
+        let clamp_y = |v: f32| {
+            if v.is_finite() {
+                v.clamp(self.clip.top as f32, self.clip.bottom as f32) as usize
+            } else {
+                self.clip.top as usize
+            }
+        };
+        let has_rclip = self.has_rounded_clip();
+        let stride = self.width as usize;
+
+        if !inset {
+            let border_phys = border_logical.to_physical(self, scroll);
+            let shadow_phys = if blur_phys <= 0.05 {
+                let s_log = border_logical.offset_and_spread(offset_x, offset_y, spread_radius);
+                if s_log.w <= 0.0 || s_log.h <= 0.0 {
+                    return;
+                }
+                s_log.to_physical(self, scroll)
+            } else {
+                let s_phys = border_phys.offset_and_spread(
+                    offset_x * self.scale,
+                    offset_y * self.scale,
+                    spread_radius * self.scale,
+                );
+                if s_phys.w <= 0.0 || s_phys.h <= 0.0 {
+                    return;
+                }
+                s_phys
+            };
+            if shadow_phys.w <= 0.0 || shadow_phys.h <= 0.0 {
+                return;
+            }
+            let left = clamp_x((shadow_phys.x - pad_blur).floor());
+            let top = clamp_y((shadow_phys.y - pad_blur).floor());
+            let right = clamp_x((shadow_phys.x + shadow_phys.w + pad_blur).ceil());
+            let bottom = clamp_y((shadow_phys.y + shadow_phys.h + pad_blur).ceil());
+            if left >= right || top >= bottom {
+                return;
+            }
+            for sy in top..bottom {
+                let row_start = sy * stride;
+                for sx in left..right {
+                    let ux = sx as u32;
+                    let uy = sy as u32;
+                    if border_phys.pixel_is_wholly_inside(ux, uy) {
+                        continue;
+                    }
+                    let clip_cov = if has_rclip {
+                        let c = self.rounded_clip_coverage(ux, uy);
+                        if c == 0 {
+                            continue;
+                        }
+                        f32::from(c) / 255.0
+                    } else {
+                        1.0
+                    };
+                    let cov = if blur_phys <= 0.05 {
+                        if shadow_phys.pixel_is_wholly_outside(ux, uy) {
+                            continue;
+                        }
+                        if shadow_phys.pixel_is_wholly_inside(ux, uy)
+                            && border_phys.pixel_is_wholly_outside(ux, uy)
+                        {
+                            1.0
+                        } else {
+                            let mut hits = 0u32;
+                            for dy in SUBSAMPLES_4X4 {
+                                let py = sy as f32 + dy;
+                                for dx in SUBSAMPLES_4X4 {
+                                    let px = sx as f32 + dx;
+                                    if shadow_phys.contains_point(px, py)
+                                        && !border_phys.contains_point(px, py)
+                                    {
+                                        hits += 1;
+                                    }
+                                }
+                            }
+                            if hits == 0 {
+                                continue;
+                            }
+                            hits as f32 * (1.0 / 16.0)
+                        }
+                    } else {
+                        let mask_out = if border_phys.pixel_is_wholly_outside(ux, uy) {
+                            1.0
+                        } else {
+                            let mut out_hits = 0u32;
+                            for dy in SUBSAMPLES_4X4 {
+                                let py = sy as f32 + dy;
+                                for dx in SUBSAMPLES_4X4 {
+                                    let px = sx as f32 + dx;
+                                    if !border_phys.contains_point(px, py) {
+                                        out_hits += 1;
+                                    }
+                                }
+                            }
+                            if out_hits == 0 {
+                                continue;
+                            }
+                            out_hits as f32 * (1.0 / 16.0)
+                        };
+                        blurred_rounded_rect_coverage(
+                            sx as f32 + 0.5,
+                            sy as f32 + 0.5,
+                            &shadow_phys,
+                            sigma,
+                        ) * mask_out
+                    };
+                    let eff_a = (base_alpha * cov * clip_cov).clamp(0.0, 1.0);
+                    if eff_a <= 1.0 / 512.0 {
+                        continue;
+                    }
+                    let dst = self.pixels[row_start + sx];
+                    if eff_a >= 1.0 {
+                        self.pixels[row_start + sx] = color & 0x00ff_ffff;
+                    } else {
+                        let inv = 1.0 - eff_a;
+                        let r = (fg_rgb[0] * eff_a + ((dst >> 16) & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        let g = (fg_rgb[1] * eff_a + ((dst >> 8) & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        let b = (fg_rgb[2] * eff_a + (dst & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        self.pixels[row_start + sx] = (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+        } else {
+            let pad_phys = padding_logical.to_physical(self, scroll);
+            if pad_phys.w <= 0.0 || pad_phys.h <= 0.0 {
+                return;
+            }
+            let hole_phys = if blur_phys <= 0.05 {
+                let h_log = padding_logical.offset_and_spread(offset_x, offset_y, -spread_radius);
+                (h_log.w > 0.0 && h_log.h > 0.0).then(|| h_log.to_physical(self, scroll))
+            } else {
+                let h_phys = pad_phys.offset_and_spread(
+                    offset_x * self.scale,
+                    offset_y * self.scale,
+                    -spread_radius * self.scale,
+                );
+                (h_phys.w > 0.0 && h_phys.h > 0.0).then_some(h_phys)
+            };
+            let left = clamp_x(pad_phys.x.floor());
+            let top = clamp_y(pad_phys.y.floor());
+            let right = clamp_x((pad_phys.x + pad_phys.w).ceil());
+            let bottom = clamp_y((pad_phys.y + pad_phys.h).ceil());
+            if left >= right || top >= bottom {
+                return;
+            }
+            for sy in top..bottom {
+                let row_start = sy * stride;
+                for sx in left..right {
+                    let ux = sx as u32;
+                    let uy = sy as u32;
+                    if pad_phys.pixel_is_wholly_outside(ux, uy) {
+                        continue;
+                    }
+                    let clip_cov = if has_rclip {
+                        let c = self.rounded_clip_coverage(ux, uy);
+                        if c == 0 {
+                            continue;
+                        }
+                        f32::from(c) / 255.0
+                    } else {
+                        1.0
+                    };
+                    let cov = match hole_phys {
+                        None => {
+                            if pad_phys.pixel_is_wholly_inside(ux, uy) {
+                                1.0
+                            } else {
+                                let mut hits = 0u32;
+                                for dy in SUBSAMPLES_4X4 {
+                                    let py = sy as f32 + dy;
+                                    for dx in SUBSAMPLES_4X4 {
+                                        if pad_phys.contains_point(sx as f32 + dx, py) {
+                                            hits += 1;
+                                        }
+                                    }
+                                }
+                                hits as f32 * (1.0 / 16.0)
+                            }
+                        }
+                        Some(ref hole) if blur_phys <= 0.05 => {
+                            if hole.pixel_is_wholly_inside(ux, uy) {
+                                continue;
+                            }
+                            if pad_phys.pixel_is_wholly_inside(ux, uy)
+                                && hole.pixel_is_wholly_outside(ux, uy)
+                            {
+                                1.0
+                            } else {
+                                let mut hits = 0u32;
+                                for dy in SUBSAMPLES_4X4 {
+                                    let py = sy as f32 + dy;
+                                    for dx in SUBSAMPLES_4X4 {
+                                        let px = sx as f32 + dx;
+                                        if pad_phys.contains_point(px, py)
+                                            && !hole.contains_point(px, py)
+                                        {
+                                            hits += 1;
+                                        }
+                                    }
+                                }
+                                if hits == 0 {
+                                    continue;
+                                }
+                                hits as f32 * (1.0 / 16.0)
+                            }
+                        }
+                        Some(ref hole) => {
+                            let pad_in = if pad_phys.pixel_is_wholly_inside(ux, uy) {
+                                1.0
+                            } else {
+                                let mut hits = 0u32;
+                                for dy in SUBSAMPLES_4X4 {
+                                    let py = sy as f32 + dy;
+                                    for dx in SUBSAMPLES_4X4 {
+                                        if pad_phys.contains_point(sx as f32 + dx, py) {
+                                            hits += 1;
+                                        }
+                                    }
+                                }
+                                if hits == 0 {
+                                    continue;
+                                }
+                                hits as f32 * (1.0 / 16.0)
+                            };
+                            let hole_cov = blurred_rounded_rect_coverage(
+                                sx as f32 + 0.5,
+                                sy as f32 + 0.5,
+                                hole,
+                                sigma,
+                            );
+                            (1.0 - hole_cov).clamp(0.0, 1.0) * pad_in
+                        }
+                    };
+                    let eff_a = (base_alpha * cov * clip_cov).clamp(0.0, 1.0);
+                    if eff_a <= 1.0 / 512.0 {
+                        continue;
+                    }
+                    let dst = self.pixels[row_start + sx];
+                    if eff_a >= 1.0 {
+                        self.pixels[row_start + sx] = color & 0x00ff_ffff;
+                    } else {
+                        let inv = 1.0 - eff_a;
+                        let r = (fg_rgb[0] * eff_a + ((dst >> 16) & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        let g = (fg_rgb[1] * eff_a + ((dst >> 8) & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        let b = (fg_rgb[2] * eff_a + (dst & 255) as f32 * inv)
+                            .round()
+                            .clamp(0.0, 255.0) as u32;
+                        self.pixels[row_start + sx] = (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Paint a CSS `text-shadow` with bounded separable Gaussian blur when
+    /// `blur_radius > 0.25` and crisp direct glyph rendering otherwise.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_shadow_styled(
+        &mut self,
+        fonts: &mut Fonts,
+        position: (f32, f32),
+        text: &str,
+        size: f32,
+        color: u32,
+        bold: bool,
+        italic: bool,
+        alpha: f32,
+        blur_radius: f32,
+    ) {
+        let base_alpha = alpha.clamp(0.0, 1.0);
+        if base_alpha <= 0.0
+            || text.is_empty()
+            || !position.0.is_finite()
+            || !position.1.is_finite()
+        {
+            return;
+        }
+        let blur_phys = if blur_radius.is_finite() {
+            (blur_radius.max(0.0) * self.scale).min(64.0)
+        } else {
+            return;
+        };
+        if blur_phys <= 0.25 {
+            self.text_styled_alpha(
+                fonts,
+                (position.0.round() as i32, position.1.round() as i32),
+                text,
+                size,
+                color,
+                bold,
+                italic,
+                base_alpha,
+            );
+            return;
+        }
+        if bold && let Some(face) = fonts.bold.as_deref_mut() {
+            let synth_italic = italic && face.synthetic_styles;
+            self.text_face_blurred_shadow(
+                face,
+                position,
+                text,
+                size,
+                color,
+                false,
+                synth_italic,
+                base_alpha,
+                blur_phys,
+            );
+        } else {
+            let synth_bold = bold && fonts.synthetic_styles;
+            let synth_italic = italic && fonts.synthetic_styles;
+            self.text_face_blurred_shadow(
+                fonts,
+                position,
+                text,
+                size,
+                color,
+                synth_bold,
+                synth_italic,
+                base_alpha,
+                blur_phys,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn text_face_blurred_shadow(
+        &mut self,
+        fonts: &mut Fonts,
+        (fx, fy): (f32, f32),
+        text: &str,
+        size: f32,
+        color: u32,
+        synth_bold: bool,
+        synth_italic: bool,
+        alpha: f32,
+        blur_phys: f32,
+    ) {
+        let size = font_size(size);
+        let Some(ref font_face) = fonts.font else {
+            return;
+        };
+        let ascent = font_face
+            .horizontal_line_metrics(size)
+            .map_or(size, |metrics| metrics.ascent);
+        let baseline = fy + ascent;
+        let sigma = (blur_phys * 0.5).clamp(0.25, 16.0);
+        let rad = (sigma * 2.5).ceil() as i64;
+        let shaped = fonts.shape(text, size);
+        if shaped.is_empty() {
+            return;
+        }
+        let extra_bold = if synth_bold {
+            ((size * self.scale) / 24.0).round().clamp(1.0, 3.0) as i64
+        } else {
+            0
+        };
+        let mut pen = fx;
+        let mut min_gx = i64::MAX;
+        let mut min_gy = i64::MAX;
+        let mut max_gx = i64::MIN;
+        let mut max_gy = i64::MIN;
+        for glyph in shaped.iter() {
+            let metrics = fonts.glyph(glyph.id, size * self.scale).0;
+            if metrics.width > 0 && metrics.height > 0 {
+                let baseline_phys = (baseline - glyph.y_offset) * self.scale;
+                let left = ((pen + glyph.x_offset) * self.scale).round() as i64
+                    + i64::from(metrics.xmin)
+                    - extra_bold / 2;
+                let top =
+                    baseline_phys.round() as i64 - i64::from(metrics.ymin) - metrics.height as i64;
+                let shear_pad = if synth_italic {
+                    (0.25 * metrics.height as f32).ceil() as i64 + 2
+                } else {
+                    0
+                };
+                min_gx = min_gx.min(left - shear_pad);
+                min_gy = min_gy.min(top);
+                max_gx = max_gx.max(left + metrics.width as i64 + extra_bold + shear_pad);
+                max_gy = max_gy.max(top + metrics.height as i64);
+            }
+            pen += glyph.advance;
+        }
+        if min_gx >= max_gx || min_gy >= max_gy {
+            return;
+        }
+        let out_x0 = (min_gx - rad).clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+        let out_x1 = (max_gx + rad).clamp(i64::from(self.clip.left), i64::from(self.clip.right));
+        let out_y0 = (min_gy - rad).clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
+        let out_y1 = (max_gy + rad).clamp(i64::from(self.clip.top), i64::from(self.clip.bottom));
+        if out_x0 >= out_x1 || out_y0 >= out_y1 {
+            return;
+        }
+        let src_x0 = out_x0 - rad;
+        let src_x1 = out_x1 + rad;
+        let src_y0 = out_y0 - rad;
+        let src_y1 = out_y1 + rad;
+        let mw = (src_x1 - src_x0) as usize;
+        let mh = (src_y1 - src_y0) as usize;
+        let ow = (out_x1 - out_x0) as usize;
+        let oh = (out_y1 - out_y0) as usize;
+        if mw.saturating_mul(mh) > 256 * 1024 {
+            // Bounded zero-mask fallback for extreme full-viewport giant glyphs.
+            let step = (sigma * 0.85).max(1.0);
+            let taps = [
+                (0.0, 0.0, 0.28_f32),
+                (-step, 0.0, 0.12),
+                (step, 0.0, 0.12),
+                (0.0, -step, 0.12),
+                (0.0, step, 0.12),
+                (-step, -step, 0.06),
+                (step, -step, 0.06),
+                (-step, step, 0.06),
+                (step, step, 0.06),
+            ];
+            let inv_scale = 1.0 / self.scale;
+            for (dx, dy, w) in taps {
+                self.text_face_alpha(
+                    fonts,
+                    (
+                        (fx + dx * inv_scale).round() as i32,
+                        (fy + dy * inv_scale).round() as i32,
+                    ),
+                    text,
+                    size,
+                    color,
+                    synth_bold,
+                    synth_italic,
+                    alpha * w,
+                );
+            }
+            return;
+        }
+        let mut src_mask = vec![0u8; mw * mh];
+        let mut pen = fx;
+        for glyph in shaped.iter() {
+            let cached = fonts.glyph(glyph.id, size * self.scale);
+            let metrics = cached.0;
+            if metrics.width == 0 || metrics.height == 0 {
+                pen += glyph.advance;
+                continue;
+            }
+            let baseline_phys = (baseline - glyph.y_offset) * self.scale;
+            let left =
+                ((pen + glyph.x_offset) * self.scale).round() as i64 + i64::from(metrics.xmin);
+            let top =
+                baseline_phys.round() as i64 - i64::from(metrics.ymin) - metrics.height as i64;
+            let gy0 = top.clamp(src_y0, src_y1);
+            let gy1 = (top + metrics.height as i64).clamp(src_y0, src_y1);
+            if !synth_bold && !synth_italic {
+                let gx0 = left.clamp(src_x0, src_x1);
+                let gx1 = (left + metrics.width as i64).clamp(src_x0, src_x1);
+                for sy in gy0..gy1 {
+                    let srow = (sy - top) as usize * metrics.width;
+                    let mrow = (sy - src_y0) as usize * mw;
+                    for sx in gx0..gx1 {
+                        let raw = cached.1[srow + (sx - left) as usize];
+                        if raw > 0 {
+                            let dst = &mut src_mask[mrow + (sx - src_x0) as usize];
+                            *dst = (u32::from(*dst) + u32::from(raw)
+                                - (u32::from(*dst) * u32::from(raw) + 127) / 255)
+                                .min(255) as u8;
+                        }
+                    }
+                }
+            } else {
+                let left_base = left - extra_bold / 2;
+                let width_i64 = metrics.width as i64;
+                for sy in gy0..gy1 {
+                    let srow = (sy - top) as usize * metrics.width;
+                    let mrow = (sy - src_y0) as usize * mw;
+                    let shear_x = if synth_italic {
+                        0.20 * (baseline_phys - (sy as f32 + 0.5))
+                    } else {
+                        0.0
+                    };
+                    let gx0 = (left_base + shear_x.floor() as i64).clamp(src_x0, src_x1);
+                    let gx1 = (left_base + width_i64 + extra_bold + shear_x.ceil() as i64 + 1)
+                        .clamp(src_x0, src_x1);
+                    for sx in gx0..gx1 {
+                        let dilated = |k: i64| -> u8 {
+                            let mut m = 0u8;
+                            for d in 0..=extra_bold {
+                                let ksx = k - d;
+                                if ksx >= 0 && ksx < width_i64 {
+                                    m = m.max(cached.1[srow + ksx as usize]);
+                                }
+                            }
+                            m
+                        };
+                        let raw = if synth_italic {
+                            let u = (sx - left_base) as f32 - shear_x;
+                            let u0 = u.floor();
+                            let frac = u - u0;
+                            let k0 = u0 as i64;
+                            (f32::from(dilated(k0)) * (1.0 - frac)
+                                + f32::from(dilated(k0 + 1)) * frac)
+                                .round() as u8
+                        } else {
+                            dilated(sx - left_base)
+                        };
+                        if raw > 0 {
+                            let dst = &mut src_mask[mrow + (sx - src_x0) as usize];
+                            *dst = (u32::from(*dst) + u32::from(raw)
+                                - (u32::from(*dst) * u32::from(raw) + 127) / 255)
+                                .min(255) as u8;
+                        }
+                    }
+                }
+            }
+            pen += glyph.advance;
+        }
+
+        let r_usize = rad as usize;
+        let klen = 2 * r_usize + 1;
+        let mut kernel = vec![0.0_f32; klen];
+        let inv_2s2 = 1.0 / (2.0 * sigma * sigma);
+        let mut ksum = 0.0_f32;
+        for (i, slot) in kernel.iter_mut().enumerate() {
+            let d = (i as isize - r_usize as isize) as f32;
+            let w = (-d * d * inv_2s2).exp();
+            *slot = w;
+            ksum += w;
+        }
+        if ksum <= 0.0 {
+            return;
+        }
+        for slot in &mut kernel {
+            *slot /= ksum;
+        }
+
+        let mut tmp_mask = vec![0u8; oh * mw];
+        for oy in 0..oh {
+            let dst_row = oy * mw;
+            for mx in 0..mw {
+                let mut acc = 0.0_f32;
+                for (ki, &kw) in kernel.iter().enumerate() {
+                    acc += f32::from(src_mask[(oy + ki) * mw + mx]) * kw;
+                }
+                tmp_mask[dst_row + mx] = acc.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+
+        let has_rclip = self.has_rounded_clip();
+        let stride = self.width as usize;
+        for oy in 0..oh {
+            let sy = (out_y0 as usize) + oy;
+            let tmp_row = oy * mw;
+            let dst_row = sy * stride;
+            for ox in 0..ow {
+                let mut acc = 0.0_f32;
+                for (ki, &kw) in kernel.iter().enumerate() {
+                    acc += f32::from(tmp_mask[tmp_row + ox + ki]) * kw;
+                }
+                let mut cov = (acc * alpha).round().clamp(0.0, 255.0) as u8;
+                if cov == 0 {
+                    continue;
+                }
+                let sx = (out_x0 as usize) + ox;
+                if has_rclip {
+                    let rcov = self.rounded_clip_coverage(sx as u32, sy as u32);
+                    if rcov == 0 {
+                        continue;
+                    }
+                    if rcov < 255 {
+                        cov = ((u32::from(cov) * u32::from(rcov) + 127) / 255) as u8;
+                    }
+                }
+                let target = &mut self.pixels[dst_row + sx];
+                *target = blend(*target, color, cov);
+            }
+        }
+    }
+
     pub fn save_png(&self, path: &str) -> Result<(), String> {
         let mut image = image::RgbImage::new(self.width, self.height);
         for (target, &pixel) in image.pixels_mut().zip(&self.pixels) {
@@ -945,6 +1639,64 @@ impl Canvas {
             .save_with_format(path, image::ImageFormat::Png)
             .map_err(|error| format!("Cannot save PNG {path}: {error}"))
     }
+}
+
+#[inline]
+fn gaussian_cdf_fast(z: f32) -> f32 {
+    if z <= -5.0 {
+        return 0.0;
+    }
+    if z >= 5.0 {
+        return 1.0;
+    }
+    let x = z.abs() * std::f32::consts::FRAC_1_SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = ((((1.061_405_4 * t - 1.453_152) * t + 1.421_413_7) * t - 0.284_496_74) * t
+        + 0.254_829_6)
+        * t;
+    let half_erfc = (0.5 * poly * (-x * x).exp()).clamp(0.0, 0.5);
+    if z < 0.0 { half_erfc } else { 1.0 - half_erfc }
+}
+
+fn blurred_rounded_rect_coverage(px: f32, py: f32, rect: &RoundedRect, sigma: f32) -> f32 {
+    if rect.w <= 0.0 || rect.h <= 0.0 || sigma <= 0.0 {
+        return 0.0;
+    }
+    if !rect.has_any_radius() {
+        let cx = (gaussian_cdf_fast((rect.x + rect.w - px) / sigma)
+            - gaussian_cdf_fast((rect.x - px) / sigma))
+        .clamp(0.0, 1.0);
+        let cy = (gaussian_cdf_fast((rect.y + rect.h - py) / sigma)
+            - gaussian_cdf_fast((rect.y - py) / sigma))
+        .clamp(0.0, 1.0);
+        return cx * cy;
+    }
+    let ya = rect.y.max(py - 3.5 * sigma);
+    let yb = (rect.y + rect.h).min(py + 3.5 * sigma);
+    if yb <= ya {
+        return 0.0;
+    }
+    const SLICES: usize = 8;
+    let step = (yb - ya) / SLICES as f32;
+    let mut sum = 0.0f32;
+    let mut prev_cdf = gaussian_cdf_fast((ya - py) / sigma);
+    for k in 0..SLICES {
+        let y_next = ya + (k + 1) as f32 * step;
+        let next_cdf = gaussian_cdf_fast((y_next - py) / sigma);
+        let wy = (next_cdf - prev_cdf).max(0.0);
+        prev_cdf = next_cdf;
+        if wy > 0.0 {
+            let ym = ya + (k as f32 + 0.5) * step;
+            let (xl, xr) = rect.horizontal_chord(ym);
+            if xr > xl {
+                let cx = (gaussian_cdf_fast((xr - px) / sigma)
+                    - gaussian_cdf_fast((xl - px) / sigma))
+                .clamp(0.0, 1.0);
+                sum += wy * cx;
+            }
+        }
+    }
+    sum.clamp(0.0, 1.0)
 }
 
 #[inline]
@@ -1739,5 +2491,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn box_shadow_masks_outer_interior_and_clips_inset_to_padding_box() {
+        let mut outer_canvas = Canvas::new(80, 80, 0xffffff);
+        let border_box = RoundedRect::from_raw(20.0, 20.0, 30.0, 30.0, [(6.0, 6.0); 4]);
+        let padding_box = border_box.inset([4.0, 4.0, 4.0, 4.0]);
+        outer_canvas.paint_box_shadow(
+            border_box,
+            padding_box,
+            8.0,
+            8.0,
+            6.0,
+            2.0,
+            0x000000,
+            0.8,
+            false,
+            0,
+        );
+        // Interior of transparent element must remain completely untouched white.
+        assert_eq!(outer_canvas.pixels[35 * 80 + 35], 0xffffff);
+        // Offset shadow region outside bottom-right edge must darken.
+        assert_ne!(outer_canvas.pixels[54 * 80 + 54], 0xffffff);
+
+        let mut inset_canvas = Canvas::new(80, 80, 0xffffff);
+        inset_canvas.paint_box_shadow(
+            border_box,
+            padding_box,
+            6.0,
+            6.0,
+            4.0,
+            0.0,
+            0x0000ff,
+            0.9,
+            true,
+            0,
+        );
+        // Outside padding box (including border ring at (21, 21) and exterior (10, 10)) stays untouched.
+        assert_eq!(inset_canvas.pixels[10 * 80 + 10], 0xffffff);
+        assert_eq!(inset_canvas.pixels[21 * 80 + 21], 0xffffff);
+        // Just inside top-left padding edge (26, 26) receives inset shadow.
+        assert_ne!(inset_canvas.pixels[26 * 80 + 26], 0xffffff);
+    }
+
+    #[test]
+    fn text_shadow_renders_sharp_and_blurred_glyphs() {
+        let mut fonts = shaping_fonts();
+        let mut sharp = Canvas::new(140, 50, 0xffffff);
+        sharp.text_shadow_styled(
+            &mut fonts,
+            (12.0, 10.0),
+            "Hi",
+            20.0,
+            0xff0000,
+            false,
+            false,
+            1.0,
+            0.0,
+        );
+        assert!(sharp.pixels.contains(&0xff0000));
+
+        let mut blurred = Canvas::new(140, 50, 0xffffff);
+        blurred.text_shadow_styled(
+            &mut fonts,
+            (12.0, 10.0),
+            "Hi",
+            20.0,
+            0x0000ff,
+            false,
+            false,
+            1.0,
+            4.0,
+        );
+        let non_white = blurred.pixels.iter().filter(|&&px| px != 0xffffff).count();
+        let sharp_non_white = sharp.pixels.iter().filter(|&&px| px != 0xffffff).count();
+        assert!(non_white > sharp_non_white);
     }
 }

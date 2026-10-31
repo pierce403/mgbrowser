@@ -335,11 +335,13 @@ impl Alignment {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GridLine {
     Auto,
     Line(i16),
     Span(u16),
+    NamedLine(String, i16),
+    NamedSpan(String, u16),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GridAutoFlow {
@@ -360,14 +362,32 @@ pub enum TrackBreadth {
 pub enum TrackSize {
     Breadth(TrackBreadth),
     MinMax(TrackBreadth, TrackBreadth),
+    FitContent(Length),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridAutoRepeatMode {
+    AutoFill,
+    AutoFit,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct GridAutoRepeat {
+    pub insert_index: usize,
+    pub mode: GridAutoRepeatMode,
+    pub tracks: Vec<TrackSize>,
+    pub line_names: Vec<Vec<String>>,
 }
 
 /// Integer repeats are flattened after checking their expanded length. Empty
-/// template vectors mean `none`; empty implicit vectors mean the initial `auto`.
+/// template vectors mean `none` unless `*_auto_repeat` is present; empty
+/// implicit vectors mean the initial `auto`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridStyle {
     pub template_rows: Vec<TrackSize>,
     pub template_columns: Vec<TrackSize>,
+    pub row_line_names: Vec<Vec<String>>,
+    pub col_line_names: Vec<Vec<String>>,
+    pub row_auto_repeat: Option<GridAutoRepeat>,
+    pub col_auto_repeat: Option<GridAutoRepeat>,
     pub auto_rows: Vec<TrackSize>,
     pub auto_columns: Vec<TrackSize>,
     pub auto_flow: GridAutoFlow,
@@ -385,7 +405,13 @@ pub struct LayoutStyle {
     /// Preferred intrinsic maximum, without fit-content's available-space clamp.
     pub width_max_content: bool,
     pub max_width_fit_content: bool,
+    pub width_intrinsic: Option<IntrinsicSize>,
+    pub height_intrinsic: Option<IntrinsicSize>,
     pub min_width_intrinsic: Option<IntrinsicSize>,
+    pub min_height_intrinsic: Option<IntrinsicSize>,
+    pub max_width_intrinsic: Option<IntrinsicSize>,
+    pub max_height_intrinsic: Option<IntrinsicSize>,
+    pub flex_basis_intrinsic: Option<IntrinsicSize>,
     pub aspect_ratio: Option<f32>,
     pub aspect_ratio_auto: bool,
     pub original_was_inline_level: bool,
@@ -428,7 +454,13 @@ impl Default for LayoutStyle {
             width_fit_content: false,
             width_max_content: false,
             max_width_fit_content: false,
+            width_intrinsic: None,
+            height_intrinsic: None,
             min_width_intrinsic: None,
+            min_height_intrinsic: None,
+            max_width_intrinsic: None,
+            max_height_intrinsic: None,
+            flex_basis_intrinsic: None,
             aspect_ratio: None,
             aspect_ratio_auto: true,
             original_was_inline_level: false,
@@ -451,8 +483,8 @@ impl Default for LayoutStyle {
             justify_items: normal,
             align_self: auto,
             justify_self: auto,
-            grid_row: [GridLine::Auto; 2],
-            grid_column: [GridLine::Auto; 2],
+            grid_row: [GridLine::Auto, GridLine::Auto],
+            grid_column: [GridLine::Auto, GridLine::Auto],
             grid: None,
             unsupported: false,
             outer_calc_only: false,
@@ -563,23 +595,99 @@ pub enum GradientDirection {
     Corner { right: bool, bottom: bool },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadialExtent {
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RadialShape {
+    CircleExplicit(Length),
+    CircleExtent(RadialExtent),
+    EllipseExplicit(Length, Length),
+    EllipseExtent(RadialExtent),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientKind {
+    Linear(GradientDirection),
+    Radial {
+        shape: RadialShape,
+        center: [Length; 2],
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradientStop {
     pub color: Color,
-    /// Unspecified first/last stops are represented as 0%/100%.
-    pub position: Length,
+    /// Unspecified first/last stops are represented as `Some(0%)` / `Some(100%)`;
+    /// `None` means an unspecified intermediate stop resolved at paint time.
+    pub position: Option<Length>,
+    /// Optional color-transition midpoint hint between this stop and the next stop.
+    pub hint_to_next: Option<Length>,
 }
 
-/// One non-repeating, two-stop sRGB linear gradient. No heap-owned source,
-/// raster surface or unbounded stop list is retained by this snapshot.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LinearGradient {
-    pub direction: GradientDirection,
-    pub stops: [GradientStop; 2],
+/// Bounded sRGB linear/radial background gradient (`2..=16` stops).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackgroundGradient {
+    pub kind: GradientKind,
+    pub repeating: bool,
+    pub stops: Vec<GradientStop>,
     pub origin: BackgroundBox,
     pub clip: BackgroundBox,
-    /// Background tiling, distinct from repeating-linear-gradient().
     pub repeat: [bool; 2],
+    pub size: [Length; 2],
+    pub position: [Length; 2],
+}
+pub type LinearGradient = BackgroundGradient;
+
+impl BackgroundGradient {
+    pub fn linear_direction(&self) -> Option<GradientDirection> {
+        match self.kind {
+            GradientKind::Linear(dir) => Some(dir),
+            GradientKind::Radial { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_radius: f32,
+    pub spread_radius: f32,
+    pub color: Color,
+    pub inset: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_radius: f32,
+    pub color: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TransformOp2D {
+    Translate(Length, Length),
+    Scale(f32, f32),
+    Matrix { a: f32, d: f32, e: f32, f: f32 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformStyle {
+    pub origin: [Length; 2],
+    pub ops: Vec<TransformOp2D>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipPathInset {
+    pub inset: [Length; 4],
+    pub radii: [(Length, Length); 4],
 }
 
 /// Solid SVG paint after the CSS cascade. Color alpha includes the respective
@@ -600,7 +708,14 @@ pub struct ComputedStyle {
     pub color: Color,
     pub background_color: Color,
     pub background_clip: BackgroundBox,
-    pub background_gradient: Option<LinearGradient>,
+    pub background_gradient: Option<Box<BackgroundGradient>>,
+    pub box_shadows: Vec<BoxShadow>,
+    pub text_shadows: Vec<TextShadow>,
+    pub transform: Option<Box<TransformStyle>>,
+    pub has_transform: bool,
+    pub clip_rect: Option<[Option<f32>; 4]>,
+    pub clip_path_inset: Option<ClipPathInset>,
+    pub text_overflow_ellipsis: bool,
     pub svg_fill: SvgPaint,
     pub svg_stroke: SvgPaint,
     pub font_size: f32,
@@ -651,6 +766,13 @@ impl Default for ComputedStyle {
             background_color: Color { rgb: 0, alpha: 0.0 },
             background_clip: BackgroundBox::Border,
             background_gradient: None,
+            box_shadows: Vec::new(),
+            text_shadows: Vec::new(),
+            transform: None,
+            has_transform: false,
+            clip_rect: None,
+            clip_path_inset: None,
+            text_overflow_ellipsis: false,
             svg_fill: SvgPaint::Color(black),
             svg_stroke: SvgPaint::None,
             font_size: 16.0,
@@ -696,7 +818,14 @@ impl ComputedStyle {
             color: self.color,
             background_color: self.background_color,
             background_clip: self.background_clip,
-            background_gradient: self.background_gradient,
+            background_gradient: self.background_gradient.clone(),
+            box_shadows: self.box_shadows.clone(),
+            text_shadows: self.text_shadows.clone(),
+            transform: self.transform.clone(),
+            has_transform: self.has_transform,
+            clip_rect: self.clip_rect,
+            clip_path_inset: self.clip_path_inset,
+            text_overflow_ellipsis: self.text_overflow_ellipsis,
             svg_fill: self.svg_fill,
             svg_stroke: self.svg_stroke,
             font_size: self.font_size,
@@ -742,7 +871,14 @@ impl ComputedStyle {
             color: self.color,
             background_color: self.background_color,
             background_clip: self.background_clip,
-            background_gradient: self.background_gradient,
+            background_gradient: None,
+            box_shadows: Vec::new(),
+            text_shadows: self.text_shadows.clone(),
+            transform: None,
+            has_transform: false,
+            clip_rect: None,
+            clip_path_inset: None,
+            text_overflow_ellipsis: false,
             svg_fill: self.svg_fill,
             svg_stroke: self.svg_stroke,
             font_size: self.font_size,
@@ -825,6 +961,10 @@ const MAX_BACKGROUND_LAYERS: usize = 8;
 const MAX_FONT_FAMILIES: usize = 16;
 const MAX_STYLE_URL_BYTES: usize = 4096;
 const MAX_FONT_NAME_BYTES: usize = 256;
+pub const MAX_GRADIENT_STOPS: usize = 16;
+pub const MAX_BOX_SHADOWS: usize = 8;
+pub const MAX_TEXT_SHADOWS: usize = 4;
+pub const MAX_TRANSFORM_OPS: usize = 16;
 
 fn pseudo_heap_bytes(pseudo: &Option<Box<PseudoStyle>>) -> usize {
     pseudo.as_ref().map_or(0, |item| {
@@ -832,12 +972,24 @@ fn pseudo_heap_bytes(pseudo: &Option<Box<PseudoStyle>>) -> usize {
     })
 }
 
-pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
-    layout_heap_bytes(&value.layout)
-        + pseudo_heap_bytes(&value.before)
-        + pseudo_heap_bytes(&value.after)
-        + value.font_families.capacity() * std::mem::size_of::<String>()
+fn gradient_heap_bytes(gradient: &Option<Box<BackgroundGradient>>) -> usize {
+    gradient.as_ref().map_or(0, |g| {
+        std::mem::size_of::<BackgroundGradient>()
+            + g.stops.capacity() * std::mem::size_of::<GradientStop>()
+    })
+}
+
+fn transform_heap_bytes(transform: &Option<Box<TransformStyle>>) -> usize {
+    transform.as_ref().map_or(0, |t| {
+        std::mem::size_of::<TransformStyle>()
+            + t.ops.capacity() * std::mem::size_of::<TransformOp2D>()
+    })
+}
+
+fn inherited_heap_bytes(value: &ComputedStyle) -> usize {
+    value.font_families.capacity() * std::mem::size_of::<String>()
         + value.background_images.capacity() * std::mem::size_of::<BackgroundImage>()
+        + value.text_shadows.capacity() * std::mem::size_of::<TextShadow>()
         + value
             .font_families
             .iter()
@@ -850,19 +1002,64 @@ pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
             .sum::<usize>()
 }
 
-fn layout_heap_bytes(value: &LayoutStyle) -> usize {
-    value.grid.as_ref().map_or(0, |grid| {
-        std::mem::size_of::<GridStyle>()
-            + [
-                &grid.template_rows,
-                &grid.template_columns,
-                &grid.auto_rows,
-                &grid.auto_columns,
-            ]
+pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
+    layout_heap_bytes(&value.layout)
+        + pseudo_heap_bytes(&value.before)
+        + pseudo_heap_bytes(&value.after)
+        + gradient_heap_bytes(&value.background_gradient)
+        + transform_heap_bytes(&value.transform)
+        + value.box_shadows.capacity() * std::mem::size_of::<BoxShadow>()
+        + inherited_heap_bytes(value)
+}
+
+fn line_names_heap_bytes(lines: &Vec<Vec<String>>) -> usize {
+    lines.capacity() * std::mem::size_of::<Vec<String>>()
+        + lines
             .iter()
-            .map(|tracks| tracks.capacity() * std::mem::size_of::<TrackSize>())
+            .map(|set| {
+                set.capacity() * std::mem::size_of::<String>()
+                    + set.iter().map(String::capacity).sum::<usize>()
+            })
             .sum::<usize>()
+}
+
+fn auto_repeat_heap_bytes(repeat: &Option<GridAutoRepeat>) -> usize {
+    repeat.as_ref().map_or(0, |ar| {
+        ar.tracks.capacity() * std::mem::size_of::<TrackSize>()
+            + line_names_heap_bytes(&ar.line_names)
     })
+}
+
+fn grid_line_heap_bytes(line: &GridLine) -> usize {
+    match line {
+        GridLine::NamedLine(s, _) | GridLine::NamedSpan(s, _) => s.capacity(),
+        GridLine::Auto | GridLine::Line(_) | GridLine::Span(_) => 0,
+    }
+}
+
+fn layout_heap_bytes(value: &LayoutStyle) -> usize {
+    value
+        .grid_row
+        .iter()
+        .chain(value.grid_column.iter())
+        .map(grid_line_heap_bytes)
+        .sum::<usize>()
+        + value.grid.as_ref().map_or(0, |grid| {
+            std::mem::size_of::<GridStyle>()
+                + [
+                    &grid.template_rows,
+                    &grid.template_columns,
+                    &grid.auto_rows,
+                    &grid.auto_columns,
+                ]
+                .iter()
+                .map(|tracks| tracks.capacity() * std::mem::size_of::<TrackSize>())
+                .sum::<usize>()
+                + line_names_heap_bytes(&grid.row_line_names)
+                + line_names_heap_bytes(&grid.col_line_names)
+                + auto_repeat_heap_bytes(&grid.row_auto_repeat)
+                + auto_repeat_heap_bytes(&grid.col_auto_repeat)
+        })
 }
 
 fn admit_snapshot(
@@ -1424,9 +1621,10 @@ fn parsed_declarations(
     if css.is_empty() {
         return None;
     }
+    let normalized = normalize_css_declarations(css, true);
     Some(Arc::new(lock.wrap(
         style::properties::parse_style_attribute(
-            css,
+            &normalized,
             url,
             reporter,
             QuirksMode::NoQuirks,
@@ -1615,22 +1813,73 @@ fn svg_presentation_hints(
     css
 }
 
+fn is_supported_text_overflow_decl_value(raw_val: &str) -> bool {
+    // Strip block comments cleanly before checking keyword/var syntax.
+    let mut cleaned = String::with_capacity(raw_val.len());
+    let bytes = raw_val.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        if bytes[idx..].starts_with(b"/*") {
+            idx = bytes[idx + 2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(bytes.len(), |p| idx + 2 + p + 2);
+            cleaned.push(' ');
+        } else {
+            let ch = raw_val[idx..].chars().next().unwrap_or(' ');
+            cleaned.push(ch);
+            idx += ch.len_utf8();
+        }
+    }
+    let mut trimmed = cleaned.trim();
+    if trimmed.len() >= 10 {
+        let lower_tail = trimmed[trimmed.len() - 9..].to_ascii_lowercase();
+        if lower_tail == "important" {
+            let before = trimmed[..trimmed.len() - 9].trim_end();
+            if let Some(rest) = before.strip_suffix('!') {
+                trimmed = rest.trim();
+            }
+        }
+    }
+    trimmed.eq_ignore_ascii_case("clip")
+        || trimmed.eq_ignore_ascii_case("ellipsis")
+        || trimmed.eq_ignore_ascii_case("inherit")
+        || trimmed.eq_ignore_ascii_case("initial")
+        || trimmed.eq_ignore_ascii_case("unset")
+        || trimmed.eq_ignore_ascii_case("revert")
+        || (trimmed.len() >= 5
+            && trimmed[..4].eq_ignore_ascii_case("var(")
+            && trimmed.ends_with(')'))
+}
+
+fn css_mentions_text_overflow(css: &str) -> bool {
+    css.as_bytes()
+        .windows(13)
+        .any(|w| w.eq_ignore_ascii_case(b"text-overflow"))
+}
+
 /// Alias legacy vendor-prefixed declaration property names dropped by modern
 /// Stylo (`-moz-border-radius*`, `-moz-box-sizing`, `-webkit-box-sizing`,
-/// `-moz-opacity`, `-moz-box-shadow`) into space-padded standard names of the
+/// `-moz-opacity`, `-moz-box-shadow`) and Stylo-disabled `text-overflow`
+/// (`13` bytes -> `--mg-txt-ovfl`, `13` bytes) into space-padded names of the
 /// exact same byte length so 1-based line and column offsets stay identical.
 fn normalize_legacy_vendor_css(css: &str) -> std::borrow::Cow<'_, str> {
+    normalize_css_declarations(css, false)
+}
+
+fn normalize_css_declarations(css: &str, in_declaration_list: bool) -> std::borrow::Cow<'_, str> {
     let raw = css.as_bytes();
     let has_candidate = raw
         .windows(5)
-        .any(|w| w.eq_ignore_ascii_case(b"-moz-") || w.eq_ignore_ascii_case(b"-webk"));
+        .any(|w| w.eq_ignore_ascii_case(b"-moz-") || w.eq_ignore_ascii_case(b"-webk"))
+        || css_mentions_text_overflow(css);
     if !has_candidate {
         return std::borrow::Cow::Borrowed(css);
     }
     let mut out: Option<Vec<u8>> = None;
     let mut i = 0usize;
-    let mut brace_depth = 0usize;
-    let mut expect_prop = false;
+    let mut brace_depth = usize::from(in_declaration_list);
+    let mut expect_prop = in_declaration_list;
     while i < raw.len() {
         if raw[i..].starts_with(b"/*") {
             i = raw[i + 2..]
@@ -1677,7 +1926,7 @@ fn normalize_legacy_vendor_css(css: &str) -> std::borrow::Cow<'_, str> {
             i += 1;
             continue;
         }
-        if brace_depth > 0 && expect_prop && b == b'-' {
+        if brace_depth > 0 && expect_prop && (b == b'-' || b == b't' || b == b'T') {
             let start = i;
             while i < raw.len() && (raw[i].is_ascii_alphanumeric() || raw[i] == b'-') {
                 i += 1;
@@ -1719,6 +1968,55 @@ fn normalize_legacy_vendor_css(css: &str) -> std::borrow::Cow<'_, str> {
                     Some(b"     opacity")
                 } else if name.eq_ignore_ascii_case("-moz-box-shadow") {
                     Some(b"     box-shadow")
+                } else if name.eq_ignore_ascii_case("text-overflow")
+                    || name.eq_ignore_ascii_case("-o-text-overflow")
+                {
+                    // Scan value up to `;` or `}` outside quotes/parens/comments.
+                    let val_start = probe + 1;
+                    let mut vj = val_start;
+                    let mut paren_depth = 0usize;
+                    while vj < raw.len() {
+                        if raw[vj..].starts_with(b"/*") {
+                            vj = raw[vj + 2..]
+                                .windows(2)
+                                .position(|w| w == b"*/")
+                                .map_or(raw.len(), |p| vj + 2 + p + 2);
+                            continue;
+                        }
+                        let vb = raw[vj];
+                        if vb == b'\'' || vb == b'"' {
+                            let q = vb;
+                            vj += 1;
+                            while vj < raw.len() {
+                                let c = raw[vj];
+                                vj += 1;
+                                if c == q {
+                                    break;
+                                }
+                                if c == b'\\' && vj < raw.len() {
+                                    vj += 1;
+                                }
+                            }
+                            continue;
+                        }
+                        if vb == b'(' {
+                            paren_depth += 1;
+                        } else if vb == b')' {
+                            paren_depth = paren_depth.saturating_sub(1);
+                        } else if paren_depth == 0 && (vb == b';' || vb == b'}') {
+                            break;
+                        }
+                        vj += 1;
+                    }
+                    if is_supported_text_overflow_decl_value(&css[val_start..vj]) {
+                        if name.len() == 16 {
+                            Some(b"   --mg-txt-ovfl")
+                        } else {
+                            Some(b"--mg-txt-ovfl")
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1917,14 +2215,20 @@ pub fn compute_styles_with_diagnostics(
                 AllowImportRules::No,
             )))
         };
+    let uses_text_overflow = sheets.iter().any(|s| css_mentions_text_overflow(&s.css))
+        || document
+            .nodes
+            .iter()
+            .any(|n| n.attr("style").is_some_and(css_mentions_text_overflow));
+    let ua_with_text_overflow;
+    let ua_css = if uses_text_overflow {
+        ua_with_text_overflow = format!("{USER_AGENT_CSS}\n*{{--mg-txt-ovfl:clip}}");
+        ua_with_text_overflow.as_str()
+    } else {
+        USER_AGENT_CSS
+    };
     stylist.append_stylesheet(
-        sheet(
-            USER_AGENT_CSS,
-            url_data.clone(),
-            Origin::UserAgent,
-            "",
-            None,
-        ),
+        sheet(ua_css, url_data.clone(), Origin::UserAgent, "", None),
         &lock.read(),
     );
     for (index, source) in sheets.iter().enumerate() {
@@ -1970,16 +2274,16 @@ pub fn compute_styles_with_diagnostics(
             values[id] = values[parent_id].clone();
             // Admit before cloning: inherited strings must not amplify a small
             // stylesheet by the number of text nodes in the arena.
-            let inherited_bytes = snapshot_heap_bytes(&output[parent_id])
-                - layout_heap_bytes(&output[parent_id].layout)
-                - pseudo_heap_bytes(&output[parent_id].before)
-                - pseudo_heap_bytes(&output[parent_id].after);
+            let inherited_bytes = inherited_heap_bytes(&output[parent_id]);
             admit_snapshot_bytes(
                 &mut snapshot_bytes,
                 snapshot_heap_bytes(&output[id]),
                 inherited_bytes,
             )?;
             output[id] = output[parent_id].inherit_for_text();
+            let actual_inherited_bytes = snapshot_heap_bytes(&output[id]);
+            debug_assert!(actual_inherited_bytes <= inherited_bytes);
+            snapshot_bytes -= inherited_bytes - actual_inherited_bytes;
             if parent_id != 0
                 && document.nodes[parent_id].tag == "details"
                 && !document.nodes[parent_id].has("open")
@@ -2052,10 +2356,26 @@ pub fn compute_styles_with_diagnostics(
             .and_then(|n| n.checked_add(snapshot_heap_bytes(&output[id])))
             .and_then(|n| n.checked_sub(snapshot_heap_bytes(&snapshot)))
             .ok_or("computed style snapshot bound exceeded")?;
+        let formatting_grid_areas = {
+            let mut anc = parent_id;
+            let mut found = None;
+            for _ in 0..=crate::document::MAX_DEPTH {
+                if anc == 0 {
+                    break;
+                }
+                if output[anc].display == Display::Contents {
+                    anc = document.nodes[anc].parent;
+                    continue;
+                }
+                found = active_grid_areas(Some(values[anc].as_ref()), output[anc].display);
+                break;
+            }
+            found
+        };
         snapshot.layout = renderer_layout(
             &computed,
             snapshot.display,
-            active_grid_areas(parent, output[parent_id].display),
+            formatting_grid_areas,
             remaining,
             id,
             &document.base_url,
@@ -2082,7 +2402,7 @@ pub fn compute_styles_with_diagnostics(
             && snapshot.display != Display::None
             && !matches!(
                 node.node().tag.as_str(),
-                "img" | "input" | "br" | "hr" | "svg" | "textarea" | "select"
+                "img" | "canvas" | "input" | "br" | "hr" | "svg" | "textarea" | "select"
             )
         {
             for pseudo_kind in [PseudoElement::Before, PseudoElement::After] {
@@ -2162,10 +2482,15 @@ pub fn compute_styles_with_diagnostics(
                     .and_then(|n| n.checked_sub(snapshot_heap_bytes(&pseudo_snapshot)))
                     .and_then(|n| n.checked_sub(pseudo_text.capacity()))
                     .ok_or("computed style snapshot bound exceeded")?;
+                let pseudo_grid_areas = if snapshot.display == Display::Contents {
+                    formatting_grid_areas
+                } else {
+                    active_grid_areas(Some(computed.as_ref()), snapshot.display)
+                };
                 pseudo_snapshot.layout = renderer_layout(
                     &pseudo_computed,
                     pseudo_snapshot.display,
-                    active_grid_areas(Some(computed.as_ref()), snapshot.display),
+                    pseudo_grid_areas,
                     pseudo_remaining,
                     id,
                     &document.base_url,
@@ -2558,7 +2883,14 @@ fn report_unsupported(
     {
         diagnostics.record(
             "css-unsupported",
-            format_args!("CSS gradient omitted: only one modern non-repeating two-stop sRGB linear gradient with bounded plain lengths/percentages, auto size, zero position, scroll attachment and rectangular clipping is implemented"),
+            format_args!("CSS gradient omitted: only one modern sRGB linear or radial gradient (2..=16 stops) with bounded lengths/percentages, scroll attachment, repeat/no-repeat tiling and rectangular clipping is implemented"),
+            format_args!("{source}"), Some(node), None,
+        );
+    }
+    if rendered.has_transform && rendered.transform.is_none() {
+        diagnostics.record(
+            "css-unsupported",
+            format_args!("CSS transform omitted: only 2D axis-aligned translate and scale operations (up to 16 operations) are implemented"),
             format_args!("{source}"), Some(node), None,
         );
     }
@@ -2940,6 +3272,12 @@ fn grid_line(
     parent_areas: Option<&style::values::specified::position::TemplateAreas>,
 ) -> Mapping<GridLine> {
     if !value.ident.0.is_empty() {
+        let ident_str: &str = value.ident.0.as_ref();
+        if ident_str.len() > MAX_FONT_NAME_BYTES {
+            return Err(MappingFailure::Limit(
+                "computed grid line name bound exceeded",
+            ));
+        }
         if value.line_num == 0
             && !value.is_span
             && let Some(areas) = parent_areas
@@ -2973,7 +3311,6 @@ fn grid_line(
                     }
                 };
             }
-            let ident_str: &str = value.ident.0.as_ref();
             if let Some((stem, is_start)) = ident_str
                 .strip_suffix("-start")
                 .map(|s| (s, true))
@@ -2993,7 +3330,22 @@ fn grid_line(
                 return Ok(GridLine::Line(line as i16));
             }
         }
-        return Err(MappingFailure::Unsupported("named grid placement"));
+        let n = value.line_num;
+        if value.is_span {
+            let span = if n == 0 { 1 } else { n };
+            if span <= 0 || span as usize > MAX_GRID_TRACKS {
+                return Err(MappingFailure::Limit(
+                    "computed grid line/span bound exceeded",
+                ));
+            }
+            return Ok(GridLine::NamedSpan(ident_str.to_owned(), span as u16));
+        }
+        if n.unsigned_abs() as usize > MAX_GRID_TRACKS {
+            return Err(MappingFailure::Limit(
+                "computed grid line/span bound exceeded",
+            ));
+        }
+        return Ok(GridLine::NamedLine(ident_str.to_owned(), n as i16));
     }
     if value.is_auto() {
         return Ok(GridLine::Auto);
@@ -3022,100 +3374,261 @@ fn track_breadth(value: &style::values::computed::TrackBreadth) -> Mapping<Track
     })
 }
 fn track_size(value: &style::values::computed::TrackSize) -> Mapping<TrackSize> {
-    use style::values::generics::grid::TrackSize as T;
+    use style::values::generics::grid::{TrackBreadth as B, TrackSize as T};
     Ok(match value {
         T::Breadth(v) => TrackSize::Breadth(track_breadth(v)?),
         T::Minmax(min, max) => TrackSize::MinMax(track_breadth(min)?, track_breadth(max)?),
+        T::FitContent(B::Breadth(v)) => TrackSize::FitContent(layout_length(v, true)?),
         T::FitContent(_) => return Err(MappingFailure::Unsupported("fit-content grid tracks")),
     })
 }
-fn template_count(value: &style::values::computed::GridTemplateComponent) -> Mapping<usize> {
+const MAX_LINE_NAMES_PER_LINE: usize = 16;
+
+fn append_custom_idents(
+    dest: &mut Vec<String>,
+    names: &[style::values::CustomIdent],
+) -> Mapping<()> {
+    for ident in names {
+        let s: &str = ident.0.as_ref();
+        if s.len() > MAX_FONT_NAME_BYTES {
+            return Err(MappingFailure::Limit(
+                "computed grid line name bound exceeded",
+            ));
+        }
+        if dest.len() >= MAX_LINE_NAMES_PER_LINE {
+            return Err(MappingFailure::Limit(
+                "computed grid line name list bound exceeded",
+            ));
+        }
+        dest.push(s.to_owned());
+    }
+    Ok(())
+}
+
+type ParsedGridTemplate = (Vec<TrackSize>, Vec<Vec<String>>, Option<GridAutoRepeat>);
+
+fn parse_grid_template(
+    value: &style::values::computed::GridTemplateComponent,
+    remaining: usize,
+) -> Mapping<ParsedGridTemplate> {
     use style::values::generics::grid::{
         GridTemplateComponent as G, RepeatCount, TrackListValue as V,
     };
     let tracks = match value {
-        G::None => return Ok(0),
+        G::None => return Ok((Vec::new(), Vec::new(), None)),
         G::TrackList(tracks) => tracks,
         _ => return Err(MappingFailure::Unsupported("subgrid or masonry")),
     };
-    if tracks.line_names.iter().any(|names| !names.is_empty()) {
-        return Err(MappingFailure::Unsupported("named grid lines"));
+    let mut single_count = 0usize;
+    let mut has_auto_repeat = false;
+    let mut has_any_names = tracks.line_names.iter().any(|names| !names.is_empty());
+    let mut est_bytes = 0usize;
+    for names in tracks.line_names.iter() {
+        if names.len() > MAX_LINE_NAMES_PER_LINE {
+            return Err(MappingFailure::Limit(
+                "computed grid line name list bound exceeded",
+            ));
+        }
+        for ident in names.iter() {
+            let len = ident.0.as_ref().len();
+            if len > MAX_FONT_NAME_BYTES {
+                return Err(MappingFailure::Limit(
+                    "computed grid line name bound exceeded",
+                ));
+            }
+            est_bytes = est_bytes.saturating_add(std::mem::size_of::<String>() + len);
+        }
     }
-    let mut count = 0usize;
     for value in tracks.values.iter() {
-        let amount = match value {
-            V::TrackSize(_) => 1,
+        match value {
+            V::TrackSize(_) => {
+                single_count = single_count
+                    .checked_add(1)
+                    .filter(|n| *n <= MAX_GRID_TRACKS)
+                    .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?;
+            }
             V::TrackRepeat(repeat) => {
                 if repeat.line_names.iter().any(|names| !names.is_empty()) {
-                    return Err(MappingFailure::Unsupported("named repeated grid lines"));
+                    has_any_names = true;
                 }
-                let RepeatCount::Number(n) = repeat.count else {
-                    return Err(MappingFailure::Unsupported(
-                        "auto-fill/auto-fit grid repeats",
-                    ));
-                };
-                if n <= 0 {
-                    return Err(MappingFailure::Limit("invalid computed grid repeat"));
-                }
-                (n as usize)
-                    .checked_mul(repeat.track_sizes.len())
-                    .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?
-            }
-        };
-        count = count
-            .checked_add(amount)
-            .filter(|n| *n <= MAX_GRID_TRACKS)
-            .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?;
-    }
-    Ok(count)
-}
-fn template_tracks(
-    value: &style::values::computed::GridTemplateComponent,
-    count: usize,
-) -> Mapping<Vec<TrackSize>> {
-    use style::values::generics::grid::{
-        GridTemplateComponent as G, RepeatCount, TrackListValue as V,
-    };
-    let mut result = Vec::with_capacity(count);
-    if let G::TrackList(tracks) = value {
-        for value in tracks.values.iter() {
-            match value {
-                V::TrackSize(v) => result.push(track_size(v)?),
-                V::TrackRepeat(repeat) => {
-                    let RepeatCount::Number(n) = repeat.count else {
-                        unreachable!("preflighted repeat")
-                    };
-                    for _ in 0..n {
-                        for v in repeat.track_sizes.iter() {
-                            result.push(track_size(v)?);
+                for names in repeat.line_names.iter() {
+                    if names.len() > MAX_LINE_NAMES_PER_LINE {
+                        return Err(MappingFailure::Limit(
+                            "computed grid line name list bound exceeded",
+                        ));
+                    }
+                    for ident in names.iter() {
+                        if ident.0.as_ref().len() > MAX_FONT_NAME_BYTES {
+                            return Err(MappingFailure::Limit(
+                                "computed grid line name bound exceeded",
+                            ));
                         }
+                    }
+                }
+                match repeat.count {
+                    RepeatCount::Number(n) => {
+                        if n <= 0 {
+                            return Err(MappingFailure::Limit("invalid computed grid repeat"));
+                        }
+                        let amount = (n as usize)
+                            .checked_mul(repeat.track_sizes.len())
+                            .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?;
+                        single_count = single_count
+                            .checked_add(amount)
+                            .filter(|c| *c <= MAX_GRID_TRACKS)
+                            .ok_or(MappingFailure::Limit("computed grid track bound exceeded"))?;
+                        let rep_name_bytes: usize = repeat
+                            .line_names
+                            .iter()
+                            .flat_map(|set| set.iter())
+                            .map(|id| std::mem::size_of::<String>() + id.0.as_ref().len())
+                            .sum();
+                        est_bytes =
+                            est_bytes.saturating_add(rep_name_bytes.saturating_mul(n as usize));
+                    }
+                    RepeatCount::AutoFill | RepeatCount::AutoFit => {
+                        if has_auto_repeat {
+                            return Err(MappingFailure::Limit("multiple auto-repeat grid clauses"));
+                        }
+                        if repeat.track_sizes.is_empty()
+                            || repeat.track_sizes.len() > MAX_GRID_TRACKS
+                        {
+                            return Err(MappingFailure::Limit(
+                                "computed grid track bound exceeded",
+                            ));
+                        }
+                        has_auto_repeat = true;
+                        let rep_name_bytes: usize = repeat
+                            .line_names
+                            .iter()
+                            .flat_map(|set| set.iter())
+                            .map(|id| std::mem::size_of::<String>() + id.0.as_ref().len())
+                            .sum();
+                        est_bytes = est_bytes
+                            .saturating_add(
+                                repeat.track_sizes.len() * std::mem::size_of::<TrackSize>(),
+                            )
+                            .saturating_add(
+                                repeat.line_names.len() * std::mem::size_of::<Vec<String>>(),
+                            )
+                            .saturating_add(rep_name_bytes);
                     }
                 }
             }
         }
     }
-    Ok(result)
+    let component_count = single_count + usize::from(has_auto_repeat);
+    if has_any_names {
+        est_bytes =
+            est_bytes.saturating_add((component_count + 1) * std::mem::size_of::<Vec<String>>());
+    }
+    est_bytes = est_bytes.saturating_add(single_count * std::mem::size_of::<TrackSize>());
+    if est_bytes > remaining {
+        return Err(MappingFailure::Limit(
+            "computed style snapshot bound exceeded",
+        ));
+    }
+
+    let mut out_tracks = Vec::with_capacity(single_count);
+    let mut out_lines = if has_any_names {
+        let mut v = Vec::with_capacity(component_count + 1);
+        v.push(Vec::new());
+        v
+    } else {
+        Vec::new()
+    };
+    let mut auto_repeat = None;
+
+    for (idx, item) in tracks.values.iter().enumerate() {
+        if has_any_names && let Some(names) = tracks.line_names.get(idx) {
+            append_custom_idents(out_lines.last_mut().unwrap(), names)?;
+        }
+        match item {
+            V::TrackSize(ts) => {
+                out_tracks.push(track_size(ts)?);
+                if has_any_names {
+                    out_lines.push(Vec::new());
+                }
+            }
+            V::TrackRepeat(repeat) => match repeat.count {
+                RepeatCount::Number(n) => {
+                    for _ in 0..n {
+                        if has_any_names && let Some(first_names) = repeat.line_names.first() {
+                            append_custom_idents(out_lines.last_mut().unwrap(), first_names)?;
+                        }
+                        for (t_idx, ts) in repeat.track_sizes.iter().enumerate() {
+                            out_tracks.push(track_size(ts)?);
+                            if has_any_names {
+                                let mut next_set = Vec::new();
+                                if let Some(after_names) = repeat.line_names.get(t_idx + 1) {
+                                    append_custom_idents(&mut next_set, after_names)?;
+                                }
+                                out_lines.push(next_set);
+                            }
+                        }
+                    }
+                }
+                RepeatCount::AutoFill | RepeatCount::AutoFit => {
+                    let insert_index = out_tracks.len();
+                    let mode = match repeat.count {
+                        RepeatCount::AutoFill => GridAutoRepeatMode::AutoFill,
+                        RepeatCount::AutoFit => GridAutoRepeatMode::AutoFit,
+                        RepeatCount::Number(_) => unreachable!(),
+                    };
+                    let mut ar_tracks = Vec::with_capacity(repeat.track_sizes.len());
+                    for ts in repeat.track_sizes.iter() {
+                        ar_tracks.push(track_size(ts)?);
+                    }
+                    let ar_lines = if repeat.line_names.iter().any(|n| !n.is_empty()) {
+                        let mut sets = Vec::with_capacity(ar_tracks.len() + 1);
+                        for i in 0..=ar_tracks.len() {
+                            let mut set = Vec::new();
+                            if let Some(names) = repeat.line_names.get(i) {
+                                append_custom_idents(&mut set, names)?;
+                            }
+                            sets.push(set);
+                        }
+                        sets
+                    } else {
+                        Vec::new()
+                    };
+                    auto_repeat = Some(GridAutoRepeat {
+                        insert_index,
+                        mode,
+                        tracks: ar_tracks,
+                        line_names: ar_lines,
+                    });
+                    if has_any_names {
+                        out_lines.push(Vec::new());
+                    }
+                }
+            },
+        }
+    }
+    if has_any_names && let Some(trailing) = tracks.line_names.get(tracks.values.len()) {
+        append_custom_idents(out_lines.last_mut().unwrap(), trailing)?;
+    }
+    Ok((out_tracks, out_lines, auto_repeat))
 }
+
 fn grid_style(
     position: &style::properties::style_structs::Position,
     remaining: usize,
 ) -> Mapping<Box<GridStyle>> {
     use style::values::computed::{GridAutoFlow as F, GridTemplateAreas};
-    let (area_rows, area_columns) = match &position.grid_template_areas {
-        GridTemplateAreas::None => (0usize, 0usize),
+    let areas_opt = match &position.grid_template_areas {
+        GridTemplateAreas::None => None,
         GridTemplateAreas::Areas(areas) => {
             let r = areas.0.strings.len();
             let c = areas.0.width as usize;
             if r > MAX_GRID_TRACKS || c > MAX_GRID_TRACKS {
                 return Err(MappingFailure::Limit("computed grid track bound exceeded"));
             }
-            (r, c)
+            Some(&areas.0)
         }
     };
-    let rows = template_count(&position.grid_template_rows)?;
-    let columns = template_count(&position.grid_template_columns)?;
-    let explicit_rows = rows.max(area_rows);
-    let explicit_columns = columns.max(area_columns);
+    let (area_rows, area_columns) =
+        areas_opt.map_or((0, 0), |a| (a.strings.len(), a.width as usize));
     let auto_rows = position.grid_auto_rows.0.len();
     let auto_columns = position.grid_auto_columns.0.len();
     if auto_rows > MAX_GRID_TRACKS || auto_columns > MAX_GRID_TRACKS {
@@ -3123,14 +3636,27 @@ fn grid_style(
             "computed implicit grid track bound exceeded",
         ));
     }
-    let bytes = (explicit_rows + explicit_columns + auto_rows + auto_columns)
+    let base_bytes = (auto_rows + auto_columns)
         .checked_mul(std::mem::size_of::<TrackSize>())
         .and_then(|n| n.checked_add(std::mem::size_of::<GridStyle>()))
         .filter(|n| *n <= remaining)
         .ok_or(MappingFailure::Limit(
             "computed style snapshot bound exceeded",
         ))?;
-    let _ = bytes; // Admission above precedes every owned grid-vector allocation.
+    let rem_after_base = remaining - base_bytes;
+    let (mut template_rows, mut row_line_names, row_auto_repeat) =
+        parse_grid_template(&position.grid_template_rows, rem_after_base)?;
+    let row_used = template_rows.capacity() * std::mem::size_of::<TrackSize>()
+        + line_names_heap_bytes(&row_line_names)
+        + auto_repeat_heap_bytes(&row_auto_repeat);
+    let rem_after_rows = rem_after_base
+        .checked_sub(row_used)
+        .ok_or(MappingFailure::Limit(
+            "computed style snapshot bound exceeded",
+        ))?;
+    let (mut template_columns, mut col_line_names, col_auto_repeat) =
+        parse_grid_template(&position.grid_template_columns, rem_after_rows)?;
+
     let implicit =
         |tracks: &style::values::computed::ImplicitGridTracks| -> Mapping<Vec<TrackSize>> {
             let mut output = Vec::with_capacity(tracks.0.len());
@@ -3148,33 +3674,115 @@ fn grid_style(
     };
     let auto_rows_vec = implicit(&position.grid_auto_rows)?;
     let auto_columns_vec = implicit(&position.grid_auto_columns)?;
-    let mut template_rows = template_tracks(&position.grid_template_rows, explicit_rows)?;
-    while template_rows.len() < explicit_rows {
-        let idx = template_rows.len() - rows;
-        let track = if auto_rows_vec.is_empty() {
-            TrackSize::Breadth(TrackBreadth::Auto)
-        } else {
-            auto_rows_vec[idx % auto_rows_vec.len()]
-        };
-        template_rows.push(track);
+
+    if row_auto_repeat.is_none() {
+        let rows = template_rows.len();
+        let explicit_rows = rows.max(area_rows);
+        while template_rows.len() < explicit_rows {
+            let idx = template_rows.len() - rows;
+            let track = if auto_rows_vec.is_empty() {
+                TrackSize::Breadth(TrackBreadth::Auto)
+            } else {
+                auto_rows_vec[idx % auto_rows_vec.len()]
+            };
+            template_rows.push(track);
+            if !row_line_names.is_empty() {
+                row_line_names.push(Vec::new());
+            }
+        }
+        if let Some(areas) = areas_opt
+            && !areas.areas.is_empty()
+            && !template_rows.is_empty()
+        {
+            if row_line_names.is_empty() {
+                row_line_names.resize_with(template_rows.len() + 1, Vec::new);
+            }
+            for area in areas.areas.iter() {
+                let s_idx = (area.rows.start as usize).saturating_sub(1);
+                let e_idx = (area.rows.end as usize).saturating_sub(1);
+                if s_idx < row_line_names.len()
+                    && row_line_names[s_idx].len() < MAX_LINE_NAMES_PER_LINE
+                {
+                    row_line_names[s_idx].push(format!("{}-start", area.name.as_ref()));
+                }
+                if e_idx < row_line_names.len()
+                    && row_line_names[e_idx].len() < MAX_LINE_NAMES_PER_LINE
+                {
+                    row_line_names[e_idx].push(format!("{}-end", area.name.as_ref()));
+                }
+            }
+        }
     }
-    let mut template_columns = template_tracks(&position.grid_template_columns, explicit_columns)?;
-    while template_columns.len() < explicit_columns {
-        let idx = template_columns.len() - columns;
-        let track = if auto_columns_vec.is_empty() {
-            TrackSize::Breadth(TrackBreadth::Auto)
-        } else {
-            auto_columns_vec[idx % auto_columns_vec.len()]
-        };
-        template_columns.push(track);
+    if col_auto_repeat.is_none() {
+        let columns = template_columns.len();
+        let explicit_columns = columns.max(area_columns);
+        while template_columns.len() < explicit_columns {
+            let idx = template_columns.len() - columns;
+            let track = if auto_columns_vec.is_empty() {
+                TrackSize::Breadth(TrackBreadth::Auto)
+            } else {
+                auto_columns_vec[idx % auto_columns_vec.len()]
+            };
+            template_columns.push(track);
+            if !col_line_names.is_empty() {
+                col_line_names.push(Vec::new());
+            }
+        }
+        if let Some(areas) = areas_opt
+            && !areas.areas.is_empty()
+            && !template_columns.is_empty()
+        {
+            if col_line_names.is_empty() {
+                col_line_names.resize_with(template_columns.len() + 1, Vec::new);
+            }
+            for area in areas.areas.iter() {
+                let s_idx = (area.columns.start as usize).saturating_sub(1);
+                let e_idx = (area.columns.end as usize).saturating_sub(1);
+                if s_idx < col_line_names.len()
+                    && col_line_names[s_idx].len() < MAX_LINE_NAMES_PER_LINE
+                {
+                    col_line_names[s_idx].push(format!("{}-start", area.name.as_ref()));
+                }
+                if e_idx < col_line_names.len()
+                    && col_line_names[e_idx].len() < MAX_LINE_NAMES_PER_LINE
+                {
+                    col_line_names[e_idx].push(format!("{}-end", area.name.as_ref()));
+                }
+            }
+        }
     }
-    Ok(Box::new(GridStyle {
+
+    let grid = Box::new(GridStyle {
         template_rows,
         template_columns,
+        row_line_names,
+        col_line_names,
+        row_auto_repeat,
+        col_auto_repeat,
         auto_rows: auto_rows_vec,
         auto_columns: auto_columns_vec,
         auto_flow,
-    }))
+    });
+    let total_grid_bytes = std::mem::size_of::<GridStyle>()
+        + [
+            &grid.template_rows,
+            &grid.template_columns,
+            &grid.auto_rows,
+            &grid.auto_columns,
+        ]
+        .iter()
+        .map(|tracks| tracks.capacity() * std::mem::size_of::<TrackSize>())
+        .sum::<usize>()
+        + line_names_heap_bytes(&grid.row_line_names)
+        + line_names_heap_bytes(&grid.col_line_names)
+        + auto_repeat_heap_bytes(&grid.row_auto_repeat)
+        + auto_repeat_heap_bytes(&grid.col_auto_repeat);
+    if total_grid_bytes > remaining {
+        return Err(MappingFailure::Limit(
+            "computed style snapshot bound exceeded",
+        ));
+    }
+    Ok(grid)
 }
 
 struct LayoutReporter<'a> {
@@ -3355,10 +3963,21 @@ fn renderer_layout(
         },
         flex_grow: p.flex_grow.0,
         flex_shrink: p.flex_shrink.0,
+        flex_basis_intrinsic: match &p.flex_basis {
+            B::Size(style::values::computed::Size::MinContent) => Some(IntrinsicSize::MinContent),
+            B::Size(style::values::computed::Size::MaxContent) => Some(IntrinsicSize::MaxContent),
+            B::Size(style::values::computed::Size::FitContent) => Some(IntrinsicSize::FitContent),
+            _ => None,
+        },
         flex_basis: report.convert(
             "flex-basis",
             match &p.flex_basis {
                 B::Content => Ok(FlexBasis::Content),
+                B::Size(
+                    style::values::computed::Size::MinContent
+                    | style::values::computed::Size::MaxContent
+                    | style::values::computed::Size::FitContent,
+                ) => Ok(FlexBasis::Auto),
                 B::Size(value) => flex_basis_size(value).map(|v| {
                     if v == Length::Auto {
                         FlexBasis::Auto
@@ -3414,15 +4033,27 @@ fn renderer_layout(
     {
         *slot = report.convert(name, layout_gap(value), Length::Px(0.))?;
     }
-    use style::values::computed::Size;
-    output.width_fit_content = matches!(p.width, Size::FitContent);
-    output.width_max_content = matches!(p.width, Size::MaxContent);
-    if !output.width_fit_content && !output.width_max_content {
-        report.convert_length("width", layout_size(&p.width), Length::Auto)?;
-    }
-    for (name, value) in [("height", &p.height), ("min-height", &p.min_height)] {
-        report.convert_length(name, layout_size(value), Length::Auto)?;
-    }
+    use style::values::computed::{MaxSize, Size};
+    output.width_intrinsic = match p.width {
+        Size::MinContent => Some(IntrinsicSize::MinContent),
+        Size::MaxContent => Some(IntrinsicSize::MaxContent),
+        Size::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert_length("width", layout_size(&p.width), Length::Auto)?;
+            None
+        }
+    };
+    output.width_fit_content = output.width_intrinsic == Some(IntrinsicSize::FitContent);
+    output.width_max_content = output.width_intrinsic == Some(IntrinsicSize::MaxContent);
+    output.height_intrinsic = match p.height {
+        Size::MinContent => Some(IntrinsicSize::MinContent),
+        Size::MaxContent => Some(IntrinsicSize::MaxContent),
+        Size::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert_length("height", layout_size(&p.height), Length::Auto)?;
+            None
+        }
+    };
     output.min_width_intrinsic = match p.min_width {
         Size::MinContent => Some(IntrinsicSize::MinContent),
         Size::MaxContent => Some(IntrinsicSize::MaxContent),
@@ -3432,22 +4063,50 @@ fn renderer_layout(
             None
         }
     };
-    for (name, value) in [("max-width", &p.max_width), ("max-height", &p.max_height)] {
-        use style::values::computed::MaxSize;
-        if name == "max-width" && matches!(value, MaxSize::FitContent) {
-            output.max_width_fit_content = true;
-            continue;
+    output.min_height_intrinsic = match p.min_height {
+        Size::MinContent => Some(IntrinsicSize::MinContent),
+        Size::MaxContent => Some(IntrinsicSize::MaxContent),
+        Size::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert_length("min-height", layout_size(&p.min_height), Length::Auto)?;
+            None
         }
-        report.convert_length(
-            name,
-            match value {
-                MaxSize::None => Ok(Length::Auto),
-                MaxSize::LengthPercentage(v) => outer_layout_length(&v.0, true),
-                _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
-            },
-            Length::Auto,
-        )?;
-    }
+    };
+    output.max_width_intrinsic = match p.max_width {
+        MaxSize::MinContent => Some(IntrinsicSize::MinContent),
+        MaxSize::MaxContent => Some(IntrinsicSize::MaxContent),
+        MaxSize::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert_length(
+                "max-width",
+                match &p.max_width {
+                    MaxSize::None => Ok(Length::Auto),
+                    MaxSize::LengthPercentage(v) => outer_layout_length(&v.0, true),
+                    _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
+                },
+                Length::Auto,
+            )?;
+            None
+        }
+    };
+    output.max_width_fit_content = output.max_width_intrinsic == Some(IntrinsicSize::FitContent);
+    output.max_height_intrinsic = match p.max_height {
+        MaxSize::MinContent => Some(IntrinsicSize::MinContent),
+        MaxSize::MaxContent => Some(IntrinsicSize::MaxContent),
+        MaxSize::FitContent => Some(IntrinsicSize::FitContent),
+        _ => {
+            report.convert_length(
+                "max-height",
+                match &p.max_height {
+                    MaxSize::None => Ok(Length::Auto),
+                    MaxSize::LengthPercentage(v) => outer_layout_length(&v.0, true),
+                    _ => Err(MappingFailure::Unsupported("intrinsic or anchor sizing")),
+                },
+                Length::Auto,
+            )?;
+            None
+        }
+    };
     let margin = values.get_margin();
     for (name, value) in [
         ("margin-top", &margin.margin_top),
@@ -3495,6 +4154,15 @@ fn renderer_layout(
             GridLine::Auto,
         )?;
     }
+    let placement_heap = output
+        .grid_row
+        .iter()
+        .chain(output.grid_column.iter())
+        .map(grid_line_heap_bytes)
+        .sum::<usize>();
+    let remaining = remaining
+        .checked_sub(placement_heap)
+        .ok_or_else(|| "computed style snapshot bound exceeded".to_owned())?;
     if matches!(display, Display::Grid | Display::InlineGrid) {
         output.grid = report.convert("grid-template", grid_style(p, remaining).map(Some), None)?;
     }
@@ -3545,14 +4213,40 @@ fn background_box(value: style::values::specified::background::BackgroundClip) -
     }
 }
 
-/// Convert only the explicitly implemented background slice. This is a fixed
-/// two-stop read of Stylo's actual computed values, not CSS string reparsing.
-fn renderer_gradient(values: &ComputedValues) -> Option<LinearGradient> {
+fn bounded_box_length(
+    value: &style::values::computed::LengthPercentage,
+    non_negative: bool,
+) -> Option<Length> {
+    let len = box_length(value, non_negative);
+    match len {
+        Length::Px(v) | Length::Percent(v) if v.is_finite() && v.abs() <= 1_000_000. => Some(len),
+        Length::Calc {
+            px,
+            percent,
+            bound_px,
+            ..
+        } if px.is_finite()
+            && percent.is_finite()
+            && bound_px.is_finite()
+            && px.abs() <= 1_000_000.
+            && percent.abs() <= 1_000_000.
+            && bound_px.abs() <= 1_000_000. =>
+        {
+            Some(len)
+        }
+        _ => None,
+    }
+}
+
+/// Convert the explicitly implemented sRGB linear/radial background gradient
+/// slice from Stylo's computed values (`2..=16` stops, optional midpoint hints).
+fn renderer_gradient(values: &ComputedValues) -> Option<Box<BackgroundGradient>> {
     use style::properties::longhands::{background_attachment, background_origin};
     use style::values::computed::image::LineDirection;
     use style::values::generics::background::BackgroundSize;
     use style::values::generics::image::{
-        Gradient, GradientCompatMode, GradientFlags, GradientItem, Image,
+        Circle, Ellipse, EndingShape, Gradient, GradientCompatMode, GradientFlags, GradientItem,
+        Image, ShapeExtent,
     };
     use style::values::generics::length::LengthPercentageOrAuto;
     use style::values::specified::background::BackgroundRepeatKeyword as Repeat;
@@ -3563,41 +4257,121 @@ fn renderer_gradient(values: &ComputedValues) -> Option<LinearGradient> {
     let [Image::Gradient(gradient)] = background.background_image.0.as_ref() else {
         return None;
     };
-    let Gradient::Linear {
-        direction,
-        color_interpolation_method,
-        items,
-        flags,
-        compat_mode,
-    } = &**gradient
-    else {
-        return None;
+    let (kind, items, repeating) = match &**gradient {
+        Gradient::Linear {
+            direction,
+            color_interpolation_method,
+            items,
+            flags,
+            compat_mode,
+        } => {
+            if *compat_mode != GradientCompatMode::Modern
+                || color_interpolation_method.space != style::color::ColorSpace::Srgb
+            {
+                return None;
+            }
+            let dir = match *direction {
+                LineDirection::Angle(angle) => {
+                    let radians = angle.radians();
+                    if !radians.is_finite() {
+                        return None;
+                    }
+                    GradientDirection::Angle(radians.rem_euclid(std::f32::consts::TAU))
+                }
+                LineDirection::Horizontal(H::Left) => {
+                    GradientDirection::Angle(std::f32::consts::PI * 1.5)
+                }
+                LineDirection::Horizontal(H::Right) => {
+                    GradientDirection::Angle(std::f32::consts::FRAC_PI_2)
+                }
+                LineDirection::Vertical(V::Top) => GradientDirection::Angle(0.),
+                LineDirection::Vertical(V::Bottom) => {
+                    GradientDirection::Angle(std::f32::consts::PI)
+                }
+                LineDirection::Corner(horizontal, vertical) => GradientDirection::Corner {
+                    right: horizontal == H::Right,
+                    bottom: vertical == V::Bottom,
+                },
+            };
+            (
+                GradientKind::Linear(dir),
+                items,
+                flags.contains(GradientFlags::REPEATING),
+            )
+        }
+        Gradient::Radial {
+            shape,
+            position,
+            color_interpolation_method,
+            items,
+            flags,
+            compat_mode,
+        } => {
+            if *compat_mode != GradientCompatMode::Modern
+                || color_interpolation_method.space != style::color::ColorSpace::Srgb
+            {
+                return None;
+            }
+            let map_extent = |ext: ShapeExtent| match ext {
+                ShapeExtent::ClosestSide | ShapeExtent::Contain => RadialExtent::ClosestSide,
+                ShapeExtent::FarthestSide => RadialExtent::FarthestSide,
+                ShapeExtent::ClosestCorner => RadialExtent::ClosestCorner,
+                ShapeExtent::FarthestCorner | ShapeExtent::Cover => RadialExtent::FarthestCorner,
+            };
+            let shape = match *shape {
+                EndingShape::Circle(Circle::Radius(r)) => {
+                    let px = r.0.px();
+                    if !px.is_finite() || !(0.0..=1_000_000.0).contains(&px) {
+                        return None;
+                    }
+                    RadialShape::CircleExplicit(Length::Px(px))
+                }
+                EndingShape::Circle(Circle::Extent(ext)) => {
+                    RadialShape::CircleExtent(map_extent(ext))
+                }
+                EndingShape::Ellipse(Ellipse::Radii(ref rx, ref ry)) => {
+                    RadialShape::EllipseExplicit(
+                        bounded_box_length(&rx.0, true)?,
+                        bounded_box_length(&ry.0, true)?,
+                    )
+                }
+                EndingShape::Ellipse(Ellipse::Extent(ext)) => {
+                    RadialShape::EllipseExtent(map_extent(ext))
+                }
+            };
+            let center = [
+                bounded_box_length(&position.horizontal, false)?,
+                bounded_box_length(&position.vertical, false)?,
+            ];
+            (
+                GradientKind::Radial { shape, center },
+                items,
+                flags.contains(GradientFlags::REPEATING),
+            )
+        }
+        Gradient::Conic { .. } => return None,
     };
-    if *compat_mode != GradientCompatMode::Modern
-        || flags.contains(GradientFlags::REPEATING)
-        || color_interpolation_method.space != style::color::ColorSpace::Srgb
-        || items.len() != 2
-    {
-        return None;
-    }
-    let size = background.background_size.0.first()?;
-    if !matches!(
-        size,
-        BackgroundSize::ExplicitSize {
-            width: LengthPercentageOrAuto::Auto,
-            height: LengthPercentageOrAuto::Auto
+
+    let size = match background.background_size.0.first()? {
+        BackgroundSize::ExplicitSize { width, height } => {
+            let w = match width {
+                LengthPercentageOrAuto::Auto => Length::Auto,
+                LengthPercentageOrAuto::LengthPercentage(lp) => bounded_box_length(&lp.0, true)?,
+            };
+            let h = match height {
+                LengthPercentageOrAuto::Auto => Length::Auto,
+                LengthPercentageOrAuto::LengthPercentage(lp) => bounded_box_length(&lp.0, true)?,
+            };
+            [w, h]
         }
-    ) {
-        return None;
-    }
-    for position in [
-        background.background_position_x.0.first()?,
-        background.background_position_y.0.first()?,
-    ] {
-        if !matches!(plain_length(position), Length::Px(0.) | Length::Percent(0.)) {
-            return None;
+        BackgroundSize::Contain | BackgroundSize::Cover => {
+            [Length::Percent(1.0), Length::Percent(1.0)]
         }
-    }
+    };
+    let position = [
+        bounded_box_length(background.background_position_x.0.first()?, false)?,
+        bounded_box_length(background.background_position_y.0.first()?, false)?,
+    ];
     if *background.background_attachment.0.first()?
         != background_attachment::single_value::computed_value::T::Scroll
     {
@@ -3619,48 +4393,358 @@ fn renderer_gradient(values: &ComputedValues) -> Option<LinearGradient> {
         _ => None,
     };
     let repeat = [repeats(repeat.0)?, repeats(repeat.1)?];
-    let direction = match *direction {
-        LineDirection::Angle(angle) => {
-            let radians = angle.radians();
-            if !radians.is_finite() {
-                return None;
-            }
-            GradientDirection::Angle(radians.rem_euclid(std::f32::consts::TAU))
-        }
-        LineDirection::Horizontal(H::Left) => GradientDirection::Angle(std::f32::consts::PI * 1.5),
-        LineDirection::Horizontal(H::Right) => {
-            GradientDirection::Angle(std::f32::consts::FRAC_PI_2)
-        }
-        LineDirection::Vertical(V::Top) => GradientDirection::Angle(0.),
-        LineDirection::Vertical(V::Bottom) => GradientDirection::Angle(std::f32::consts::PI),
-        LineDirection::Corner(horizontal, vertical) => GradientDirection::Corner {
-            right: horizontal == H::Right,
-            bottom: vertical == V::Bottom,
-        },
-    };
+
     let text = values.get_inherited_text();
-    let stop = |index: usize| {
-        let (color, position) = match &items[index] {
-            GradientItem::SimpleColorStop(color) => (color, Length::Percent(index as f32)),
-            GradientItem::ComplexColorStop { color, position } => (color, plain_length(position)),
-            GradientItem::InterpolationHint(_) => return None,
-        };
-        if !matches!(position, Length::Px(value) | Length::Percent(value) if value.is_finite() && value.abs() <= 1_000_000.)
-        {
-            return None;
+    let mut stops: Vec<GradientStop> = Vec::with_capacity(items.len().min(MAX_GRADIENT_STOPS + 1));
+    for item in items.iter() {
+        match item {
+            GradientItem::SimpleColorStop(color) => {
+                if stops.len() >= MAX_GRADIENT_STOPS {
+                    return None;
+                }
+                let color = absolute_color(&color.resolve_to_absolute(&text.color));
+                if !color.alpha.is_finite() {
+                    return None;
+                }
+                stops.push(GradientStop {
+                    color,
+                    position: None,
+                    hint_to_next: None,
+                });
+            }
+            GradientItem::ComplexColorStop { color, position } => {
+                if stops.len() >= MAX_GRADIENT_STOPS {
+                    return None;
+                }
+                let pos = bounded_box_length(position, false)?;
+                let color = absolute_color(&color.resolve_to_absolute(&text.color));
+                if !color.alpha.is_finite() {
+                    return None;
+                }
+                stops.push(GradientStop {
+                    color,
+                    position: Some(pos),
+                    hint_to_next: None,
+                });
+            }
+            GradientItem::InterpolationHint(pos) => {
+                let prev = stops.last_mut()?;
+                if prev.hint_to_next.is_some() {
+                    return None;
+                }
+                prev.hint_to_next = Some(bounded_box_length(pos, false)?);
+            }
         }
-        let color = absolute_color(&color.resolve_to_absolute(&text.color));
-        if !color.alpha.is_finite() {
-            return None;
-        }
-        Some(GradientStop { color, position })
-    };
-    Some(LinearGradient {
-        direction,
-        stops: [stop(0)?, stop(1)?],
+    }
+    if !(2..=MAX_GRADIENT_STOPS).contains(&stops.len()) || stops.last()?.hint_to_next.is_some() {
+        return None;
+    }
+    if stops[0].position.is_none() {
+        stops[0].position = Some(Length::Percent(0.0));
+    }
+    if let Some(last) = stops.last_mut()
+        && last.position.is_none()
+    {
+        last.position = Some(Length::Percent(1.0));
+    }
+    stops.shrink_to_fit();
+    Some(Box::new(BackgroundGradient {
+        kind,
+        repeating,
+        stops,
         origin,
         clip,
         repeat,
+        size,
+        position,
+    }))
+}
+
+fn renderer_transform(
+    box_style: &style::properties::style_structs::Box,
+) -> (bool, Option<Box<TransformStyle>>) {
+    use style::values::generics::transform::{Rotate, Scale, TransformOperation, Translate};
+    let has_transform = !box_style.transform.0.is_empty()
+        || !matches!(box_style.translate, Translate::None)
+        || !matches!(box_style.rotate, Rotate::None)
+        || !matches!(box_style.scale, Scale::None);
+    if !has_transform {
+        return (false, None);
+    }
+    let Some(origin_x) = bounded_box_length(&box_style.transform_origin.horizontal, false) else {
+        return (true, None);
+    };
+    let Some(origin_y) = bounded_box_length(&box_style.transform_origin.vertical, false) else {
+        return (true, None);
+    };
+    let origin_z = box_style.transform_origin.depth.px();
+    if !origin_z.is_finite() || origin_z.abs() > 1e-5 {
+        return (true, None);
+    }
+
+    let valid_scale = |v: f32| v.is_finite() && v.abs() <= 1_000_000.0;
+    let angle_scale_op = |radians: f32| -> Result<Option<TransformOp2D>, ()> {
+        if !radians.is_finite() {
+            return Err(());
+        }
+        let (sin, cos) = radians.sin_cos();
+        if (cos - 1.0).abs() <= 1e-5 && sin.abs() <= 1e-5 {
+            Ok(None)
+        } else if (cos + 1.0).abs() <= 1e-5 && sin.abs() <= 1e-5 {
+            Ok(Some(TransformOp2D::Scale(-1.0, -1.0)))
+        } else {
+            Err(())
+        }
+    };
+
+    let mut ops = Vec::new();
+    let push_op = |ops: &mut Vec<TransformOp2D>, op: TransformOp2D| -> Result<(), ()> {
+        if ops.len() >= MAX_TRANSFORM_OPS {
+            return Err(());
+        }
+        ops.push(op);
+        Ok(())
+    };
+
+    match &box_style.translate {
+        Translate::None => {}
+        Translate::Translate(tx, ty, tz) => {
+            let z = tz.px();
+            if !z.is_finite() || z.abs() > 1e-5 {
+                return (true, None);
+            }
+            let (Some(x), Some(y)) = (bounded_box_length(tx, false), bounded_box_length(ty, false))
+            else {
+                return (true, None);
+            };
+            if push_op(&mut ops, TransformOp2D::Translate(x, y)).is_err() {
+                return (true, None);
+            }
+        }
+    }
+    match &box_style.rotate {
+        Rotate::None => {}
+        Rotate::Rotate(angle) => match angle_scale_op(angle.radians()) {
+            Ok(Some(op)) => {
+                if push_op(&mut ops, op).is_err() {
+                    return (true, None);
+                }
+            }
+            Ok(None) => {}
+            Err(()) => return (true, None),
+        },
+        Rotate::Rotate3D(x, y, z, angle) => {
+            if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+                return (true, None);
+            }
+            if x.abs() <= 1e-5 && y.abs() <= 1e-5 && z.abs() > 1e-5 {
+                let dir = if *z < 0.0 { -1.0 } else { 1.0 };
+                match angle_scale_op(angle.radians() * dir) {
+                    Ok(Some(op)) => {
+                        if push_op(&mut ops, op).is_err() {
+                            return (true, None);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(()) => return (true, None),
+                }
+            } else if angle.radians().abs() <= 1e-5 {
+                // Zero-angle rotation around any finite axis is identity.
+            } else {
+                return (true, None);
+            }
+        }
+    }
+    match &box_style.scale {
+        Scale::None => {}
+        Scale::Scale(sx, sy, sz) => {
+            if !sz.is_finite() || (*sz - 1.0).abs() > 1e-5 || !valid_scale(*sx) || !valid_scale(*sy)
+            {
+                return (true, None);
+            }
+            if push_op(&mut ops, TransformOp2D::Scale(*sx, *sy)).is_err() {
+                return (true, None);
+            }
+        }
+    }
+
+    for op in box_style.transform.0.iter() {
+        let mapped = match op {
+            TransformOperation::Translate(tx, ty) => {
+                let (Some(x), Some(y)) =
+                    (bounded_box_length(tx, false), bounded_box_length(ty, false))
+                else {
+                    return (true, None);
+                };
+                Some(TransformOp2D::Translate(x, y))
+            }
+            TransformOperation::TranslateX(tx) => {
+                let Some(x) = bounded_box_length(tx, false) else {
+                    return (true, None);
+                };
+                Some(TransformOp2D::Translate(x, Length::Px(0.0)))
+            }
+            TransformOperation::TranslateY(ty) => {
+                let Some(y) = bounded_box_length(ty, false) else {
+                    return (true, None);
+                };
+                Some(TransformOp2D::Translate(Length::Px(0.0), y))
+            }
+            TransformOperation::TranslateZ(tz) => {
+                let z = tz.px();
+                if !z.is_finite() || z.abs() > 1e-5 {
+                    return (true, None);
+                }
+                None
+            }
+            TransformOperation::Translate3D(tx, ty, tz) => {
+                let z = tz.px();
+                if !z.is_finite() || z.abs() > 1e-5 {
+                    return (true, None);
+                }
+                let (Some(x), Some(y)) =
+                    (bounded_box_length(tx, false), bounded_box_length(ty, false))
+                else {
+                    return (true, None);
+                };
+                Some(TransformOp2D::Translate(x, y))
+            }
+            TransformOperation::Scale(sx, sy) => {
+                if !valid_scale(*sx) || !valid_scale(*sy) {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Scale(*sx, *sy))
+            }
+            TransformOperation::ScaleX(sx) => {
+                if !valid_scale(*sx) {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Scale(*sx, 1.0))
+            }
+            TransformOperation::ScaleY(sy) => {
+                if !valid_scale(*sy) {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Scale(1.0, *sy))
+            }
+            TransformOperation::ScaleZ(sz) => {
+                if !sz.is_finite() || (*sz - 1.0).abs() > 1e-5 {
+                    return (true, None);
+                }
+                None
+            }
+            TransformOperation::Scale3D(sx, sy, sz) => {
+                if !sz.is_finite()
+                    || (*sz - 1.0).abs() > 1e-5
+                    || !valid_scale(*sx)
+                    || !valid_scale(*sy)
+                {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Scale(*sx, *sy))
+            }
+            TransformOperation::Matrix(m) => {
+                if !valid_scale(m.a)
+                    || !valid_scale(m.d)
+                    || !valid_scale(m.e)
+                    || !valid_scale(m.f)
+                    || !m.b.is_finite()
+                    || !m.c.is_finite()
+                    || m.b.abs() > 1e-5
+                    || m.c.abs() > 1e-5
+                {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Matrix {
+                    a: m.a,
+                    d: m.d,
+                    e: m.e,
+                    f: m.f,
+                })
+            }
+            TransformOperation::Matrix3D(m) => {
+                let zeros = [
+                    m.m12, m.m13, m.m14, m.m21, m.m23, m.m24, m.m31, m.m32, m.m34, m.m43,
+                ];
+                if zeros.iter().any(|v| !v.is_finite() || v.abs() > 1e-5)
+                    || !m.m33.is_finite()
+                    || (m.m33 - 1.0).abs() > 1e-5
+                    || !m.m44.is_finite()
+                    || (m.m44 - 1.0).abs() > 1e-5
+                    || !valid_scale(m.m11)
+                    || !valid_scale(m.m22)
+                    || !valid_scale(m.m41)
+                    || !valid_scale(m.m42)
+                {
+                    return (true, None);
+                }
+                Some(TransformOp2D::Matrix {
+                    a: m.m11,
+                    d: m.m22,
+                    e: m.m41,
+                    f: m.m42,
+                })
+            }
+            TransformOperation::Rotate(angle) | TransformOperation::RotateZ(angle) => {
+                match angle_scale_op(angle.radians()) {
+                    Ok(opt) => opt,
+                    Err(()) => return (true, None),
+                }
+            }
+            _ => return (true, None),
+        };
+        if let Some(op) = mapped
+            && push_op(&mut ops, op).is_err()
+        {
+            return (true, None);
+        }
+    }
+    ops.shrink_to_fit();
+    (
+        true,
+        Some(Box::new(TransformStyle {
+            origin: [origin_x, origin_y],
+            ops,
+        })),
+    )
+}
+
+fn renderer_clip_path_inset(values: &ComputedValues) -> Option<ClipPathInset> {
+    use style::values::generics::basic_shape::{BasicShape, ClipPath, ShapeBox, ShapeGeometryBox};
+    let ClipPath::Shape(shape, geom_box) = &values.get_svg().clip_path else {
+        return None;
+    };
+    if !matches!(
+        geom_box,
+        ShapeGeometryBox::ElementDependent | ShapeGeometryBox::ShapeBox(ShapeBox::BorderBox)
+    ) {
+        return None;
+    }
+    let BasicShape::Rect(inset_rect) = shape.as_ref() else {
+        return None;
+    };
+    let inset = [
+        bounded_box_length(&inset_rect.rect.0, false)?,
+        bounded_box_length(&inset_rect.rect.1, false)?,
+        bounded_box_length(&inset_rect.rect.2, false)?,
+        bounded_box_length(&inset_rect.rect.3, false)?,
+    ];
+    let radii = [
+        &inset_rect.round.top_left,
+        &inset_rect.round.top_right,
+        &inset_rect.round.bottom_right,
+        &inset_rect.round.bottom_left,
+    ];
+    let mut out_radii = [(Length::Px(0.0), Length::Px(0.0)); 4];
+    for (slot, r) in out_radii.iter_mut().zip(radii) {
+        *slot = (
+            bounded_box_length(&r.0.width.0, true)?,
+            bounded_box_length(&r.0.height.0, true)?,
+        );
+    }
+    Some(ClipPathInset {
+        inset,
+        radii: out_radii,
     })
 }
 
@@ -3670,14 +4754,18 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
     };
     use style::values::computed::font::SingleFontFamily;
     use style::values::computed::{AlignmentBaseline, Display as D, LineHeight};
+    use style::values::generics::ClipRectOrAuto;
     use style::values::generics::box_::{BaselineShift, BaselineShiftKeyword};
-    use style::values::specified::text::{TextAlignKeyword, TextDecorationLine};
+    use style::values::generics::length::LengthPercentageOrAuto;
+    use style::values::specified::text::{TextAlignKeyword, TextDecorationLine, TextOverflowSide};
     use style::values::specified::ui::PointerEvents;
     use style_traits::ToCss;
 
     let box_style = values.get_box();
     let font = values.get_font();
     let text = values.get_inherited_text();
+    let reset_text = values.get_text();
+    let effects = values.get_effects();
     let border = values.get_border();
     let margin = values.get_margin();
     let padding = values.get_padding();
@@ -3819,8 +4907,12 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
                             width: w,
                             height: h,
                         } => {
-                            if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = w { width = plain_length(&v.0); }
-                            if let style::values::generics::length::LengthPercentageOrAuto::LengthPercentage(v) = h { height = plain_length(&v.0); }
+                            if let LengthPercentageOrAuto::LengthPercentage(v) = w {
+                                width = plain_length(&v.0);
+                            }
+                            if let LengthPercentageOrAuto::LengthPercentage(v) = h {
+                                height = plain_length(&v.0);
+                            }
                         }
                         style::values::generics::background::BackgroundSize::Contain
                         | style::values::generics::background::BackgroundSize::Cover => {
@@ -3859,6 +4951,91 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             border_width[side] = widths[side].0.to_f32_px();
         }
     }
+    let mut box_shadows = Vec::with_capacity(effects.box_shadow.0.len().min(MAX_BOX_SHADOWS));
+    for shadow in effects.box_shadow.0.iter().take(MAX_BOX_SHADOWS) {
+        let ox = shadow.base.horizontal.px();
+        let oy = shadow.base.vertical.px();
+        let blur = shadow.base.blur.0.px().max(0.0);
+        let spread = shadow.spread.px();
+        if ox.is_finite()
+            && oy.is_finite()
+            && blur.is_finite()
+            && spread.is_finite()
+            && ox.abs() <= 1_000_000.0
+            && oy.abs() <= 1_000_000.0
+            && blur <= 1_000_000.0
+            && spread.abs() <= 1_000_000.0
+        {
+            box_shadows.push(BoxShadow {
+                offset_x: ox,
+                offset_y: oy,
+                blur_radius: blur,
+                spread_radius: spread,
+                color: resolve_color(&shadow.base.color),
+                inset: shadow.inset,
+            });
+        }
+    }
+    box_shadows.shrink_to_fit();
+
+    let mut text_shadows = Vec::with_capacity(text.text_shadow.0.len().min(MAX_TEXT_SHADOWS));
+    for shadow in text.text_shadow.0.iter().take(MAX_TEXT_SHADOWS) {
+        let ox = shadow.horizontal.px();
+        let oy = shadow.vertical.px();
+        let blur = shadow.blur.0.px().max(0.0);
+        if ox.is_finite()
+            && oy.is_finite()
+            && blur.is_finite()
+            && ox.abs() <= 1_000_000.0
+            && oy.abs() <= 1_000_000.0
+            && blur <= 1_000_000.0
+        {
+            text_shadows.push(TextShadow {
+                offset_x: ox,
+                offset_y: oy,
+                blur_radius: blur,
+                color: resolve_color(&shadow.color),
+            });
+        }
+    }
+    text_shadows.shrink_to_fit();
+
+    let (has_transform, transform) = renderer_transform(box_style);
+    let clip_rect = match &effects.clip {
+        ClipRectOrAuto::Auto => None,
+        ClipRectOrAuto::Rect(r) => {
+            let side = |v: &style::values::computed::LengthOrAuto| match v {
+                LengthPercentageOrAuto::Auto => Ok(None),
+                LengthPercentageOrAuto::LengthPercentage(l) => {
+                    let px = l.px();
+                    (px.is_finite() && px.abs() <= 1_000_000.0)
+                        .then_some(Some(px))
+                        .ok_or(())
+                }
+            };
+            match (side(&r.top), side(&r.right), side(&r.bottom), side(&r.left)) {
+                (Ok(t), Ok(ri), Ok(b), Ok(l)) => Some([t, ri, b, l]),
+                _ => None,
+            }
+        }
+    };
+    let clip_path_inset = renderer_clip_path_inset(values);
+    let direction_val = match values.get_inherited_box().direction {
+        direction::computed_value::T::Ltr => TextDirection::Ltr,
+        direction::computed_value::T::Rtl => TextDirection::Rtl,
+    };
+    let text_overflow_ellipsis = (if reset_text.text_overflow.sides_are_logical {
+        reset_text.text_overflow.second == TextOverflowSide::Ellipsis
+    } else if direction_val == TextDirection::Rtl {
+        reset_text.text_overflow.first == TextOverflowSide::Ellipsis
+    } else {
+        reset_text.text_overflow.second == TextOverflowSide::Ellipsis
+    }) || values
+        .custom_properties()
+        .inherited
+        .get(&style::Atom::from("mg-txt-ovfl"))
+        .is_some_and(|v| v.to_css_string().trim().eq_ignore_ascii_case("ellipsis"));
+
     Ok(ComputedStyle {
         display,
         layout: LayoutStyle::default(),
@@ -3873,6 +5050,13 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             )
             .map_or(BackgroundBox::Border, |value| background_box(*value)),
         background_gradient: renderer_gradient(values),
+        box_shadows,
+        text_shadows,
+        transform,
+        has_transform,
+        clip_rect,
+        clip_path_inset,
+        text_overflow_ellipsis,
         svg_fill: svg_paint(&svg.fill, svg.fill_opacity),
         svg_stroke: svg_paint(&svg.stroke, svg.stroke_opacity),
         font_size,
@@ -3880,8 +5064,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         italic: font.font_style != style::values::computed::FontStyle::NORMAL,
         font_families,
         line_height,
-        underline: values
-            .get_text()
+        underline: reset_text
             .text_decoration_line
             .contains(TextDecorationLine::UNDERLINE),
         margin: [
@@ -3925,10 +5108,7 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
         max_width: max_size_length(&position.max_width),
         max_height: max_size_length(&position.max_height),
         text_align,
-        direction: match values.get_inherited_box().direction {
-            direction::computed_value::T::Ltr => TextDirection::Ltr,
-            direction::computed_value::T::Rtl => TextDirection::Rtl,
-        },
+        direction: direction_val,
         vertical_align,
         white_space,
         visibility: match values.get_inherited_box().visibility {
@@ -3937,8 +5117,8 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             visibility::computed_value::T::Collapse => Visibility::Collapse,
         },
         visible: values.get_inherited_box().visibility == visibility::computed_value::T::Visible,
-        own_opacity: values.get_effects().opacity.clamp(0.0, 1.0),
-        opacity: values.get_effects().opacity.clamp(0.0, 1.0),
+        own_opacity: effects.opacity.clamp(0.0, 1.0),
+        opacity: effects.opacity.clamp(0.0, 1.0),
         pointer_events: values.get_inherited_ui().pointer_events != PointerEvents::None,
         border_collapse: table.border_collapse == border_collapse::computed_value::T::Collapse,
         border_spacing: [

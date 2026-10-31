@@ -23,8 +23,11 @@ pub(super) struct StyleView<'a> {
     pub(super) natural_ratio: Option<f32>,
     intrinsic_min_width: Option<f32>,
     intrinsic_max_width: Option<f32>,
+    intrinsic_min_height: Option<f32>,
+    intrinsic_max_height: Option<f32>,
     pub(super) parent_size: (Option<f32>, Option<f32>),
     pub(super) container_is_row: bool,
+    pub(super) container_is_flex: bool,
 }
 
 impl<'a> StyleView<'a> {
@@ -35,8 +38,11 @@ impl<'a> StyleView<'a> {
             natural_ratio: None,
             intrinsic_min_width: None,
             intrinsic_max_width: None,
+            intrinsic_min_height: None,
+            intrinsic_max_height: None,
             parent_size: (None, None),
             container_is_row: true,
+            container_is_flex: false,
         }
     }
     pub(super) fn item(style: &'a mg::ComputedStyle, natural_ratio: Option<f32>) -> Self {
@@ -46,8 +52,11 @@ impl<'a> StyleView<'a> {
             natural_ratio,
             intrinsic_min_width: None,
             intrinsic_max_width: None,
+            intrinsic_min_height: None,
+            intrinsic_max_height: None,
             parent_size: (None, None),
             container_is_row: true,
+            container_is_flex: false,
         }
     }
     pub(super) fn anonymous(style: &'a mg::ComputedStyle) -> Self {
@@ -57,8 +66,11 @@ impl<'a> StyleView<'a> {
             natural_ratio: None,
             intrinsic_min_width: None,
             intrinsic_max_width: None,
+            intrinsic_min_height: None,
+            intrinsic_max_height: None,
             parent_size: (None, None),
             container_is_row: true,
+            container_is_flex: false,
         }
     }
     pub(super) fn with_parent_size(
@@ -66,9 +78,11 @@ impl<'a> StyleView<'a> {
         width: Option<f32>,
         height: Option<f32>,
         container_is_row: bool,
+        container_is_flex: bool,
     ) -> Self {
         self.parent_size = (width, height);
         self.container_is_row = container_is_row;
+        self.container_is_flex = container_is_flex;
         self
     }
     /// Measured intrinsic content width expressed in this item's sizing box:
@@ -82,11 +96,81 @@ impl<'a> StyleView<'a> {
         self.intrinsic_max_width = Some(width);
         self
     }
+    pub(super) fn with_intrinsic_min_height(mut self, height: f32) -> Self {
+        self.intrinsic_min_height = Some(height);
+        self
+    }
+    pub(super) fn with_intrinsic_max_height(mut self, height: f32) -> Self {
+        self.intrinsic_max_height = Some(height);
+        self
+    }
     fn item_box(self) -> bool {
         self.mode == BoxMode::Item
     }
     fn formatting(self) -> bool {
         self.mode != BoxMode::Anonymous
+    }
+    /// Taffy 0.14 applies `aspect_ratio` to `size()` before checking
+    /// `flex-basis: content` (transferring an overridden main-size property
+    /// into a synthetic cross size) and transfers definite cross sizes under
+    /// `Dimension::content()` using outer border-box dimensions instead of
+    /// inner content-box dimensions. For a flex item with an aspect ratio and
+    /// `flex-basis: content` (when main size is `auto` or main minimum is not
+    /// `auto`), mapping main size and `flex_basis` to `auto` preserves CSS
+    /// Flexbox 1 §9.2.1/§9.2.3 content-box aspect-ratio sizing.
+    fn flex_content_aspect_ratio_as_auto(self) -> bool {
+        if !self.item_box()
+            || !self.container_is_flex
+            || self.effective_aspect_ratio().is_none()
+            || self.style.layout.flex_basis_intrinsic.is_some()
+            || self.style.layout.flex_basis != mg::FlexBasis::Content
+        {
+            return false;
+        }
+        let (main_is_auto, min_main_is_auto) = if self.container_is_row {
+            (
+                self.style.width == mg::Length::Auto
+                    && self.style.layout.width_intrinsic.is_none()
+                    && !self.style.layout.width_fit_content
+                    && !self.style.layout.width_max_content,
+                self.style.min_width == mg::Length::Auto
+                    && self.style.layout.min_width_intrinsic.is_none()
+                    && self.style.layout.overflow[0] == mg::Overflow::Visible,
+            )
+        } else {
+            (
+                self.style.height == mg::Length::Auto
+                    && self.style.layout.height_intrinsic.is_none(),
+                self.style.min_height == mg::Length::Auto
+                    && self.style.layout.min_height_intrinsic.is_none()
+                    && self.style.layout.overflow[1] == mg::Overflow::Visible,
+            )
+        };
+        main_is_auto || !min_main_is_auto
+    }
+    pub(super) fn root_auto_repeat_content_bound(
+        self,
+        bound: mg::Length,
+        is_width: bool,
+    ) -> Option<f32> {
+        let mg::Length::Px(px) = bound else {
+            return None;
+        };
+        if !px.is_finite() || px < 0.0 {
+            return None;
+        }
+        if self.style.layout.box_sizing != mg::BoxSizing::BorderBox {
+            return Some(px);
+        }
+        let sides = if is_width { [1, 3] } else { [0, 2] };
+        let mut inset = 0.0f32;
+        for s in sides {
+            let mg::Length::Px(pad) = self.style.padding[s] else {
+                return None;
+            };
+            inset += pad + self.style.border_width[s];
+        }
+        Some((px - inset).max(0.0))
     }
 
     /// Refuse lost or unimplemented semantics before giving Taffy any values.
@@ -103,12 +187,12 @@ impl<'a> StyleView<'a> {
             return Err("fixed items require a viewport containing block");
         }
         if self.item_box()
-            && l.max_width_fit_content
+            && (l.max_width_fit_content || l.max_width_intrinsic.is_some())
             && !self
                 .intrinsic_max_width
                 .is_some_and(|v| v.is_finite() && v >= 0.)
         {
-            return Err("fit-content max-width requires a finite content measurement");
+            return Err("intrinsic max-width requires a finite content measurement");
         }
         if self.item_box()
             && l.min_width_intrinsic.is_some()
@@ -117,6 +201,22 @@ impl<'a> StyleView<'a> {
                 .is_some_and(|v| v.is_finite() && v >= 0.)
         {
             return Err("intrinsic min-width requires a finite content measurement");
+        }
+        if self.item_box()
+            && l.min_height_intrinsic.is_some()
+            && !self
+                .intrinsic_min_height
+                .is_some_and(|v| v.is_finite() && v >= 0.)
+        {
+            return Err("intrinsic min-height requires a finite content measurement");
+        }
+        if self.item_box()
+            && l.max_height_intrinsic.is_some()
+            && !self
+                .intrinsic_max_height
+                .is_some_and(|v| v.is_finite() && v >= 0.)
+        {
+            return Err("intrinsic max-height requires a finite content measurement");
         }
         if let mg::FlexBasis::Length(length) = l.flex_basis
             && !finite_length(length)
@@ -186,10 +286,74 @@ impl<'a> StyleView<'a> {
                 mg::GridLine::Span(n) if *n == 0 || *n as usize > mg::MAX_GRID_TRACKS => {
                     return Err("grid span exceeds the bounded numeric range");
                 }
+                mg::GridLine::NamedLine(name, n)
+                    if name.is_empty()
+                        || name.len() > 256
+                        || n.unsigned_abs() as usize > mg::MAX_GRID_TRACKS =>
+                {
+                    return Err("named grid line exceeds the bounded range");
+                }
+                mg::GridLine::NamedSpan(name, n)
+                    if name.is_empty()
+                        || name.len() > 256
+                        || *n == 0
+                        || *n as usize > mg::MAX_GRID_TRACKS =>
+                {
+                    return Err("named grid span exceeds the bounded range");
+                }
                 _ => {}
             }
         }
         if let Some(grid) = &l.grid {
+            let validate_track = |track: &mg::TrackSize| -> Result<(), &'static str> {
+                match *track {
+                    mg::TrackSize::FitContent(len) => {
+                        if !finite_length(len) || matches!(len, mg::Length::Auto) {
+                            return Err("invalid grid fit-content track length");
+                        }
+                    }
+                    mg::TrackSize::Breadth(breadth) => {
+                        let (min, max) = match breadth {
+                            mg::TrackBreadth::Fr(v) => {
+                                (mg::TrackBreadth::Auto, mg::TrackBreadth::Fr(v))
+                            }
+                            v => (v, v),
+                        };
+                        for b in [min, max] {
+                            match b {
+                                mg::TrackBreadth::Fr(v) if !v.is_finite() || v < 0. => {
+                                    return Err("invalid grid fraction");
+                                }
+                                mg::TrackBreadth::Length(v)
+                                    if !finite_length(v) || matches!(v, mg::Length::Auto) =>
+                                {
+                                    return Err("invalid grid track length");
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    mg::TrackSize::MinMax(min, max) => {
+                        if matches!(min, mg::TrackBreadth::Fr(_)) {
+                            return Err("flexible grid minimum is invalid");
+                        }
+                        for b in [min, max] {
+                            match b {
+                                mg::TrackBreadth::Fr(v) if !v.is_finite() || v < 0. => {
+                                    return Err("invalid grid fraction");
+                                }
+                                mg::TrackBreadth::Length(v)
+                                    if !finite_length(v) || matches!(v, mg::Length::Auto) =>
+                                {
+                                    return Err("invalid grid track length");
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            };
             for tracks in [
                 &grid.template_rows,
                 &grid.template_columns,
@@ -200,28 +364,23 @@ impl<'a> StyleView<'a> {
                     return Err("grid track list exceeds the bounded numeric range");
                 }
                 for track in tracks {
-                    let (min, max) = match *track {
-                        mg::TrackSize::Breadth(mg::TrackBreadth::Fr(v)) => {
-                            (mg::TrackBreadth::Auto, mg::TrackBreadth::Fr(v))
-                        }
-                        mg::TrackSize::Breadth(v) => (v, v),
-                        mg::TrackSize::MinMax(min, max) => (min, max),
-                    };
-                    if matches!(min, mg::TrackBreadth::Fr(_)) {
-                        return Err("flexible grid minimum is invalid");
+                    validate_track(track)?;
+                }
+            }
+            for (ar_opt, tmpl) in [
+                (&grid.row_auto_repeat, &grid.template_rows),
+                (&grid.col_auto_repeat, &grid.template_columns),
+            ] {
+                if let Some(ar) = ar_opt {
+                    if ar.insert_index > tmpl.len()
+                        || ar.tracks.is_empty()
+                        || ar.tracks.len() > mg::MAX_GRID_TRACKS
+                        || (!ar.line_names.is_empty() && ar.line_names.len() != ar.tracks.len() + 1)
+                    {
+                        return Err("invalid grid auto-repeat clause");
                     }
-                    for breadth in [min, max] {
-                        match breadth {
-                            mg::TrackBreadth::Fr(v) if !v.is_finite() || v < 0. => {
-                                return Err("invalid grid fraction");
-                            }
-                            mg::TrackBreadth::Length(v)
-                                if !finite_length(v) || matches!(v, mg::Length::Auto) =>
-                            {
-                                return Err("invalid grid track length");
-                            }
-                            _ => {}
-                        }
+                    for track in &ar.tracks {
+                        validate_track(track)?;
                     }
                 }
             }
@@ -490,16 +649,32 @@ impl CoreStyle for StyleView<'_> {
         }
     }
     fn size(&self) -> Size<Dimension> {
+        let map_intrinsic = |k: mg::IntrinsicSize| match k {
+            mg::IntrinsicSize::MinContent => Dimension::min_content(),
+            mg::IntrinsicSize::MaxContent => Dimension::max_content(),
+            mg::IntrinsicSize::FitContent => Dimension::fit_content(),
+        };
         if self.item_box() {
+            let clear_main = self.flex_content_aspect_ratio_as_auto();
             Size {
-                width: if self.style.layout.width_fit_content {
+                width: if clear_main && self.container_is_row {
+                    Dimension::auto()
+                } else if let Some(k) = self.style.layout.width_intrinsic {
+                    map_intrinsic(k)
+                } else if self.style.layout.width_fit_content {
                     Dimension::fit_content()
                 } else if self.style.layout.width_max_content {
                     Dimension::max_content()
                 } else {
                     dimension(&self.style.width, self.parent_size.0)
                 },
-                height: dimension(&self.style.height, self.parent_size.1),
+                height: if clear_main && !self.container_is_row {
+                    Dimension::auto()
+                } else if let Some(k) = self.style.layout.height_intrinsic {
+                    map_intrinsic(k)
+                } else {
+                    dimension(&self.style.height, self.parent_size.1)
+                },
             }
         } else {
             Size {
@@ -518,7 +693,26 @@ impl CoreStyle for StyleView<'_> {
                 } else {
                     lpa(&self.style.min_width, self.parent_size.0, true)
                 },
-                height: lpa(&self.style.min_height, self.parent_size.1, true),
+                height: if self.style.layout.min_height_intrinsic.is_some() {
+                    self.intrinsic_min_height
+                        .map(LengthPercentageAuto::length)
+                        .unwrap_or_else(LengthPercentageAuto::auto)
+                } else {
+                    lpa(&self.style.min_height, self.parent_size.1, true)
+                },
+            }
+        } else if self.mode == BoxMode::RootContent {
+            let col_ar = self.grid().is_some_and(|g| g.col_auto_repeat.is_some());
+            let row_ar = self.grid().is_some_and(|g| g.row_auto_repeat.is_some());
+            Size {
+                width: col_ar
+                    .then(|| self.root_auto_repeat_content_bound(self.style.min_width, true))
+                    .flatten()
+                    .map_or_else(LengthPercentageAuto::auto, LengthPercentageAuto::length),
+                height: row_ar
+                    .then(|| self.root_auto_repeat_content_bound(self.style.min_height, false))
+                    .flatten()
+                    .map_or_else(LengthPercentageAuto::auto, LengthPercentageAuto::length),
             }
         } else {
             Size {
@@ -530,14 +724,35 @@ impl CoreStyle for StyleView<'_> {
     fn max_size(&self) -> Size<LengthPercentageAuto> {
         if self.item_box() {
             Size {
-                width: if self.style.layout.max_width_fit_content {
+                width: if self.style.layout.max_width_fit_content
+                    || self.style.layout.max_width_intrinsic.is_some()
+                {
                     self.intrinsic_max_width
                         .map(LengthPercentageAuto::length)
                         .unwrap_or_else(LengthPercentageAuto::auto)
                 } else {
                     lpa(&self.style.max_width, self.parent_size.0, false)
                 },
-                height: lpa(&self.style.max_height, self.parent_size.1, false),
+                height: if self.style.layout.max_height_intrinsic.is_some() {
+                    self.intrinsic_max_height
+                        .map(LengthPercentageAuto::length)
+                        .unwrap_or_else(LengthPercentageAuto::auto)
+                } else {
+                    lpa(&self.style.max_height, self.parent_size.1, false)
+                },
+            }
+        } else if self.mode == BoxMode::RootContent {
+            let col_ar = self.grid().is_some_and(|g| g.col_auto_repeat.is_some());
+            let row_ar = self.grid().is_some_and(|g| g.row_auto_repeat.is_some());
+            Size {
+                width: col_ar
+                    .then(|| self.root_auto_repeat_content_bound(self.style.max_width, true))
+                    .flatten()
+                    .map_or_else(LengthPercentageAuto::auto, LengthPercentageAuto::length),
+                height: row_ar
+                    .then(|| self.root_auto_repeat_content_bound(self.style.max_height, false))
+                    .flatten()
+                    .map_or_else(LengthPercentageAuto::auto, LengthPercentageAuto::length),
             }
         } else {
             Size {
@@ -547,10 +762,19 @@ impl CoreStyle for StyleView<'_> {
         }
     }
     fn aspect_ratio(&self) -> Option<f32> {
-        if self.item_box() && !self.style.layout.width_max_content {
+        let intrinsic_w = self.style.layout.width_max_content
+            || matches!(
+                self.style.layout.width_intrinsic,
+                Some(mg::IntrinsicSize::MinContent | mg::IntrinsicSize::MaxContent)
+            );
+        let intrinsic_h = matches!(
+            self.style.layout.height_intrinsic,
+            Some(mg::IntrinsicSize::MinContent | mg::IntrinsicSize::MaxContent)
+        );
+        if self.item_box() && !intrinsic_w && !intrinsic_h {
             self.effective_aspect_ratio()
         } else {
-            // A max-content width must be measured, not synthesized from an
+            // A min/max-content size must be measured, not synthesized from an
             // opposite-axis border-box size before Taffy resolves the keyword.
             // Mg's replaced measurement transfers the natural content ratio
             // after subtracting padding/borders and preserves forced used sizes.
@@ -726,6 +950,13 @@ impl FlexboxItemStyle for StyleView<'_> {
         if !self.item_box() {
             return Dimension::auto();
         }
+        if let Some(k) = self.style.layout.flex_basis_intrinsic {
+            return match k {
+                mg::IntrinsicSize::MinContent => Dimension::min_content(),
+                mg::IntrinsicSize::MaxContent => Dimension::max_content(),
+                mg::IntrinsicSize::FitContent => Dimension::fit_content(),
+            };
+        }
         let main_basis = if self.container_is_row {
             self.parent_size.0
         } else {
@@ -734,7 +965,13 @@ impl FlexboxItemStyle for StyleView<'_> {
         match &self.style.layout.flex_basis {
             mg::FlexBasis::Length(value) => dimension(value, main_basis),
             mg::FlexBasis::Auto => Dimension::auto(),
-            mg::FlexBasis::Content => Dimension::content(),
+            mg::FlexBasis::Content => {
+                if self.flex_content_aspect_ratio_as_auto() {
+                    Dimension::auto()
+                } else {
+                    Dimension::content()
+                }
+            }
         }
     }
     fn flex_grow(&self) -> f32 {
@@ -804,10 +1041,55 @@ fn track(value: &mg::TrackSize, basis: Option<f32>) -> TrackSizingFunction {
             min: min_track(min, basis),
             max: max_track(max, basis),
         },
+        mg::TrackSize::FitContent(len) => MinMax {
+            min: MinTrackSizingFunction::auto(),
+            max: match len {
+                mg::Length::Px(v) => MaxTrackSizingFunction::fit_content_px(*v),
+                mg::Length::Percent(v) => MaxTrackSizingFunction::fit_content_percent(*v),
+                mg::Length::Calc { .. } => resolve_calc_against(len, basis).map_or_else(
+                    MaxTrackSizingFunction::max_content,
+                    MaxTrackSizingFunction::fit_content_px,
+                ),
+                mg::Length::Auto => MaxTrackSizingFunction::max_content(),
+            },
+        },
     }
 }
 
-type Component<'a> = GenericGridTemplateComponent<String, &'a GridTemplateRepetition<String>>;
+#[derive(Clone, Copy)]
+pub(super) struct AutoRepeatRef<'a>(&'a mg::GridAutoRepeat, Option<f32>);
+
+impl<'a> GenericRepetition for AutoRepeatRef<'a> {
+    type CustomIdent = String;
+    type RepetitionTrackList<'b>
+        = TrackIter<'b>
+    where
+        Self: 'b;
+    type TemplateLineNames<'b>
+        = LineNames<'b>
+    where
+        Self: 'b;
+
+    fn count(&self) -> RepetitionCount {
+        match self.0.mode {
+            mg::GridAutoRepeatMode::AutoFill => RepetitionCount::AutoFill,
+            mg::GridAutoRepeatMode::AutoFit => RepetitionCount::AutoFit,
+        }
+    }
+
+    fn tracks(&self) -> Self::RepetitionTrackList<'_> {
+        TrackIter(self.0.tracks.iter(), self.1)
+    }
+
+    fn lines_names(&self) -> Self::TemplateLineNames<'_> {
+        self.0
+            .line_names
+            .iter()
+            .map((|v: &Vec<String>| v.iter()) as fn(&Vec<String>) -> std::slice::Iter<'_, String>)
+    }
+}
+
+type Component<'a> = GenericGridTemplateComponent<String, AutoRepeatRef<'a>>;
 #[derive(Clone)]
 pub(super) struct TrackIter<'a>(std::slice::Iter<'a, mg::TrackSize>, Option<f32>);
 impl Iterator for TrackIter<'_> {
@@ -826,26 +1108,63 @@ type LineNames<'a> = std::iter::Map<
     fn(&Vec<String>) -> std::slice::Iter<'_, String>,
 >;
 
-/// Repeats are already bounded and expanded by the snapshot. This iterator
-/// borrows those tracks and emits only Single components, without allocations.
+/// Integer repeats are already bounded and expanded by the snapshot; optional
+/// `auto-fill` / `auto-fit` is emitted at `insert_index` without allocation.
 #[derive(Clone)]
-pub(super) struct TemplateIter<'a>(std::slice::Iter<'a, mg::TrackSize>, Option<f32>);
+pub(super) struct TemplateIter<'a> {
+    tracks: &'a [mg::TrackSize],
+    auto_repeat: Option<&'a mg::GridAutoRepeat>,
+    basis: Option<f32>,
+    index: usize,
+    emitted_repeat: bool,
+}
+impl<'a> TemplateIter<'a> {
+    fn new(
+        tracks: &'a [mg::TrackSize],
+        auto_repeat: Option<&'a mg::GridAutoRepeat>,
+        basis: Option<f32>,
+    ) -> Self {
+        Self {
+            tracks,
+            auto_repeat,
+            basis,
+            index: 0,
+            emitted_repeat: false,
+        }
+    }
+}
 impl<'a> Iterator for TemplateIter<'a> {
     type Item = Component<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.0
-            .next()
-            .map(|value| GenericGridTemplateComponent::Single(track(value, self.1)))
+        if !self.emitted_repeat
+            && let Some(ar) = self.auto_repeat
+            && self.index == ar.insert_index
+        {
+            self.emitted_repeat = true;
+            return Some(GenericGridTemplateComponent::Repeat(AutoRepeatRef(
+                ar, self.basis,
+            )));
+        }
+        if let Some(value) = self.tracks.get(self.index) {
+            self.index += 1;
+            return Some(GenericGridTemplateComponent::Single(track(
+                value, self.basis,
+            )));
+        }
+        None
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        let total = self.tracks.len() + usize::from(self.auto_repeat.is_some());
+        let used = self.index + usize::from(self.emitted_repeat);
+        let rem = total.saturating_sub(used);
+        (rem, Some(rem))
     }
 }
 impl ExactSizeIterator for TemplateIter<'_> {}
 
 impl GridContainerStyle for StyleView<'_> {
     type Repetition<'a>
-        = &'a GridTemplateRepetition<String>
+        = AutoRepeatRef<'a>
     where
         Self: 'a;
     type TemplateTrackList<'a>
@@ -867,13 +1186,25 @@ impl GridContainerStyle for StyleView<'_> {
 
     fn grid_template_rows(&self) -> Option<TemplateIter<'_>> {
         self.grid()
-            .filter(|g| !g.template_rows.is_empty())
-            .map(|g| TemplateIter(g.template_rows.iter(), self.parent_size.1))
+            .filter(|g| !g.template_rows.is_empty() || g.row_auto_repeat.is_some())
+            .map(|g| {
+                TemplateIter::new(
+                    &g.template_rows,
+                    g.row_auto_repeat.as_ref(),
+                    self.parent_size.1,
+                )
+            })
     }
     fn grid_template_columns(&self) -> Option<TemplateIter<'_>> {
         self.grid()
-            .filter(|g| !g.template_columns.is_empty())
-            .map(|g| TemplateIter(g.template_columns.iter(), self.parent_size.0))
+            .filter(|g| !g.template_columns.is_empty() || g.col_auto_repeat.is_some())
+            .map(|g| {
+                TemplateIter::new(
+                    &g.template_columns,
+                    g.col_auto_repeat.as_ref(),
+                    self.parent_size.0,
+                )
+            })
     }
     fn grid_auto_rows(&self) -> TrackIter<'_> {
         TrackIter(
@@ -895,10 +1226,30 @@ impl GridContainerStyle for StyleView<'_> {
         None
     }
     fn grid_template_column_names(&self) -> Option<LineNames<'_>> {
-        None
+        self.grid()
+            .filter(|g| {
+                !g.col_line_names.is_empty()
+                    && (!g.template_columns.is_empty() || g.col_auto_repeat.is_some())
+            })
+            .map(|g| {
+                g.col_line_names.iter().map(
+                    (|v: &Vec<String>| v.iter())
+                        as fn(&Vec<String>) -> std::slice::Iter<'_, String>,
+                )
+            })
     }
     fn grid_template_row_names(&self) -> Option<LineNames<'_>> {
-        None
+        self.grid()
+            .filter(|g| {
+                !g.row_line_names.is_empty()
+                    && (!g.template_rows.is_empty() || g.row_auto_repeat.is_some())
+            })
+            .map(|g| {
+                g.row_line_names.iter().map(
+                    (|v: &Vec<String>| v.iter())
+                        as fn(&Vec<String>) -> std::slice::Iter<'_, String>,
+                )
+            })
     }
     fn grid_auto_flow(&self) -> GridAutoFlow {
         match self
@@ -935,19 +1286,21 @@ impl GridContainerStyle for StyleView<'_> {
     }
 }
 
-fn placement(value: mg::GridLine) -> GridPlacement<String> {
+fn placement(value: &mg::GridLine) -> GridPlacement<String> {
     match value {
         mg::GridLine::Auto => GridPlacement::Auto,
-        mg::GridLine::Line(n) => taffy::style_helpers::line(n),
-        mg::GridLine::Span(n) => taffy::style_helpers::span(n),
+        mg::GridLine::Line(n) => taffy::style_helpers::line(*n),
+        mg::GridLine::Span(n) => taffy::style_helpers::span(*n),
+        mg::GridLine::NamedLine(name, n) => GridPlacement::NamedLine(name.clone(), *n),
+        mg::GridLine::NamedSpan(name, n) => GridPlacement::NamedSpan(name.clone(), *n),
     }
 }
 impl GridItemStyle for StyleView<'_> {
     fn grid_row(&self) -> Line<GridPlacement<String>> {
         if self.item_box() {
             Line {
-                start: placement(self.style.layout.grid_row[0]),
-                end: placement(self.style.layout.grid_row[1]),
+                start: placement(&self.style.layout.grid_row[0]),
+                end: placement(&self.style.layout.grid_row[1]),
             }
         } else {
             Line {
@@ -959,8 +1312,8 @@ impl GridItemStyle for StyleView<'_> {
     fn grid_column(&self) -> Line<GridPlacement<String>> {
         if self.item_box() {
             Line {
-                start: placement(self.style.layout.grid_column[0]),
-                end: placement(self.style.layout.grid_column[1]),
+                start: placement(&self.style.layout.grid_column[0]),
+                end: placement(&self.style.layout.grid_column[1]),
             }
         } else {
             Line {
@@ -976,9 +1329,11 @@ impl GridItemStyle for StyleView<'_> {
         if self.style.layout.align_self.keyword == mg::AlignKeyword::Normal {
             Some(
                 if self.style.height != mg::Length::Auto
+                    || self.style.layout.height_intrinsic.is_some()
                     || self.natural_ratio.is_some()
                     || (self.style.layout.aspect_ratio.is_some()
-                        && self.style.width != mg::Length::Auto)
+                        && (self.style.width != mg::Length::Auto
+                            || self.style.layout.width_intrinsic.is_some()))
                 {
                     AlignSelf::START
                 } else {
@@ -995,7 +1350,8 @@ impl GridItemStyle for StyleView<'_> {
                 Some(
                     if self.style.width != mg::Length::Auto
                         || (self.style.layout.aspect_ratio.is_some()
-                            && self.style.height != mg::Length::Auto)
+                            && (self.style.height != mg::Length::Auto
+                                || self.style.layout.height_intrinsic.is_some()))
                     {
                         AlignSelf::START
                     } else {
@@ -1266,10 +1622,13 @@ mod tests {
         assert_eq!(view.size().width, Dimension::fit_content());
         assert_eq!(LeafStyle::from(view).size().width, Dimension::fit_content());
         assert_eq!(StyleView::root_content(&s).size().width, Dimension::auto());
+        let min_c = computed("width:min-content;height:fit-content");
+        let min_view = StyleView::item(&min_c, None);
+        assert!(min_view.validate().is_ok());
+        assert_eq!(min_view.size().width, Dimension::min_content());
+        assert_eq!(min_view.size().height, Dimension::fit_content());
         for css in [
             "width:fit-content(40px)",
-            "width:min-content",
-            "height:fit-content",
             "width:fit-content;height:min(50%, 3px)",
         ] {
             assert!(

@@ -17,6 +17,7 @@ enum SavedImage {
 
 #[derive(Debug, PartialEq)]
 enum SavedPaint {
+    BoxShadow(Geometry, Geometry, usize, [f32; 4], usize),
     Background(Geometry, usize, [f32; 4]),
     RoundedDecoration(Geometry, usize, [f32; 4]),
     Rect(Geometry, Color),
@@ -46,6 +47,19 @@ impl SavedScene {
                 .paints
                 .iter()
                 .map(|paint| match paint {
+                    Paint::BoxShadow {
+                        bounds,
+                        border_rect,
+                        node,
+                        padding,
+                        shadow_idx,
+                    } => SavedPaint::BoxShadow(
+                        geometry(*bounds),
+                        geometry(*border_rect),
+                        *node,
+                        *padding,
+                        *shadow_idx,
+                    ),
                     Paint::Background(r, node, padding) => {
                         SavedPaint::Background(geometry(*r), *node, *padding)
                     }
@@ -73,9 +87,7 @@ impl SavedScene {
                             ControlVisual::Button { label } => (label.as_str(), true),
                             ControlVisual::Text { text, .. } => (text.as_str(), false),
                             ControlVisual::Select { label } => (label.as_str(), false),
-                            ControlVisual::Checkbox { checked } => {
-                                ("checkbox", *checked)
-                            }
+                            ControlVisual::Checkbox { checked } => ("checkbox", *checked),
                             ControlVisual::Radio { checked } => ("radio", *checked),
                         };
                         SavedPaint::Control(

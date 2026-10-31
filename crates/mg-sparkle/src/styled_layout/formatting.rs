@@ -42,6 +42,8 @@ struct Slot {
     ratio: Option<f32>,
     intrinsic_min: Option<f32>,
     intrinsic_max: Option<f32>,
+    intrinsic_min_height: Option<f32>,
+    intrinsic_max_height: Option<f32>,
     definite_height: bool,
     cache: Cache,
     geometry: Geometry,
@@ -57,6 +59,8 @@ impl Slot {
             ratio: None,
             intrinsic_min: None,
             intrinsic_max: None,
+            intrinsic_min_height: None,
+            intrinsic_max_height: None,
             definite_height: false,
             cache: Cache::new(),
             geometry: Geometry::default(),
@@ -566,7 +570,7 @@ fn run_inner<const EMIT: bool>(
             let style = &adapter.layout.styles[node];
             let image_ratio_needed = matches!(
                 adapter.layout.document.nodes[node].tag.as_str(),
-                "img" | "svg"
+                "img" | "svg" | "canvas"
             ) && (style.width == Length::Auto
                 || style.height == Length::Auto);
             if image_ratio_needed {
@@ -627,32 +631,51 @@ fn run_inner<const EMIT: bool>(
                 }
                 adapter.slots[index].intrinsic_min = Some(value);
             }
-            if adapter.layout.styles[node].layout.max_width_fit_content {
-                if matches!(
-                    adapter.layout.styles[id].display,
-                    Display::Grid | Display::InlineGrid
-                ) {
+            let max_w_kw = adapter.layout.styles[node]
+                .layout
+                .max_width_intrinsic
+                .or_else(|| {
+                    adapter.layout.styles[node]
+                        .layout
+                        .max_width_fit_content
+                        .then_some(IntrinsicSize::FitContent)
+                });
+            if let Some(keyword) = max_w_kw {
+                if keyword == IntrinsicSize::FitContent
+                    && matches!(
+                        adapter.layout.styles[id].display,
+                        Display::Grid | Display::InlineGrid
+                    )
+                {
                     adapter.layout.fail(node, "fit-content max-width on a grid item requires its resolved grid-area width");
                     return None;
                 }
-                let intrinsic = adapter.layout.measure_fit_content_intrinsic(
-                    node,
-                    width.into_option().unwrap_or(0.0),
-                    height,
-                    depth + 1,
-                )?;
+                let intrinsic = if keyword == IntrinsicSize::FitContent {
+                    adapter.layout.measure_fit_content_intrinsic(
+                        node,
+                        width.into_option().unwrap_or(0.0),
+                        height,
+                        depth + 1,
+                    )?
+                } else {
+                    adapter.layout.measure_content_intrinsic(node, depth + 1)?
+                };
                 let (margin, padding) = adapter
                     .layout
                     .edges(node, width.into_option().unwrap_or(0.0));
                 let edges = padding[1] + padding[3];
-                let content = match width {
-                    AvailableSpace::Definite(w) => intrinsic.max.min(
-                        intrinsic
-                            .min
-                            .max((w - margin[1] - margin[3] - edges).max(0.0)),
-                    ),
-                    AvailableSpace::MinContent => intrinsic.min,
-                    AvailableSpace::MaxContent => intrinsic.max,
+                let content = match keyword {
+                    IntrinsicSize::MinContent => intrinsic.min,
+                    IntrinsicSize::MaxContent => intrinsic.max,
+                    IntrinsicSize::FitContent => match width {
+                        AvailableSpace::Definite(w) => intrinsic.max.min(
+                            intrinsic
+                                .min
+                                .max((w - margin[1] - margin[3] - edges).max(0.0)),
+                        ),
+                        AvailableSpace::MinContent => intrinsic.min,
+                        AvailableSpace::MaxContent => intrinsic.max,
+                    },
                 };
                 let value = content
                     + if adapter.layout.styles[node].layout.box_sizing == BoxSizing::BorderBox {
@@ -668,6 +691,116 @@ fn run_inner<const EMIT: bool>(
                     return None;
                 }
                 adapter.slots[index].intrinsic_max = Some(value);
+            }
+            if adapter.layout.styles[node]
+                .layout
+                .min_height_intrinsic
+                .is_some()
+                || adapter.layout.styles[node]
+                    .layout
+                    .max_height_intrinsic
+                    .is_some()
+            {
+                let basis_w = width.into_option().unwrap_or(0.0);
+                let (margin, padding) = adapter.layout.edges(node, basis_w);
+                let v_edges = padding[0] + padding[2];
+                let h_edges = padding[1] + padding[3];
+                let content_h = if adapter.layout.is_replaced(node) {
+                    let natural = if let Some(size) = adapter.slots[index].natural {
+                        size
+                    } else {
+                        let (nw, nh) = adapter.layout.measure_natural_replaced(node, depth + 1)?;
+                        let size = Size {
+                            width: nw,
+                            height: nh,
+                        };
+                        adapter.slots[index].natural = Some(size);
+                        size
+                    };
+                    let own_w = adapter.layout.styles[node]
+                        .width
+                        .resolve(basis_w)
+                        .filter(|_| {
+                            !matches!(
+                                adapter.layout.styles[node].width,
+                                Length::Percent(_) | Length::Calc { .. }
+                            ) || width.into_option().is_some()
+                        })
+                        .map(|w| {
+                            if adapter.layout.styles[node].layout.box_sizing == BoxSizing::BorderBox
+                            {
+                                (w - h_edges).max(0.0)
+                            } else {
+                                w.max(0.0)
+                            }
+                        });
+                    if let Some(cw) = own_w
+                        && natural.width > 0.0
+                        && matches!(
+                            adapter.layout.document.nodes[node].tag.as_str(),
+                            "img" | "svg" | "canvas"
+                        )
+                    {
+                        cw * natural.height / natural.width
+                    } else {
+                        natural.height
+                    }
+                } else {
+                    let measure_w = if let Some(w) = adapter.layout.styles[node]
+                        .width
+                        .resolve(basis_w)
+                        .filter(|_| {
+                            !matches!(
+                                adapter.layout.styles[node].width,
+                                Length::Percent(_) | Length::Calc { .. }
+                            ) || width.into_option().is_some()
+                        }) {
+                        if adapter.layout.styles[node].layout.box_sizing == BoxSizing::BorderBox {
+                            (w - h_edges).max(0.0)
+                        } else {
+                            w.max(0.0)
+                        }
+                    } else {
+                        let intr = adapter.layout.measure_content_intrinsic(node, depth + 1)?;
+                        match width {
+                            AvailableSpace::Definite(w) => intr
+                                .max
+                                .min(intr.min.max((w - margin[1] - margin[3] - h_edges).max(0.0))),
+                            AvailableSpace::MinContent => intr.min,
+                            AvailableSpace::MaxContent => intr.max,
+                        }
+                    };
+                    adapter
+                        .layout
+                        .measure_content_height(node, measure_w, None, depth + 1)?
+                };
+                let box_h = content_h
+                    + if adapter.layout.styles[node].layout.box_sizing == BoxSizing::BorderBox {
+                        v_edges
+                    } else {
+                        0.0
+                    };
+                if !dimension(box_h) {
+                    adapter.layout.fail(
+                        node,
+                        "formatting intrinsic height bound is outside finite extent",
+                    );
+                    return None;
+                }
+                if adapter.layout.styles[node]
+                    .layout
+                    .min_height_intrinsic
+                    .is_some()
+                {
+                    adapter.slots[index].intrinsic_min_height = Some(box_h);
+                }
+                if adapter.layout.styles[node]
+                    .layout
+                    .max_height_intrinsic
+                    .is_some()
+                {
+                    adapter.slots[index].intrinsic_max_height = Some(box_h);
+                }
             }
         }
         if let Err(reason) = adapter.view(index).validate() {
@@ -898,7 +1031,8 @@ impl Adapter<'_, '_, '_> {
         let slot = &self.slots[index];
         let style = &self.layout.styles[slot.node];
         let root_style = &self.layout.styles[self.slots[0].node];
-        let is_row = !matches!(root_style.display, Display::Flex | Display::InlineFlex)
+        let is_flex = matches!(root_style.display, Display::Flex | Display::InlineFlex);
+        let is_row = !is_flex
             || matches!(
                 root_style.layout.flex_direction,
                 FlexDirection::Row | FlexDirection::RowReverse
@@ -911,11 +1045,17 @@ impl Adapter<'_, '_, '_> {
                 let view = slot
                     .intrinsic_min
                     .map_or(view, |value| view.with_intrinsic_min_width(value));
-                slot.intrinsic_max
-                    .map_or(view, |value| view.with_intrinsic_max_width(value))
+                let view = slot
+                    .intrinsic_max
+                    .map_or(view, |value| view.with_intrinsic_max_width(value));
+                let view = slot
+                    .intrinsic_min_height
+                    .map_or(view, |value| view.with_intrinsic_min_height(value));
+                slot.intrinsic_max_height
+                    .map_or(view, |value| view.with_intrinsic_max_height(value))
             }
         };
-        view.with_parent_size(self.parent_size.0, self.parent_size.1, is_row)
+        view.with_parent_size(self.parent_size.0, self.parent_size.1, is_row, is_flex)
     }
 
     fn anonymous_tokens(&mut self, index: usize) -> Option<Vec<Token>> {
@@ -988,7 +1128,23 @@ impl Adapter<'_, '_, '_> {
         }
         let node = self.slots[index].node;
         let anonymous = matches!(self.slots[index].kind, Kind::Anonymous { .. });
+        let root_style = &self.layout.styles[self.slots[0].node];
+        let is_flex = matches!(root_style.display, Display::Flex | Display::InlineFlex);
+        let flex_overrides_main = !anonymous
+            && is_flex
+            && (self.layout.styles[node].layout.flex_basis != crate::style::FlexBasis::Auto
+                || self.layout.styles[node]
+                    .layout
+                    .flex_basis_intrinsic
+                    .is_some());
+        let flex_row = matches!(
+            root_style.layout.flex_direction,
+            FlexDirection::Row | FlexDirection::RowReverse
+        );
+        let ignore_main_width = flex_overrides_main && flex_row;
+        let ignore_main_height = flex_overrides_main && !flex_row;
         let own_width = !anonymous
+            && !ignore_main_width
             && input.sizing_mode == SizingMode::InherentSize
             && self.layout.styles[node]
                 .width
@@ -1000,6 +1156,7 @@ impl Adapter<'_, '_, '_> {
             ) || input.parent_size.width.is_some());
         let fixed_width = input.known_dimensions.width.is_some() || own_width;
         let own_height = !anonymous
+            && !ignore_main_height
             && input.sizing_mode == SizingMode::InherentSize
             && super::height_length(self.layout.styles[node].height, input.parent_size.height)
                 .is_some();
@@ -1017,7 +1174,10 @@ impl Adapter<'_, '_, '_> {
                 self.slots[index].natural = Some(size);
                 size
             };
-            let image = matches!(self.layout.document.nodes[node].tag.as_str(), "img" | "svg");
+            let image = matches!(
+                self.layout.document.nodes[node].tag.as_str(),
+                "img" | "svg" | "canvas"
+            );
             let width = if fixed_width {
                 available
                     .width
@@ -1126,22 +1286,58 @@ impl Adapter<'_, '_, '_> {
         let mut work = count.checked_mul(count)?.max(1);
         if matches!(root.display, Display::Grid | Display::InlineGrid) {
             let grid = root.layout.grid.as_deref();
-            let columns = grid.map_or(0, |grid| grid.template_columns.len());
-            let rows = grid.map_or(0, |grid| grid.template_rows.len());
+            let root_view = StyleView::root_content(root);
+            let Some((columns, col_reps)) = expanded_explicit_tracks(
+                grid.map_or(&[][..], |g| g.template_columns.as_slice()),
+                grid.and_then(|g| g.col_auto_repeat.as_ref()),
+                root.layout.gap[1],
+                self.parent_size.0,
+                root_view.root_auto_repeat_content_bound(root.min_width, true),
+                root_view.root_auto_repeat_content_bound(root.max_width, true),
+            ) else {
+                self.layout.fail(
+                    self.slots[0].node,
+                    "formatting grid implicit column bound exceeded",
+                );
+                return None;
+            };
+            let Some((rows, row_reps)) = expanded_explicit_tracks(
+                grid.map_or(&[][..], |g| g.template_rows.as_slice()),
+                grid.and_then(|g| g.row_auto_repeat.as_ref()),
+                root.layout.gap[0],
+                self.parent_size.1,
+                root_view.root_auto_repeat_content_bound(root.min_height, false),
+                root_view.root_auto_repeat_content_bound(root.max_height, false),
+            ) else {
+                self.layout.fail(
+                    self.slots[0].node,
+                    "formatting grid implicit row bound exceeded",
+                );
+                return None;
+            };
             let column_flow = grid.is_some_and(|grid| {
                 matches!(
                     grid.auto_flow,
                     GridAutoFlow::Column | GridAutoFlow::ColumnDense
                 )
             });
-            let mut col = AxisBound::new(columns);
-            let mut row = AxisBound::new(rows);
+            let mut col = AxisBound::with_names(
+                columns,
+                grid.map_or(&[][..], |g| g.col_line_names.as_slice()),
+                grid.and_then(|g| g.col_auto_repeat.as_ref().map(|ar| (ar, col_reps))),
+            );
+            let mut row = AxisBound::with_names(
+                rows,
+                grid.map_or(&[][..], |g| g.row_line_names.as_slice()),
+                grid.and_then(|g| g.row_auto_repeat.as_ref().map(|ar| (ar, row_reps))),
+            );
+            let auto_pair = [GridLine::Auto, GridLine::Auto];
             for slot in &self.slots[1..] {
                 let (columns, rows) = if matches!(slot.kind, Kind::Element) {
                     let style = &self.layout.styles[slot.node].layout;
-                    (style.grid_column, style.grid_row)
+                    (&style.grid_column, &style.grid_row)
                 } else {
-                    ([GridLine::Auto; 2], [GridLine::Auto; 2])
+                    (&auto_pair, &auto_pair)
                 };
                 if col.item(columns).is_none() || row.item(rows).is_none() {
                     self.layout.fail(
@@ -1201,63 +1397,260 @@ impl Adapter<'_, '_, '_> {
     }
 }
 
+fn track_fixed_size_in_axis(track: &crate::style::TrackSize, basis: f32) -> Option<f32> {
+    use crate::style::{TrackBreadth as B, TrackSize as T};
+    let resolve_breadth = |b: &B| -> Option<f32> {
+        match b {
+            B::Length(len) => len.resolve(basis).map(|v| v.max(0.0)),
+            _ => None,
+        }
+    };
+    match track {
+        T::Breadth(B::Fr(_)) | T::FitContent(_) => None,
+        T::Breadth(b) => resolve_breadth(b),
+        T::MinMax(min, max) => {
+            let min_v = resolve_breadth(min);
+            let max_v = resolve_breadth(max);
+            match (min_v, max_v) {
+                (Some(mn), Some(mx)) => Some(mx.max(mn)),
+                (None, Some(mx)) => Some(mx),
+                (Some(mn), None) => Some(mn),
+                (None, None) => None,
+            }
+        }
+    }
+}
+
+fn has_fixed_track_component(track: &crate::style::TrackSize, basis: Option<f32>) -> bool {
+    use crate::style::{TrackBreadth as B, TrackSize as T};
+    let breadth_fixed = |b: &B| match b {
+        B::Length(Length::Px(_) | Length::Percent(_)) => true,
+        B::Length(Length::Calc { percent, .. }) => *percent == 0.0 || basis.is_some(),
+        _ => false,
+    };
+    match track {
+        T::Breadth(B::Fr(_)) | T::FitContent(_) => false,
+        T::Breadth(b) => breadth_fixed(b),
+        T::MinMax(min, max) => breadth_fixed(min) || breadth_fixed(max),
+    }
+}
+
+fn expanded_explicit_tracks(
+    tracks: &[crate::style::TrackSize],
+    auto_repeat: Option<&crate::style::GridAutoRepeat>,
+    gap: Length,
+    container_size: Option<f32>,
+    min_bound: Option<f32>,
+    max_bound: Option<f32>,
+) -> Option<(usize, usize)> {
+    let Some(ar) = auto_repeat else {
+        return (tracks.len() <= MAX_TRACKS).then_some((tracks.len(), 0));
+    };
+    if ar.tracks.is_empty() {
+        return None;
+    }
+    let (avail_opt, is_min_strategy) = if let Some(sz) = container_size {
+        (Some(sz), false)
+    } else if let Some(mx) = max_bound {
+        (Some(mx), false)
+    } else if let Some(mn) = min_bound {
+        (Some(mn), true)
+    } else {
+        (None, false)
+    };
+    if !tracks
+        .iter()
+        .chain(ar.tracks.iter())
+        .all(|t| has_fixed_track_component(t, container_size))
+    {
+        return Some((0, 0));
+    }
+    let reps = match avail_opt {
+        None => 1usize,
+        Some(inner_sz) => {
+            let inner = inner_sz.max(0.0);
+            let mut non_rep_used = 0.0f32;
+            for t in tracks {
+                non_rep_used += track_fixed_size_in_axis(t, inner)?;
+            }
+            let mut per_rep_track = 0.0f32;
+            for t in &ar.tracks {
+                per_rep_track += track_fixed_size_in_axis(t, inner)?;
+            }
+            let gap_px = gap.resolve(inner).unwrap_or(0.0).max(0.0);
+            let first_used = non_rep_used
+                + per_rep_track
+                + ((tracks.len() + ar.tracks.len()).saturating_sub(1) as f32 * gap_px);
+            if first_used > inner {
+                1usize
+            } else {
+                let per_rep_used = per_rep_track + (ar.tracks.len() as f32) * gap_px;
+                if !per_rep_used.is_finite() || per_rep_used <= 0.0 {
+                    return None;
+                }
+                let fit = (inner - first_used) / per_rep_used;
+                if !fit.is_finite() || fit > MAX_TRACKS as f32 {
+                    return None;
+                }
+                let add = if is_min_strategy {
+                    fit.ceil() as usize
+                } else {
+                    fit.floor() as usize
+                };
+                1usize.checked_add(add)?
+            }
+        }
+    };
+    let expanded = tracks
+        .len()
+        .checked_add(reps.checked_mul(ar.tracks.len())?)?;
+    (expanded <= MAX_TRACKS).then_some((expanded, reps))
+}
+
 #[derive(Clone, Copy)]
-struct AxisBound {
+struct AxisBound<'a> {
     explicit: usize,
-    max_span: usize,
+    max_auto_span: usize,
+    max_definite_span: usize,
     sum_span: usize,
     before: usize,
     after: usize,
     positioned: bool,
+    line_names: &'a [Vec<String>],
+    auto_repeat: Option<(&'a crate::style::GridAutoRepeat, usize)>,
 }
-impl AxisBound {
+impl<'a> AxisBound<'a> {
+    #[cfg(test)]
     fn new(explicit: usize) -> Self {
+        Self::with_names(explicit, &[], None)
+    }
+    fn with_names(
+        explicit: usize,
+        line_names: &'a [Vec<String>],
+        auto_repeat: Option<(&'a crate::style::GridAutoRepeat, usize)>,
+    ) -> Self {
         Self {
             explicit,
-            max_span: 1,
+            max_auto_span: 1,
+            max_definite_span: 1,
             sum_span: 0,
             before: 0,
             after: 0,
             positioned: false,
+            line_names,
+            auto_repeat,
         }
     }
-    fn item(&mut self, lines: [GridLine; 2]) -> Option<()> {
+    fn count_named_lines(&self, target: &str, is_end: bool) -> usize {
+        let count_exact = |name: &str| -> usize {
+            let mut n = self
+                .line_names
+                .iter()
+                .flat_map(|set| set.iter())
+                .filter(|s| s.as_str() == name)
+                .count();
+            if let Some((ar, reps)) = self.auto_repeat
+                && reps > 0
+            {
+                let per_rep = ar
+                    .line_names
+                    .iter()
+                    .flat_map(|set| set.iter())
+                    .filter(|s| s.as_str() == name)
+                    .count();
+                n = n.saturating_add(per_rep.saturating_mul(reps));
+            }
+            n
+        };
+        let exact = count_exact(target);
+        if exact > 0 {
+            return exact;
+        }
+        let implicit = if is_end {
+            format!("{target}-end")
+        } else {
+            format!("{target}-start")
+        };
+        count_exact(&implicit)
+    }
+    fn item(&mut self, lines: &[GridLine; 2]) -> Option<()> {
         let mut span = 1usize;
-        for line in lines {
+        for (side_idx, line) in lines.iter().enumerate() {
+            let is_end = side_idx == 1;
             match line {
-                GridLine::Span(value) if value > 0 && usize::from(value) <= MAX_TRACKS => {
-                    span = span.max(usize::from(value))
+                GridLine::Span(value) if *value > 0 && usize::from(*value) <= MAX_TRACKS => {
+                    span = span.max(usize::from(*value))
                 }
                 GridLine::Line(value)
-                    if value != 0 && usize::from(value.unsigned_abs()) <= MAX_TRACKS =>
+                    if *value != 0 && usize::from(value.unsigned_abs()) <= MAX_TRACKS =>
                 {
                     self.positioned = true;
                     let extra = usize::from(value.unsigned_abs()).saturating_sub(self.explicit + 1);
-                    if value < 0 {
+                    if *value < 0 {
                         self.before = self.before.max(extra);
                     } else {
                         self.after = self.after.max(extra);
                     }
                 }
+                GridLine::NamedLine(name, raw_idx)
+                    if !name.is_empty() && usize::from(raw_idx.unsigned_abs()) <= MAX_TRACKS =>
+                {
+                    self.positioned = true;
+                    let eff_idx = if *raw_idx == 0 { 1i16 } else { *raw_idx };
+                    let needed = usize::from(eff_idx.unsigned_abs());
+                    let occ = self.count_named_lines(name, is_end);
+                    let extra = needed.saturating_sub(occ);
+                    if eff_idx < 0 {
+                        self.before = self.before.max(extra);
+                    } else {
+                        self.after = self.after.max(extra);
+                    }
+                }
+                GridLine::NamedSpan(name, value)
+                    if !name.is_empty() && *value > 0 && usize::from(*value) <= MAX_TRACKS =>
+                {
+                    let needed = usize::from(*value);
+                    let occ = self.count_named_lines(name, is_end);
+                    let extra = needed.saturating_sub(occ);
+                    self.after = self.after.max(extra);
+                    span = span.max(self.explicit.saturating_add(extra).max(1));
+                }
                 GridLine::Auto => {}
                 _ => return None,
             }
         }
+        let both_definite = matches!(
+            lines,
+            [
+                GridLine::Line(_) | GridLine::NamedLine(_, _),
+                GridLine::Line(_) | GridLine::NamedLine(_, _)
+            ]
+        );
         if let [GridLine::Line(start), GridLine::Line(end)] = lines {
             if start.signum() == end.signum() {
-                span = span.max(usize::from(start.abs_diff(end)));
+                span = span.max(usize::from(start.abs_diff(*end)));
             } else {
                 span = span.max(self.explicit + self.before + self.after);
             }
+        } else if both_definite {
+            span = span.max(self.explicit + self.before + self.after);
         }
-        self.max_span = self.max_span.max(span);
+        if both_definite {
+            self.max_definite_span = self.max_definite_span.max(span);
+        } else {
+            self.max_auto_span = self.max_auto_span.max(span);
+        }
         self.sum_span = self.sum_span.checked_add(span)?;
         Some(())
     }
     fn tracks(self, auto_flow_axis: bool) -> Option<usize> {
-        let base = self.explicit.max(self.max_span).max(1);
+        let base = self
+            .explicit
+            .max(self.max_definite_span)
+            .max(self.max_auto_span)
+            .max(1);
         let extra = if self.positioned {
-            self.max_span.checked_mul(2)?
+            self.max_auto_span.checked_mul(2)?
         } else {
             0
         };
@@ -1362,6 +1755,7 @@ impl LayoutPartialTree for Adapter<'_, '_, '_> {
                     input.parent_size.width.or(tree.parent_size.0),
                     input.parent_size.height.or(tree.parent_size.1),
                     view.container_is_row,
+                    view.container_is_flex,
                 ));
                 let mut output = compute_leaf_layout(
                     input,
@@ -1815,22 +2209,22 @@ mod tests {
     #[test]
     fn implicit_track_preflight_counts_spans_and_rejects_unbounded_growth() {
         let mut columns = AxisBound::new(12);
-        columns.item([GridLine::Span(8), GridLine::Auto]).unwrap();
-        columns.item([GridLine::Span(4), GridLine::Auto]).unwrap();
+        columns.item(&[GridLine::Span(8), GridLine::Auto]).unwrap();
+        columns.item(&[GridLine::Span(4), GridLine::Auto]).unwrap();
         assert_eq!(columns.tracks(false), Some(12));
         let mut rows = AxisBound::new(0);
         for _ in 0..128 {
-            rows.item([GridLine::Auto; 2]).unwrap();
+            rows.item(&[GridLine::Auto, GridLine::Auto]).unwrap();
         }
         assert_eq!(rows.tracks(true), None);
         assert!(
             AxisBound::new(0)
-                .item([GridLine::Line(0), GridLine::Auto])
+                .item(&[GridLine::Line(0), GridLine::Auto])
                 .is_none()
         );
         let mut displaced = AxisBound::new(12);
         displaced
-            .item([GridLine::Line(-128), GridLine::Span(128)])
+            .item(&[GridLine::Line(-128), GridLine::Span(128)])
             .unwrap();
         assert_eq!(displaced.tracks(false), None);
     }

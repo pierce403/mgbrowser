@@ -1,7 +1,8 @@
 use mg_sparkle::{
     document::parse,
     style::{
-        BackgroundBox, GradientDirection, Length, StyleDiagnostics, compute_styles_with_diagnostics,
+        BackgroundBox, GradientDirection, GradientKind, Length, RadialExtent, RadialShape,
+        StyleDiagnostics, compute_styles_with_diagnostics,
     },
 };
 
@@ -29,13 +30,13 @@ fn actual_two_stop_transparent_white_background_keeps_four_pixel_stop_and_clip()
     );
     let gradient = style.background_gradient.unwrap();
     assert_eq!(
-        gradient.direction,
-        GradientDirection::Angle(std::f32::consts::FRAC_PI_2)
+        gradient.linear_direction(),
+        Some(GradientDirection::Angle(std::f32::consts::FRAC_PI_2))
     );
-    assert_eq!(gradient.stops[0].position, Length::Percent(0.));
+    assert_eq!(gradient.stops[0].position, Some(Length::Percent(0.)));
     assert_eq!(gradient.stops[0].color.rgb, 0xffffff);
     assert_eq!(gradient.stops[0].color.alpha, 0.);
-    assert_eq!(gradient.stops[1].position, Length::Px(4.));
+    assert_eq!(gradient.stops[1].position, Some(Length::Px(4.)));
     assert_eq!(gradient.stops[1].color.rgb, 0xffffff);
     assert_eq!(gradient.stops[1].color.alpha, 1.);
     assert_eq!(gradient.origin, BackgroundBox::Padding);
@@ -53,17 +54,17 @@ fn colors_use_cascade_current_color_and_supported_direction_forms() {
     );
     let gradient = style.background_gradient.unwrap();
     assert_eq!(
-        gradient.direction,
-        GradientDirection::Corner {
+        gradient.linear_direction(),
+        Some(GradientDirection::Corner {
             right: true,
             bottom: true
-        }
+        })
     );
     assert_eq!(gradient.stops[0].color.rgb, 0x123456);
-    assert_eq!(gradient.stops[0].position, Length::Percent(0.2));
+    assert_eq!(gradient.stops[0].position, Some(Length::Percent(0.2)));
     assert_eq!(gradient.stops[1].color.rgb, 0x1e2832);
     assert_eq!(gradient.stops[1].color.alpha, 0.5);
-    assert_eq!(gradient.stops[1].position, Length::Percent(1.));
+    assert_eq!(gradient.stops[1].position, Some(Length::Percent(1.)));
     assert_eq!(gradient.origin, BackgroundBox::Content);
     assert_eq!(gradient.clip, BackgroundBox::Padding);
     assert_eq!(gradient.repeat, [false; 2]);
@@ -78,29 +79,63 @@ fn colors_use_cascade_current_color_and_supported_direction_forms() {
             "background-image:linear-gradient({direction},red,blue)"
         ));
         assert_eq!(
-            style.background_gradient.unwrap().direction,
-            GradientDirection::Angle(radians)
+            style.background_gradient.unwrap().linear_direction(),
+            Some(GradientDirection::Angle(radians))
         );
         assert!(diagnostics.entries.is_empty(), "{diagnostics:?}");
     }
 }
 
 #[test]
+fn multi_stop_repeating_radial_and_sized_gradients_extract_cleanly() {
+    let (style, diagnostics) =
+        compute("background-image:linear-gradient(90deg,red,20%,green calc(2px + 50%),blue)");
+    assert!(diagnostics.entries.is_empty(), "{diagnostics:?}");
+    let g = style.background_gradient.unwrap();
+    assert_eq!(g.stops.len(), 3);
+    assert_eq!(g.stops[0].hint_to_next, Some(Length::Percent(0.2)));
+    assert!(matches!(
+        g.stops[1].position,
+        Some(Length::Calc { px, percent, .. })
+            if (px - 2.0).abs() < 1e-4 && (percent - 0.5).abs() < 1e-4
+    ));
+
+    let (style, diagnostics) = compute(
+        "background-image:repeating-linear-gradient(45deg,red 0px,blue 10px);background-size:20px 30px;background-position:2px 4px",
+    );
+    assert!(diagnostics.entries.is_empty(), "{diagnostics:?}");
+    let g = style.background_gradient.unwrap();
+    assert!(g.repeating);
+    assert_eq!(g.size, [Length::Px(20.0), Length::Px(30.0)]);
+    assert_eq!(g.position, [Length::Px(2.0), Length::Px(4.0)]);
+
+    let (style, diagnostics) =
+        compute("background-image:radial-gradient(circle closest-side at 25% 75%,red,blue)");
+    assert!(diagnostics.entries.is_empty(), "{diagnostics:?}");
+    let g = style.background_gradient.unwrap();
+    assert_eq!(
+        g.kind,
+        GradientKind::Radial {
+            shape: RadialShape::CircleExtent(RadialExtent::ClosestSide),
+            center: [Length::Percent(0.25), Length::Percent(0.75)],
+        }
+    );
+}
+
+#[test]
 fn unsupported_forms_are_omitted_with_explicit_node_diagnostics_not_coerced() {
+    let seventeen_stops = format!(
+        "background-image:linear-gradient({})",
+        vec!["red"; 17].join(",")
+    );
     for css in [
-        "background-image:radial-gradient(red,blue)",
         "background-image:conic-gradient(red,blue)",
-        "background-image:repeating-linear-gradient(red,blue)",
-        "background-image:linear-gradient(red,green,blue)",
-        "background-image:linear-gradient(red,20%,blue)",
-        "background-image:linear-gradient(red calc(2px + 10%),blue)",
         "background-image:linear-gradient(in oklab,red,blue)",
         "background-image:linear-gradient(red,blue),linear-gradient(white,black)",
-        "background-image:linear-gradient(red,blue);background-size:20px 30px",
-        "background-image:linear-gradient(red,blue);background-position:2px 0",
         "background-image:linear-gradient(red,blue);background-attachment:fixed",
         "background-image:linear-gradient(red,blue);background-repeat:round",
         "background-image:linear-gradient(red 1000001px,blue)",
+        seventeen_stops.as_str(),
     ] {
         let (style, diagnostics) = compute(css);
         assert_eq!(style.background_gradient, None, "{css}");

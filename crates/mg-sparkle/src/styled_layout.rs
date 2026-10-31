@@ -102,6 +102,13 @@ enum ControlVisual {
 
 #[derive(Clone)]
 enum Paint {
+    BoxShadow {
+        bounds: Rect,
+        border_rect: Rect,
+        node: usize,
+        padding: [f32; 4],
+        shadow_idx: usize,
+    },
     Background(Rect, usize, [f32; 4]),
     RoundedDecoration(Rect, usize, [f32; 4]),
     Rect(Rect, Color),
@@ -119,13 +126,54 @@ enum ImageSource {
 impl Paint {
     fn rect_mut(&mut self) -> &mut Rect {
         match self {
-            Self::Background(r, ..)
+            Self::BoxShadow { bounds: r, .. }
+            | Self::Background(r, ..)
             | Self::RoundedDecoration(r, ..)
             | Self::Rect(r, _)
             | Self::Text(r, ..)
             | Self::Image(r, ..)
             | Self::Control(r, ..) => r,
         }
+    }
+    fn shift_by(&mut self, dx: f32, dy: f32) {
+        match self {
+            Self::BoxShadow {
+                bounds,
+                border_rect,
+                ..
+            } => {
+                bounds.x += dx;
+                bounds.y += dy;
+                border_rect.x += dx;
+                border_rect.y += dy;
+            }
+            _ => {
+                let r = self.rect_mut();
+                r.x += dx;
+                r.y += dy;
+            }
+        }
+    }
+}
+
+fn box_shadow_bounds(r: Rect, sh: &crate::style::BoxShadow) -> Rect {
+    if sh.inset {
+        return r;
+    }
+    let expand = sh.spread_radius.max(0.0) + sh.blur_radius.max(0.0) * 1.6 + 2.0;
+    let sx = r.x + sh.offset_x - expand;
+    let sy = r.y + sh.offset_y - expand;
+    let sw = (r.w + 2.0 * expand).max(0.0);
+    let sh_h = (r.h + 2.0 * expand).max(0.0);
+    let x0 = r.x.min(sx);
+    let y0 = r.y.min(sy);
+    let x1 = (r.x + r.w).max(sx + sw);
+    let y1 = (r.y + r.h).max(sy + sh_h);
+    Rect {
+        x: x0,
+        y: y0,
+        w: (x1 - x0).max(0.0),
+        h: (y1 - y0).max(0.0),
     }
 }
 
@@ -137,10 +185,41 @@ fn has_nonzero_border_radius(s: &ComputedStyle) -> bool {
 }
 
 fn resolve_rounded_rect(s: &ComputedStyle, r: Rect) -> crate::paint::RoundedRect {
+    resolve_rounded_rect_scaled(s, r, (1.0, 1.0))
+}
+
+fn resolve_scaled_length(len: Length, basis: f32, factor: f32) -> f32 {
+    match len {
+        Length::Auto => 0.0,
+        Length::Px(px) => px * factor,
+        Length::Percent(p) => p * basis,
+        Length::Calc {
+            px,
+            percent,
+            bound_px,
+            op,
+            non_negative,
+        } => Length::Calc {
+            px: px * factor,
+            percent,
+            bound_px: bound_px * factor,
+            op,
+            non_negative,
+        }
+        .resolve(basis)
+        .unwrap_or(0.0),
+    }
+}
+
+fn resolve_rounded_rect_scaled(
+    s: &ComputedStyle,
+    r: Rect,
+    (sx, sy): (f32, f32),
+) -> crate::paint::RoundedRect {
     let raw = s.border_radii.map(|(rx, ry)| {
         (
-            rx.resolve(r.w).unwrap_or(0.0),
-            ry.resolve(r.h).unwrap_or(0.0),
+            resolve_scaled_length(rx, r.w, sx),
+            resolve_scaled_length(ry, r.h, sy),
         )
     });
     crate::paint::RoundedRect::from_raw(r.x, r.y, r.w, r.h, raw)
@@ -216,6 +295,8 @@ struct Scene {
         (usize, usize, usize, usize),
         Rect,
     )>,
+    /// Accumulated 2D transform visual scale `(sx, sy)` per DOM node when transforms exist.
+    node_scales: Vec<(f32, f32)>,
 }
 
 impl Scene {
@@ -238,9 +319,7 @@ impl Scene {
         dy: f32,
     ) {
         for op in &mut self.paints[start.0..end.0] {
-            let r = op.rect_mut();
-            r.x += dx;
-            r.y += dy;
+            op.shift_by(dx, dy);
         }
         for clip in self.clips[start.0..end.0].iter_mut().flatten() {
             clip.x += dx;
@@ -551,6 +630,7 @@ pub(crate) fn compute_boxes(
         )
         .1;
     positioned::run(&mut layout);
+    layout.apply_transforms();
     stacking::run(&mut layout);
     if layout.exhausted {
         return None;
@@ -700,6 +780,7 @@ pub(crate) fn render_scaled_profiled(
         .clamp(0.0, MAX_EXTENT);
     layout.apply_sticky_offsets(pre_sticky_scroll_height);
     positioned::run(&mut layout);
+    layout.apply_transforms();
     stacking::run(&mut layout);
     if layout.exhausted
         || layout.scene.paints.len() >= MAX_OPS
@@ -755,12 +836,66 @@ pub(crate) fn render_scaled_profiled(
             canvas.intersect_rounded_clip(rr.to_physical(&canvas, viewport.scroll));
         }
         match op {
+            Paint::BoxShadow {
+                bounds,
+                border_rect,
+                node,
+                padding: _,
+                shadow_idx,
+            } => {
+                if !visible(*bounds, viewport) {
+                    continue;
+                }
+                let style = &layout.styles[*node];
+                let Some(sh) = style.box_shadows.get(*shadow_idx) else {
+                    continue;
+                };
+                let (sx, sy) = layout
+                    .scene
+                    .node_scales
+                    .get(*node)
+                    .copied()
+                    .unwrap_or((1.0, 1.0));
+                let bw = [
+                    style.border_width[0] * sy,
+                    style.border_width[1] * sx,
+                    style.border_width[2] * sy,
+                    style.border_width[3] * sx,
+                ];
+                let outer_logical = resolve_rounded_rect_scaled(style, *border_rect, (sx, sy));
+                let inner_logical = outer_logical.inset(bw);
+                let avg_s = 0.5 * (sx + sy);
+                canvas.paint_box_shadow(
+                    outer_logical,
+                    inner_logical,
+                    sh.offset_x * sx,
+                    sh.offset_y * sy,
+                    sh.blur_radius * avg_s,
+                    sh.spread_radius * avg_s,
+                    sh.color.rgb,
+                    sh.color.alpha * opacity,
+                    sh.inset,
+                    viewport.scroll,
+                );
+            }
             Paint::Background(rect, node, padding) => {
                 if !visible(*rect, viewport) {
                     continue;
                 }
                 let style = &layout.styles[*node];
-                let area = |kind| background_box(*rect, style.border_width, *padding, kind);
+                let (sx, sy) = layout
+                    .scene
+                    .node_scales
+                    .get(*node)
+                    .copied()
+                    .unwrap_or((1.0, 1.0));
+                let bw = [
+                    style.border_width[0] * sy,
+                    style.border_width[1] * sx,
+                    style.border_width[2] * sy,
+                    style.border_width[3] * sx,
+                ];
+                let area = |kind| background_box(*rect, bw, *padding, kind);
                 if let Some(color_box) = area(style.background_clip) {
                     paint_rect(
                         &mut canvas,
@@ -772,14 +907,15 @@ pub(crate) fn render_scaled_profiled(
                         viewport.scroll,
                     );
                 }
-                if let Some(gradient) = &style.background_gradient
+                if let Some(gradient) = style.background_gradient.as_deref()
                     && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
                 {
-                    crate::gradient::paint(
+                    crate::gradient::paint_with_opacity(
                         &mut canvas,
                         [origin.x, origin.y, origin.w, origin.h],
                         [clip.x, clip.y, clip.w, clip.h],
                         gradient,
+                        opacity,
                         viewport.scroll,
                     );
                 }
@@ -789,14 +925,22 @@ pub(crate) fn render_scaled_profiled(
                     continue;
                 }
                 let style = &layout.styles[*node];
-                let outer_logical = resolve_rounded_rect(style, *rect);
-                let inner_logical = outer_logical.inset(style.border_width);
-                let bg_logical = rounded_background_box(
-                    outer_logical,
-                    style.border_width,
-                    *padding,
-                    style.background_clip,
-                );
+                let (sx, sy) = layout
+                    .scene
+                    .node_scales
+                    .get(*node)
+                    .copied()
+                    .unwrap_or((1.0, 1.0));
+                let bw = [
+                    style.border_width[0] * sy,
+                    style.border_width[1] * sx,
+                    style.border_width[2] * sy,
+                    style.border_width[3] * sx,
+                ];
+                let outer_logical = resolve_rounded_rect_scaled(style, *rect, (sx, sy));
+                let inner_logical = outer_logical.inset(bw);
+                let bg_logical =
+                    rounded_background_box(outer_logical, bw, *padding, style.background_clip);
                 let outer_phys = outer_logical.to_physical(&canvas, viewport.scroll);
                 let inner_phys = inner_logical.to_physical(&canvas, viewport.scroll);
                 let bg_phys = bg_logical.map(|b| {
@@ -808,24 +952,22 @@ pub(crate) fn render_scaled_profiled(
                 });
                 let borders = style.border_color.map(|c| (c.rgb, c.alpha * opacity));
                 canvas.paint_rounded_decoration(outer_phys, inner_phys, bg_phys, borders);
-                let area = |kind| background_box(*rect, style.border_width, *padding, kind);
-                if let Some(gradient) = &style.background_gradient
+                let area = |kind| background_box(*rect, bw, *padding, kind);
+                if let Some(gradient) = style.background_gradient.as_deref()
                     && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
                 {
-                    if let Some(grad_rr) = rounded_background_box(
-                        outer_logical,
-                        style.border_width,
-                        *padding,
-                        gradient.clip,
-                    ) {
+                    if let Some(grad_rr) =
+                        rounded_background_box(outer_logical, bw, *padding, gradient.clip)
+                    {
                         canvas
                             .intersect_rounded_clip(grad_rr.to_physical(&canvas, viewport.scroll));
                     }
-                    crate::gradient::paint(
+                    crate::gradient::paint_with_opacity(
                         &mut canvas,
                         [origin.x, origin.y, origin.w, origin.h],
                         [clip.x, clip.y, clip.w, clip.h],
                         gradient,
+                        opacity,
                         viewport.scroll,
                     );
                 }
@@ -841,6 +983,13 @@ pub(crate) fn render_scaled_profiled(
             ),
             Paint::Text(rect, node, text) => {
                 let style = &layout.styles[*node];
+                let (sx, sy) = layout
+                    .scene
+                    .node_scales
+                    .get(*node)
+                    .copied()
+                    .unwrap_or((1.0, 1.0));
+                let eff_font_size = style.font_size * sx.min(sy);
                 if text_runs.len() < super::render::MAX_TEXT_RUNS && !text.is_empty() {
                     let clipped_out = layout.scene.clips[index].is_some_and(|clip| {
                         clip.w <= 0.0
@@ -857,13 +1006,48 @@ pub(crate) fn render_scaled_profiled(
                             y: rect.y.round() as i32 - viewport.scroll,
                             width: rect.w.ceil().max(1.0) as u32,
                             height: rect.h.ceil().max(1.0) as u32,
-                            font_size: style.font_size,
+                            font_size: eff_font_size,
                             text: text.clone(),
                         });
                     }
                 }
-                if !visible(*rect, viewport) {
+                let shadow_pad = style.text_shadows.iter().fold(0.0f32, |acc, sh| {
+                    acc.max(
+                        sh.offset_x.abs() * sx
+                            + sh.offset_y.abs() * sy
+                            + sh.blur_radius * 1.6
+                            + 2.0,
+                    )
+                });
+                let vis_rect = if shadow_pad > 0.0 {
+                    Rect {
+                        x: rect.x - shadow_pad,
+                        y: rect.y - shadow_pad,
+                        w: rect.w + 2.0 * shadow_pad,
+                        h: rect.h + 2.0 * shadow_pad,
+                    }
+                } else {
+                    *rect
+                };
+                if !visible(vis_rect, viewport) || eff_font_size <= 0.0 {
                     continue;
+                }
+                let bold = style.font_weight >= 600;
+                for sh in style.text_shadows.iter().rev() {
+                    canvas.text_shadow_styled(
+                        layout.fonts.select_family(&style.font_families),
+                        (
+                            rect.x + sh.offset_x * sx,
+                            rect.y - viewport.scroll as f32 + sh.offset_y * sy,
+                        ),
+                        text,
+                        eff_font_size,
+                        sh.color.rgb,
+                        bold,
+                        style.italic,
+                        sh.color.alpha * opacity,
+                        sh.blur_radius * 0.5 * (sx + sy),
+                    );
                 }
                 canvas.text_styled_alpha(
                     layout.fonts.select_family(&style.font_families),
@@ -872,9 +1056,9 @@ pub(crate) fn render_scaled_profiled(
                         rect.y.round() as i32 - viewport.scroll,
                     ),
                     text,
-                    style.font_size,
+                    eff_font_size,
                     style.color.rgb,
-                    style.font_weight >= 600,
+                    bold,
                     style.italic,
                     opacity,
                 );
@@ -883,7 +1067,7 @@ pub(crate) fn render_scaled_profiled(
                         &mut canvas,
                         Rect {
                             x: rect.x.round(),
-                            y: (rect.y + style.font_size).round(),
+                            y: (rect.y + eff_font_size).round(),
                             w: rect.w.ceil(),
                             h: 1.0,
                         },
@@ -1424,7 +1608,7 @@ impl Layout<'_, '_> {
             let tag = self.document.nodes[id].tag.as_str();
             self.replaced_nodes[id] = matches!(
                 tag,
-                "img" | "svg" | "input" | "textarea" | "button" | "select"
+                "img" | "svg" | "canvas" | "input" | "textarea" | "button" | "select"
             );
             if tag == "button" {
                 for index in 0..self.document.nodes[id].children.len() {
@@ -1541,7 +1725,18 @@ impl Layout<'_, '_> {
         if !x && !y {
             return None;
         }
-        let b = s.border_width;
+        let (sx, sy) = self
+            .scene
+            .node_scales
+            .get(id)
+            .copied()
+            .unwrap_or((1.0, 1.0));
+        let b = [
+            s.border_width[0] * sy,
+            s.border_width[1] * sx,
+            s.border_width[2] * sy,
+            s.border_width[3] * sx,
+        ];
         Some(Rect {
             x: if x { r.x + b[3] } else { -MAX_EXTENT },
             y: if y { r.y + b[0] } else { -MAX_EXTENT },
@@ -1569,7 +1764,90 @@ impl Layout<'_, '_> {
         if !x || !y {
             return None;
         }
-        Some(resolve_rounded_rect(s, r).inset(s.border_width))
+        let (sx, sy) = self
+            .scene
+            .node_scales
+            .get(id)
+            .copied()
+            .unwrap_or((1.0, 1.0));
+        let b = [
+            s.border_width[0] * sy,
+            s.border_width[1] * sx,
+            s.border_width[2] * sy,
+            s.border_width[3] * sx,
+        ];
+        Some(resolve_rounded_rect_scaled(s, r, (sx, sy)).inset(b))
+    }
+
+    pub(super) fn self_clip_for(
+        &self,
+        id: usize,
+        r: Rect,
+    ) -> (Option<Rect>, Option<crate::paint::RoundedRect>) {
+        let s = &self.styles[id];
+        let (sx, sy) = self
+            .scene
+            .node_scales
+            .get(id)
+            .copied()
+            .unwrap_or((1.0, 1.0));
+        let mut clip: Option<Rect> = None;
+        let mut rounded: Option<crate::paint::RoundedRect> = None;
+        if let Some([top, right, bottom, left]) = s.clip_rect
+            && matches!(
+                s.layout.position,
+                crate::style::Position::Absolute | crate::style::Position::Fixed
+            )
+        {
+            let cx0 = r.x + left.unwrap_or(0.0) * sx;
+            let cy0 = r.y + top.unwrap_or(0.0) * sy;
+            let cx1 = r.x + right.map_or(r.w, |v| v * sx);
+            let cy1 = r.y + bottom.map_or(r.h, |v| v * sy);
+            clip = Some(Rect {
+                x: cx0,
+                y: cy0,
+                w: (cx1 - cx0).max(0.0),
+                h: (cy1 - cy0).max(0.0),
+            });
+        }
+        if let Some(ref inset) = s.clip_path_inset {
+            let top = resolve_scaled_length(inset.inset[0], r.h, sy);
+            let right = resolve_scaled_length(inset.inset[1], r.w, sx);
+            let bottom = resolve_scaled_length(inset.inset[2], r.h, sy);
+            let left = resolve_scaled_length(inset.inset[3], r.w, sx);
+            let cw = (r.w - left - right).max(0.0);
+            let ch = (r.h - top - bottom).max(0.0);
+            let cx = if cw > 0.0 {
+                r.x + left
+            } else {
+                r.x + left.clamp(0.0, r.w)
+            };
+            let cy = if ch > 0.0 {
+                r.y + top
+            } else {
+                r.y + top.clamp(0.0, r.h)
+            };
+            let cp_rect = Rect {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            };
+            clip = Some(clip.map_or(cp_rect, |prev| prev.intersect(cp_rect)));
+            if cw > 0.0 && ch > 0.0 {
+                let raw = inset.radii.map(|(rx, ry)| {
+                    (
+                        resolve_scaled_length(rx, r.w, sx),
+                        resolve_scaled_length(ry, r.h, sy),
+                    )
+                });
+                let rr = crate::paint::RoundedRect::from_raw(cx, cy, cw, ch, raw);
+                if rr.has_any_radius() {
+                    rounded = Some(rr);
+                }
+            }
+        }
+        (clip, rounded)
     }
 
     fn spend(&mut self, depth: usize) -> bool {
@@ -1627,7 +1905,10 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> Option<Intrinsic> {
         let measured = self.measure_content_intrinsic(id, depth)?;
-        if !matches!(self.document.nodes[id].tag.as_str(), "img" | "svg") {
+        if !matches!(
+            self.document.nodes[id].tag.as_str(),
+            "img" | "svg" | "canvas"
+        ) {
             return Some(measured);
         }
         let natural = self.natural_replaced_size(id, true);
@@ -1646,8 +1927,10 @@ impl Layout<'_, '_> {
         (natural_width, natural_height): (f32, f32),
     ) -> f32 {
         let style = &self.styles[id];
-        if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
-            && natural_height > 0.0
+        if matches!(
+            self.document.nodes[id].tag.as_str(),
+            "img" | "svg" | "canvas"
+        ) && natural_height > 0.0
             && let Some(height) = height_length(style.height, containing_height)
         {
             let (_, padding) = self.edges(id, basis);
@@ -1921,6 +2204,20 @@ impl Layout<'_, '_> {
         if !s.visible {
             return;
         }
+        for (sh_idx, sh) in s.box_shadows.iter().enumerate().rev() {
+            if !sh.inset {
+                self.scene.paint(
+                    id,
+                    Paint::BoxShadow {
+                        bounds: box_shadow_bounds(r, sh),
+                        border_rect: r,
+                        node: id,
+                        padding,
+                        shadow_idx: sh_idx,
+                    },
+                );
+            }
+        }
         let rounded = has_nonzero_border_radius(s);
         if rounded {
             self.scene
@@ -1967,6 +2264,20 @@ impl Layout<'_, '_> {
                 slot.push(rr);
             }
         }
+        for (sh_idx, sh) in s.box_shadows.iter().enumerate().rev() {
+            if sh.inset {
+                self.scene.paint(
+                    id,
+                    Paint::BoxShadow {
+                        bounds: box_shadow_bounds(r, sh),
+                        border_rect: r,
+                        node: id,
+                        padding,
+                        shadow_idx: sh_idx,
+                    },
+                );
+            }
+        }
     }
     fn image_url(&self, id: usize) -> Option<String> {
         let preferred_ref =
@@ -1995,10 +2306,11 @@ impl Layout<'_, '_> {
         containing_height: Option<f32>,
     ) -> (f32, f32) {
         let (width, mut height) = self.replaced_size_base(id, basis, containing_height);
-        if !self.styles[id].layout.max_width_fit_content
-            && self.styles[id].layout.min_width_intrinsic
-                != Some(crate::style::IntrinsicSize::FitContent)
-        {
+        let has_w_intr = self.styles[id].layout.max_width_intrinsic.is_some()
+            || self.styles[id].layout.min_width_intrinsic.is_some();
+        let has_h_intr = self.styles[id].layout.max_height_intrinsic.is_some()
+            || self.styles[id].layout.min_height_intrinsic.is_some();
+        if !has_w_intr && !has_h_intr {
             return (width, height);
         }
         // Replaced content has equal intrinsic minimum/maximum widths. The
@@ -2013,33 +2325,48 @@ impl Layout<'_, '_> {
         } else {
             0.0
         };
-        let minimum =
-            if s.layout.min_width_intrinsic == Some(crate::style::IntrinsicSize::FitContent) {
+        let constrained = if has_w_intr {
+            let minimum = if s.layout.min_width_intrinsic.is_some() {
                 intrinsic
             } else {
                 (s.min_width.resolve(basis).unwrap_or(0.0) - edges).max(0.0)
             };
-        let maximum = if s.layout.max_width_fit_content {
-            intrinsic
-        } else {
-            MAX_EXTENT
-        };
-        let constrained = width.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT);
-        if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
-            && height_length(s.height, containing_height).is_none()
-            && natural > 0.0
-        {
-            let vertical = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
-                padding[0] + padding[2]
+            let maximum = if s.layout.max_width_intrinsic.is_some() {
+                intrinsic
             } else {
-                0.0
+                MAX_EXTENT
             };
-            height = (constrain_height(
-                s,
-                natural_height * constrained / natural + vertical,
-                containing_height,
-            ) - vertical)
-                .max(0.0);
+            let c = width.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT);
+            if matches!(
+                self.document.nodes[id].tag.as_str(),
+                "img" | "svg" | "canvas"
+            ) && height_length(s.height, containing_height).is_none()
+                && natural > 0.0
+                && natural_height > 0.0
+            {
+                let vertical = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                    padding[0] + padding[2]
+                } else {
+                    0.0
+                };
+                height = (constrain_height(
+                    s,
+                    natural_height * c / natural + vertical,
+                    containing_height,
+                ) - vertical)
+                    .max(0.0);
+            }
+            c
+        } else {
+            width
+        };
+        if has_h_intr {
+            if s.layout.max_height_intrinsic.is_some() {
+                height = height.min(natural_height);
+            }
+            if s.layout.min_height_intrinsic.is_some() {
+                height = height.max(natural_height);
+            }
         }
         (constrained, height)
     }
@@ -2049,7 +2376,10 @@ impl Layout<'_, '_> {
         basis: f32,
         containing_height: Option<f32>,
     ) -> (f32, f32) {
-        if self.styles[id].layout.width_max_content {
+        if matches!(
+            self.styles[id].layout.width_intrinsic,
+            Some(crate::style::IntrinsicSize::MinContent | crate::style::IntrinsicSize::MaxContent)
+        ) {
             let natural = self.natural_replaced_size(id, true);
             let intrinsic = self.replaced_intrinsic_width(id, basis, containing_height, natural);
             let (_, padding) = self.edges(id, basis);
@@ -2070,8 +2400,11 @@ impl Layout<'_, '_> {
                 .resolve(basis)
                 .map_or(0.0, |v| (v - horizontal).max(0.0));
             let width = intrinsic.min(maximum).max(minimum).clamp(0.0, MAX_EXTENT);
-            let auto_height = if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
-                && natural.0 > 0.0
+            let auto_height = if matches!(
+                self.document.nodes[id].tag.as_str(),
+                "img" | "svg" | "canvas"
+            ) && natural.0 > 0.0
+                && natural.1 > 0.0
             {
                 width * natural.1 / natural.0
             } else {
@@ -2108,7 +2441,11 @@ impl Layout<'_, '_> {
                 .flatten();
             let ratio = explicit_ar.unwrap_or_else(|| (natural_w / natural_h.max(1.0)).max(0.001));
             let has_ratio = explicit_ar.is_some()
-                || matches!(self.document.nodes[id].tag.as_str(), "img" | "svg");
+                || (matches!(
+                    self.document.nodes[id].tag.as_str(),
+                    "img" | "svg" | "canvas"
+                ) && natural_w > 0.0
+                    && natural_h > 0.0);
             let s = &self.styles[id];
             let mut w = width.unwrap_or_else(|| {
                 if explicit_ar.is_some() {
@@ -2169,7 +2506,10 @@ impl Layout<'_, '_> {
         let explicit_ar = (!s.layout.aspect_ratio_auto)
             .then_some(s.layout.aspect_ratio)
             .flatten();
-        if !matches!(node.tag.as_str(), "img" | "svg") && explicit_ar.is_none() {
+        let has_intrinsic_ratio = matches!(node.tag.as_str(), "img" | "svg" | "canvas")
+            && default_w > 0.0
+            && default_h > 0.0;
+        if !has_intrinsic_ratio && explicit_ar.is_none() {
             return (
                 width.unwrap_or(default_w).clamp(0.0, MAX_EXTENT),
                 constrain_height(s, height.unwrap_or(default_h), containing_height),
@@ -2258,7 +2598,27 @@ impl Layout<'_, '_> {
         }
         let node = &self.document.nodes[id];
         let s = &self.styles[id];
-        if node.tag == "img" {
+        if node.tag == "canvas" {
+            let parse_canvas_dim = |raw: Option<&str>, default: f32| -> f32 {
+                let Some(raw) = raw else {
+                    return default;
+                };
+                let trimmed = raw.trim_start_matches(is_css_space);
+                let rest = trimmed.strip_prefix('+').unwrap_or(trimmed);
+                let digit_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+                if digit_len == 0 {
+                    return default;
+                }
+                match rest[..digit_len].parse::<u64>() {
+                    Ok(v) if v <= i32::MAX as u64 => (v as f32).min(MAX_EXTENT),
+                    _ => default,
+                }
+            };
+            (
+                parse_canvas_dim(node.attr("width"), 300.0),
+                parse_canvas_dim(node.attr("height"), 150.0),
+            )
+        } else if node.tag == "img" {
             image_url
                 .as_ref()
                 .and_then(|url| self.natural_images.get(url))
@@ -2378,6 +2738,14 @@ impl Layout<'_, '_> {
                 result.max = result.max.min((maximum - sizing_edges).max(0.0));
             }
             result.min = result.max;
+        } else if s.layout.width_intrinsic == Some(crate::style::IntrinsicSize::MinContent) {
+            if let Length::Px(maximum) = s.max_width {
+                result.min = result.min.min((maximum - sizing_edges).max(0.0));
+            }
+            result.max = result.min;
+        }
+        if s.layout.max_width_intrinsic == Some(crate::style::IntrinsicSize::MinContent) {
+            result.max = result.max.min(result.min);
         }
         if let Length::Px(width) = s.width {
             let width = (width - sizing_edges).max(0.0);
@@ -2790,57 +3158,60 @@ impl Layout<'_, '_> {
         } else {
             horizontal
         };
-        let mut width = forced.unwrap_or_else(|| {
-            s.width
-                .resolve(available)
-                .map(|w| w + sizing_edges)
-                .unwrap_or_else(|| {
-                    if s.layout.width_fit_content || s.layout.width_max_content {
-                        let Some(i) = self.measure_content_intrinsic(id, depth + 1) else {
-                            return 0.0;
-                        };
-                        let stretch = (available - margin[1] - margin[3] - horizontal).max(0.0);
-                        // Intrinsic width keywords describe the content box,
-                        // independently of box-sizing. Numeric min/max below
-                        // still use the declared sizing box exactly once.
-                        if s.layout.width_max_content {
-                            i.max + horizontal
-                        } else {
-                            i.max.min(i.min.max(stretch)) + horizontal
-                        }
-                    } else if is_table {
-                        let i = self.intrinsic(id, depth + 1);
-                        i.max.min(available).max(i.min)
-                    } else if let Some(ar) = s.layout.aspect_ratio
-                        && let Some(def_h) = height_length(s.height, containing_height)
-                    {
-                        let used_border_h = if s.layout.box_sizing
-                            == crate::style::BoxSizing::BorderBox
-                        {
-                            constrain_height(&s, def_h, containing_height)
-                                .max(padding[0] + padding[2])
-                        } else {
-                            constrain_height(&s, def_h, containing_height) + padding[0] + padding[2]
-                        };
-                        if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
-                            (used_border_h * ar).max(horizontal)
-                        } else {
-                            (used_border_h - padding[0] - padding[2]).max(0.0) * ar + horizontal
-                        }
-                    } else {
-                        (available - margin[1] - margin[3]).max(horizontal)
-                    }
-                })
-        });
+        let mut width = if let Some(f) = forced {
+            f
+        } else if let Some(w) = s.width.resolve(available) {
+            w + sizing_edges
+        } else if let Some(kw) = s.layout.width_intrinsic {
+            let Some(i) = self.measure_content_intrinsic(id, depth + 1) else {
+                return (0.0, 0.0);
+            };
+            let stretch = (available - margin[1] - margin[3] - horizontal).max(0.0);
+            // Intrinsic width keywords describe the content box,
+            // independently of box-sizing. Numeric min/max below
+            // still use the declared sizing box exactly once.
+            match kw {
+                crate::style::IntrinsicSize::MinContent => i.min + horizontal,
+                crate::style::IntrinsicSize::MaxContent => i.max + horizontal,
+                crate::style::IntrinsicSize::FitContent => {
+                    i.max.min(i.min.max(stretch)) + horizontal
+                }
+            }
+        } else if is_table {
+            let i = self.intrinsic(id, depth + 1);
+            i.max.min(available).max(i.min)
+        } else if let Some(ar) = s.layout.aspect_ratio
+            && let Some(def_h) = height_length(s.height, containing_height)
+        {
+            let used_border_h = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                constrain_height(&s, def_h, containing_height).max(padding[0] + padding[2])
+            } else {
+                constrain_height(&s, def_h, containing_height) + padding[0] + padding[2]
+            };
+            if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                (used_border_h * ar).max(horizontal)
+            } else {
+                (used_border_h - padding[0] - padding[2]).max(0.0) * ar + horizontal
+            }
+        } else {
+            (available - margin[1] - margin[3]).max(horizontal)
+        };
         if let Some(max) = s.max_width.resolve(available) {
             width = width.min(max + sizing_edges);
         }
-        if s.layout.max_width_fit_content {
+        if let Some(kw) = s.layout.max_width_intrinsic {
             let Some(intrinsic) = self.measure_content_intrinsic(id, depth + 1) else {
                 return (0.0, 0.0);
             };
             let stretch = (available - margin[1] - margin[3] - horizontal).max(0.0);
-            width = width.min(intrinsic.max.min(intrinsic.min.max(stretch)) + horizontal);
+            let cap = match kw {
+                crate::style::IntrinsicSize::MinContent => intrinsic.min,
+                crate::style::IntrinsicSize::MaxContent => intrinsic.max,
+                crate::style::IntrinsicSize::FitContent => {
+                    intrinsic.max.min(intrinsic.min.max(stretch))
+                }
+            };
+            width = width.min(cap + horizontal);
         }
         width = width.max(s.min_width.resolve(available).unwrap_or(0.0) + sizing_edges);
         if let Some(intrinsic) = s.layout.min_width_intrinsic {
@@ -2955,26 +3326,29 @@ impl Layout<'_, '_> {
                     height
                 }
             });
-        let ar_content_height =
-            if specified_height.is_none() && !is_table && s.display != Display::TableCell {
-                s.layout.aspect_ratio.map(|ar| {
-                    let raw = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
-                        (width / ar - padding[0] - padding[2]).max(0.0)
-                    } else {
-                        content_w / ar
-                    };
-                    if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
-                        (constrain_height(&s, raw + padding[0] + padding[2], containing_height)
-                            - padding[0]
-                            - padding[2])
-                            .max(0.0)
-                    } else {
-                        constrain_height(&s, raw, containing_height)
-                    }
-                })
-            } else {
-                None
-            };
+        let ar_content_height = if specified_height.is_none()
+            && s.layout.height_intrinsic.is_none()
+            && !is_table
+            && s.display != Display::TableCell
+        {
+            s.layout.aspect_ratio.map(|ar| {
+                let raw = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                    (width / ar - padding[0] - padding[2]).max(0.0)
+                } else {
+                    content_w / ar
+                };
+                if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+                    (constrain_height(&s, raw + padding[0] + padding[2], containing_height)
+                        - padding[0]
+                        - padding[2])
+                        .max(0.0)
+                } else {
+                    constrain_height(&s, raw, containing_height)
+                }
+            })
+        } else {
+            None
+        };
         // The synthetic document represents the initial containing block.
         // Minimum/maximum height alone must not make an auto height definite.
         let child_height = if id == 0 {
@@ -3055,12 +3429,19 @@ impl Layout<'_, '_> {
         } else {
             content_h
         };
-        let h = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
+        let mut h = if s.layout.box_sizing == crate::style::BoxSizing::BorderBox {
             constrain_height(&s, used_height + padding[0] + padding[2], containing_height)
                 .max(padding[0] + padding[2])
         } else {
             constrain_height(&s, used_height, containing_height) + padding[0] + padding[2]
         };
+        let intrinsic_border_h = content_h + padding[0] + padding[2];
+        if s.layout.max_height_intrinsic.is_some() {
+            h = h.min(intrinsic_border_h);
+        }
+        if s.layout.min_height_intrinsic.is_some() {
+            h = h.max(intrinsic_border_h);
+        }
         let h = h.clamp(0.0, MAX_EXTENT);
         let rect = Rect {
             x: bx,
@@ -3092,6 +3473,13 @@ impl Layout<'_, '_> {
             self.scene.border_for(id, rect);
             self.scene.box_for(id, rect);
             self.hit(id, rect);
+            let (sc, sr) = self.self_clip_for(id, rect);
+            if let Some(c) = sc {
+                self.scene.clip(self_start_mark, c);
+            }
+            if let Some(rr) = sr {
+                self.scene.clip_rounded(self_start_mark, rr);
+            }
             if s.layout.position == crate::style::Position::Sticky {
                 self.scene
                     .sticky_ranges
@@ -3104,13 +3492,28 @@ impl Layout<'_, '_> {
         if !self.styles[id].visible {
             return;
         }
-        let s = &self.styles[id];
-        let rounded = has_nonzero_border_radius(s);
-        let bg_offset = if rounded {
-            if let Some(Paint::RoundedDecoration(old, ..)) = self.scene.paints.get_mut(start) {
+        let s = self.styles[id].clone();
+        let mut cursor = start;
+        for (_, sh) in s.box_shadows.iter().enumerate().rev() {
+            if !sh.inset {
+                if let Some(Paint::BoxShadow {
+                    bounds,
+                    border_rect,
+                    ..
+                }) = self.scene.paints.get_mut(cursor)
+                {
+                    *bounds = box_shadow_bounds(r, sh);
+                    *border_rect = r;
+                }
+                cursor += 1;
+            }
+        }
+        let rounded = has_nonzero_border_radius(&s);
+        if rounded {
+            if let Some(Paint::RoundedDecoration(old, ..)) = self.scene.paints.get_mut(cursor) {
                 *old = r;
             }
-            1
+            cursor += 1;
         } else {
             let b = s.border_width;
             let rects = [
@@ -3130,23 +3533,23 @@ impl Layout<'_, '_> {
             ];
             for (i, rect) in rects.into_iter().enumerate() {
                 if let Some(Paint::Rect(old, _) | Paint::Background(old, ..)) =
-                    self.scene.paints.get_mut(start + i)
+                    self.scene.paints.get_mut(cursor + i)
                 {
                     *old = rect;
                 }
             }
-            5
-        };
+            cursor += 5;
+        }
         let bg_rr = rounded
             .then(|| {
-                let outer = resolve_rounded_rect(s, r);
+                let outer = resolve_rounded_rect(&s, r);
                 rounded_background_box(outer, s.border_width, padding, s.background_clip)
             })
             .flatten();
-        for (i, bg) in self.styles[id].background_images.iter().rev().enumerate() {
+        for (i, bg) in s.background_images.iter().rev().enumerate() {
             let w = bg.width.resolve(r.w).unwrap_or(r.w);
             let h = bg.height.resolve(r.h).unwrap_or(w);
-            let idx = start + bg_offset + i;
+            let idx = cursor + i;
             if let Some(Paint::Image(old, ..)) = self.scene.paints.get_mut(idx) {
                 *old = Rect { w, h, ..r };
             }
@@ -3155,6 +3558,21 @@ impl Layout<'_, '_> {
             {
                 slot.clear();
                 slot.push(rr);
+            }
+        }
+        cursor += s.background_images.len();
+        for (_, sh) in s.box_shadows.iter().enumerate().rev() {
+            if sh.inset {
+                if let Some(Paint::BoxShadow {
+                    bounds,
+                    border_rect,
+                    ..
+                }) = self.scene.paints.get_mut(cursor)
+                {
+                    *bounds = box_shadow_bounds(r, sh);
+                    *border_rect = r;
+                }
+                cursor += 1;
             }
         }
     }
@@ -3443,9 +3861,9 @@ impl Layout<'_, '_> {
             out.push(Token::Break(id));
         } else if s.layout.float != crate::style::FloatSide::None {
             out.push(Token::Float(id));
-        } else if node.tag == "svg" && is_block(s.display) {
-            // SVG is a newly admitted replaced element, but an authored block
-            // display must still start a block instead of getting a baseline.
+        } else if matches!(node.tag.as_str(), "svg" | "canvas") && is_block(s.display) {
+            // SVG and canvas are newly admitted replaced elements, and an authored
+            // block display must start a block instead of getting an inline baseline.
             // Keep existing image/native-control inline geometry unchanged.
             out.push(Token::Block(id));
         } else if self.is_replaced(id)
@@ -3564,8 +3982,7 @@ impl Layout<'_, '_> {
         }
         let s = &self.styles[child];
         let has_explicit_w = s.width != Length::Auto
-            || s.layout.width_fit_content
-            || s.layout.width_max_content
+            || s.layout.width_intrinsic.is_some()
             || (s.layout.aspect_ratio.is_some() && height_length(s.height, containing_h).is_some())
             || matches!(s.display, Display::Table | Display::InlineTable);
         let forced = if has_explicit_w {
@@ -3825,8 +4242,7 @@ impl Layout<'_, '_> {
                         let cs = self.styles[child].clone();
                         let is_tbl = matches!(cs.display, Display::Table | Display::InlineTable);
                         let is_auto_w = cs.width == Length::Auto
-                            && !cs.layout.width_fit_content
-                            && !cs.layout.width_max_content
+                            && cs.layout.width_intrinsic.is_none()
                             && !is_tbl
                             && !self.is_replaced(child)
                             && !(cs.layout.aspect_ratio.is_some()
@@ -4063,7 +4479,11 @@ impl Layout<'_, '_> {
         containing_height: Option<f32>,
         depth: usize,
     ) -> f32 {
-        if self.styles[id].layout.width_max_content && !self.is_replaced(id) {
+        if matches!(
+            self.styles[id].layout.width_intrinsic,
+            Some(crate::style::IntrinsicSize::MinContent | crate::style::IntrinsicSize::MaxContent)
+        ) && !self.is_replaced(id)
+        {
             let saved_floats = (self.floats.clone(), self.last_float_top);
             let w = self
                 .block_layout::<false>(id, 0.0, 0.0, width, containing_height, None, depth + 1)
@@ -4077,8 +4497,10 @@ impl Layout<'_, '_> {
         } else if self.is_definite_atomic_inline(id, width, containing_height) {
             self.definite_atomic_inline::<false>(id, 0.0, 0.0, width, containing_height, depth)
                 .0
-        } else if matches!(self.document.nodes[id].tag.as_str(), "img" | "svg")
-            && self.styles[id].width == Length::Auto
+        } else if matches!(
+            self.document.nodes[id].tag.as_str(),
+            "img" | "svg" | "canvas"
+        ) && self.styles[id].width == Length::Auto
         {
             // A definite percentage height can change an image's auto width.
             // Use that same width for wrapping/alignment and for painting.
@@ -4111,8 +4533,7 @@ impl Layout<'_, '_> {
             self.styles[id].display,
             Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
         ) && self.styles[id].width == Length::Auto
-            && !self.styles[id].layout.width_fit_content
-            && !self.styles[id].layout.width_max_content
+            && self.styles[id].layout.width_intrinsic.is_none()
             && !self.is_replaced(id)
             && !self.is_structured_button(id)
     }
@@ -4162,8 +4583,13 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> (f32, f32) {
         let forced = if self.styles[id].width.resolve(width).is_some()
-            || self.styles[id].layout.width_max_content
-        {
+            || matches!(
+                self.styles[id].layout.width_intrinsic,
+                Some(
+                    crate::style::IntrinsicSize::MinContent
+                        | crate::style::IntrinsicSize::MaxContent
+                )
+            ) {
             None
         } else {
             let outer = self.intrinsic(id, depth + 1).max.min(width);
@@ -4196,7 +4622,14 @@ impl Layout<'_, '_> {
                     ascent = ascent.max(self.styles[*node].font_size);
                 }
                 Token::Box(child) => {
-                    if self.styles[*child].layout.width_max_content && !self.is_replaced(*child) {
+                    if matches!(
+                        self.styles[*child].layout.width_intrinsic,
+                        Some(
+                            crate::style::IntrinsicSize::MinContent
+                                | crate::style::IntrinsicSize::MaxContent
+                        )
+                    ) && !self.is_replaced(*child)
+                    {
                         let (_, h) = self.block_layout::<false>(
                             *child,
                             0.0,
@@ -4248,6 +4681,141 @@ impl Layout<'_, '_> {
         }
         (height, ascent)
     }
+    fn ellipsize_line_tokens(
+        &mut self,
+        id: usize,
+        avail_w: f32,
+        containing_height: Option<f32>,
+        tokens: &[Token],
+        depth: usize,
+    ) -> (Vec<Token>, f32) {
+        let block_s = self.styles[id].clone();
+        let ellipsis_w = self
+            .fonts
+            .select_family(&block_s.font_families)
+            .width_weight("\u{2026}", block_s.font_size, block_s.font_weight >= 600);
+        if ellipsis_w >= avail_w {
+            return (
+                vec![Token::Word {
+                    node: id,
+                    text: "\u{2026}".to_owned(),
+                    width: ellipsis_w,
+                }],
+                ellipsis_w,
+            );
+        }
+        let target_w = (avail_w - ellipsis_w).max(0.0);
+        let mut out = Vec::new();
+        let mut acc = 0.0f32;
+        let mut last_node = id;
+        for token in tokens {
+            match token {
+                Token::Word {
+                    node,
+                    text,
+                    width: tw,
+                } => {
+                    last_node = *node;
+                    if acc + *tw <= target_w + 0.01 {
+                        out.push(token.clone());
+                        acc += *tw;
+                    } else {
+                        let ws = self.styles[*node].clone();
+                        let bold = ws.font_weight >= 600;
+                        let mut best = String::new();
+                        let mut best_w = 0.0;
+                        let mut cand = String::new();
+                        for ch in text.chars() {
+                            cand.push(ch);
+                            let cw = self.fonts.select_family(&ws.font_families).width_weight(
+                                &cand,
+                                ws.font_size,
+                                bold,
+                            );
+                            if acc + cw <= target_w + 0.01 {
+                                best.push(ch);
+                                best_w = cw;
+                            } else {
+                                break;
+                            }
+                        }
+                        if !best.is_empty() {
+                            out.push(Token::Word {
+                                node: *node,
+                                text: best,
+                                width: best_w,
+                            });
+                            acc += best_w;
+                        }
+                        break;
+                    }
+                }
+                Token::Space {
+                    node, width: sw, ..
+                } => {
+                    if acc + *sw <= target_w + 0.01 {
+                        last_node = *node;
+                        out.push(token.clone());
+                        acc += *sw;
+                    } else {
+                        break;
+                    }
+                }
+                Token::Gap(gw) => {
+                    if acc + *gw <= target_w + 0.01 {
+                        out.push(token.clone());
+                        acc += *gw;
+                    } else {
+                        break;
+                    }
+                }
+                Token::Box(child) => {
+                    let bw = self.inline_box_width(*child, avail_w, containing_height, depth + 1);
+                    if acc + bw <= target_w + 0.01 {
+                        last_node = *child;
+                        out.push(token.clone());
+                        acc += bw;
+                    } else {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Trim trailing collapsible space right before the ellipsis.
+        while matches!(out.last(), Some(Token::Space { .. })) {
+            if let Some(Token::Space { width: sw, .. }) = out.pop() {
+                acc = (acc - sw).max(0.0);
+            }
+        }
+        if let Some(Token::Word {
+            node: wn,
+            text: wt,
+            width: ww,
+        }) = out.last_mut()
+            && self.document.nodes[*wn].parent == id
+        {
+            acc = (acc - *ww).max(0.0);
+            wt.push('\u{2026}');
+            let ws = &self.styles[*wn];
+            let merged_w = self.fonts.select_family(&ws.font_families).width_weight(
+                wt,
+                ws.font_size,
+                ws.font_weight >= 600,
+            );
+            *ww = merged_w;
+            acc += merged_w;
+        } else {
+            out.push(Token::Word {
+                node: last_node,
+                text: "\u{2026}".to_owned(),
+                width: ellipsis_w,
+            });
+            acc += ellipsis_w;
+        }
+        (out, acc)
+    }
+
     fn line<const EMIT: bool>(
         &mut self,
         id: usize,
@@ -4260,6 +4828,22 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> f32 {
         let (height, ascent) = self.line_metrics(id, width, containing_height, tokens, depth);
+        let ellipsized_storage: Vec<Token>;
+        let (tokens, used) = if EMIT
+            && self.styles[id].text_overflow_ellipsis
+            && !matches!(
+                self.styles[id].layout.overflow[0],
+                crate::style::Overflow::Visible
+            )
+            && used > width + 0.05
+            && width > 0.0
+        {
+            let (t, u) = self.ellipsize_line_tokens(id, width, containing_height, tokens, depth);
+            ellipsized_storage = t;
+            (ellipsized_storage.as_slice(), u)
+        } else {
+            (tokens, used)
+        };
         let is_rtl = self.styles[id].direction == crate::style::TextDirection::Rtl;
         let mut left = x + match (self.styles[id].text_align, is_rtl) {
             (TextAlign::Center, _) => (width - used).max(0.0) / 2.0,
@@ -4305,7 +4889,13 @@ impl Layout<'_, '_> {
                     };
                     let (w, h) = if self.is_replaced(*child) {
                         self.replaced::<EMIT>(*child, left, y, width, containing_height)
-                    } else if self.styles[*child].layout.width_max_content {
+                    } else if matches!(
+                        self.styles[*child].layout.width_intrinsic,
+                        Some(
+                            crate::style::IntrinsicSize::MinContent
+                                | crate::style::IntrinsicSize::MaxContent
+                        )
+                    ) {
                         self.block_layout::<EMIT>(
                             *child,
                             left,
@@ -4406,6 +4996,13 @@ impl Layout<'_, '_> {
             h,
         };
         self.paint_replaced_allocated(id, r, content);
+        let (sc, sr) = self.self_clip_for(id, r);
+        if let Some(c) = sc {
+            self.scene.clip(self_start_mark, c);
+        }
+        if let Some(rr) = sr {
+            self.scene.clip_rounded(self_start_mark, rr);
+        }
         if self.styles[id].layout.position == crate::style::Position::Sticky {
             self.scene
                 .sticky_ranges
@@ -4447,6 +5044,21 @@ impl Layout<'_, '_> {
                         .then(|| (id, node.attr("aria-label").unwrap_or("").to_owned())),
                 ),
             );
+            self.hit(id, r);
+        } else if node.tag == "canvas" {
+            let canvas_url = node
+                .attr("data-mg-canvas")
+                .and_then(|raw| resolve_layout_image_url(&self.document.base_url, raw))
+                .or_else(|| self.image_url(id));
+            if let Some(url) = canvas_url
+                && (self.document.resources.contains_key(&url)
+                    || (url.len() >= 5 && url.as_bytes()[..5].eq_ignore_ascii_case(b"data:")))
+                && content.w > 0.0
+                && content.h > 0.0
+            {
+                self.scene
+                    .paint(id, Paint::Image(content, ImageSource::Resource(url), None));
+            }
             self.hit(id, r);
         } else if node.tag == "img" {
             if let Some(url) = self.image_url(id)
@@ -4640,6 +5252,13 @@ impl Layout<'_, '_> {
         };
         if self.is_replaced(id) {
             self.paint_replaced_allocated(id, r, content);
+            let (self_clip, self_rr) = self.self_clip_for(id, r);
+            if let Some(sc) = self_clip {
+                self.scene.clip(self_start_mark, sc);
+            }
+            if let Some(sr) = self_rr {
+                self.scene.clip_rounded(self_start_mark, sr);
+            }
             if self.styles[id].layout.position == crate::style::Position::Sticky {
                 self.scene
                     .sticky_ranges
@@ -4709,6 +5328,13 @@ impl Layout<'_, '_> {
         }
         self.scene.box_for(id, r);
         self.hit(id, r);
+        let (self_clip, self_rr) = self.self_clip_for(id, r);
+        if let Some(sc) = self_clip {
+            self.scene.clip(self_start_mark, sc);
+        }
+        if let Some(sr) = self_rr {
+            self.scene.clip_rounded(self_start_mark, sr);
+        }
         if self.styles[id].layout.position == crate::style::Position::Sticky {
             self.scene
                 .sticky_ranges
@@ -4849,9 +5475,7 @@ impl Layout<'_, '_> {
                 continue;
             }
             for op in &mut self.scene.paints[start.0..end.0] {
-                let r = op.rect_mut();
-                r.x += dx;
-                r.y += dy;
+                op.shift_by(dx, dy);
             }
             for b in &mut self.scene.boxes[start.1..end.1] {
                 b.x += dx.round() as i32;
@@ -4935,6 +5559,16 @@ impl Layout<'_, '_> {
                         rrs.push(bg_rr);
                     }
                 }
+                if let Some(own_r) = updated_borders.get(owner).copied().flatten() {
+                    let (sc, sr) = self.self_clip_for(owner, own_r);
+                    if let Some(c) = sc {
+                        let c = c.paint_edges();
+                        clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                    }
+                    if let Some(rr) = sr {
+                        rrs.push(rr);
+                    }
+                }
                 let mut anc = if owner == 0 {
                     0
                 } else {
@@ -4949,11 +5583,399 @@ impl Layout<'_, '_> {
                         if let Some(rr) = self.rounded_clip_for(anc, ar) {
                             rrs.push(rr);
                         }
+                        let (sc, sr) = self.self_clip_for(anc, ar);
+                        if let Some(c) = sc {
+                            let c = c.paint_edges();
+                            clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                        }
+                        if let Some(rr) = sr {
+                            rrs.push(rr);
+                        }
                     }
                     anc = self.document.nodes[anc].parent;
                 }
                 self.scene.clips[p] = clip;
                 self.scene.rounded_clips[p] = rrs;
+            }
+        }
+    }
+
+    fn apply_transforms(&mut self) {
+        if self.exhausted || !self.styles.iter().any(|s| s.transform.is_some()) {
+            return;
+        }
+        let n = self.document.nodes.len();
+        self.scene.node_scales = vec![(1.0, 1.0); n];
+
+        let mut postorder = Vec::new();
+        let mut stack = vec![(0usize, false)];
+        while let Some((u, children_done)) = stack.pop() {
+            if children_done {
+                if u != 0
+                    && self.document.nodes[u].tag != "#text"
+                    && self.styles[u].transform.is_some()
+                    && !matches!(
+                        self.styles[u].display,
+                        Display::None
+                            | Display::Contents
+                            | Display::TableColumn
+                            | Display::TableColumnGroup
+                    )
+                    && (self.styles[u].display != Display::Inline || self.is_replaced(u))
+                {
+                    postorder.push(u);
+                }
+            } else {
+                stack.push((u, true));
+                for &child in self.document.nodes[u].children.iter().rev() {
+                    if child < n && self.styles[child].display != Display::None {
+                        stack.push((child, false));
+                    }
+                }
+            }
+        }
+        if postorder.is_empty() {
+            return;
+        }
+
+        let mut border_counts = vec![0u32; n];
+        for &(node, _) in &self.scene.borders {
+            if let Some(c) = border_counts.get_mut(node) {
+                *c += 1;
+            }
+        }
+        let mut box_counts = vec![0u32; n];
+        for b in &self.scene.boxes {
+            if let Some(c) = box_counts.get_mut(b.node) {
+                *c += 1;
+            }
+        }
+
+        let mut any_transformed = vec![false; n];
+        let mut in_subtree = vec![false; n];
+        let mut sub_nodes = Vec::new();
+
+        for id in postorder {
+            let ref_box = self
+                .scene
+                .borders
+                .iter()
+                .rev()
+                .find(|&&(node, _)| node == id)
+                .map(|&(_, br)| br)
+                .or_else(|| {
+                    self.scene
+                        .boxes
+                        .iter()
+                        .rev()
+                        .find(|b| b.node == id)
+                        .map(|b| Rect {
+                            x: b.x as f32,
+                            y: b.y as f32,
+                            w: b.width as f32,
+                            h: b.height as f32,
+                        })
+                });
+            let Some(ref_box) = ref_box else {
+                continue;
+            };
+            let Some(ref tf) = self.styles[id].transform else {
+                continue;
+            };
+            let ox = ref_box.x + tf.origin[0].resolve(ref_box.w).unwrap_or(ref_box.w * 0.5);
+            let oy = ref_box.y + tf.origin[1].resolve(ref_box.h).unwrap_or(ref_box.h * 0.5);
+            let mut sx = 1.0f32;
+            let mut sy = 1.0f32;
+            let mut tx = 0.0f32;
+            let mut ty = 0.0f32;
+            for op in &tf.ops {
+                match *op {
+                    crate::style::TransformOp2D::Translate(lx, ly) => {
+                        let dx = lx.resolve(ref_box.w).unwrap_or(0.0);
+                        let dy = ly.resolve(ref_box.h).unwrap_or(0.0);
+                        tx += sx * dx;
+                        ty += sy * dy;
+                    }
+                    crate::style::TransformOp2D::Scale(kx, ky) => {
+                        sx *= kx;
+                        sy *= ky;
+                    }
+                    crate::style::TransformOp2D::Matrix { a, d, e, f } => {
+                        tx += sx * e;
+                        ty += sy * f;
+                        sx *= a;
+                        sy *= d;
+                    }
+                }
+            }
+            let ax = sx.abs();
+            let ay = sy.abs();
+            let map_rect = |r: Rect| -> Rect {
+                let x0 = ox + sx * (r.x - ox) + tx;
+                let x1 = ox + sx * (r.x + r.w - ox) + tx;
+                let y0 = oy + sy * (r.y - oy) + ty;
+                let y1 = oy + sy * (r.y + r.h - oy) + ty;
+                let rx = x0.min(x1);
+                let ry = y0.min(y1);
+                Rect {
+                    x: rx.clamp(-MAX_EXTENT, MAX_EXTENT),
+                    y: ry.clamp(-MAX_EXTENT, MAX_EXTENT),
+                    w: (x1 - x0).abs().min(MAX_EXTENT * 2.0),
+                    h: (y1 - y0).abs().min(MAX_EXTENT * 2.0),
+                }
+            };
+            let map_edges = |e: [f32; 4]| -> [f32; 4] {
+                let (top, bottom) = if sy < 0.0 {
+                    (e[2] * ay, e[0] * ay)
+                } else {
+                    (e[0] * ay, e[2] * ay)
+                };
+                let (right, left) = if sx < 0.0 {
+                    (e[3] * ax, e[1] * ax)
+                } else {
+                    (e[1] * ax, e[3] * ax)
+                };
+                [top, right, bottom, left]
+            };
+
+            sub_nodes.clear();
+            let mut walk = vec![id];
+            while let Some(v) = walk.pop() {
+                if v < n && !in_subtree[v] {
+                    in_subtree[v] = true;
+                    any_transformed[v] = true;
+                    self.scene.node_scales[v].0 *= ax;
+                    self.scene.node_scales[v].1 *= ay;
+                    sub_nodes.push(v);
+                    for &c in &self.document.nodes[v].children {
+                        walk.push(c);
+                    }
+                }
+            }
+
+            for (p, op) in self.scene.paints.iter_mut().enumerate() {
+                let owner = self.scene.paint_nodes[p];
+                if !in_subtree.get(owner).copied().unwrap_or(false) {
+                    continue;
+                }
+                match op {
+                    Paint::Background(rect, _, padding)
+                    | Paint::RoundedDecoration(rect, _, padding) => {
+                        *rect = map_rect(*rect);
+                        *padding = map_edges(*padding);
+                    }
+                    Paint::BoxShadow {
+                        bounds,
+                        border_rect,
+                        padding,
+                        ..
+                    } => {
+                        *bounds = map_rect(*bounds);
+                        *border_rect = map_rect(*border_rect);
+                        *padding = map_edges(*padding);
+                    }
+                    _ => {
+                        let r = op.rect_mut();
+                        *r = map_rect(*r);
+                    }
+                }
+            }
+            for (node, br) in &mut self.scene.borders {
+                if in_subtree.get(*node).copied().unwrap_or(false) {
+                    *br = map_rect(*br);
+                }
+            }
+            for b in &mut self.scene.boxes {
+                if in_subtree.get(b.node).copied().unwrap_or(false)
+                    && !(border_counts.get(b.node).copied().unwrap_or(0) == 1
+                        && box_counts.get(b.node).copied().unwrap_or(0) == 1)
+                {
+                    let mr = map_rect(Rect {
+                        x: b.x as f32,
+                        y: b.y as f32,
+                        w: b.width as f32,
+                        h: b.height as f32,
+                    });
+                    b.x = mr.x.round() as i32;
+                    b.y = mr.y.round() as i32;
+                    b.width = mr.w.ceil().max(0.0) as u32;
+                    b.height = mr.h.ceil().max(0.0) as u32;
+                }
+            }
+            for (h_idx, (hr, _)) in self.scene.hits.iter_mut().enumerate() {
+                let owner = self.scene.hit_nodes[h_idx];
+                if in_subtree.get(owner).copied().unwrap_or(false) {
+                    *hr = map_rect(*hr);
+                }
+            }
+
+            for &v in &sub_nodes {
+                in_subtree[v] = false;
+            }
+        }
+
+        let mut updated_borders = vec![None; n];
+        for &(node, br) in &self.scene.borders {
+            if let Some(slot) = updated_borders.get_mut(node) {
+                *slot = Some(br);
+            }
+        }
+
+        type NodeClipEntry = (Option<Rect>, Vec<crate::paint::RoundedRect>);
+        let mut node_clips: Vec<Option<NodeClipEntry>> = vec![None; n];
+        {
+            let is_viewport_fixed = |node: usize| -> bool {
+                if node == 0 || self.styles[node].layout.position != crate::style::Position::Fixed {
+                    return false;
+                }
+                let mut p = self.document.nodes[node].parent;
+                while p != 0 {
+                    if self.styles[p].has_transform {
+                        return false;
+                    }
+                    p = self.document.nodes[p].parent;
+                }
+                true
+            };
+            for owner in 0..n {
+                if !any_transformed[owner] {
+                    continue;
+                }
+                let mut clip: Option<Rect> = None;
+                let mut rrs: Vec<crate::paint::RoundedRect> = Vec::new();
+                if let Some(own_r) = updated_borders.get(owner).copied().flatten() {
+                    let (sc, sr) = self.self_clip_for(owner, own_r);
+                    if let Some(c) = sc {
+                        let c = c.paint_edges();
+                        clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                    }
+                    if let Some(rr) = sr {
+                        rrs.push(rr);
+                    }
+                }
+                let mut anc = if owner == 0 || is_viewport_fixed(owner) {
+                    0
+                } else {
+                    self.document.nodes[owner].parent
+                };
+                while anc != 0 {
+                    if let Some(ar) = updated_borders.get(anc).copied().flatten() {
+                        if let Some(c) = self.clip_for(anc, ar) {
+                            let c = c.paint_edges();
+                            clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                        }
+                        if let Some(rr) = self.rounded_clip_for(anc, ar) {
+                            rrs.push(rr);
+                        }
+                        let (sc, sr) = self.self_clip_for(anc, ar);
+                        if let Some(c) = sc {
+                            let c = c.paint_edges();
+                            clip = Some(clip.map_or(c, |prev| prev.intersect(c)));
+                        }
+                        if let Some(rr) = sr {
+                            rrs.push(rr);
+                        }
+                    }
+                    if is_viewport_fixed(anc) {
+                        break;
+                    }
+                    anc = self.document.nodes[anc].parent;
+                }
+                node_clips[owner] = Some((clip, rrs));
+            }
+        }
+
+        for p in 0..self.scene.paints.len() {
+            let owner = self.scene.paint_nodes[p];
+            let Some((clip, base_rrs)) = node_clips.get(owner).and_then(|c| c.as_ref()) else {
+                continue;
+            };
+            let clip = *clip;
+            let mut rrs = base_rrs.clone();
+            if matches!(
+                self.scene.paints[p],
+                Paint::Image(_, ImageSource::Resource(_), None)
+            ) && has_nonzero_border_radius(&self.styles[owner])
+                && let Some(own_r) = updated_borders.get(owner).copied().flatten()
+            {
+                let own_parent_w = if owner == 0 {
+                    own_r.w
+                } else {
+                    updated_borders
+                        .get(self.document.nodes[owner].parent)
+                        .copied()
+                        .flatten()
+                        .map_or(self.viewport.width as f32, |r| r.w)
+                };
+                let (_, own_pad) = self.edges(owner, own_parent_w);
+                let (osx, osy) = self
+                    .scene
+                    .node_scales
+                    .get(owner)
+                    .copied()
+                    .unwrap_or((1.0, 1.0));
+                let bw = self.styles[owner].border_width;
+                let scaled_bw = [bw[0] * osy, bw[1] * osx, bw[2] * osy, bw[3] * osx];
+                let scaled_pad = [
+                    own_pad[0] * osy,
+                    own_pad[1] * osx,
+                    own_pad[2] * osy,
+                    own_pad[3] * osx,
+                ];
+                let outer = resolve_rounded_rect_scaled(&self.styles[owner], own_r, (osx, osy));
+                if let Some(bg_rr) = rounded_background_box(
+                    outer,
+                    scaled_bw,
+                    scaled_pad,
+                    self.styles[owner].background_clip,
+                ) {
+                    rrs.insert(0, bg_rr);
+                }
+            }
+            self.scene.clips[p] = clip;
+            self.scene.rounded_clips[p] = rrs;
+        }
+
+        for b in &mut self.scene.boxes {
+            let Some((rect_clip, _)) = node_clips.get(b.node).and_then(|c| c.as_ref()) else {
+                continue;
+            };
+            let base_r = if border_counts.get(b.node).copied().unwrap_or(0) == 1
+                && box_counts.get(b.node).copied().unwrap_or(0) == 1
+                && let Some(br) = updated_borders.get(b.node).copied().flatten()
+            {
+                br
+            } else {
+                Rect {
+                    x: b.x as f32,
+                    y: b.y as f32,
+                    w: b.width as f32,
+                    h: b.height as f32,
+                }
+            };
+            let final_r = if let Some(c) = *rect_clip {
+                base_r.intersect(c)
+            } else {
+                base_r
+            };
+            b.x = final_r.x.round() as i32;
+            b.y = final_r.y.round() as i32;
+            b.width = final_r.w.ceil().max(0.0) as u32;
+            b.height = final_r.h.ceil().max(0.0) as u32;
+        }
+
+        for (h_idx, (hr, _)) in self.scene.hits.iter_mut().enumerate() {
+            let owner = self.scene.hit_nodes[h_idx];
+            let Some((Some(clip), _)) = node_clips.get(owner).and_then(|c| c.as_ref()) else {
+                continue;
+            };
+            let clip = *clip;
+            if hr.x < clip.x
+                || hr.y < clip.y
+                || hr.x + hr.w > clip.x + clip.w
+                || hr.y + hr.h > clip.y + clip.h
+            {
+                *hr = hr.paint_edges().intersect(clip);
             }
         }
     }
