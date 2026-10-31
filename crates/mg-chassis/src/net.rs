@@ -4,7 +4,7 @@
 //! Cookies stay in memory for one browser session. There is no authentication,
 //! proxy, or HTTP/2 support.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{
@@ -14,6 +14,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime};
 
+use mg_sparkle::page_session::platform::{
+    MAX_STORAGE_QUOTA_BYTES, ScriptFetchRequest, ScriptFetchResponse, StorageOp,
+    base64_decode_forgiving, base64_encode,
+};
 use url::Url;
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
@@ -70,6 +74,7 @@ pub struct Session {
     cookies: Arc<Mutex<CookieJar>>,
     exchanges: Arc<Mutex<VecDeque<ExchangeRecord>>>,
     disable_cache: Arc<AtomicBool>,
+    local_storage: Arc<Mutex<BTreeMap<String, Vec<(String, String)>>>>,
 }
 
 /// Automatic resource authority, separate from top-level navigation and updates.
@@ -133,6 +138,400 @@ impl Session {
         if let Ok(mut jar) = self.cookies.lock() {
             jar.cookies.clear();
         }
+    }
+
+    pub fn clear_local_storage(&self) {
+        if let Ok(mut map) = self.local_storage.lock() {
+            map.clear();
+        }
+    }
+
+    pub fn local_storage_for_origin(&self, url: &str) -> Vec<(String, String)> {
+        let Some(origin) = storage_origin_key(url) else {
+            return Vec::new();
+        };
+        self.local_storage
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&origin).cloned())
+            .unwrap_or_default()
+    }
+
+    pub fn apply_local_storage_ops(&self, url: &str, ops: &[StorageOp]) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(origin) = storage_origin_key(url) else {
+            return;
+        };
+        let Ok(mut map) = self.local_storage.lock() else {
+            return;
+        };
+        if !map.contains_key(&origin) && map.len() >= 256 {
+            return;
+        }
+        let entries = map.entry(origin.clone()).or_default();
+        apply_storage_ops(entries, ops);
+        if entries.is_empty() {
+            map.remove(&origin);
+        }
+    }
+
+    pub fn script_cookie_header(&self, url: &str) -> String {
+        let Ok(parsed) = Url::parse(url) else {
+            return String::new();
+        };
+        if validate_url(&parsed).is_err() {
+            return String::new();
+        }
+        self.cookies
+            .lock()
+            .map(|mut jar| jar.script_header(&parsed))
+            .unwrap_or_default()
+    }
+
+    pub fn set_script_cookie(&self, url: &str, raw_cookie: &str) {
+        let Ok(parsed) = Url::parse(url) else {
+            return;
+        };
+        if validate_url(&parsed).is_err() {
+            return;
+        }
+        if let Ok(mut jar) = self.cookies.lock() {
+            jar.store_from_script(&parsed, raw_cookie);
+        }
+    }
+
+    pub fn fetch_script_same_origin(
+        &self,
+        page_url: &str,
+        req: ScriptFetchRequest,
+    ) -> ScriptFetchResponse {
+        let req_id = req.request_id.max(1);
+        if let Err(err) = req.validate() {
+            return ScriptFetchResponse::network_error(req_id, err);
+        }
+        let Ok(origin) = Url::parse(page_url) else {
+            return ScriptFetchResponse::network_error(req_id, "Invalid document origin");
+        };
+        if let Err(err) = validate_url(&origin) {
+            return ScriptFetchResponse::network_error(req_id, err);
+        }
+        let Ok(mut url) = Url::parse(&req.url) else {
+            return ScriptFetchResponse::network_error(req_id, "Invalid request URL");
+        };
+        if let Err(err) = validate_url(&url) {
+            return ScriptFetchResponse::network_error(req_id, err);
+        }
+        if origin.origin() != url.origin() {
+            return ScriptFetchResponse::network_error(req_id, "Same-origin policy violation");
+        }
+        let mut method = req.method.trim().to_owned();
+        if method.is_empty()
+            || method.len() > 32
+            || !method
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+        {
+            return ScriptFetchResponse::network_error(req_id, "Invalid HTTP method");
+        }
+        for std_m in ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"] {
+            if method.eq_ignore_ascii_case(std_m) {
+                method = std_m.to_owned();
+                break;
+            }
+        }
+        if matches!(
+            method.to_ascii_uppercase().as_str(),
+            "CONNECT" | "TRACE" | "TRACK"
+        ) {
+            return ScriptFetchResponse::network_error(req_id, "Forbidden HTTP method");
+        }
+        let mut body_bytes = match &req.body_b64 {
+            Some(b64) if !b64.is_empty() => match base64_decode_forgiving(b64) {
+                Ok(decoded) if decoded.len() <= 72 * 1024 => Some(decoded),
+                Ok(_) => {
+                    return ScriptFetchResponse::network_error(
+                        req_id,
+                        "Request body exceeds limit",
+                    );
+                }
+                Err(err) => return ScriptFetchResponse::network_error(req_id, err),
+            },
+            _ => None,
+        };
+        if matches!(method.as_str(), "GET" | "HEAD") {
+            body_bytes = None;
+        }
+        let mut custom_headers = Vec::new();
+        for (raw_name, raw_val) in &req.headers {
+            let name = raw_name.trim().to_ascii_lowercase();
+            let val = raw_val.trim();
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+                || val.bytes().any(|b| (b < b' ' && b != b'\t') || b == 127)
+                || is_forbidden_script_request_header(&name)
+            {
+                continue;
+            }
+            custom_headers.push((name, val.to_owned()));
+        }
+
+        let roots =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut config = match crate::tls_client_config(roots) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                return ScriptFetchResponse::network_error(
+                    req_id,
+                    format!("TLS configuration: {err}"),
+                );
+            }
+        };
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let config = Arc::new(config);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let max_body: usize = 1024 * 1024;
+        let no_cache = self.cache_disabled();
+
+        for redirects in 0..=5 {
+            if let Err(err) = validate_url(&url) {
+                return ScriptFetchResponse::network_error(req_id, err);
+            }
+            if origin.origin() != url.origin() {
+                return ScriptFetchResponse::network_error(req_id, "Same-origin policy violation");
+            }
+            let cookie_header = match self.cookies.lock() {
+                Ok(mut jar) => jar.header(&url),
+                Err(_) => return ScriptFetchResponse::network_error(req_id, "Cookie lock failed"),
+            };
+            let req_wire = match script_request_bytes(
+                &method,
+                &url,
+                &custom_headers,
+                body_bytes.as_deref(),
+                &cookie_header,
+                no_cache,
+            ) {
+                Ok(bytes) => bytes,
+                Err(err) => return ScriptFetchResponse::network_error(req_id, err),
+            };
+            let socket = match connect(&url, deadline) {
+                Ok(s) => s,
+                Err(err) => return ScriptFetchResponse::network_error(req_id, err),
+            };
+            let mut stream: Box<dyn Transport> = if url.scheme() == "https" {
+                let hostname = match url.host() {
+                    Some(url::Host::Domain(h)) => h.to_owned(),
+                    Some(url::Host::Ipv4(ip)) => ip.to_string(),
+                    Some(url::Host::Ipv6(ip)) => ip.to_string(),
+                    None => return ScriptFetchResponse::network_error(req_id, "URL has no host"),
+                };
+                let server_name = match rustls::pki_types::ServerName::try_from(hostname) {
+                    Ok(sn) => sn,
+                    Err(err) => {
+                        return ScriptFetchResponse::network_error(
+                            req_id,
+                            format!("Invalid TLS server name: {err}"),
+                        );
+                    }
+                };
+                let client = match rustls::ClientConnection::new(config.clone(), server_name) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        return ScriptFetchResponse::network_error(
+                            req_id,
+                            format!("TLS initialization: {err}"),
+                        );
+                    }
+                };
+                Box::new(rustls::StreamOwned::new(client, socket))
+            } else {
+                Box::new(socket)
+            };
+            if let Err(err) = stream.write_all(&req_wire).and_then(|()| stream.flush()) {
+                return ScriptFetchResponse::network_error(
+                    req_id,
+                    format!("Request write failed: {err}"),
+                );
+            }
+            let is_head = method.eq_ignore_ascii_case("HEAD");
+            let (head, raw_bytes) = match read_response_progress_with_mode(
+                BufReader::new(stream),
+                max_body,
+                is_head,
+                &mut |_, _| {},
+            ) {
+                Ok(res) => res,
+                Err(err) => return ScriptFetchResponse::network_error(req_id, err),
+            };
+
+            if let Ok(mut log) = self.exchanges.lock() {
+                let static_method = match method.as_str() {
+                    "GET" => "GET",
+                    "POST" => "POST",
+                    "PUT" => "PUT",
+                    "DELETE" => "DELETE",
+                    "PATCH" => "PATCH",
+                    "HEAD" => "HEAD",
+                    "OPTIONS" => "OPTIONS",
+                    _ => "FETCH",
+                };
+                let mut req_headers = Vec::new();
+                if let Some(h) = url.host() {
+                    let mut host_val = h.to_string();
+                    if let Some(p) = url.port() {
+                        host_val.push_str(&format!(":{p}"));
+                    }
+                    req_headers.push(("host".into(), host_val));
+                }
+                req_headers.push(("user-agent".into(), USER_AGENT.to_owned()));
+                for (k, v) in &custom_headers {
+                    let logged = if matches!(k.as_str(), "authorization" | "proxy-authorization") {
+                        format!("<redacted {} bytes>", v.len())
+                    } else {
+                        v.chars().take(256).collect()
+                    };
+                    req_headers.push((k.clone(), logged));
+                }
+                if !cookie_header.is_empty() {
+                    req_headers.push((
+                        "cookie".into(),
+                        format!("<redacted {} bytes>", cookie_header.len()),
+                    ));
+                }
+                let resp_headers = head
+                    .headers
+                    .iter()
+                    .take(32)
+                    .map(|(k, v)| {
+                        let val = if matches!(
+                            k.as_str(),
+                            "set-cookie"
+                                | "set-cookie2"
+                                | "authorization"
+                                | "proxy-authorization"
+                                | "www-authenticate"
+                        ) {
+                            format!("<redacted {} bytes>", v.len())
+                        } else {
+                            v.chars().take(256).collect()
+                        };
+                        (k.clone(), val)
+                    })
+                    .collect();
+                if log.len() >= MAX_EXCHANGES {
+                    log.pop_front();
+                }
+                log.push_back(ExchangeRecord {
+                    method: static_method,
+                    url: url.as_str().chars().take(512).collect(),
+                    status: head.status,
+                    request_headers: req_headers,
+                    response_headers: resp_headers,
+                    body_preview: None,
+                });
+            }
+
+            if let Ok(mut jar) = self.cookies.lock() {
+                for (_, value) in head.headers.iter().filter(|(name, _)| name == "set-cookie") {
+                    jar.store(&url, value);
+                }
+            }
+
+            if matches!(head.status, 301 | 302 | 303 | 307 | 308)
+                && let Some(location) = head.header("location")
+            {
+                if redirects == 5 {
+                    return ScriptFetchResponse::network_error(
+                        req_id,
+                        "Redirect limit (5) exceeded",
+                    );
+                }
+                let Ok(next) = url.join(location) else {
+                    return ScriptFetchResponse::network_error(req_id, "Invalid redirect URL");
+                };
+                if let Err(err) = validate_url(&next) {
+                    return ScriptFetchResponse::network_error(req_id, err);
+                }
+                if origin.origin() != next.origin() {
+                    return ScriptFetchResponse::network_error(
+                        req_id,
+                        "Cross-origin redirect blocked by same-origin policy",
+                    );
+                }
+                if head.status == 303
+                    || (matches!(head.status, 301 | 302) && method.eq_ignore_ascii_case("POST"))
+                {
+                    method = "GET".into();
+                    body_bytes = None;
+                    custom_headers.retain(|(k, _)| {
+                        !matches!(
+                            k.as_str(),
+                            "content-type" | "content-language" | "content-location"
+                        )
+                    });
+                }
+                url = next;
+                continue;
+            }
+
+            let decoded = if is_head || raw_bytes.is_empty() {
+                Vec::new()
+            } else {
+                match decode_content_limited(raw_bytes, head.header("content-encoding"), max_body) {
+                    Ok(b) => b,
+                    Err(err) => return ScriptFetchResponse::network_error(req_id, err),
+                }
+            };
+            let had_encoding = head.header("content-encoding").is_some();
+            if let Ok(mut log) = self.exchanges.lock()
+                && let Some(last) = log.back_mut()
+            {
+                let ct = head
+                    .header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_ascii_lowercase();
+                let textual = ct.starts_with("text/")
+                    || ct.contains("javascript")
+                    || ct.contains("ecmascript")
+                    || ct.contains("json")
+                    || ct.contains("xml")
+                    || ct.contains("svg");
+                if textual && !decoded.is_empty() {
+                    let sample = &decoded[..decoded.len().min(32 * 1024)];
+                    last.body_preview = Some(String::from_utf8_lossy(sample).into_owned());
+                }
+            }
+            let exposed_headers: Vec<(String, String)> = head
+                .headers
+                .into_iter()
+                .filter(|(k, _)| {
+                    !matches!(k.as_str(), "set-cookie" | "set-cookie2")
+                        && (!had_encoding
+                            || !matches!(
+                                k.as_str(),
+                                "content-encoding" | "content-length" | "transfer-encoding"
+                            ))
+                })
+                .take(128)
+                .collect();
+            let updated_cookies = Some(self.script_cookie_header(origin.as_str()));
+            return ScriptFetchResponse {
+                request_id: req_id,
+                ok_transport: true,
+                error: None,
+                status: head.status,
+                status_text: head.status_text,
+                final_url: url.as_str().to_owned(),
+                headers: exposed_headers,
+                body_b64: base64_encode(&decoded),
+                updated_cookies,
+            };
+        }
+        ScriptFetchResponse::network_error(req_id, "Redirect limit exceeded")
     }
 
     pub fn fetch(&self, url: &str) -> Result<Response, String> {
@@ -524,6 +923,7 @@ struct Cookie {
     host_only: bool,
     path: String,
     secure: bool,
+    http_only: bool,
     expires: Option<SystemTime>,
 }
 
@@ -535,6 +935,14 @@ impl CookieJar {
     }
 
     fn store(&mut self, url: &Url, header: &str) {
+        self.store_inner(url, header, false);
+    }
+
+    fn store_from_script(&mut self, url: &Url, header: &str) {
+        self.store_inner(url, header, true);
+    }
+
+    fn store_inner(&mut self, url: &Url, header: &str, from_script: bool) {
         if header.len() > MAX_COOKIE_BYTES {
             return;
         }
@@ -575,6 +983,7 @@ impl CookieJar {
             host_only: true,
             path: default_cookie_path(url.path()).to_owned(),
             secure: false,
+            http_only: false,
             expires: None,
         };
         let mut max_age = None;
@@ -606,14 +1015,19 @@ impl CookieJar {
                     explicit_path = true;
                 }
                 "secure" => cookie.secure = true,
+                "httponly" => {
+                    if from_script {
+                        return;
+                    }
+                    cookie.http_only = true;
+                }
                 "max-age" => {
                     max_age = value.trim().parse::<i64>().ok();
                 }
                 "expires" => {
                     cookie.expires = httpdate::parse_http_date(value.trim()).ok();
                 }
-                // Partition keys and script access are outside this transport.
-                // HttpOnly data is never exposed through a scripting API.
+                // Partition keys are outside this transport.
                 "partitioned" => return,
                 _ => {}
             }
@@ -639,6 +1053,18 @@ impl CookieJar {
             };
         }
         self.prune();
+        if from_script
+            && self.cookies.iter().any(|existing| {
+                existing.http_only
+                    && existing.name == cookie.name
+                    && (domain_matches(&existing.domain, &cookie.domain)
+                        || domain_matches(&cookie.domain, &existing.domain))
+                    && (cookie_path_matches(&cookie.path, &existing.path)
+                        || cookie_path_matches(&existing.path, &cookie.path))
+            })
+        {
+            return;
+        }
         // An unencrypted response cannot overwrite a secure cookie of the same
         // name on this domain/path or introduce a more specific shadow cookie.
         if url.scheme() != "https"
@@ -691,6 +1117,14 @@ impl CookieJar {
     }
 
     fn header(&mut self, url: &Url) -> String {
+        self.header_filtered(url, true)
+    }
+
+    fn script_header(&mut self, url: &Url) -> String {
+        self.header_filtered(url, false)
+    }
+
+    fn header_filtered(&mut self, url: &Url, include_http_only: bool) -> String {
         self.prune();
         let Some(host) = url.host_str() else {
             return String::new();
@@ -699,7 +1133,8 @@ impl CookieJar {
             .cookies
             .iter()
             .filter(|cookie| {
-                (!cookie.secure || url.scheme() == "https")
+                (include_http_only || !cookie.http_only)
+                    && (!cookie.secure || url.scheme() == "https")
                     && if cookie.host_only {
                         host == cookie.domain
                     } else {
@@ -724,6 +1159,139 @@ impl CookieJar {
         }
         header
     }
+}
+
+pub fn storage_origin_key(url_str: &str) -> Option<String> {
+    let parsed = Url::parse(url_str).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    Some(match parsed.port() {
+        Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
+        None => format!("{}://{host}", parsed.scheme()),
+    })
+}
+
+pub fn apply_storage_ops(entries: &mut Vec<(String, String)>, ops: &[StorageOp]) {
+    for op in ops {
+        match op {
+            StorageOp::Set { key, value } => {
+                let mut total: usize = entries
+                    .iter()
+                    .filter(|(k, _)| k != key)
+                    .map(|(k, v)| k.len().saturating_add(v.len()))
+                    .sum();
+                total = total.saturating_add(key.len()).saturating_add(value.len());
+                if total > MAX_STORAGE_QUOTA_BYTES {
+                    continue;
+                }
+                if let Some(existing) = entries.iter_mut().find(|(k, _)| k == key) {
+                    existing.1 = value.clone();
+                } else {
+                    entries.push((key.clone(), value.clone()));
+                }
+            }
+            StorageOp::Remove { key } => {
+                entries.retain(|(k, _)| k != key);
+            }
+            StorageOp::Clear => {
+                entries.clear();
+            }
+        }
+    }
+}
+
+fn is_forbidden_script_request_header(lower_name: &str) -> bool {
+    matches!(
+        lower_name,
+        "accept-charset"
+            | "accept-encoding"
+            | "access-control-request-headers"
+            | "access-control-request-method"
+            | "connection"
+            | "content-length"
+            | "cookie"
+            | "cookie2"
+            | "date"
+            | "dnt"
+            | "expect"
+            | "host"
+            | "keep-alive"
+            | "origin"
+            | "referer"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "via"
+            | "user-agent"
+    ) || lower_name.starts_with("proxy-")
+        || lower_name.starts_with("sec-")
+}
+
+fn script_request_bytes(
+    method: &str,
+    url: &Url,
+    custom_headers: &[(String, String)],
+    body: Option<&[u8]>,
+    cookie_header: &str,
+    no_cache: bool,
+) -> Result<Vec<u8>, String> {
+    let mut target = url.path().to_owned();
+    if target.is_empty() {
+        target.push('/');
+    }
+    if let Some(query) = url.query() {
+        target.push('?');
+        target.push_str(query);
+    }
+    let mut host = url.host().ok_or("URL has no host")?.to_string();
+    if let Some(port) = url.port() {
+        host.push_str(&format!(":{port}"));
+    }
+    let has_accept = custom_headers.iter().any(|(k, _)| k == "accept");
+    let has_accept_lang = custom_headers.iter().any(|(k, _)| k == "accept-language");
+    let has_cache_ctrl = custom_headers.iter().any(|(k, _)| k == "cache-control");
+    let mut head =
+        format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\n");
+    if !has_accept {
+        head.push_str("Accept: */*\r\n");
+    }
+    if !has_accept_lang {
+        head.push_str("Accept-Language: en-US,en;q=0.8\r\n");
+    }
+    head.push_str("Accept-Encoding: gzip, deflate, identity\r\nConnection: close\r\n");
+    if no_cache && !has_cache_ctrl {
+        head.push_str("Cache-Control: no-cache\r\nPragma: no-cache\r\n");
+    }
+    for (k, v) in custom_headers {
+        head.push_str(k);
+        head.push_str(": ");
+        head.push_str(v);
+        head.push_str("\r\n");
+    }
+    if !cookie_header.is_empty() {
+        head.push_str("Cookie: ");
+        head.push_str(cookie_header);
+        head.push_str("\r\n");
+    }
+    if let Some(body) = body {
+        head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    } else if matches!(method, "POST" | "PUT" | "PATCH") {
+        head.push_str("Content-Length: 0\r\n");
+    }
+    head.push_str("\r\n");
+    let total = head.len().saturating_add(body.map_or(0, <[u8]>::len));
+    if total > 96 * 1024 {
+        return Err("Script request exceeds 96 KiB wire limit".into());
+    }
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(head.as_bytes());
+    if let Some(body) = body {
+        out.extend_from_slice(body);
+    }
+    Ok(out)
 }
 
 fn cookie_site(domain: &str) -> &[u8] {
@@ -946,6 +1514,7 @@ fn request_bytes_with_options(
 #[derive(Debug)]
 struct Head {
     status: u16,
+    status_text: String,
     headers: Vec<(String, String)>,
 }
 
@@ -996,6 +1565,13 @@ fn read_head(reader: &mut impl BufRead, budget: &mut usize) -> Result<Head, Stri
         return Err("Unsupported HTTP version".into());
     }
     let code = fields.next().ok_or("Missing HTTP status")?;
+    let status_text = fields
+        .next()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(256)
+        .collect::<String>();
     if code.len() != 3 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("Invalid HTTP status".into());
     }
@@ -1039,7 +1615,11 @@ fn read_head(reader: &mut impl BufRead, budget: &mut usize) -> Result<Head, Stri
         }
         headers.push((key, value.trim().to_owned()));
     }
-    Ok(Head { status, headers })
+    Ok(Head {
+        status,
+        status_text,
+        headers,
+    })
 }
 
 #[cfg(test)]
@@ -1053,8 +1633,17 @@ fn read_response_limited(reader: impl BufRead, max_body: usize) -> Result<(Head,
 }
 
 fn read_response_progress(
+    reader: impl BufRead,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(Head, Vec<u8>), String> {
+    read_response_progress_with_mode(reader, max_body, false, progress)
+}
+
+fn read_response_progress_with_mode(
     mut reader: impl BufRead,
     max_body: usize,
+    head_only: bool,
     progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(Head, Vec<u8>), String> {
     let mut budget = MAX_HEADERS;
@@ -1070,7 +1659,7 @@ fn read_response_progress(
         }
         head = read_head(&mut reader, &mut budget)?;
     }
-    if matches!(head.status, 204 | 304) {
+    if head_only || matches!(head.status, 204 | 304) {
         return Ok((head, Vec::new()));
     }
     let mut report = |received, total| {

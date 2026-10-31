@@ -62,6 +62,30 @@ impl ScriptRuntime for LinuxScripts {
         )
         .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
     }
+    fn start_with_platform(
+        &self,
+        request: Request,
+        generation: u64,
+        platform: mg_sparkle::page_session::platform::PlatformInit,
+    ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
+        let effective = if script_worker::legacy_test_mode()
+            || !matches!(
+                self.observer,
+                mg_sparkle::page_session::observer::ObserverInit::Disabled
+            ) {
+            mg_sparkle::page_session::platform::PlatformInit::default()
+        } else {
+            platform
+        };
+        script_worker::Session::start_with_platform(
+            request,
+            generation,
+            self.pool.clone(),
+            self.observer,
+            effective,
+        )
+        .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
+    }
     fn close(&self) {
         self.pool.close();
     }
@@ -88,6 +112,13 @@ impl ScriptSession for script_worker::Session {
         revision: u64,
     ) -> Result<u64, String> {
         self.try_console(command, revision)
+    }
+    fn try_platform(
+        &mut self,
+        command: mg_sparkle::page_session::platform::PlatformCommand,
+        revision: u64,
+    ) -> Result<u64, String> {
+        self.try_platform(command, revision)
     }
     fn take_console(
         &mut self,

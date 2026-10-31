@@ -78,7 +78,7 @@ fn completed_array_ast_storage_allows_the_frozen_real_form() {
         [("source".to_owned(), "fixture".to_owned())]
     );
     assert!(doc.items.iter().any(|item| matches!(item,
-        Item::Input { form: 0, name, value, kind }
+        Item::Input { form: Some(0), name, value, kind }
             if name == "q" && value.is_empty() && kind == "text")));
     assert!(doc.items.iter().any(|item| matches!(item,
         Item::Submit { form: 0, name, value, label }

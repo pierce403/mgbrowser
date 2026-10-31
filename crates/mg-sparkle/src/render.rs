@@ -11,10 +11,14 @@ const BG: u32 = 0xfafbf8;
 const INK: u32 = 0x26342b;
 const LINK: u32 = 0x174ea6;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Input(usize),
     Submit(usize),
+    Click(usize),
+    Toggle(usize),
+    Reset(usize),
+    Select(usize),
     Link { node: usize, href: String },
 }
 #[derive(Clone, Debug)]
@@ -53,6 +57,7 @@ pub struct Viewport {
 #[derive(Default)]
 pub struct Controls<'a> {
     pub values: Option<&'a HashMap<usize, String>>,
+    pub checked: Option<&'a HashMap<usize, bool>>,
     pub focused_input: Option<usize>,
     pub select_all: bool,
     /// Optional `(sel_start_chars, sel_end_chars, caret_chars)` for `focused_input`.
@@ -344,6 +349,7 @@ pub fn render_scaled_cached(
         height: viewport.height,
         scroll: viewport.scroll,
         values: controls.values,
+        checked: controls.checked,
         focused_input: controls.focused_input,
         select_all: controls.select_all,
         input_selection: controls.input_selection,
@@ -366,6 +372,7 @@ struct Renderer<'a> {
     height: u32,
     scroll: i32,
     values: Option<&'a HashMap<usize, String>>,
+    checked: Option<&'a HashMap<usize, bool>>,
     focused_input: Option<usize>,
     select_all: bool,
     input_selection: Option<(usize, usize, usize)>,
@@ -516,6 +523,89 @@ impl Renderer<'_> {
                         c.rect(x, y, w, 36, 0xe0e8f3);
                         c.text(self.fonts, x + 12, y + 7, &label, 16., LINK);
                         self.hit(x, y, w, 36, Action::Submit(node));
+                    }
+                    x += w as i32 + 12;
+                    row = 46;
+                }
+                Item::Button { kind, label, .. } => {
+                    let shown = if label.is_empty() { " " } else { &label };
+                    let w = (self.fonts.width(shown, 16.) as u32 + 28)
+                        .min((right - left).max(80) as u32);
+                    if x > left && x + w as i32 > right {
+                        x = left;
+                        y += 42;
+                    }
+                    self.layout_box(i, x, y, w, 36);
+                    if y + 38 > 0 && y < self.height as i32 - 1 {
+                        c.rect(x, y, w, 36, 0xe0e8f3);
+                        c.text(self.fonts, x + 12, y + 7, &label, 16., LINK);
+                        let action = match kind {
+                            crate::document::ButtonKind::Reset => Action::Reset(node),
+                            crate::document::ButtonKind::Submit => Action::Submit(node),
+                            crate::document::ButtonKind::Button => Action::Click(node),
+                        };
+                        self.hit(x, y, w, 36, action);
+                    }
+                    x += w as i32 + 12;
+                    row = 46;
+                }
+                Item::Toggle { checked, radio, .. } => {
+                    if x + 22 > right {
+                        x = left;
+                        y += row;
+                    }
+                    let is_on = self
+                        .checked
+                        .and_then(|m| m.get(&node).copied())
+                        .unwrap_or(checked);
+                    let by = y + 3;
+                    self.layout_box(i, x, by, 20, 20);
+                    if by + 20 > 0 && by < self.height as i32 - 1 {
+                        c.rect(x, by, 20, 20, 0x666666);
+                        c.rect(x + 2, by + 2, 16, 16, 0xffffff);
+                        if is_on {
+                            if radio {
+                                c.rect(x + 6, by + 6, 8, 8, 0x277453);
+                            } else {
+                                c.rect(x + 4, by + 4, 12, 12, 0x277453);
+                            }
+                        }
+                        self.hit(x, by, 20, 20, Action::Toggle(node));
+                    }
+                    x += 28;
+                    row = row.max(28);
+                }
+                Item::Select {
+                    options, selected, ..
+                } => {
+                    let chosen_label = if let Some(val) = self.values.and_then(|m| m.get(&node)) {
+                        options
+                            .iter()
+                            .find(|o| !o.disabled && o.value == *val)
+                            .or_else(|| options.iter().find(|o| o.value == *val))
+                            .map(|o| o.label.as_str())
+                            .unwrap_or("")
+                    } else {
+                        selected
+                            .and_then(|idx| options.get(idx))
+                            .map(|o| o.label.as_str())
+                            .unwrap_or("")
+                    };
+                    let display = format!("{chosen_label} ▾");
+                    let w = (self.fonts.width(&display, 16.) as u32 + 28)
+                        .clamp(96, (right - left).max(96) as u32);
+                    if x > left && x + w as i32 > right {
+                        x = left;
+                        y += 42;
+                    }
+                    self.layout_box(i, x, y, w, 36);
+                    if y + 38 > 0 && y < self.height as i32 - 1 {
+                        c.rect(x, y, w, 36, 0x9ca79a);
+                        c.rect(x + 2, y + 2, w - 4, 32, 0xffffff);
+                        let trimmed = fit_tail(self.fonts, chosen_label, 16., w as f32 - 32.);
+                        c.text(self.fonts, x + 10, y + 7, &trimmed, 16., INK);
+                        c.text(self.fonts, x + w as i32 - 20, y + 7, "▾", 16., INK);
+                        self.hit(x, y, w, 36, Action::Select(node));
                     }
                     x += w as i32 + 12;
                     row = 46;

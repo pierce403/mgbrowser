@@ -288,11 +288,11 @@ fn function_only_scope_and_receivers_fail_honestly() {
         var rejected=0;
         try{setTimeout('document.title="bad"',0);}catch(e){rejected++;}
         try{setTimeout.call(document,()=>{},0);}catch(e){rejected++;}
-        // Window messages are implemented in v0.9.10; keyboard events remain
-        // outside this bounded event surface. Keep the unsupported-family guard.
-        try{window.addEventListener('keydown',()=>{});}catch(e){rejected++;}
-        if(rejected!==3||typeof setInterval!=='undefined'||typeof clearInterval!=='undefined')throw 'fake scope';
+        try{setInterval('document.title="bad"',0);}catch(e){rejected++;}
+        try{setInterval.call(document,()=>{},0);}catch(e){rejected++;}
+        if(rejected!==4)throw 'fake scope';
         var id=setTimeout.call(null,()=>{},100000);clearTimeout.call(undefined,id);
+        var iv=setInterval.call(null,()=>{},100000);clearInterval.call(undefined,iv);
     "#,
     );
     assert!(init.task_wake.is_none());

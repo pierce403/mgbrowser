@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const MAX_SOURCE: usize = 8 * 1024 * 1024;
-const MAX_NODES: usize = 50_000;
-const MAX_DEPTH: usize = 256;
+pub(crate) const MAX_NODES: usize = 50_000;
+pub(crate) const MAX_DEPTH: usize = 256;
 const MAX_ATTRIBUTE: usize = 16_384;
 const MAX_FORMS: usize = 256;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
@@ -59,6 +59,22 @@ pub enum StylesheetRequest {
     Linked { url: String, media: String },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonKind {
+    Button,
+    Reset,
+    Submit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectOption {
+    pub node: usize,
+    pub label: String,
+    pub value: String,
+    pub disabled: bool,
+    pub selected: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
     Text {
@@ -68,7 +84,7 @@ pub enum Item {
     },
     Break,
     Input {
-        form: usize,
+        form: Option<usize>,
         name: String,
         value: String,
         kind: String,
@@ -78,6 +94,27 @@ pub enum Item {
         name: String,
         value: String,
         label: String,
+    },
+    Toggle {
+        form: Option<usize>,
+        node: usize,
+        name: String,
+        value: String,
+        checked: bool,
+        radio: bool,
+    },
+    Button {
+        form: Option<usize>,
+        node: usize,
+        kind: ButtonKind,
+        label: String,
+    },
+    Select {
+        form: Option<usize>,
+        node: usize,
+        name: String,
+        options: Vec<SelectOption>,
+        selected: Option<usize>,
     },
     Image {
         alt: String,
@@ -133,6 +170,44 @@ impl Document {
             return None;
         }
         resolve(&self.base_url, node.attr("href")?)
+    }
+
+    /// Resolve a `<label>` element's associated labelable control (`for` id in
+    /// the connected document tree, or the first labelable descendant).
+    pub fn label_target(&self, label_id: usize) -> Option<usize> {
+        let label = self.nodes.get(label_id)?;
+        if label.tag != "label" {
+            return None;
+        }
+        if let Some(target_id) = label.attr("for") {
+            if target_id.is_empty() {
+                return None;
+            }
+            let mut stack = vec![0usize];
+            while let Some(id) = stack.pop() {
+                let node = &self.nodes[id];
+                if node.tag == "template" {
+                    continue;
+                }
+                if is_labelable_node(node) && node.attr("id") == Some(target_id) {
+                    return Some(id);
+                }
+                stack.extend(node.children.iter().rev().copied());
+            }
+            return None;
+        }
+        let mut stack: Vec<usize> = label.children.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            let node = &self.nodes[id];
+            if node.tag == "template" {
+                continue;
+            }
+            if is_labelable_node(node) {
+                return Some(id);
+            }
+            stack.extend(node.children.iter().rev().copied());
+        }
+        None
     }
 
     /// Attached, active nodes in tree order. Template contents and scripting-on
@@ -504,16 +579,27 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
         {
             return Err("Invalid script snapshot links/attributes".into());
         }
+        let is_fragment_root = matches!(
+            node.tag.as_str(),
+            "#document-fragment" | "#document-subroot"
+        );
         if node.tag == "#document" && id != 0
+            || is_fragment_root
+                && (id == 0
+                    || node.parent != id
+                    || !node.text.is_empty()
+                    || !node.attributes.is_empty())
             || node.tag == "#text" && (!node.children.is_empty() || !node.attributes.is_empty())
             || node.tag != "#text" && !node.text.is_empty()
             || node.tag.is_empty()
             || node.tag.len() > MAX_ATTRIBUTE
-            || !matches!(node.tag.as_str(), "#text" | "#document")
-                && !node
-                    .tag
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+            || !matches!(
+                node.tag.as_str(),
+                "#text" | "#document" | "#document-fragment" | "#document-subroot"
+            ) && !node
+                .tag
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
         {
             return Err("Invalid script snapshot node kind".into());
         }
@@ -886,6 +972,24 @@ pub(crate) fn has_internal_dtd_or_entity(source: &str) -> bool {
     false
 }
 
+pub(crate) fn parse_xml_nodes(source: &str) -> Result<Vec<Node>, &'static str> {
+    if source.len() > MAX_SOURCE || has_internal_dtd_or_entity(source) {
+        return Err("XML document rejected");
+    }
+    if roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: MAX_NODES as u32,
+        },
+    )
+    .is_err()
+    {
+        return Err("Invalid XML markup");
+    }
+    Ok(build_xml_tree(source))
+}
+
 fn build_xml_tree(source: &str) -> Vec<Node> {
     let mut nodes = vec![Node {
         tag: "#document".to_owned(),
@@ -963,7 +1067,18 @@ fn build_xml_tree(source: &str) -> Vec<Node> {
     nodes
 }
 
+/// Parse an HTML fragment into a raw node arena (`nodes[0]` is `#document` whose
+/// `children` are the fragment's top-level nodes) without synthesizing an
+/// implicit `<body>` wrapper around fragment elements.
+pub fn parse_html_fragment(html: &str) -> Vec<Node> {
+    build_tree_inner(html, false)
+}
+
 fn build_tree(source: &str) -> Vec<Node> {
+    build_tree_inner(source, true)
+}
+
+fn build_tree_inner(source: &str, synthesize_body: bool) -> Vec<Node> {
     let mut end = source.len().min(MAX_SOURCE);
     while !source.is_char_boundary(end) {
         end -= 1;
@@ -1051,7 +1166,13 @@ fn build_tree(source: &str) -> Vec<Node> {
         }
         // A few common optional-end-tag rules keep ordinary malformed pages
         // readable. This does not implement foster parenting or adoption agency.
-        if tag == "li" || tag == "p" || tag == "a" || tag == "button" || tag == "option" {
+        if tag == "optgroup" && stack.last().is_some_and(|id| nodes[*id].tag == "option") {
+            stack.pop();
+        }
+        if matches!(
+            tag.as_str(),
+            "li" | "p" | "a" | "button" | "option" | "optgroup"
+        ) {
             if let Some(index) = stack.iter().rposition(|id| nodes[*id].tag == tag) {
                 stack.truncate(index.max(1));
             }
@@ -1107,7 +1228,8 @@ fn build_tree(source: &str) -> Vec<Node> {
             stack.push(id);
         }
     }
-    if nodes.len() < MAX_NODES
+    if synthesize_body
+        && nodes.len() < MAX_NODES
         && !nodes
             .iter()
             .any(|n| matches!(n.tag.as_str(), "body" | "frameset"))
@@ -1283,6 +1405,16 @@ fn is_void(tag: &str) -> bool {
     )
 }
 
+fn is_labelable_node(node: &Node) -> bool {
+    match node.tag.as_str() {
+        "input" => !node
+            .attr("type")
+            .is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+        "textarea" | "select" | "button" => true,
+        _ => false,
+    }
+}
+
 fn is_block(tag: &str) -> bool {
     matches!(
         tag,
@@ -1294,6 +1426,7 @@ fn is_block(tag: &str) -> bool {
             | "br"
             | "dd"
             | "details"
+            | "dialog"
             | "div"
             | "dl"
             | "dt"
@@ -1424,7 +1557,7 @@ impl Projection<'_> {
         if let Some(name) = self.nodes[id].attr("form") {
             return self.form_ids.get(name).copied();
         }
-        while id != 0 {
+        while id != 0 && self.nodes[id].parent != id {
             if let Some(form) = self.form_nodes.get(&id) {
                 return Some(*form);
             }
@@ -1457,6 +1590,7 @@ impl Projection<'_> {
         }
         let hidden = hidden
             || node.has("hidden")
+            || (node.tag == "dialog" && !node.has("open"))
             || node
                 .attr("aria-hidden")
                 .is_some_and(|s| s.eq_ignore_ascii_case("true"))
@@ -1479,7 +1613,10 @@ impl Projection<'_> {
             if !hidden {
                 let mut source = id;
                 if href.is_some() {
-                    while source != 0 && self.nodes[source].tag != "a" {
+                    while source != 0
+                        && self.nodes[source].parent != source
+                        && self.nodes[source].tag != "a"
+                    {
                         source = self.nodes[source].parent;
                     }
                 }
@@ -1495,9 +1632,31 @@ impl Projection<'_> {
             "input" | "textarea" | "button" | "select"
         ) {
             if !disabled && !node.has("disabled") {
-                if let Some(form) = self.owner(id) {
-                    self.control(id, form, hidden);
-                }
+                self.control(id, self.owner(id), hidden);
+            }
+            return;
+        }
+        if node.tag == "summary" && !hidden && self.nodes[node.parent].tag == "details" {
+            let marker = if self.nodes[node.parent].has("open") {
+                "▾ "
+            } else {
+                "▸ "
+            };
+            self.text(id, marker, href, heading);
+        }
+        if node.tag == "details" && !node.has("open") {
+            let summary = node
+                .children
+                .iter()
+                .copied()
+                .find(|&child| self.nodes[child].tag == "summary");
+            if let Some(summary) = summary {
+                self.walk(summary, href, heading, hidden, disabled);
+            } else if !hidden {
+                self.text(id, "▸ Details", href, heading);
+            }
+            if !hidden && is_block(&node.tag) {
+                self.line_break(id);
             }
             return;
         }
@@ -1523,7 +1682,7 @@ impl Projection<'_> {
         }
     }
 
-    fn control(&mut self, id: usize, form: usize, hidden: bool) {
+    fn control(&mut self, id: usize, form: Option<usize>, hidden: bool) {
         let node = &self.nodes[id];
         let name = node.attr("name").unwrap_or("");
         let value = node.attr("value").unwrap_or("");
@@ -1537,40 +1696,149 @@ impl Projection<'_> {
             .to_ascii_lowercase();
         if node.tag == "select" {
             let mut options = Vec::new();
-            let mut stack = node.children.clone();
-            stack.reverse();
-            while let Some(option) = stack.pop() {
-                let option_node = &self.nodes[option];
-                if option_node.tag == "option" && !option_node.has("disabled") {
-                    options.push(option);
+            let mut stack: Vec<(usize, bool)> =
+                node.children.iter().rev().map(|&c| (c, false)).collect();
+            while let Some((child, group_disabled)) = stack.pop() {
+                let child_node = &self.nodes[child];
+                if child_node.tag == "option" {
+                    let text = collapse(&descendant_text(self.nodes, child))
+                        .trim()
+                        .to_owned();
+                    let label = child_node
+                        .attr("label")
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| text.clone());
+                    let opt_value = child_node
+                        .attr("value")
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| text);
+                    options.push(SelectOption {
+                        node: child,
+                        label,
+                        value: opt_value,
+                        disabled: group_disabled || child_node.has("disabled"),
+                        selected: child_node.has("selected"),
+                    });
                 } else {
-                    stack.extend(option_node.children.iter().rev().copied());
+                    let sub_disabled = group_disabled
+                        || (child_node.tag == "optgroup" && child_node.has("disabled"));
+                    stack.extend(child_node.children.iter().rev().map(|&c| (c, sub_disabled)));
                 }
             }
-            let selected: Vec<_> = options
+            let explicit = options.iter().rposition(|o| o.selected);
+            let selected_idx = explicit.or_else(|| {
+                (!node.has("multiple"))
+                    .then(|| options.iter().position(|o| !o.disabled))
+                    .flatten()
+            });
+            if !node.has("multiple") {
+                for (i, opt) in options.iter_mut().enumerate() {
+                    opt.selected = Some(i) == selected_idx;
+                }
+            }
+            if hidden {
+                if let Some(form_idx) = form {
+                    if node.has("multiple") {
+                        for opt in &options {
+                            if opt.selected && !opt.disabled {
+                                self.field(form_idx, name, &opt.value);
+                            }
+                        }
+                    } else if let Some(idx) = selected_idx
+                        && !options[idx].disabled
+                    {
+                        let v = options[idx].value.clone();
+                        self.field(form_idx, name, &v);
+                    }
+                }
+                return;
+            }
+            let options_cost: usize = options
                 .iter()
-                .copied()
-                .filter(|id| self.nodes[*id].has("selected"))
-                .collect();
-            let selected = if selected.is_empty() && !node.has("multiple") {
-                options.into_iter().take(1).collect()
-            } else {
-                selected
+                .map(|o| o.label.len() + o.value.len() + 24)
+                .sum();
+            if self.charge(name.len() + options_cost + 32) {
+                self.document.items.push(Item::Select {
+                    form,
+                    node: id,
+                    name: name.to_owned(),
+                    options,
+                    selected: selected_idx,
+                });
+                self.document.item_nodes.push(id);
+            }
+            return;
+        }
+        if node.tag == "input" && matches!(kind.as_str(), "checkbox" | "radio") {
+            let checked = node.has("checked");
+            let val = node.attr("value").unwrap_or("on").to_owned();
+            if hidden {
+                if checked && let Some(form_idx) = form {
+                    self.field(form_idx, name, &val);
+                }
+                return;
+            }
+            if self.charge(name.len() + val.len() + 32) {
+                self.document.items.push(Item::Toggle {
+                    form,
+                    node: id,
+                    name: name.to_owned(),
+                    value: val,
+                    checked,
+                    radio: kind == "radio",
+                });
+                self.document.item_nodes.push(id);
+            }
+            return;
+        }
+        if node.tag == "input" && kind == "file" {
+            return;
+        }
+        if node.tag == "button"
+            || (node.tag == "input"
+                && matches!(kind.as_str(), "button" | "reset" | "submit" | "image"))
+        {
+            if hidden {
+                return;
+            }
+            let btn_kind = match kind.as_str() {
+                "button" => ButtonKind::Button,
+                "reset" => ButtonKind::Reset,
+                _ => ButtonKind::Submit,
             };
-            for option in selected {
-                let option_node = &self.nodes[option];
-                let text = collapse(&descendant_text(self.nodes, option));
-                self.field(form, name, option_node.attr("value").unwrap_or(text.trim()));
+            let label = if node.tag == "button" {
+                collapse(&descendant_text(self.nodes, id)).trim().to_owned()
+            } else if !value.is_empty() {
+                value.to_owned()
+            } else {
+                match btn_kind {
+                    ButtonKind::Reset => "Reset".to_owned(),
+                    ButtonKind::Button => String::new(),
+                    ButtonKind::Submit => node.attr("alt").unwrap_or("Submit").to_owned(),
+                }
+            };
+            if btn_kind == ButtonKind::Submit
+                && let Some(form_idx) = form
+            {
+                if self.charge(name.len() + value.len() + label.len() + 32) {
+                    self.document.items.push(Item::Submit {
+                        form: form_idx,
+                        name: name.to_owned(),
+                        value: value.to_owned(),
+                        label,
+                    });
+                    self.document.item_nodes.push(id);
+                }
+            } else if self.charge(label.len() + 32) {
+                self.document.items.push(Item::Button {
+                    form,
+                    node: id,
+                    kind: btn_kind,
+                    label,
+                });
+                self.document.item_nodes.push(id);
             }
-            return;
-        }
-        if matches!(kind.as_str(), "checkbox" | "radio") {
-            if node.has("checked") {
-                self.field(form, name, node.attr("value").unwrap_or("on"));
-            }
-            return;
-        }
-        if matches!(kind.as_str(), "button" | "reset" | "file") {
             return;
         }
         let value = if node.tag == "textarea" {
@@ -1579,29 +1847,12 @@ impl Projection<'_> {
             value.to_owned()
         };
         if kind == "hidden" || hidden {
-            if !matches!(kind.as_str(), "submit" | "image") {
-                self.field(form, name, &value);
+            if let Some(form_idx) = form {
+                self.field(form_idx, name, &value);
             }
             return;
         }
-        if kind == "submit" || kind == "image" {
-            let label = if node.tag == "button" {
-                collapse(&descendant_text(self.nodes, id)).trim().to_owned()
-            } else if value.is_empty() {
-                node.attr("alt").unwrap_or("Submit").to_owned()
-            } else {
-                value.clone()
-            };
-            if self.charge(name.len() + value.len() + label.len() + 32) {
-                self.document.items.push(Item::Submit {
-                    form,
-                    name: name.to_owned(),
-                    value,
-                    label,
-                });
-                self.document.item_nodes.push(id);
-            }
-        } else if self.charge(name.len() + value.len() + kind.len() + 32) {
+        if self.charge(name.len() + value.len() + kind.len() + 32) {
             self.document.items.push(Item::Input {
                 form,
                 name: name.to_owned(),
@@ -1622,13 +1873,16 @@ fn common_ancestor(nodes: &[Node], first: usize, second: usize) -> usize {
     let mut id = first;
     loop {
         ancestors.push(id);
-        if id == 0 {
+        if id == 0 || nodes[id].parent == id {
             break;
         }
         id = nodes[id].parent;
     }
     let mut id = second;
     while !ancestors.contains(&id) {
+        if id == 0 || nodes[id].parent == id {
+            return 0;
+        }
         id = nodes[id].parent;
     }
     id
@@ -1887,7 +2141,7 @@ mod tests {
             }]
         );
         assert!(doc.items.contains(&Item::Input {
-            form: 0,
+            form: Some(0),
             name: "q".to_owned(),
             value: "rust & browsers".to_owned(),
             kind: "text".to_owned()
@@ -1981,16 +2235,40 @@ mod tests {
         );
         assert_eq!(doc.base_url, "https://cdn.example.org/docs/");
         assert_eq!(doc.forms[0].action, "https://example.org/original");
-        assert_eq!(
-            doc.forms[0].fields,
-            [
-                ("a".into(), "1".into()),
-                ("c".into(), "on".into()),
-                ("s".into(), "two".into())
-            ]
-        );
+        assert_eq!(doc.forms[0].fields, [("a".into(), "1".into())]);
+        assert!(doc.items.iter().any(|item| matches!(
+            item,
+            Item::Toggle {
+                form: Some(0),
+                name,
+                value,
+                checked: true,
+                radio: false,
+                ..
+            } if name == "c" && value == "on"
+        )));
+        assert!(doc.items.iter().any(|item| matches!(
+            item,
+            Item::Toggle {
+                form: Some(0),
+                name,
+                checked: false,
+                radio: false,
+                ..
+            } if name == "skip"
+        )));
+        assert!(doc.items.iter().any(|item| matches!(
+            item,
+            Item::Select {
+                form: Some(0),
+                name,
+                selected: Some(1),
+                options,
+                ..
+            } if name == "s" && options.len() == 2 && options[1].value == "two"
+        )));
         assert!(doc.items.contains(&Item::Input {
-            form: 0,
+            form: Some(0),
             name: "q".into(),
             value: "\"rust\"".into(),
             kind: "text".into()

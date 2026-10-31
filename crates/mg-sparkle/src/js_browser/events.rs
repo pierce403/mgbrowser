@@ -78,6 +78,7 @@ impl Kind {
         }
     }
     // The original interpreter's event/serialization contract stays unchanged.
+    #[allow(dead_code)]
     pub(super) fn modern_parse(name: &str) -> Result<Self, String> {
         match name {
             "readystatechange" => Ok(Self::ReadyState),
@@ -89,6 +90,7 @@ impl Kind {
             _ => Self::parse(name),
         }
     }
+    #[allow(dead_code)]
     pub(super) fn modern_property(name: &str) -> Option<Self> {
         match name {
             "onload" => Some(Self::Load),
@@ -647,6 +649,12 @@ impl PageRealm {
             task_wake: None,
             lifecycle: None,
             observer: None,
+            local_storage_ops: Vec::new(),
+            session_storage_ops: Vec::new(),
+            cookie_writes: Vec::new(),
+            history_ops: Vec::new(),
+            fetch_requests: Vec::new(),
+            scroll_request: None,
         };
         if self.closed || self.runtime.is_fatal() {
             self.closed = true;

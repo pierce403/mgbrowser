@@ -34,22 +34,23 @@ use mg_sparkle::{
         LifecycleProgress, RealmState, SessionInput, SessionReply, TaskPump, TaskWake,
         automation::{AutomationRequest, AutomationResult},
         console::{ConsoleCommand, ConsoleResult},
-        observer::{ObserverLedger, ObserverParentFailure, ObserverProgress},
+        observer::{ObserverExpectation, ObserverLedger, ObserverParentFailure, ObserverProgress},
+        platform::{HistoryOp, PlatformInit, ScriptFetchResponse, ScrollRequest, ViewportState},
     },
     paint::{Canvas, Fonts},
 };
 pub(crate) use runtime_automation::AutomationCompletion;
 pub use scale::ScalePreference;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     rc::Rc,
     sync::mpsc,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 pub use theme::{ColorScheme, ThemePreference};
 #[cfg(test)]
@@ -159,6 +160,14 @@ enum Action {
     FindClose,
     Input(usize),
     Submit(usize),
+    PageClick(usize),
+    PageToggle(usize),
+    PageReset(usize),
+    PageSelect(usize),
+    SelectOption {
+        select: usize,
+        index: usize,
+    },
     Link {
         node: usize,
         href: String,
@@ -274,6 +283,16 @@ enum PendingTransaction {
         identity: TransactionIdentity,
         target: ConsoleTarget,
     },
+    Platform {
+        identity: TransactionIdentity,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HistoryMeta {
+    pub(crate) doc_group_id: u64,
+    pub(crate) state_id: Option<u64>,
+    pub(crate) state_json: Option<String>,
 }
 /// Owned default selected from the validated candidate, never looked up again
 /// after its projection commits. FollowLink receives final URL policy before
@@ -380,6 +399,11 @@ pub struct Browser {
     automation_session: Option<(u64, u64)>,
     console_detached_dom: bool,
     queued_console: VecDeque<(ConsoleCommand, ConsoleTarget)>,
+    queued_platform: VecDeque<scripts::PlatformCommand>,
+    session_storage: Arc<Mutex<BTreeMap<String, Vec<(String, String)>>>>,
+    script_fetch_tx: mpsc::Sender<(u64, u64, ScriptFetchResponse)>,
+    script_fetch_rx: mpsc::Receiver<(u64, u64, ScriptFetchResponse)>,
+    script_fetch_inflight: usize,
     task_wake: Option<ScheduledTaskWake>,
     last_task_wake_token: u64,
     script_blocked: bool,
@@ -390,6 +414,8 @@ pub struct Browser {
     edit_versions: HashMap<usize, u64>,
     next_edit: u64,
     values: HashMap<usize, String>,
+    checked: HashMap<usize, bool>,
+    open_select: Option<usize>,
     hits: Vec<Hit>,
     pointer_press: Option<(i32, i32)>,
     pointer_press_ctrl: bool,
@@ -402,7 +428,10 @@ pub struct Browser {
     smooth_scroll: Option<scroll::ScrollMotion>,
     content_height: i32,
     history: Vec<String>,
+    history_meta: Vec<HistoryMeta>,
     history_at: usize,
+    next_doc_group_id: u64,
+    active_doc_group_id: u64,
     generation: u64,
     inflight: usize,
     resource_generation: Arc<AtomicU64>,
@@ -476,6 +505,7 @@ impl Browser {
         self.stop_scroll();
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.scroll_reflow_pending = true;
+        self.open_select = None;
         self.hits.clear();
         self.boxes.clear();
         self.pointer_press = None;
@@ -876,6 +906,7 @@ impl Browser {
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (dl_tx, dl_rx) = mpsc::channel();
+        let (script_fetch_tx, script_fetch_rx) = mpsc::channel();
         Self {
             devtools: devtools::State::default(),
             selection: clipboard::SelectionState::default(),
@@ -940,6 +971,8 @@ impl Browser {
                 )
             },
             values: HashMap::new(),
+            checked: HashMap::new(),
+            open_select: None,
             page_url: "about:blank".into(),
             page_mime: "text/html".into(),
             page_loader: 0,
@@ -959,6 +992,11 @@ impl Browser {
             automation_session: None,
             console_detached_dom: false,
             queued_console: VecDeque::new(),
+            queued_platform: VecDeque::new(),
+            session_storage: Arc::new(Mutex::new(BTreeMap::new())),
+            script_fetch_tx,
+            script_fetch_rx,
+            script_fetch_inflight: 0,
             task_wake: None,
             last_task_wake_token: 0,
             script_blocked: false,
@@ -984,7 +1022,10 @@ impl Browser {
             smooth_scroll: None,
             content_height: 0,
             history: Vec::new(),
+            history_meta: Vec::new(),
             history_at: 0,
+            next_doc_group_id: 0,
+            active_doc_group_id: 0,
             generation: 0,
             resource_generation: Arc::new(AtomicU64::new(0)),
             inflight: 0,
@@ -1092,6 +1133,7 @@ impl Browser {
         self.pending_transaction = None;
         self.console_detached_dom = false;
         self.queued_console.clear();
+        self.queued_platform.clear();
         self.task_wake = None;
         self.last_task_wake_token = 0;
         self.pointer_press = None;
@@ -1114,13 +1156,34 @@ impl Browser {
         if !automatic {
             self.refresh_count = 0;
         }
+        self.next_doc_group_id += 1;
+        let doc_group = self.next_doc_group_id;
+        self.active_doc_group_id = doc_group;
+        self.sync_history_meta_len();
         if add_history {
             if !self.history.is_empty() {
                 self.history.truncate(self.history_at + 1);
+                self.history_meta.truncate(self.history_at + 1);
             }
             self.history.push(target.clone());
+            self.history_meta.push(HistoryMeta {
+                doc_group_id: doc_group,
+                state_id: None,
+                state_json: None,
+            });
             self.history_at = self.history.len() - 1;
+        } else if let Some(meta) = self.history_meta.get_mut(self.history_at) {
+            meta.doc_group_id = doc_group;
+            meta.state_id = None;
         }
+        let history_length = self.history.len().max(1);
+        let history_state_json = self
+            .history_meta
+            .get(self.history_at)
+            .and_then(|m| m.state_json.clone());
+        let mut initial_viewport = self.current_viewport_state();
+        initial_viewport.scroll_y = 0.0;
+        let session_storage = self.session_storage.clone();
         let generation = self.generation;
         let tx = self.tx.clone();
         let session = self.session.clone();
@@ -1192,14 +1255,39 @@ impl Browser {
             let script = match (result.as_ref().ok(), decoded_script_html) {
                 (Some(response), Some(html)) => {
                     let worker_started = Instant::now();
+                    let platform_init = if source_wire_mode == scripts::SourceWireMode::Modern
+                        && !observer_active
+                    {
+                        let page_url_str = response.url.as_str();
+                        let sess_entries = net::storage_origin_key(page_url_str)
+                            .and_then(|k| {
+                                session_storage.lock().ok().and_then(|g| g.get(&k).cloned())
+                            })
+                            .unwrap_or_default();
+                        PlatformInit {
+                            local_storage: session.local_storage_for_origin(page_url_str),
+                            session_storage: sess_entries,
+                            initial_cookies: session.script_cookie_header(page_url_str),
+                            viewport: initial_viewport,
+                            history_length,
+                            history_state_json,
+                            time_origin_ms: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs_f64() * 1000.0)
+                                .unwrap_or(0.0),
+                        }
+                    } else {
+                        PlatformInit::default()
+                    };
                     let started = pool
-                        .start(
+                        .start_with_platform(
                             mg_sparkle::js_browser::Request {
                                 url: response.url.to_string(),
                                 html,
                                 external_scripts,
                             },
                             generation,
+                            platform_init,
                         )
                         .map(|(session, reply)| ScriptLoad {
                             session: Some(session),
@@ -1275,10 +1363,13 @@ impl Browser {
             self.scroll = 0;
             self.stop_scroll();
             self.values.clear();
+            self.checked.clear();
+            self.open_select = None;
             self.edit_versions.clear();
             self.pending_transaction = None;
             self.console_detached_dom = false;
             self.queued_console.clear();
+            self.queued_platform.clear();
             self.task_wake = None;
             self.last_task_wake_token = 0;
             self.page_revision = 0;
@@ -1297,6 +1388,7 @@ impl Browser {
             self.last_load_ok = false;
             let mut load_error = None;
             let mut script_navigation = None;
+            let mut startup_platform_reply: Option<(u64, SessionReply)> = None;
             // Failed fetches are measured too; a failed navigation is not a
             // zero-duration load. Keep profiling independent of response status.
             self.devtools.performance.fetch_html_ms = loaded.fetch_html_ms;
@@ -1365,6 +1457,7 @@ impl Browser {
                             && self.history[self.history_at] != self.page_url
                         {
                             self.history.pop();
+                            self.history_meta.truncate(self.history.len());
                             self.history_at = self.history.len() - 1;
                         }
                         self.enqueue_loaded_download(
@@ -1489,14 +1582,19 @@ impl Browser {
                                                 == Some(ObserverProgress::Finished)
                                         });
                                     self.script_blocked |= observer_finished;
+                                    let summary = self.script_summary(&startup.reply);
                                     if !self.script_blocked {
                                         script_navigation = startup.reply.navigation.take();
-                                        self.page_session = startup.session.take();
+                                        let session = startup.session.take();
+                                        if let Some(s) = &session {
+                                            startup_platform_reply = Some((s.id(), startup.reply));
+                                        }
+                                        self.page_session = session;
                                         self.replace_task_wake(wake);
                                     } else if let Some(session) = &startup.session {
                                         session.cancel();
                                     }
-                                    self.script_summary(&startup.reply)
+                                    summary
                                 }
                                 Err(error) => {
                                     if let Some(ledger) = &mut self.observer_ledger {
@@ -1629,6 +1727,10 @@ impl Browser {
             }
             self.page_url = self.address.clone();
             self.page_loader = loaded.generation;
+            let mut startup_history_go = None;
+            if let Some((sid, mut init_reply)) = startup_platform_reply {
+                startup_history_go = self.apply_platform_deltas(sid, &mut init_reply);
+            }
             self.dom_epoch += 1;
             if self.devtools.open
                 && self.devtools.selected.is_none()
@@ -1672,14 +1774,20 @@ impl Browser {
                 } else {
                     self.block_session("Automatic navigation limit reached; navigation stopped");
                 }
+            } else if let Some(delta) = startup_history_go {
+                self.traverse_history_by(delta);
             }
         }
         self.poll_page_session();
+        self.poll_script_fetches();
         // Let initial-load consumers observe the accepted load milestone
         // before starting unrelated load-created zero-delay work. Ordinary
         // native polling resumes it on the next tick, including hidden tabs.
         if !was_loading || self.loading {
             self.poll_task_wake(Instant::now());
+        }
+        if !was_loading || !self.loading {
+            self.pump_queued_platform();
         }
     }
     fn script_summary(&mut self, reply: &SessionReply) -> String {
@@ -1838,6 +1946,320 @@ impl Browser {
                 (id == node && matches!(self.document.items[i], Item::Input { .. })).then_some(i)
             })
     }
+    fn editable_value_item(&self, node: usize) -> Option<usize> {
+        self.document
+            .item_nodes
+            .iter()
+            .enumerate()
+            .find_map(|(i, &id)| {
+                (id == node
+                    && matches!(
+                        self.document.items[i],
+                        Item::Input { .. } | Item::Select { .. }
+                    ))
+                .then_some(i)
+            })
+    }
+    fn point_in_page_viewport(&self, x: i32, y: i32) -> bool {
+        x >= 0
+            && x < self.page_viewport_width() as i32
+            && y >= self.page_top()
+            && y < self.page_top() + self.viewport_height() as i32
+    }
+    pub(crate) fn select_dropdown_layout(
+        &self,
+        select_node: usize,
+    ) -> Option<(
+        i32,
+        i32,
+        u32,
+        u32,
+        Vec<document::SelectOption>,
+        Option<usize>,
+    )> {
+        let item_idx = self
+            .document
+            .item_nodes
+            .iter()
+            .position(|&id| id == select_node)?;
+        let Item::Select {
+            options, selected, ..
+        } = self.document.items.get(item_idx)?
+        else {
+            return None;
+        };
+        if self
+            .document
+            .nodes
+            .get(select_node)
+            .is_none_or(|n| n.has("disabled"))
+            || options.is_empty()
+        {
+            return None;
+        }
+        let anchor = self
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::PageSelect(n) if n == select_node))
+            .map(|h| (h.x, h.y, h.w, h.h))
+            .or_else(|| {
+                self.boxes
+                    .iter()
+                    .find(|b| b.node == select_node)
+                    .map(|b| (b.x, b.y, b.width, b.height))
+            })?;
+        let (bx, by, bw, bh) = anchor;
+        let row_h = 26u32;
+        let page_w = self.page_viewport_width();
+        let drop_w = bw.max(140).min(page_w.max(1));
+        let drop_x = bx.clamp(0, (page_w as i32 - drop_w as i32).max(0));
+        let ptop = self.page_top();
+        let view_h = self.viewport_height() as i32;
+        let total_h = (options.len() as i32) * (row_h as i32) + 2;
+        let below_y = by + bh as i32;
+        let drop_y = if below_y + total_h <= ptop + view_h || by - ptop < total_h {
+            below_y.min((ptop + view_h - total_h).max(ptop))
+        } else {
+            (by - total_h).max(ptop)
+        };
+        let active_selected = if let Some(val) = self.values.get(&select_node) {
+            options
+                .iter()
+                .position(|o| !o.disabled && &o.value == val)
+                .or(*selected)
+        } else {
+            *selected
+        };
+        Some((
+            drop_x,
+            drop_y,
+            drop_w,
+            row_h,
+            options.clone(),
+            active_selected,
+        ))
+    }
+    fn toggle_control_local(&mut self, node: usize) {
+        let Some(item_idx) = self.document.item_nodes.iter().position(|&id| id == node) else {
+            return;
+        };
+        let Some(Item::Toggle {
+            form,
+            name,
+            checked,
+            radio,
+            ..
+        }) = self.document.items.get(item_idx).cloned()
+        else {
+            return;
+        };
+        if self
+            .document
+            .nodes
+            .get(node)
+            .is_none_or(|n| n.has("disabled"))
+        {
+            return;
+        }
+        let cur = self.checked.get(&node).copied().unwrap_or(checked);
+        if radio {
+            if !cur {
+                if !name.is_empty() {
+                    let peers: Vec<usize> = self
+                        .document
+                        .items
+                        .iter()
+                        .zip(&self.document.item_nodes)
+                        .filter_map(|(it, &peer_id)| match it {
+                            Item::Toggle {
+                                form: pf,
+                                name: pn,
+                                radio: true,
+                                ..
+                            } if *pf == form && pn == &name && peer_id != node => Some(peer_id),
+                            _ => None,
+                        })
+                        .collect();
+                    for peer in peers {
+                        self.checked.insert(peer, false);
+                    }
+                }
+                self.checked.insert(node, true);
+            }
+        } else {
+            self.checked.insert(node, !cur);
+        }
+    }
+    fn reset_form_for_button(&mut self, button_node: usize) {
+        if self
+            .document
+            .nodes
+            .get(button_node)
+            .is_none_or(|n| n.has("disabled"))
+        {
+            return;
+        }
+        let Some(item_idx) = self
+            .document
+            .item_nodes
+            .iter()
+            .position(|&id| id == button_node)
+        else {
+            return;
+        };
+        let form = match self.document.items.get(item_idx) {
+            Some(Item::Button {
+                form: Some(f),
+                kind: document::ButtonKind::Reset,
+                ..
+            }) => *f,
+            _ => return,
+        };
+        let to_clear: Vec<usize> = self
+            .document
+            .items
+            .iter()
+            .zip(&self.document.item_nodes)
+            .filter_map(|(it, &id)| match it {
+                Item::Input { form: Some(f), .. }
+                | Item::Toggle { form: Some(f), .. }
+                | Item::Select { form: Some(f), .. }
+                    if *f == form =>
+                {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in to_clear {
+            self.values.remove(&id);
+            self.checked.remove(&id);
+            self.edit_versions.remove(&id);
+        }
+    }
+    fn reproject_local_document(&mut self) {
+        let stylesheets = std::mem::take(&mut self.document.stylesheets);
+        let resources = std::mem::take(&mut self.document.resources);
+        let resource_warnings = std::mem::take(&mut self.document.resource_warnings);
+        let nodes = std::mem::take(&mut self.document.nodes);
+        if let Ok(mut projected) = document::project_nodes(nodes, &self.page_url) {
+            projected.stylesheets = stylesheets;
+            projected.resources = resources;
+            projected.resource_warnings = resource_warnings;
+            self.document = projected;
+            self.dom_epoch += 1;
+            self.style_cache.clear();
+            self.frame_cache = None;
+            self.scroll_reflow_pending = true;
+            self.pointer_press = None;
+            self.selection.active_drag = None;
+            self.dirty = true;
+        }
+    }
+    fn native_click_fallback(&mut self, start_node: usize) -> Result<(), String> {
+        self.native_click_fallback_depth(start_node, 0)
+    }
+    fn native_click_fallback_depth(&mut self, start_node: usize, depth: u8) -> Result<(), String> {
+        if depth > 4 || start_node == 0 || start_node >= self.document.nodes.len() {
+            return Ok(());
+        }
+        let mut cur = start_node;
+        for _ in 0..=256 {
+            let Some(node) = self.document.nodes.get(cur) else {
+                break;
+            };
+            if node.tag == "summary" {
+                let parent = node.parent;
+                if let Some(details) = self.document.nodes.get(parent)
+                    && details.tag == "details"
+                    && details
+                        .children
+                        .iter()
+                        .copied()
+                        .find(|&cid| self.document.nodes[cid].tag == "summary")
+                        == Some(cur)
+                {
+                    let has_open = details.attr("open").is_some();
+                    let details_mut = &mut self.document.nodes[parent];
+                    if has_open {
+                        details_mut
+                            .attributes
+                            .retain(|(k, _)| !k.eq_ignore_ascii_case("open"));
+                    } else {
+                        details_mut.attributes.push(("open".into(), String::new()));
+                    }
+                    self.reproject_local_document();
+                    return Ok(());
+                }
+            } else if node.tag == "label" {
+                if let Some(target) = self.document.label_target(cur)
+                    && target != cur
+                {
+                    if self.input_item(target).is_some() {
+                        return self.activate_checked(Action::Input(target));
+                    }
+                    if let Some(idx) = self.document.item_nodes.iter().position(|&id| id == target)
+                    {
+                        match &self.document.items[idx] {
+                            Item::Toggle { .. } => {
+                                return self.activate_checked(Action::PageToggle(target));
+                            }
+                            Item::Select { .. } => {
+                                return self.activate_checked(Action::PageSelect(target));
+                            }
+                            Item::Submit { .. } => {
+                                return self.activate_checked(Action::Submit(target));
+                            }
+                            Item::Button {
+                                kind: document::ButtonKind::Submit,
+                                ..
+                            } => {
+                                return self.activate_checked(Action::Submit(target));
+                            }
+                            Item::Button {
+                                kind: document::ButtonKind::Reset,
+                                ..
+                            } => {
+                                return self.activate_checked(Action::PageReset(target));
+                            }
+                            Item::Button {
+                                kind: document::ButtonKind::Button,
+                                ..
+                            } => {
+                                return self.native_click_fallback_depth(target, depth + 1);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            if cur == 0 || node.parent == cur {
+                break;
+            }
+            cur = node.parent;
+        }
+        Ok(())
+    }
+    fn dispatch_arbitrary_page_click(&mut self, x: i32, y: i32) -> Result<(), String> {
+        if self.loading
+            || self.script_blocked
+            || self.pending_transaction.is_some()
+            || self.automation_completion.is_some()
+        {
+            return Ok(());
+        }
+        let Some(node) = self.inspected_node_at(x, y) else {
+            return Ok(());
+        };
+        if node == 0 {
+            return Ok(());
+        }
+        if !self.dispatch_page(InputKind::Click { target: node })? {
+            self.native_click_fallback(node)?;
+        }
+        Ok(())
+    }
     fn block_session(&mut self, error: &str) {
         self.devtools.record("JavaScript session", error);
         if let Some(session) = &self.page_session {
@@ -1846,6 +2268,7 @@ impl Browser {
         self.finish_automation(Err(error.into()), scripts::SessionContinuation::Terminal);
         self.pending_transaction = None;
         self.queued_console.clear();
+        self.queued_platform.clear();
         self.task_wake = None;
         self.script_blocked = true;
         self.fetching = false;
@@ -1991,6 +2414,310 @@ impl Browser {
             }
         }
     }
+    pub(crate) fn sync_history_meta_len(&mut self) {
+        if self.history_meta.len() < self.history.len() {
+            self.history_meta
+                .resize(self.history.len(), HistoryMeta::default());
+        } else if self.history_meta.len() > self.history.len() {
+            self.history_meta.truncate(self.history.len());
+        }
+    }
+    fn current_viewport_state(&self) -> ViewportState {
+        ViewportState {
+            inner_width: self.page_viewport_width(),
+            inner_height: self.viewport_height(),
+            scroll_x: 0.0,
+            scroll_y: self.scroll.max(0) as f32,
+            device_pixel_ratio: self.effective_scale(),
+        }
+    }
+    fn same_origin_http(base: &str, candidate: &str) -> bool {
+        if candidate.len() > 16_384 {
+            return false;
+        }
+        let (Ok(b), Ok(c)) = (url::Url::parse(base), url::Url::parse(candidate)) else {
+            return false;
+        };
+        matches!(b.scheme(), "http" | "https")
+            && matches!(c.scheme(), "http" | "https")
+            && c.username().is_empty()
+            && c.password().is_none()
+            && b.origin().is_tuple()
+            && b.origin() == c.origin()
+    }
+    fn can_use_platform_commands(&self) -> bool {
+        self.page_session.is_some()
+            && !self.fetching
+            && !self.script_blocked
+            && self.child_pool.source_wire_mode() == scripts::SourceWireMode::Modern
+            && matches!(
+                self.child_pool.observer_expectation(),
+                ObserverExpectation::Disabled
+            )
+    }
+    fn enqueue_platform_command(&mut self, cmd: scripts::PlatformCommand) {
+        if self.queued_platform.len() >= 32 {
+            return;
+        }
+        self.queued_platform.push_back(cmd);
+        self.pump_queued_platform();
+    }
+    pub(crate) fn pump_queued_platform(&mut self) {
+        if self.queued_platform.is_empty()
+            || self.fetching
+            || self.script_blocked
+            || self.pending_transaction.is_some()
+            || self.automation_completion.is_some()
+        {
+            return;
+        }
+        if self
+            .lifecycle
+            .is_some_and(|lc| lc.phase != LifecyclePhase::LoadComplete)
+            && self.task_wake.is_some()
+        {
+            self.poll_task_wake(Instant::now());
+            return;
+        }
+        let Some(cmd) = self.queued_platform.pop_front() else {
+            return;
+        };
+        let Some(session) = self.page_session.as_mut() else {
+            return;
+        };
+        let session_id = session.id();
+        match session.try_platform(cmd, self.page_revision) {
+            Ok(sequence) => {
+                self.task_wake = None;
+                self.pending_transaction = Some(PendingTransaction::Platform {
+                    identity: TransactionIdentity {
+                        generation: self.generation,
+                        session_id,
+                        sequence,
+                        revision: self.page_revision,
+                    },
+                });
+                self.dirty = true;
+            }
+            Err(error) => {
+                if let Some(ledger) = &mut self.observer_ledger {
+                    ledger.fail_parent(ObserverParentFailure::Transport);
+                }
+                self.block_session(&error);
+            }
+        }
+    }
+    fn poll_script_fetches(&mut self) {
+        let mut received_any = false;
+        while let Ok((rx_gen, sid, response)) = self.script_fetch_rx.try_recv() {
+            self.script_fetch_inflight = self.script_fetch_inflight.saturating_sub(1);
+            received_any = true;
+            if rx_gen == self.generation
+                && !self.script_blocked
+                && self.page_session.as_ref().is_some_and(|s| s.id() == sid)
+                && self.can_use_platform_commands()
+                && self.queued_platform.len() < 32
+            {
+                self.queued_platform
+                    .push_back(scripts::PlatformCommand::FetchComplete { response });
+            }
+        }
+        if received_any {
+            self.devtools
+                .sync_network_exchanges(&self.session.recent_exchanges());
+            self.dirty = true;
+        }
+    }
+    fn apply_platform_deltas(&mut self, session_id: u64, reply: &mut SessionReply) -> Option<i32> {
+        if !reply.local_storage_ops.is_empty() {
+            self.session
+                .apply_local_storage_ops(&self.page_url, &reply.local_storage_ops);
+        }
+        if !reply.session_storage_ops.is_empty()
+            && let Some(key) = net::storage_origin_key(&self.page_url)
+            && let Ok(mut guard) = self.session_storage.lock()
+        {
+            let entries = guard.entry(key).or_default();
+            net::apply_storage_ops(entries, &reply.session_storage_ops);
+        }
+        for raw in &reply.cookie_writes {
+            let _ = self.session.set_script_cookie(&self.page_url, raw);
+        }
+        if let Some(scroll_req) = reply.scroll_request.take()
+            && reply.navigation.is_none()
+        {
+            self.stop_scroll();
+            match scroll_req {
+                ScrollRequest::Absolute { y, .. } => {
+                    self.scroll = (y.round() as i32).max(0);
+                    self.dirty = true;
+                }
+                ScrollRequest::By { dy, .. } => {
+                    self.scroll = self.scroll.saturating_add(dy.round() as i32).max(0);
+                    self.dirty = true;
+                }
+                ScrollRequest::IntoView { node, align_top } => {
+                    let found = self
+                        .boxes
+                        .iter()
+                        .find(|b| b.node == node)
+                        .map(|b| ((b.y - self.page_top()) + self.scroll, b.height as i32));
+                    if let Some((doc_y, h)) = found {
+                        self.scroll = if align_top {
+                            doc_y.max(0)
+                        } else {
+                            (doc_y + h - self.viewport_height() as i32).max(0)
+                        };
+                        self.dirty = true;
+                    }
+                }
+            }
+        }
+        let mut pending_go = None;
+        if !reply.history_ops.is_empty() {
+            self.sync_history_meta_len();
+            if self.history.is_empty()
+                && !self.page_url.is_empty()
+                && self.page_url != "about:blank"
+            {
+                self.history.push(self.page_url.clone());
+                self.history_meta.push(HistoryMeta {
+                    doc_group_id: self.active_doc_group_id,
+                    state_id: None,
+                    state_json: None,
+                });
+                self.history_at = 0;
+            }
+            for op in std::mem::take(&mut reply.history_ops) {
+                match op {
+                    HistoryOp::PushState {
+                        url,
+                        state_id,
+                        state_json,
+                    } => {
+                        if Self::same_origin_http(&self.page_url, &url) {
+                            if !self.history.is_empty() {
+                                self.history.truncate(self.history_at + 1);
+                                self.history_meta.truncate(self.history_at + 1);
+                            }
+                            self.history.push(url.clone());
+                            self.history_meta.push(HistoryMeta {
+                                doc_group_id: self.active_doc_group_id,
+                                state_id: Some(state_id),
+                                state_json,
+                            });
+                            self.history_at = self.history.len() - 1;
+                            self.page_url = url.clone();
+                            self.address = url;
+                            self.selection.address_cursor = self.address.len();
+                            self.selection.address_anchor = None;
+                            self.dirty = true;
+                        }
+                    }
+                    HistoryOp::ReplaceState {
+                        url,
+                        state_id,
+                        state_json,
+                    } => {
+                        if Self::same_origin_http(&self.page_url, &url) {
+                            if self.history.is_empty() {
+                                self.history.push(url.clone());
+                                self.history_meta.push(HistoryMeta {
+                                    doc_group_id: self.active_doc_group_id,
+                                    state_id: Some(state_id),
+                                    state_json,
+                                });
+                                self.history_at = 0;
+                            } else {
+                                self.history[self.history_at] = url.clone();
+                                self.history_meta[self.history_at] = HistoryMeta {
+                                    doc_group_id: self.active_doc_group_id,
+                                    state_id: Some(state_id),
+                                    state_json,
+                                };
+                            }
+                            self.page_url = url.clone();
+                            self.address = url;
+                            self.selection.address_cursor = self.address.len();
+                            self.selection.address_anchor = None;
+                            self.dirty = true;
+                        }
+                    }
+                    HistoryOp::Go { delta } => {
+                        pending_go = Some(delta);
+                    }
+                }
+            }
+        }
+        let fetch_requests = std::mem::take(&mut reply.fetch_requests);
+        if reply.navigation.is_none() && !self.script_blocked && self.can_use_platform_commands() {
+            for req in fetch_requests {
+                if self.script_fetch_inflight >= 16 {
+                    if self.queued_platform.len() < 32 {
+                        self.queued_platform
+                            .push_back(scripts::PlatformCommand::FetchComplete {
+                                response: ScriptFetchResponse::network_error(
+                                    req.request_id,
+                                    "Too many concurrent script fetches",
+                                ),
+                            });
+                    }
+                } else {
+                    self.script_fetch_inflight += 1;
+                    let session = self.session.clone();
+                    let page_url = self.page_url.clone();
+                    let tx = self.script_fetch_tx.clone();
+                    let generation = self.generation;
+                    thread::spawn(move || {
+                        let resp = session.fetch_script_same_origin(&page_url, req);
+                        let _ = tx.send((generation, session_id, resp));
+                    });
+                }
+            }
+        }
+        pending_go
+    }
+    fn traverse_history_by(&mut self, delta: i32) {
+        self.sync_history_meta_len();
+        if delta == 0 {
+            if !self.page_url.is_empty() && self.page_url != "about:blank" && self.inflight < 2 {
+                self.navigate(self.page_url.clone(), None, false);
+            }
+            return;
+        }
+        if self.history.is_empty() {
+            return;
+        }
+        let target_isize = (self.history_at as isize).saturating_add(delta as isize);
+        if target_isize < 0 || (target_isize as usize) >= self.history.len() {
+            return;
+        }
+        let target_idx = target_isize as usize;
+        let target_url = self.history[target_idx].clone();
+        let meta = self.history_meta[target_idx].clone();
+        if self.active_doc_group_id != 0
+            && meta.doc_group_id == self.active_doc_group_id
+            && self.can_use_platform_commands()
+            && Self::same_origin_http(&self.page_url, &target_url)
+        {
+            self.history_at = target_idx;
+            self.page_url = target_url.clone();
+            self.address = target_url.clone();
+            self.selection.address_cursor = self.address.len();
+            self.selection.address_anchor = None;
+            let history_length = self.history.len();
+            self.enqueue_platform_command(scripts::PlatformCommand::HistoryTraverse {
+                url: target_url,
+                state_id: meta.state_id,
+                state_json: meta.state_json,
+                history_length,
+            });
+            self.dirty = true;
+        } else if self.inflight < 2 {
+            self.history_at = target_idx;
+            self.navigate(target_url, None, false);
+        }
+    }
     // Ok(true) means queued; Ok(false) permits native-only activation. Immediate
     // rejection must remain observable to CDP, never a successful dropped click.
     fn dispatch_page(&mut self, kind: InputKind) -> Result<bool, String> {
@@ -2016,7 +2743,7 @@ impl Browser {
             if let Some(value) = self
                 .values
                 .get(&node)
-                .filter(|_| self.input_item(node).is_some())
+                .filter(|_| self.editable_value_item(node).is_some())
             {
                 bytes = bytes.saturating_add(value.len());
                 if selected.len() == 128 || bytes > 64 * 1024 {
@@ -2170,9 +2897,9 @@ impl Browser {
                 .pending_transaction
                 .take()
                 .ok_or("Script session expired or sent an unsolicited completion")?;
-            let (identity, activation, automation, console_target) = match pending {
+            let (identity, activation, automation, console_target, is_task_pump) = match pending {
                 PendingTransaction::Activation { identity, input } => {
-                    (identity, Some(input), None, None)
+                    (identity, Some(input), None, None, false)
                 }
                 PendingTransaction::TaskPump {
                     identity,
@@ -2181,14 +2908,15 @@ impl Browser {
                     if wake_token == 0 || wake_token != self.last_task_wake_token {
                         return Err("Invalid pending task wake identity".into());
                     }
-                    (identity, None, None, None)
+                    (identity, None, None, None, true)
                 }
                 PendingTransaction::Automation { identity, request } => {
-                    (identity, None, Some(request), None)
+                    (identity, None, Some(request), None, false)
                 }
                 PendingTransaction::Console { identity, target } => {
-                    (identity, None, None, Some(target))
+                    (identity, None, None, Some(target), false)
                 }
+                PendingTransaction::Platform { identity } => (identity, None, None, None, false),
             };
             if identity.generation != self.generation
                 || identity.session_id != update.session_id
@@ -2243,10 +2971,7 @@ impl Browser {
                 );
             }
             let wake = self.validate_task_wake(&reply, received)?;
-            let lifecycle = self.validate_lifecycle_reply(
-                &reply,
-                Some(activation.is_none() && automation.is_none() && console_target.is_none()),
-            )?;
+            let lifecycle = self.validate_lifecycle_reply(&reply, Some(is_task_pump))?;
             if self
                 .last_accounting
                 .as_ref()
@@ -2423,6 +3148,7 @@ impl Browser {
             }
         }
         self.accept_lifecycle(lifecycle, received);
+        let history_go = self.apply_platform_deltas(identity.session_id, &mut reply);
         let _ = self.script_summary(&reply);
         self.ingest_wire_console_and_sync(wire_console, !self.console_detached_dom);
         if let Some(target) = console_target
@@ -2444,6 +3170,7 @@ impl Browser {
         if terminal {
             self.script_blocked = true;
             self.queued_console.clear();
+            self.queued_platform.clear();
             self.task_wake = None;
             if let Some(session) = &self.page_session {
                 session.cancel();
@@ -2501,9 +3228,13 @@ impl Browser {
             }
             return;
         }
+        if let Some(delta) = history_go {
+            self.traverse_history_by(delta);
+        }
         match default {
             StagedDefault::None => {
                 if !terminal && !self.script_blocked {
+                    self.pump_queued_platform();
                     self.pump_queued_console();
                 }
             }
@@ -2526,17 +3257,32 @@ impl Browser {
                 self.values.remove(&node);
             }
         }
-        let editable: HashSet<_> = self
+        let input_nodes: HashSet<_> = self
             .document
             .items
             .iter()
             .zip(&self.document.item_nodes)
             .filter_map(|(item, &node)| matches!(item, Item::Input { .. }).then_some(node))
             .collect();
+        let editable: HashSet<_> = self
+            .document
+            .items
+            .iter()
+            .zip(&self.document.item_nodes)
+            .filter_map(|(item, &node)| {
+                matches!(item, Item::Input { .. } | Item::Select { .. }).then_some(node)
+            })
+            .collect();
         self.values.retain(|node, _| editable.contains(node));
         self.edit_versions.retain(|node, _| editable.contains(node));
+        self.checked.clear();
+        if let Some(sel) = self.open_select
+            && !editable.contains(&sel)
+        {
+            self.open_select = None;
+        }
         if let Focus::Input(node) = self.focus {
-            if !editable.contains(&node) {
+            if !input_nodes.contains(&node) {
                 self.focus = Focus::Page;
                 self.select_all = false;
                 self.selection.input_node = None;
@@ -2582,14 +3328,13 @@ impl Browser {
         };
         let mut fields = form_data.fields.clone();
         for (i, item) in self.document.items.iter().enumerate() {
-            if let Item::Input {
-                form: f,
-                name,
-                value,
-                ..
-            } = item
-            {
-                if *f == form && !name.is_empty() {
+            match item {
+                Item::Input {
+                    form: Some(f),
+                    name,
+                    value,
+                    ..
+                } if *f == form && !name.is_empty() => {
                     fields.push((
                         name.clone(),
                         if use_edits {
@@ -2599,6 +3344,62 @@ impl Browser {
                         },
                     ));
                 }
+                Item::Toggle {
+                    form: Some(f),
+                    node,
+                    name,
+                    value,
+                    checked,
+                    ..
+                } if *f == form
+                    && !name.is_empty()
+                    && !self
+                        .document
+                        .nodes
+                        .get(*node)
+                        .is_some_and(|n| n.has("disabled")) =>
+                {
+                    let is_checked = if use_edits {
+                        self.checked.get(node).copied().unwrap_or(*checked)
+                    } else {
+                        *checked
+                    };
+                    if is_checked {
+                        fields.push((name.clone(), value.clone()));
+                    }
+                }
+                Item::Select {
+                    form: Some(f),
+                    node,
+                    name,
+                    options,
+                    selected,
+                } if *f == form
+                    && !name.is_empty()
+                    && !self
+                        .document
+                        .nodes
+                        .get(*node)
+                        .is_some_and(|n| n.has("disabled")) =>
+                {
+                    let chosen = if use_edits {
+                        self.values.get(node).cloned().or_else(|| {
+                            selected
+                                .and_then(|idx| options.get(idx))
+                                .filter(|o| !o.disabled)
+                                .map(|o| o.value.clone())
+                        })
+                    } else {
+                        selected
+                            .and_then(|idx| options.get(idx))
+                            .filter(|o| !o.disabled)
+                            .map(|o| o.value.clone())
+                    };
+                    if let Some(val) = chosen {
+                        fields.push((name.clone(), val));
+                    }
+                }
+                _ => {}
             }
         }
         if let Some(i) = button {
@@ -2629,6 +3430,9 @@ impl Browser {
     }
     fn activate_checked(&mut self, action: Action) -> Result<(), String> {
         self.stop_scroll();
+        if !matches!(action, Action::PageSelect(_)) {
+            self.open_select = None;
+        }
         if !matches!(
             action,
             Action::ClipboardCut
@@ -3146,6 +3950,89 @@ impl Browser {
                     self.focus = Focus::Page;
                 }
             }
+            Action::PageClick(node) => {
+                if !self.dispatch_page(InputKind::Click { target: node })? {
+                    self.native_click_fallback(node)?;
+                }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
+                }
+            }
+            Action::PageToggle(node) => {
+                if !self.dispatch_page(InputKind::Click { target: node })? {
+                    self.toggle_control_local(node);
+                }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
+                }
+            }
+            Action::PageReset(node) => {
+                if !self.dispatch_page(InputKind::Click { target: node })? {
+                    self.reset_form_for_button(node);
+                }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
+                }
+            }
+            Action::PageSelect(node) => {
+                if self.open_select == Some(node) {
+                    self.open_select = None;
+                } else {
+                    self.open_select = Some(node);
+                }
+                if matches!(
+                    self.focus,
+                    Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_)
+                ) {
+                    self.focus = Focus::Page;
+                }
+            }
+            Action::SelectOption { select, index } => {
+                self.open_select = None;
+                let picked = if self
+                    .document
+                    .nodes
+                    .get(select)
+                    .is_some_and(|n| !n.has("disabled"))
+                {
+                    self.document
+                        .item_nodes
+                        .iter()
+                        .position(|&id| id == select)
+                        .and_then(|item_idx| match self.document.items.get(item_idx) {
+                            Some(Item::Select { options, .. }) => {
+                                options.get(index).filter(|o| !o.disabled).cloned()
+                            }
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
+                if let Some(opt) = picked {
+                    if self.can_use_platform_commands() {
+                        self.enqueue_platform_command(scripts::PlatformCommand::SelectOption {
+                            select_node: select,
+                            selected_index: index as i32,
+                        });
+                    } else {
+                        if self.next_edit < u64::MAX {
+                            self.values.insert(select, opt.value);
+                            self.next_edit = self.next_edit.saturating_add(1);
+                            self.edit_versions.insert(select, self.next_edit);
+                        }
+                        let _ = self.dispatch_page(InputKind::Click { target: opt.node })?;
+                    }
+                }
+            }
             Action::History => {
                 if !self.devtools_is_docked() {
                     self.devtools.close();
@@ -3188,6 +4075,10 @@ impl Browser {
                 self.menu_open = false;
                 self.history_open = false;
                 self.session.clear_cookies();
+                self.session.clear_local_storage();
+                if let Ok(mut guard) = self.session_storage.lock() {
+                    guard.clear();
+                }
                 self.session.clear_exchanges();
                 self.devtools.clear_network();
                 self.browsing_history.clear();
@@ -3301,6 +4192,8 @@ impl Browser {
                         session.cancel();
                     }
                     self.pending_transaction = None;
+                    self.queued_console.clear();
+                    self.queued_platform.clear();
                     self.task_wake = None;
                     self.loading = false;
                     self.fetching = false;
@@ -3310,14 +4203,12 @@ impl Browser {
             }
             Action::Back => {
                 if self.history_at > 0 && self.inflight < 2 {
-                    self.history_at -= 1;
-                    self.navigate(self.history[self.history_at].clone(), None, false);
+                    self.traverse_history_by(-1);
                 }
             }
             Action::Forward => {
                 if self.history_at + 1 < self.history.len() && self.inflight < 2 {
-                    self.history_at += 1;
-                    self.navigate(self.history[self.history_at].clone(), None, false);
+                    self.traverse_history_by(1);
                 }
             }
         }
@@ -3352,10 +4243,14 @@ impl Browser {
             }
             self.activate_checked(hit.action.clone())?;
         } else if !self.modal_open() {
+            let was_select_open = self.open_select.take().is_some();
             self.omnibox.open = false;
             self.omnibox.selected = None;
             self.focus = Focus::Page;
             self.dirty = true;
+            if !was_select_open && self.point_in_page_viewport(x, y) {
+                self.dispatch_arbitrary_page_click(x, y)?;
+            }
         }
         Ok(())
     }
@@ -3457,8 +4352,18 @@ impl Browser {
                 self.step_find_match(true);
             }
             Focus::Input(node) => {
-                if let Some(i) = self.input_item(node) {
-                    if let Some(Item::Input { form, .. }) = self.document.items.get(i) {
+                if self
+                    .document
+                    .nodes
+                    .get(node)
+                    .is_some_and(|n| n.tag == "textarea")
+                {
+                    self.type_text("\n");
+                } else if let Some(i) = self.input_item(node) {
+                    if let Some(Item::Input {
+                        form: Some(form), ..
+                    }) = self.document.items.get(i)
+                    {
                         let form = *form;
                         let button = self.document.items.iter().position(
                             |item| matches!(item, Item::Submit {form:f, ..} if *f == form),
@@ -3723,6 +4628,10 @@ impl Browser {
             }
         }
         if sym == 0xff1b && !ctrl && !alt {
+            if self.open_select.take().is_some() {
+                self.dirty = true;
+                return;
+            }
             if self.find.open {
                 self.close_find_bar();
                 return;
@@ -3842,6 +4751,7 @@ impl Browser {
     }
     pub fn scroll_by(&mut self, amount: i32) {
         self.stop_scroll();
+        self.open_select = None;
         if self.modal_open() {
             return;
         }
@@ -3907,6 +4817,10 @@ impl Browser {
         let mut entries: Vec<_> = self.values.iter().collect();
         entries.sort_by_key(|(k, _)| **k);
         entries.hash(&mut hasher);
+        let mut checked_entries: Vec<_> = self.checked.iter().collect();
+        checked_entries.sort_by_key(|(k, _)| **k);
+        checked_entries.hash(&mut hasher);
+        self.open_select.hash(&mut hasher);
         hasher.finish()
     }
     pub fn paint(&mut self) -> Canvas {
@@ -3978,6 +4892,7 @@ impl Browser {
             self.frame_cache = None;
             let controls = mg_sparkle::render::Controls {
                 values: Some(&self.values),
+                checked: Some(&self.checked),
                 focused_input,
                 select_all: self.select_all,
                 input_selection,
@@ -4060,6 +4975,10 @@ impl Browser {
                 action: match &hit.action {
                     mg_sparkle::render::Action::Input(node) => Action::Input(*node),
                     mg_sparkle::render::Action::Submit(node) => Action::Submit(*node),
+                    mg_sparkle::render::Action::Click(node) => Action::PageClick(*node),
+                    mg_sparkle::render::Action::Toggle(node) => Action::PageToggle(*node),
+                    mg_sparkle::render::Action::Reset(node) => Action::PageReset(*node),
+                    mg_sparkle::render::Action::Select(node) => Action::PageSelect(*node),
                     mg_sparkle::render::Action::Link { node, href } => Action::Link {
                         node: *node,
                         href: href.clone(),
@@ -4067,6 +4986,31 @@ impl Browser {
                 },
             })
             .collect();
+        if !self.chrome
+            && let Some(select_node) = self.open_select
+        {
+            if let Some((drop_x, drop_y, drop_w, row_h, options, _)) =
+                self.select_dropdown_layout(select_node)
+            {
+                for (idx, opt) in options.iter().enumerate() {
+                    if !opt.disabled {
+                        let ry = drop_y + 1 + (idx as i32) * (row_h as i32);
+                        self.hits.push(Hit {
+                            x: drop_x,
+                            y: ry,
+                            w: drop_w,
+                            h: row_h,
+                            action: Action::SelectOption {
+                                select: select_node,
+                                index: idx,
+                            },
+                        });
+                    }
+                }
+            } else {
+                self.open_select = None;
+            }
+        }
         self.refresh_hovered_link();
         if !self.chrome {
             self.dirty = false;
@@ -4254,9 +5198,13 @@ impl Browser {
             app.hits
                 .iter()
                 .find(|hit| match hit.action {
-                    Action::Input(id) | Action::Submit(id) | Action::Link { node: id, .. } => {
-                        id == node
-                    }
+                    Action::Input(id)
+                    | Action::Submit(id)
+                    | Action::PageClick(id)
+                    | Action::PageToggle(id)
+                    | Action::PageReset(id)
+                    | Action::PageSelect(id)
+                    | Action::Link { node: id, .. } => id == node,
                     _ => false,
                 })
                 .cloned()
@@ -4893,6 +5841,12 @@ mod tests {
                     task_wake: None,
                     lifecycle: None,
                     observer: None,
+                    local_storage_ops: vec![],
+                    session_storage_ops: vec![],
+                    cookie_writes: vec![],
+                    history_ops: vec![],
+                    fetch_requests: vec![],
+                    scroll_request: None,
                 },
             }),
             Ok(ScriptLoad {
@@ -4918,6 +5872,12 @@ mod tests {
                     task_wake: None,
                     lifecycle: None,
                     observer: None,
+                    local_storage_ops: vec![],
+                    session_storage_ops: vec![],
+                    cookie_writes: vec![],
+                    history_ops: vec![],
+                    fetch_requests: vec![],
+                    scroll_request: None,
                 },
             }),
             Err("Worker deadline".into()),
@@ -5006,6 +5966,12 @@ mod tests {
                         task_wake: None,
                         lifecycle: None,
                         observer: None,
+                        local_storage_ops: vec![],
+                        session_storage_ops: vec![],
+                        cookie_writes: vec![],
+                        history_ops: vec![],
+                        fetch_requests: vec![],
+                        scroll_request: None,
                     },
                 })),
                 result: Ok(net::Response {
@@ -5312,6 +6278,9 @@ impl Browser {
     pub fn reload(&mut self) {
         self.activate(Action::Reload);
     }
+    pub fn clear_browsing_data(&mut self) {
+        self.activate(Action::ClearBrowsingData);
+    }
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -5344,7 +6313,10 @@ impl Browser {
     pub fn script_work_status(&self) -> ScriptWorkStatus {
         if self.script_blocked {
             ScriptWorkStatus::Blocked
-        } else if self.pending_transaction.is_some() {
+        } else if self.pending_transaction.is_some()
+            || self.script_fetch_inflight > 0
+            || !self.queued_platform.is_empty()
+        {
             ScriptWorkStatus::Pending
         } else if let Some(wake) = self.task_wake {
             ScriptWorkStatus::Scheduled(wake.at)
@@ -5832,7 +6804,14 @@ impl Browser {
                     && y < self.page_top() + self.viewport_height() as i32
                     && !matches!(
                         self.topmost_hit(x, y).map(|i| &self.hits[i].action),
-                        Some(Action::Submit(_))
+                        Some(
+                            Action::Submit(_)
+                                | Action::PageClick(_)
+                                | Action::PageToggle(_)
+                                | Action::PageReset(_)
+                                | Action::PageSelect(_)
+                                | Action::SelectOption { .. }
+                        )
                     )
                 {
                     let on_link = matches!(
@@ -5889,7 +6868,9 @@ impl Browser {
             self.devtools.split_dragging = false;
             return;
         }
+        let mut page_drag_moved = false;
         if let Some(drag) = self.selection.active_drag.take() {
+            page_drag_moved = matches!(drag, clipboard::DragTarget::Page { moved: true, .. });
             match drag {
                 clipboard::DragTarget::Page { moved: true, .. } if self.has_page_selection() => {
                     if let Some(txt) = self.selected_page_text() {
@@ -5976,7 +6957,13 @@ impl Browser {
                 && self.devtools.open
                 && self.devtools.pick_mode
                 && !self.popup_modal_open();
-            if (press.is_some() && press == release) || picker_page_click {
+            let arbitrary_page_click = press.is_none()
+                && release.is_none()
+                && !page_drag_moved
+                && !self.modal_open()
+                && self.point_in_page_viewport(px, py)
+                && self.point_in_page_viewport(x, y);
+            if (press.is_some() && press == release) || picker_page_click || arbitrary_page_click {
                 if (press_ctrl || ctrl)
                     && self.chrome
                     && !self.modal_open()

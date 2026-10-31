@@ -88,7 +88,7 @@ impl Browser {
                 if let Some(value) = self
                     .values
                     .get(&node)
-                    .filter(|_| self.input_item(node).is_some())
+                    .filter(|_| self.editable_value_item(node).is_some())
                 {
                     bytes = bytes.saturating_add(value.len());
                     if selected.len() == 128
@@ -333,6 +333,12 @@ mod tests {
                 task_wake: None,
                 lifecycle: app.lifecycle,
                 observer: Some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
+                local_storage_ops: vec![],
+                session_storage_ops: vec![],
+                cookie_writes: vec![],
+                history_ops: vec![],
+                fetch_requests: vec![],
+                scroll_request: None,
             }),
         }
     }

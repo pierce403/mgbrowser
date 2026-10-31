@@ -3483,6 +3483,12 @@ mod tests {
                     }),
                     observer: (!legacy)
                         .then_some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
+                    local_storage_ops: Vec::new(),
+                    session_storage_ops: Vec::new(),
+                    cookie_writes: Vec::new(),
+                    history_ops: Vec::new(),
+                    fetch_requests: Vec::new(),
+                    scroll_request: None,
                 },
             }))
         } else if case == "legacy-worker" {

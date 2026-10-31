@@ -92,13 +92,22 @@ fn background_box(
 }
 
 #[derive(Clone)]
+enum ControlVisual {
+    Text { text: String, multiline: bool },
+    Button { label: String },
+    Checkbox { checked: bool },
+    Radio { checked: bool },
+    Select { label: String },
+}
+
+#[derive(Clone)]
 enum Paint {
     Background(Rect, usize, [f32; 4]),
     RoundedDecoration(Rect, usize, [f32; 4]),
     Rect(Rect, Color),
     Text(Rect, usize, String),
     Image(Rect, ImageSource, Option<(usize, String)>),
-    Control(Rect, usize, String, bool),
+    Control(Rect, usize, ControlVisual),
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -479,6 +488,95 @@ pub(crate) fn render_scaled(
 ) -> Result<Frame, LayoutFailure> {
     render_scaled_profiled(document, fonts, viewport, controls, styles.into(), scale)
         .map(|(frame, ..)| frame)
+}
+
+/// Pixel-free layout pass for worker-side DOM geometry (`getBoundingClientRect`, `offsetWidth`, etc.).
+pub(crate) fn compute_boxes(
+    document: &Document,
+    fonts: &mut Fonts,
+    viewport: Viewport,
+    styles: Arc<[ComputedStyle]>,
+) -> Option<(Vec<LayoutBox>, Vec<(usize, (f32, f32, f32, f32))>, f32)> {
+    if styles.len() != document.nodes.len() {
+        return None;
+    }
+    let orig_nodes_len = document.nodes.len();
+    let materialized = materialize_pseudo_elements(document, &styles)
+        .ok()
+        .flatten();
+    let (document, styles): (&Document, Arc<[ComputedStyle]>) = match &materialized {
+        Some((doc, st)) => (doc, Arc::clone(st)),
+        None => (document, styles),
+    };
+    let controls = Controls::default();
+    let viewport_overflow = viewport_overflow_node(document, &styles);
+    let mut layout = Layout {
+        document,
+        fonts,
+        controls: &controls,
+        styles,
+        viewport,
+        viewport_overflow,
+        scene: Scene::default(),
+        intrinsic: HashMap::new(),
+        content_intrinsic_cache: HashMap::new(),
+        content_height_cache: HashMap::new(),
+        natural_images: HashMap::new(),
+        natural_svg: HashMap::new(),
+        inline_svg: HashMap::new(),
+        inline_svg_bytes: 0,
+        inline_svg_limit_reported: false,
+        diagnostics: Default::default(),
+        table_cache: HashMap::new(),
+        format_scratch: 0,
+        replaced_nodes: Vec::new(),
+        anonymous_tables: Vec::new(),
+        floats: Vec::new(),
+        last_float_top: 0.0,
+        budget: 200_000,
+        exhausted: false,
+        failure: None,
+    };
+    layout.prepare_replaced_nodes();
+    anonymous_table::prepare(&mut layout);
+    let height = layout
+        .block(
+            0,
+            0.0,
+            0.0,
+            viewport.width as f32,
+            Some(viewport.height as f32),
+            None,
+            0,
+        )
+        .1;
+    positioned::run(&mut layout);
+    stacking::run(&mut layout);
+    if layout.exhausted {
+        return None;
+    }
+    let scroll_height = layout
+        .scene
+        .boxes
+        .iter()
+        .zip(&layout.scene.box_scroll)
+        .fold(height, |h, (rect, contributes)| {
+            if *contributes && rect.width != 0 && rect.height != 0 {
+                h.max(rect.y as f32 + rect.height as f32)
+            } else {
+                h
+            }
+        });
+    let mut boxes = layout.scene.boxes;
+    boxes.retain(|b| b.node < orig_nodes_len);
+    let borders = layout
+        .scene
+        .borders
+        .into_iter()
+        .filter(|(n, _)| *n < orig_nodes_len)
+        .map(|(n, r)| (n, (r.x, r.y, r.w, r.h)))
+        .collect();
+    Some((boxes, borders, scroll_height))
 }
 
 pub(crate) fn render_scaled_profiled(
@@ -885,101 +983,207 @@ pub(crate) fn render_scaled_profiled(
                     );
                 }
             }
-            Paint::Control(rect, node, text, submit) => {
+            Paint::Control(rect, node, visual) => {
                 if !visible(*rect, viewport) {
                     continue;
                 }
                 let focused = controls.focused_input == Some(*node);
                 let style = &layout.styles[*node];
-                let borderless = !focused
-                    && !*submit
-                    && (style.border_width == [0.0; 4]
-                        || style.border_color.iter().all(|c| c.alpha == 0.0));
+                let rx = rect.x.round() as i32;
                 let y = rect.y.round() as i32 - viewport.scroll;
-                if !borderless {
-                    canvas.rect(
-                        rect.x.round() as i32,
-                        y,
-                        rect.w.ceil() as u32,
-                        rect.h.ceil() as u32,
-                        if focused { 0x277453 } else { 0x888888 },
-                    );
-                    canvas.rect(
-                        rect.x.round() as i32 + 1,
-                        y + 1,
-                        (rect.w - 2.0).max(0.0) as u32,
-                        (rect.h - 2.0).max(0.0) as u32,
-                        if *submit { 0xeeeeee } else { 0xffffff },
-                    );
-                }
-                let avail = rect.w - if borderless { 0.0 } else { 8.0 };
-                let (shown, caret_x) = if focused
-                    && !*submit
-                    && let Some((sa, sb, caret)) = controls.input_selection
-                {
-                    let (shown, sx0, sx1, cx) = super::render::slice_visible_input(
-                        layout.fonts,
-                        text,
-                        style.font_size,
-                        avail,
-                        sa,
-                        sb,
-                        caret,
-                    );
-                    if sx1 > sx0 {
+                let rw = rect.w.ceil().max(0.0) as u32;
+                let rh = rect.h.ceil().max(0.0) as u32;
+                match visual {
+                    ControlVisual::Checkbox { checked } | ControlVisual::Radio { checked } => {
+                        let is_radio = matches!(visual, ControlVisual::Radio { .. });
+                        canvas.rect(rx, y, rw, rh, if focused { 0x277453 } else { 0x666666 });
                         canvas.rect(
-                            rect.x.round() as i32 + if borderless { 0 } else { 3 } + sx0,
-                            y + 2,
-                            (sx1 - sx0) as u32 + 1,
-                            (rect.h - 4.0).max(0.0) as u32,
-                            0xc6dfed,
+                            rx + 1,
+                            y + 1,
+                            rw.saturating_sub(2),
+                            rh.saturating_sub(2),
+                            0xffffff,
                         );
+                        if *checked {
+                            let pad = if is_radio { 4 } else { 3 };
+                            let iw = rw.saturating_sub(pad * 2);
+                            let ih = rh.saturating_sub(pad * 2);
+                            if iw > 0 && ih > 0 {
+                                canvas.rect(rx + pad as i32, y + pad as i32, iw, ih, 0x277453);
+                            }
+                        }
                     }
-                    (shown, Some(cx))
-                } else {
-                    let shown = super::render::fit_tail(layout.fonts, text, style.font_size, avail);
-                    if focused && controls.select_all {
+                    ControlVisual::Select { label } => {
+                        canvas.rect(rx, y, rw, rh, if focused { 0x277453 } else { 0x888888 });
                         canvas.rect(
-                            rect.x.round() as i32 + 3,
-                            y + 2,
-                            layout.fonts.width(&shown, style.font_size).ceil() as u32,
-                            (rect.h - 4.0).max(0.0) as u32,
-                            0xc6dfed,
+                            rx + 1,
+                            y + 1,
+                            rw.saturating_sub(2),
+                            rh.saturating_sub(2),
+                            0xffffff,
                         );
+                        let avail = (rect.w - 22.0).max(0.0);
+                        let shown =
+                            super::render::fit_tail(layout.fonts, label, style.font_size, avail);
+                        canvas.text_weight(
+                            layout.fonts,
+                            (rx + 4, y + 2),
+                            &shown,
+                            style.font_size,
+                            style.color.rgb,
+                            style.font_weight >= 600,
+                        );
+                        if rect.w >= 16.0 {
+                            canvas.text_weight(
+                                layout.fonts,
+                                (rx + rw as i32 - 14, y + 2),
+                                "▾",
+                                style.font_size,
+                                style.color.rgb,
+                                false,
+                            );
+                        }
                     }
-                    (shown, None)
-                };
-                if borderless {
-                    let line_h = layout
-                        .fonts
-                        .select_family(&style.font_families)
-                        .line_height(style.font_size) as f32;
-                    let text_y = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
-                    canvas.text_styled_alpha(
-                        layout.fonts.select_family(&style.font_families),
-                        (rect.x.round() as i32, text_y),
-                        &shown,
-                        style.font_size,
-                        style.color.rgb,
-                        style.font_weight >= 600,
-                        style.italic,
-                        opacity,
-                    );
-                } else {
-                    canvas.text_weight(
-                        layout.fonts,
-                        (rect.x.round() as i32 + 3, y + 2),
-                        &shown,
-                        style.font_size,
-                        style.color.rgb,
-                        style.font_weight >= 600,
-                    );
-                }
-                if let Some(cx) = caret_x {
-                    let base_x = rect.x.round() as i32 + if borderless { 0 } else { 3 };
-                    let draw_x =
-                        (base_x + cx).min(rect.x.round() as i32 + rect.w.ceil() as i32 - 3);
-                    canvas.rect(draw_x, y + 2, 2, (rect.h - 4.0).max(2.0) as u32, 0x277453);
+                    ControlVisual::Text { text, .. } | ControlVisual::Button { label: text } => {
+                        let submit = matches!(visual, ControlVisual::Button { .. });
+                        let is_multiline = matches!(
+                            visual,
+                            ControlVisual::Text {
+                                multiline: true,
+                                ..
+                            }
+                        );
+                        let borderless = !focused
+                            && !submit
+                            && (style.border_width == [0.0; 4]
+                                || style.border_color.iter().all(|c| c.alpha == 0.0));
+                        if !borderless {
+                            canvas.rect(rx, y, rw, rh, if focused { 0x277453 } else { 0x888888 });
+                            canvas.rect(
+                                rx + 1,
+                                y + 1,
+                                (rect.w - 2.0).max(0.0) as u32,
+                                (rect.h - 2.0).max(0.0) as u32,
+                                if submit { 0xeeeeee } else { 0xffffff },
+                            );
+                        }
+                        let avail = rect.w - if borderless { 0.0 } else { 8.0 };
+                        if is_multiline && text.contains('\n') && !focused {
+                            let lh = layout
+                                .fonts
+                                .select_family(&style.font_families)
+                                .line_height(style.font_size)
+                                .max(1);
+                            let mut ly = y + 2;
+                            for line_str in text.split('\n').take(16) {
+                                if ly + lh > y + rh as i32 {
+                                    break;
+                                }
+                                let shown = super::render::fit_tail(
+                                    layout.fonts,
+                                    line_str,
+                                    style.font_size,
+                                    avail,
+                                );
+                                canvas.text_weight(
+                                    layout.fonts,
+                                    (rx + if borderless { 0 } else { 3 }, ly),
+                                    &shown,
+                                    style.font_size,
+                                    style.color.rgb,
+                                    style.font_weight >= 600,
+                                );
+                                ly += lh;
+                            }
+                        } else {
+                            let single_text;
+                            let display_text = if text.contains('\n') {
+                                single_text = text.replace('\n', " ");
+                                single_text.as_str()
+                            } else {
+                                text.as_str()
+                            };
+                            let (shown, caret_x) = if focused
+                                && !submit
+                                && let Some((sa, sb, caret)) = controls.input_selection
+                            {
+                                let (shown, sx0, sx1, cx) = super::render::slice_visible_input(
+                                    layout.fonts,
+                                    display_text,
+                                    style.font_size,
+                                    avail,
+                                    sa,
+                                    sb,
+                                    caret,
+                                );
+                                if sx1 > sx0 {
+                                    canvas.rect(
+                                        rx + if borderless { 0 } else { 3 } + sx0,
+                                        y + 2,
+                                        (sx1 - sx0) as u32 + 1,
+                                        (rect.h - 4.0).max(0.0) as u32,
+                                        0xc6dfed,
+                                    );
+                                }
+                                (shown, Some(cx))
+                            } else {
+                                let shown = super::render::fit_tail(
+                                    layout.fonts,
+                                    display_text,
+                                    style.font_size,
+                                    avail,
+                                );
+                                if focused && controls.select_all {
+                                    canvas.rect(
+                                        rx + 3,
+                                        y + 2,
+                                        layout.fonts.width(&shown, style.font_size).ceil() as u32,
+                                        (rect.h - 4.0).max(0.0) as u32,
+                                        0xc6dfed,
+                                    );
+                                }
+                                (shown, None)
+                            };
+                            if borderless {
+                                let line_h = layout
+                                    .fonts
+                                    .select_family(&style.font_families)
+                                    .line_height(style.font_size)
+                                    as f32;
+                                let text_y = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
+                                canvas.text_styled_alpha(
+                                    layout.fonts.select_family(&style.font_families),
+                                    (rx, text_y),
+                                    &shown,
+                                    style.font_size,
+                                    style.color.rgb,
+                                    style.font_weight >= 600,
+                                    style.italic,
+                                    opacity,
+                                );
+                            } else {
+                                canvas.text_weight(
+                                    layout.fonts,
+                                    (rx + 3, y + 2),
+                                    &shown,
+                                    style.font_size,
+                                    style.color.rgb,
+                                    style.font_weight >= 600,
+                                );
+                            }
+                            if let Some(cx) = caret_x {
+                                let base_x = rx + if borderless { 0 } else { 3 };
+                                let draw_x = (base_x + cx).min(rx + rw as i32 - 3);
+                                canvas.rect(
+                                    draw_x,
+                                    y + 2,
+                                    2,
+                                    (rect.h - 4.0).max(2.0) as u32,
+                                    0x277453,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1176,8 +1380,10 @@ impl Layout<'_, '_> {
                 return;
             }
             let tag = self.document.nodes[id].tag.as_str();
-            self.replaced_nodes[id] =
-                matches!(tag, "img" | "svg" | "input" | "textarea" | "button");
+            self.replaced_nodes[id] = matches!(
+                tag,
+                "img" | "svg" | "input" | "textarea" | "button" | "select"
+            );
             if tag == "button" {
                 for index in 0..self.document.nodes[id].children.len() {
                     if !self.spend(0) {
@@ -1569,7 +1775,21 @@ impl Layout<'_, '_> {
         for _ in 0..MAX_DEPTH {
             let node = &self.document.nodes[id];
             if self.is_structured_button(id) {
-                return Some(Action::Submit(id));
+                return self
+                    .document
+                    .item_nodes
+                    .iter()
+                    .position(|&n| n == id)
+                    .and_then(|i| self.document.items.get(i))
+                    .and_then(|item| match item {
+                        Item::Submit { .. } => Some(Action::Submit(id)),
+                        Item::Button { kind, .. } => Some(match kind {
+                            crate::document::ButtonKind::Submit => Action::Submit(id),
+                            crate::document::ButtonKind::Reset => Action::Reset(id),
+                            crate::document::ButtonKind::Button => Action::Click(id),
+                        }),
+                        _ => None,
+                    });
             }
             if node.tag == "a"
                 && let Some(href) = node.attr("href")
@@ -1587,6 +1807,20 @@ impl Layout<'_, '_> {
                     });
                 }
                 return None;
+            }
+            if node.tag == "summary" && id != 0 && self.document.nodes[node.parent].tag == "details"
+            {
+                let first_summary = self.document.nodes[node.parent]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| self.document.nodes[c].tag == "summary");
+                if Some(id) == first_summary {
+                    return Some(Action::Click(id));
+                }
+            }
+            if node.tag == "label" {
+                return Some(Action::Click(id));
             }
             if id == 0 {
                 return None;
@@ -1931,11 +2165,43 @@ impl Layout<'_, '_> {
                 .and_then(|url| self.natural_images.get(url))
                 .copied()
                 .unwrap_or((18.0, 18.0))
-        } else if node.tag == "button"
-            || node
-                .attr("type")
-                .is_some_and(|kind| matches!(kind, "submit" | "button" | "reset"))
+        } else if node.tag == "input"
+            && node.attr("type").is_some_and(|t| {
+                t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")
+            })
         {
+            (16.0, 16.0)
+        } else if node.tag == "select" {
+            let max_label_w = self
+                .document
+                .item_nodes
+                .iter()
+                .position(|&n| n == id)
+                .and_then(|i| self.document.items.get(i))
+                .and_then(|item| match item {
+                    Item::Select { options, .. } => Some(
+                        options
+                            .iter()
+                            .map(|o| {
+                                self.fonts
+                                    .width_weight(&o.label, s.font_size, s.font_weight >= 600)
+                            })
+                            .fold(24.0f32, f32::max),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(64.0);
+            (max_label_w + 24.0, self.line_height(id).max(20.0))
+        } else if node.tag == "button"
+            || (node.tag == "input"
+                && node.attr("type").is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("submit")
+                        || kind.eq_ignore_ascii_case("button")
+                        || kind.eq_ignore_ascii_case("reset")
+                        || kind.eq_ignore_ascii_case("image")
+                }))
+        {
+            let mut owned_fallback = String::new();
             let label = self
                 .document
                 .item_nodes
@@ -1943,14 +2209,38 @@ impl Layout<'_, '_> {
                 .position(|&n| n == id)
                 .and_then(|i| self.document.items.get(i))
                 .and_then(|item| match item {
-                    Item::Submit { label, .. } => Some(label.as_str()),
+                    Item::Submit { label, .. } | Item::Button { label, .. } => Some(label.as_str()),
                     _ => None,
                 })
-                .unwrap_or("Submit");
+                .unwrap_or_else(|| {
+                    if node.tag == "button" {
+                        owned_fallback = collapse(&collect_node_text(self.document, id))
+                            .trim()
+                            .to_owned();
+                        owned_fallback.as_str()
+                    } else {
+                        node.attr("value").unwrap_or("Submit")
+                    }
+                });
             (
                 self.fonts
                     .width_weight(label, s.font_size, s.font_weight >= 600),
                 self.line_height(id),
+            )
+        } else if node.tag == "textarea" {
+            let cols = node
+                .attr("cols")
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(20.0)
+                .clamp(1.0, 1000.0);
+            let rows = node
+                .attr("rows")
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(2.0)
+                .clamp(1.0, 200.0);
+            (
+                self.fonts.width("0", s.font_size) * cols,
+                self.line_height(id) * rows,
             )
         } else {
             let size = node
@@ -3209,6 +3499,67 @@ impl Layout<'_, '_> {
         depth: usize,
     ) -> f32 {
         let mut tokens = Vec::new();
+        let tag = self.document.nodes[id].tag.as_str();
+        if tag == "summary" && id != 0 {
+            let parent = self.document.nodes[id].parent;
+            if self.document.nodes[parent].tag == "details" {
+                let first_summary = self.document.nodes[parent]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| self.document.nodes[c].tag == "summary");
+                if Some(id) == first_summary {
+                    let s = self.styles[id].clone();
+                    let marker = if self.document.nodes[parent].has("open") {
+                        "▾"
+                    } else {
+                        "▸"
+                    };
+                    let font = self.fonts.select_family(&s.font_families);
+                    let mw = font.width_weight(marker, s.font_size, s.font_weight >= 600);
+                    let sw = font.width_weight(" ", s.font_size, s.font_weight >= 600);
+                    tokens.push(Token::Word {
+                        node: id,
+                        text: marker.to_owned(),
+                        width: mw,
+                    });
+                    tokens.push(Token::Space {
+                        node: id,
+                        width: sw,
+                    });
+                }
+            }
+        } else if tag == "details"
+            && !self.document.nodes[id]
+                .children
+                .iter()
+                .any(|&c| self.document.nodes[c].tag == "summary")
+        {
+            let s = self.styles[id].clone();
+            let marker = if self.document.nodes[id].has("open") {
+                "▾"
+            } else {
+                "▸"
+            };
+            let font = self.fonts.select_family(&s.font_families);
+            let mw = font.width_weight(marker, s.font_size, s.font_weight >= 600);
+            let sw = font.width_weight(" ", s.font_size, s.font_weight >= 600);
+            let dw = font.width_weight("Details", s.font_size, s.font_weight >= 600);
+            tokens.push(Token::Word {
+                node: id,
+                text: marker.to_owned(),
+                width: mw,
+            });
+            tokens.push(Token::Space {
+                node: id,
+                width: sw,
+            });
+            tokens.push(Token::Word {
+                node: id,
+                text: "Details".to_owned(),
+                width: dw,
+            });
+        }
         for child in self.document.nodes[id].children.clone() {
             self.tokens(child, &mut tokens, depth + 1);
         }
@@ -4029,36 +4380,133 @@ impl Layout<'_, '_> {
                 .iter()
                 .position(|&n| n == id)
                 .and_then(|i| self.document.items.get(i));
-            let (text, submit) = match item {
+            let (visual, hit_action) = match item {
                 Some(Item::Input { value, kind, .. }) => {
                     let value = self
                         .controls
                         .values
                         .and_then(|values| values.get(&id))
                         .unwrap_or(value);
+                    let shown = if kind == "password" {
+                        "•".repeat(value.chars().count())
+                    } else {
+                        value.clone()
+                    };
                     (
-                        if kind == "password" {
-                            "•".repeat(value.chars().count())
-                        } else {
-                            value.clone()
+                        ControlVisual::Text {
+                            text: shown,
+                            multiline: node.tag == "textarea",
                         },
-                        false,
+                        Some(Action::Input(id)),
                     )
                 }
-                Some(Item::Submit { label, .. }) => (label.clone(), true),
-                _ => (node.attr("value").unwrap_or("").to_owned(), false),
-            };
-            self.scene.paint(id, Paint::Control(r, id, text, submit));
-            if self.styles[id].pointer_events {
-                self.scene.hit(
-                    id,
-                    r,
-                    if submit {
-                        Action::Submit(id)
-                    } else {
-                        Action::Input(id)
+                Some(Item::Submit { label, .. }) => (
+                    ControlVisual::Button {
+                        label: label.clone(),
                     },
-                );
+                    Some(Action::Submit(id)),
+                ),
+                Some(Item::Button { kind, label, .. }) => (
+                    ControlVisual::Button {
+                        label: label.clone(),
+                    },
+                    Some(match kind {
+                        crate::document::ButtonKind::Submit => Action::Submit(id),
+                        crate::document::ButtonKind::Reset => Action::Reset(id),
+                        crate::document::ButtonKind::Button => Action::Click(id),
+                    }),
+                ),
+                Some(Item::Toggle { checked, radio, .. }) => {
+                    let is_on = self
+                        .controls
+                        .checked
+                        .and_then(|m| m.get(&id).copied())
+                        .unwrap_or(*checked);
+                    (
+                        if *radio {
+                            ControlVisual::Radio { checked: is_on }
+                        } else {
+                            ControlVisual::Checkbox { checked: is_on }
+                        },
+                        Some(Action::Toggle(id)),
+                    )
+                }
+                Some(Item::Select {
+                    options, selected, ..
+                }) => {
+                    let label = if let Some(val) =
+                        self.controls.values.and_then(|values| values.get(&id))
+                    {
+                        options
+                            .iter()
+                            .find(|o| !o.disabled && o.value == *val)
+                            .or_else(|| options.iter().find(|o| o.value == *val))
+                            .map(|o| o.label.clone())
+                            .unwrap_or_default()
+                    } else {
+                        selected
+                            .and_then(|idx| options.get(idx))
+                            .map(|o| o.label.clone())
+                            .unwrap_or_default()
+                    };
+                    (ControlVisual::Select { label }, Some(Action::Select(id)))
+                }
+                _ => {
+                    let visual = if node.tag == "input"
+                        && node
+                            .attr("type")
+                            .is_some_and(|t| t.eq_ignore_ascii_case("checkbox"))
+                    {
+                        ControlVisual::Checkbox {
+                            checked: node.has("checked"),
+                        }
+                    } else if node.tag == "input"
+                        && node
+                            .attr("type")
+                            .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                    {
+                        ControlVisual::Radio {
+                            checked: node.has("checked"),
+                        }
+                    } else if node.tag == "select" {
+                        ControlVisual::Select {
+                            label: String::new(),
+                        }
+                    } else if node.tag == "button"
+                        || (node.tag == "input"
+                            && node.attr("type").is_some_and(|t| {
+                                t.eq_ignore_ascii_case("submit")
+                                    || t.eq_ignore_ascii_case("button")
+                                    || t.eq_ignore_ascii_case("reset")
+                            }))
+                    {
+                        let label = if node.tag == "button" {
+                            collapse(&collect_node_text(self.document, id))
+                                .trim()
+                                .to_owned()
+                        } else {
+                            node.attr("value").unwrap_or("Submit").to_owned()
+                        };
+                        ControlVisual::Button { label }
+                    } else if node.tag == "textarea" {
+                        ControlVisual::Text {
+                            text: collect_node_text(self.document, id),
+                            multiline: true,
+                        }
+                    } else {
+                        ControlVisual::Text {
+                            text: node.attr("value").unwrap_or("").to_owned(),
+                            multiline: false,
+                        }
+                    };
+                    (visual, None)
+                }
+            };
+            self.scene.paint(id, Paint::Control(r, id, visual));
+            if self.styles[id].pointer_events
+                && let Some(action) = hit_action
+            {
+                self.scene.hit(id, r, action);
             }
         }
         self.scene.box_for(id, r);
@@ -4482,6 +4930,25 @@ fn rtl_visual_indices(tokens: &[Token]) -> Vec<usize> {
     let mut out = Vec::with_capacity(tokens.len());
     for run in runs.into_iter().rev() {
         out.extend(run);
+    }
+    out
+}
+
+fn collect_node_text(doc: &Document, root: usize) -> String {
+    let mut out = String::new();
+    let mut stack = vec![root];
+    let mut visited = 0usize;
+    while let Some(id) = stack.pop() {
+        visited += 1;
+        if visited > crate::document::MAX_NODES {
+            break;
+        }
+        let node = &doc.nodes[id];
+        if node.tag == "#text" {
+            out.push_str(&node.text);
+        } else if !matches!(node.tag.as_str(), "script" | "style" | "template") {
+            stack.extend(node.children.iter().rev().copied());
+        }
     }
     out
 }

@@ -534,11 +534,11 @@ fn capture_identity_and_option_rejection_are_not_silent_success() {
         r#"
 var link=document.getElementById('link'),s=document.getElementById('state'),caught=false;
 function handler(e){s.textContent+='x';}
-link.addEventListener('click',handler,true);
+link.addEventListener('click',handler,{capture:true});
 link.addEventListener('click',handler,false);
-link.removeEventListener('click',handler,true);
-try{link.addEventListener('click',handler,{capture:true});}catch(error){caught=true;}
-if(!caught)throw 'Option objects must not be silently ignored';
+link.removeEventListener('click',handler,{capture:true});
+try{link.addEventListener('click',handler,{signal:{}});}catch(error){caught=true;}
+if(!caught)throw 'Invalid signal option must not be silently ignored';
 "#,
     );
     let reply = click(&mut realm, node(&init, "#link"));

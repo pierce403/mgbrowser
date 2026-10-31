@@ -116,7 +116,7 @@ impl Peer {
         assert!(count > 0);
         let frame: Value = serde_json::from_slice(&self.exact(count)).unwrap();
         for (field, expected) in [
-            ("version", 8),
+            ("version", 9),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -134,7 +134,7 @@ impl Peer {
     }
     fn load(&mut self, html: &str) -> SessionReply {
         self.send(
-            8,
+            9,
             0,
             0,
             "Init",
@@ -147,7 +147,7 @@ impl Peer {
         for sequence in 1..=2 {
             let wake = reply.task_wake.as_ref().unwrap().token;
             self.send(
-                8,
+                9,
                 sequence,
                 reply.revision,
                 "TaskPump",
@@ -173,7 +173,7 @@ impl Peer {
             edits: vec![],
         };
         self.send(
-            8,
+            9,
             sequence,
             previous.revision,
             "Automation",
@@ -331,7 +331,7 @@ fn final_sequence_63_preserves_completed_primitive_then_reaps_without_renewal() 
 
 #[test]
 fn old_modern_versions_and_later_automation_fail_closed() {
-    for version in 1..=7 {
+    for version in 1..=8 {
         let mut p = Peer::start("--script-session");
         p.send(version,0,0,"Init",json!({"page":{"url":"https://example.test/","html":"<script>throw 'MUST_NOT_RUN'</script>"},"observer":{"kind":"Disabled"}}));
         p.finish(74);
@@ -339,7 +339,7 @@ fn old_modern_versions_and_later_automation_fail_closed() {
     let mut p = Peer::start("--script-session");
     let reply = p.load("<p>owned</p>");
     p.send(
-        7,
+        8,
         3,
         reply.revision,
         "Automation",
@@ -361,7 +361,7 @@ fn invalid_automation_fields_are_not_reinterpreted_as_an_event() {
     ] {
         let mut p = Peer::start("--script-session");
         let reply = p.load("<p>owned</p>");
-        p.send(8, 3, reply.revision, "Automation", bad);
+        p.send(9, 3, reply.revision, "Automation", bad);
         p.finish(74);
     }
 }

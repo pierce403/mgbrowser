@@ -55,7 +55,7 @@ impl Peer {
         std::thread::sleep(Duration::from_millis(1));
     }
     fn send(&mut self, sequence: u64, revision: u64, kind: &str, payload: Value) {
-        self.send_version(8, sequence, revision, kind, payload);
+        self.send_version(9, sequence, revision, kind, payload);
     }
     fn send_version(
         &mut self,
@@ -65,8 +65,8 @@ impl Peer {
         kind: &str,
         payload: Value,
     ) {
-        let payload = if matches!(version, 6 | 7 | 8) && kind == "Init" {
-            // Versions6/7 keep their genuine old wrapper in rejection controls.
+        let payload = if matches!(version, 6..=9) && kind == "Init" {
+            // Versions6/7/8 keep their genuine old wrapper in rejection controls.
             json!({"page":payload,"observer":{"kind":"Disabled"}})
         } else {
             payload
@@ -74,7 +74,7 @@ impl Peer {
         self.send_wire(version, sequence, revision, kind, payload);
     }
     fn send_observed_init(&mut self, page: Value, observer: Value) {
-        self.send_wire(8, 0, 0, "Init", json!({"page":page,"observer":observer}));
+        self.send_wire(9, 0, 0, "Init", json!({"page":page,"observer":observer}));
     }
     fn send_wire(&mut self, version: u8, sequence: u64, revision: u64, kind: &str, payload: Value) {
         let payload = serde_json::to_vec(&json!({
@@ -133,7 +133,7 @@ impl Peer {
         assert!(len > 0);
         let frame: Value = serde_json::from_slice(&self.exact(len)).unwrap();
         for (field, value) in [
-            ("version", 8),
+            ("version", 9),
             ("generation", 31),
             ("session_id", 47),
             ("sequence", sequence),
@@ -1320,7 +1320,7 @@ fn real_worker_timer_error_retains_native_event_across_following_input_transacti
 #[test]
 fn real_worker_rejects_v1_through_v6_init_and_later_commands_without_reply_or_execution() {
     for (version, kind) in
-        (1..=7).flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
+        (1..=8).flat_map(|version| ["Init", "Event", "TaskPump"].map(|kind| (version, kind)))
     {
         let mut peer = Peer::start();
         let (sequence, payload) = match kind {

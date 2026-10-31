@@ -748,8 +748,10 @@ impl Canvas {
             return;
         }
         let size = font_size(size);
-        let ascent = fonts
-            .font
+        let Some(ref font_face) = fonts.font else {
+            return;
+        };
+        let ascent = font_face
             .horizontal_line_metrics(size)
             .map_or(size, |metrics| metrics.ascent);
         let baseline = y as f32 + ascent;
@@ -1035,7 +1037,7 @@ struct PositionedGlyph {
 
 pub struct Fonts {
     bytes: Vec<u8>,
-    font: fontdue::Font,
+    font: Option<fontdue::Font>,
     cache: HashMap<(u16, u32), (fontdue::Metrics, Vec<u8>)>,
     cached_bytes: usize,
     shape_cache: HashMap<(u64, u32), (Box<str>, f32, Rc<[PositionedGlyph]>)>,
@@ -1047,6 +1049,23 @@ pub struct Fonts {
 }
 
 impl Fonts {
+    /// Lightweight fallback text-metric provider for worker-side DOM geometry queries
+    /// where no font bytes or filesystem access exist.
+    pub(crate) fn fallback_metrics() -> Self {
+        Self {
+            bytes: Vec::new(),
+            font: None,
+            cache: HashMap::new(),
+            cached_bytes: 0,
+            shape_cache: HashMap::new(),
+            shape_cached_bytes: 0,
+            shaping_stats: Default::default(),
+            synthetic_styles: false,
+            bold: None,
+            families: HashMap::new(),
+        }
+    }
+
     /// Parse caller-owned font data without selecting a platform font or doing I/O.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
         let bytes = crate::woff::decode_font_bytes(bytes)?;
@@ -1055,7 +1074,7 @@ impl Fonts {
         rustybuzz::Face::from_slice(&bytes, 0).ok_or_else(|| "Cannot shape font".to_owned())?;
         Ok(Self {
             bytes,
-            font,
+            font: Some(font),
             cache: HashMap::new(),
             cached_bytes: 0,
             shape_cache: HashMap::new(),
@@ -1147,6 +1166,9 @@ impl Fonts {
     /// Measure the same shaped advances that `Canvas::text` paints.
     pub fn width(&mut self, text: &str, size: f32) -> f32 {
         let size = font_size(size);
+        if self.font.is_none() {
+            return (text.chars().count() as f32 * size * 0.6).max(0.0);
+        }
         if text.len() <= 256 {
             let mut hasher = DefaultHasher::new();
             text.hash(&mut hasher);
@@ -1168,7 +1190,8 @@ impl Fonts {
     pub fn line_height(&self, size: f32) -> i32 {
         let size = font_size(size);
         self.font
-            .horizontal_line_metrics(size)
+            .as_ref()
+            .and_then(|f| f.horizontal_line_metrics(size))
             .map_or(size * 1.25, |metrics| metrics.new_line_size)
             .ceil() as i32
     }
@@ -1178,7 +1201,8 @@ impl Fonts {
     pub fn css_line_height(&self, size: f32) -> f32 {
         let size = font_size(size);
         self.font
-            .horizontal_line_metrics(size)
+            .as_ref()
+            .and_then(|f| f.horizontal_line_metrics(size))
             .map_or(size * 1.2, |metrics| {
                 metrics.ascent.round() - metrics.descent.round() + metrics.line_gap.round()
             })
@@ -1249,7 +1273,11 @@ impl Fonts {
     fn glyph(&mut self, id: u16, size: f32) -> &(fontdue::Metrics, Vec<u8>) {
         let key = (id, size.to_bits());
         if !self.cache.contains_key(&key) {
-            let glyph = self.font.rasterize_indexed(id, size);
+            let glyph = self
+                .font
+                .as_ref()
+                .expect("validated font face")
+                .rasterize_indexed(id, size);
             if self.cached_bytes + glyph.1.len() > GLYPH_CACHE_BYTES
                 || self.cache.len() >= GLYPH_CACHE_ENTRIES
             {

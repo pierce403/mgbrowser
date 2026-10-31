@@ -11,7 +11,7 @@ description = "Mg browser executable and platform integration"
 
 [profile.release]
 # Keep the complete archive within already-installed updaters' 8 MiB download cap.
-# Preserve default panic/unwind and runtime limits; thin LTO trims cross-crate bloat.
+# Preserve default panic/unwind and runtime limits; full LTO trims cross-crate bloat.
 opt-level = "z"
 lto = "thin"
 codegen-units = 1
@@ -32,6 +32,10 @@ required-features = ["legacy-test-engine"]
 [[test]]
 name = "script_session"
 required-features = ["legacy-test-engine"]
+
+[[test]]
+name = "m2_platform_session"
+harness = false
 
 [dependencies]
 mg-chassis = { workspace = true, features = ["chrome"] }
