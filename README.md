@@ -2,7 +2,22 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.26
+## Latest verified release: v0.9.27
+
+v0.9.27 upgrades CSS and layout fidelity across `mg-sparkle` — anti-aliased
+`border-radius` backgrounds, borders, and rounded overflow clipping; full CSS
+2.1 Appendix E stacking contexts and `z-index` paint order; `position: absolute`
+hypothetical static positions in block/inline/flex/grid and `position: sticky`
+clamping; `direction: rtl`, CSS Sizing 4 `aspect-ratio`, flex/grid `calc(% + px)`,
+CSS 2.1 `float`/`clear` and BFC float avoidance, `overflow: auto | scroll` and
+`table-cell` clipping, general `::before`/`::after` pseudo-elements,
+`visibility: collapse`, and CSSOM container-query length units — advancing honest
+upstream WPT coverage from `339` to **528 PASS / 421 FAIL / 62 UNSUPPORTED of
+1,011** (`+189` new passes, `0` losses) on the static reftest lane and to
+**16/16 files and 79/79 final subtests** (`100%`) on the Window parsing lane.
+[Release notes](docs/RELEASE-v0.9.27.md).
+
+## Previous release: v0.9.26
 
 v0.9.26 delivers Chromium-style desktop browser UX parity: Omnibox search & URL
 classification (`DuckDuckGo`, `Google`, `Wikipedia`) with live autocomplete

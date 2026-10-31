@@ -6,6 +6,40 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-030 : CSS layout fidelity, rounded boxes, stacking & WPT coverage
+
+Stability: stable
+
+### Dependencies
+
+F-003 local document rendering, F-005 styled text and images, F-014 Stylo CSS, F-026 WPT coverage.
+
+### Properties
+
+Pure-Rust CSS and layout upgrades in `mg-sparkle`: CSS Backgrounds 3
+`border-radius` resolution, 4×4 supersampled anti-aliased corner borders and
+backgrounds without outer bleed, and stackable rounded `CanvasClip` overflow
+masking; full CSS 2.1 Appendix E stacking contexts (`opacity < 1`, `position:
+fixed | sticky`, positioned and flex/grid item `z-index`, Step 2 floats, Step 3
+atomic inlines and `order`-sorted items, Step 4 `z-index: auto` positioned
+pseudo-contexts interleaved with `z-index: 0` contexts); `position: absolute |
+fixed` hypothetical static positioning across block/inline/flex/grid and
+`position: sticky` clamping; `direction: rtl`, CSS Sizing 4 `aspect-ratio`,
+flex/grid `calc(% + px)`, CSS 2.1 `float`/`clear` and BFC float avoidance,
+`overflow: auto | scroll` and `table-cell` clipping, general `::before` and
+`::after` pseudo-elements, `visibility: collapse`, and CSSOM container-query
+length units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`). Advances honest WPT
+static reftests to `528 PASS / 421 FAIL / 62 UNSUPPORTED` of `1,011` (`+189`
+passes, `0` regressions) and WPT Window parsing to `16/16` files and `79/79`
+final subtests (`100%`). See [docs/RELEASE-v0.9.27.md](docs/RELEASE-v0.9.27.md).
+
+### Test criteria
+
+- [x] `border-radius`, Appendix E stacking contexts, abspos static positions, `position: sticky`, `direction: rtl`, `aspect-ratio`, flex/grid `calc()`, `float`/`clear`, `overflow: auto|scroll`, `::before`/`::after`, and `visibility: collapse` pass unit and layout geometry suites (`milestone3_css_layout`).
+- [x] Pinned WPT static flexbox reftest lane advances to `528 PASS / 421 FAIL / 62 UNSUPPORTED` of `1,011` with zero losses across all prior passes and runnable cases.
+- [x] Pinned WPT Window declared-value parsing lane reaches `16/16` passing files and `79/79` passing final subtests (`flex-valid.html` passing).
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-029 : Desktop browser UX, Omnibox, Find, History & Downloads
 
 Stability: stable

@@ -12,6 +12,7 @@
     "css/css-flexbox/parsing/flex-invalid.html",
     "css/css-flexbox/parsing/flex-shrink-invalid.html",
     "css/css-flexbox/parsing/flex-shrink-valid.html",
+    "css/css-flexbox/parsing/flex-valid.html",
     "css/css-flexbox/parsing/flex-wrap-invalid.html",
     "css/css-flexbox/parsing/flex-wrap-valid.html",
     "css/css-flexbox/parsing/order-invalid.html",

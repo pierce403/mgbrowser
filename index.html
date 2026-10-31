@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mgbrowser: v0.9.26 Experimental Preview</title>
+<title>mgbrowser: v0.9.27 Experimental Preview</title>
 <meta name="description" content="A browser written from the ground up in Rust. Install the experimental Linux preview. Modern-web compatibility is poor.">
 <link rel="canonical" href="https://mgbrowser.org/">
 <link rel="icon" type="image/svg+xml" href="/assets/mgbrowser.svg">
@@ -17,12 +17,13 @@
 <header><a class="brand" href="/">mgbrowser</a><nav aria-label="Main navigation"><a href="#limitations">Limitations</a><a href="https://github.com/pierce403/mgbrowser">GitHub ↗</a></nav></header>
 <main>
 <section class="hero" aria-labelledby="title">
-<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.26 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
+<div class="identity"><img src="/assets/mgbrowser.svg" width="176" height="176" alt="Burning magnesium periodic-table tile: 12, Mg, 24.305"><div><p class="eyebrow">v0.9.27 Experimental Preview</p><h1 id="title">mgbrowser</h1><p class="intro">A browser written from the ground up in Rust.</p></div></div>
 <p class="platform">Linux x86_64 · X11 / XWayland · glibc 2.35+ · No Rust toolchain needed</p>
 <div class="install"><code id="install-command">curl -fsSL https://mgbrowser.org/install.sh | bash</code><button id="copy" type="button" hidden>Copy</button></div>
 <span id="copy-status" role="status"></span>
 <div class="links"><a href="https://github.com/pierce403/mgbrowser/releases/latest">Release notes ↗</a><a href="https://github.com/pierce403/mgbrowser/releases/latest/download/mgbrowser-linux-x86_64.tar.gz">Download Linux tarball ↓</a><a href="/install.sh">Inspect installer</a></div>
 <p class="warning"><strong>Modern-web compatibility is poor.</strong> This is a technology preview, not a daily browser. Do not use it for banking, sensitive authenticated browsing, or arbitrary hostile websites.</p>
+<p class="muted"><strong>v0.9.27: CSS layout fidelity, rounded corners, Appendix E stacking &amp; +189 WPT passes.</strong> Anti-aliased <code>border-radius</code> rendering and rounded overflow clipping, full CSS 2.1 Appendix E stacking contexts and <code>z-index</code> paint order, <code>position: absolute</code> hypothetical static positions across block/inline/flex/grid and <code>position: sticky</code> clamping, <code>direction: rtl</code>, CSS Sizing 4 <code>aspect-ratio</code>, flex/grid <code>calc(% + px)</code>, CSS 2.1 <code>float</code>/<code>clear</code>, <code>overflow: auto | scroll</code> and <code>table-cell</code> clipping, general <code>::before</code>/<code>::after</code> pseudo-elements, <code>visibility: collapse</code>, and CSSOM container-query length units — advancing honest WPT static reftests from 339 to <strong>528 PASS / 421 FAIL / 62 UNSUPPORTED of 1,011</strong> and WPT Window parsing to <strong>16/16 files (79/79 subtests)</strong>. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/RELEASE-v0.9.27.md">Scope and limits ↗</a></p>
 <p class="muted"><strong>v0.9.26: Desktop browser UX, Omnibox, Find in Page, persistent History &amp; Downloads.</strong> Omnibox URL/search classification (<code>DuckDuckGo</code>, <code>Google</code>, <code>Wikipedia</code>) with live autocomplete dropdown; built-in <code>chrome://newtab</code>, <code>chrome://history</code>, <code>chrome://bookmarks</code>, <code>chrome://downloads</code>, <code>chrome://settings</code>, and <code>chrome://version</code> pages; Find in Page (<code>Ctrl+F</code> / <code>F3</code> / <code>Shift+F3</code>) with match highlights and scroll-into-view; persistent user-local Browsing History (<code>Ctrl+H</code>) and Clear Browsing Data (<code>Ctrl+Shift+Delete</code>); pure-Rust File Downloads (<code>Content-Disposition: attachment</code>, <code>&lt;a download&gt;</code>, <code>Ctrl+S</code> Save Page, <code>Ctrl+J</code>); toggleable Bookmarks Bar (<code>Ctrl+Shift+B</code>); Hard Reload (<code>Ctrl+Shift+R</code>), Stop Loading (<code>Escape</code>), and View Page Source (<code>Ctrl+U</code>); plus <code>Ctrl+Shift+T</code> Reopen Closed Tab, <code>Ctrl+N</code> New Window, <code>Ctrl+1..9</code> tab jump, middle-click background link open &amp; tab close, tab-strip context menu, mouse buttons 8/9 Back/Forward, and <code>F11</code> fullscreen. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/RELEASE-v0.9.26.md">Scope and limits ↗</a></p>
 <p class="muted"><strong>v0.9.25: App-wide X11 clipboard, text selection, and Cut / Copy / Paste.</strong> Pure-Rust X11 <code>CLIPBOARD</code> and <code>PRIMARY</code> selection ownership and retrieval across every surface: click/drag or <code>Ctrl+C</code> / right-click on DevTools <code>Console</code> rows to copy full untruncated JS errors and stack traces (plus <code>copy()</code> sync); full cursor/selection editing, Cut/Copy/Paste, and middle-click <code>PRIMARY</code> paste in the <code>&gt;</code> REPL, DevTools inputs, Address bar (<code>Paste and go</code>), and page <code>&lt;input&gt;</code> fields (with strict password-field copy/cut protection); drag/double-click/<code>Ctrl+A</code> text selection and <code>Ctrl+C</code> copy on web pages; and copy actions across <code>Elements</code>, <code>Sources</code>, <code>Network</code>, <code>Performance</code>, <code>Application</code>, and <code>About</code>. <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/RELEASE-v0.9.25.md">Scope and limits ↗</a></p>
 <p class="muted"><strong>v0.9.24: Six-panel Chromium-style DevTools workspace.</strong> Built-in <code>Elements</code> (<code>Styles</code>, <code>Computed</code>, <code>Box Model</code>, live <code>element.style</code> DOM/CSS editing), <code>Console</code> (19-method <code>console.*</code> API in the isolated Boa worker, interactive <code>&gt;</code> JS REPL, Command Line API <code>$_</code>, <code>$0..$4</code>, <code>$$()</code>, <code>table()</code>, <code>copy()</code>, <code>inspect()</code>, inline object trees), <code>Sources</code>, <code>Network</code> (4-tab <code>Headers</code>/<code>Response</code>/<code>Preview</code>/<code>Timing</code> inspector with secret redaction, <code>Disable cache</code>, <code>Preserve log</code>), <code>Performance</code> (64-frame 60 FPS sparkline), and <code>Application</code> (session cookies, TLS/sandbox security, resources), with Right/Bottom docking, draggable splitter resize, and interactive Element Picker (<code>↖</code> / <code>Ctrl+Shift+C</code>). <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/RELEASE-v0.9.24.md">Scope and limits ↗</a></p>
@@ -45,22 +46,22 @@
 <p class="eyebrow">Measured compatibility</p><h2 id="wpt-title">Web Platform Tests</h2>
 <p class="muted">The complete reviewed v0.9.21 and fresh documentation-closeout measurements retain 339 PASS / 610 FAIL / 62 UNSUPPORTED of 1,011, with all339 protected passes and949 runnable cases preserved. The separate Window lane remains15/16 passing files and77/79 passing final subtests. Native target control adds no WPT passes; actual outcomes, pixels and worker counters match the prior source. The earlier v0.9.19 layout change gained one negative-margins match, but four already-failing comparisons worsened and another failing reference exceeded the unchanged viewport. Those failures remain counted. Neither lane is full browser conformance or a score run on the installed binary.</p>
 <!-- wpt-score:start -->
-<p class="wpt-score"><strong>339 / 1011 selected tests passing</strong></p>
-<p>Fail: 610 · Unsupported: 62 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
+<p class="wpt-score"><strong>528 / 1011 selected tests passing</strong></p>
+<p>Fail: 421 · Unsupported: 62 · Errors: 0 · Timeouts: 0 · Crashes: 0.</p>
 <p class="muted">A pinned flexbox reftest selection using the real Rust browser navigation, resource and rendering path. This is a selected subset, not the full Web Platform Tests suite or JavaScript testharness coverage. These are current-source measurements, not a score for the installed release.</p>
 <p>Pages reruns this selection and checks the recorded score before publishing a commit. Unsupported cases stay in the denominator.</p>
 <p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/WPT.md">Method and limitations ↗</a> · <a href="/wpt-results.json">Full results and tested commit ↗</a></p>
 <details><summary>Reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
 <p>Corpus SHA-256: <code class="wpt-fingerprint">d8c4bd6aacd93d964c10302e63b9c42576d785a055848772f9f71b2436f8075d</code></p>
-<p>Browser source SHA-256: <code class="wpt-fingerprint">a23e0bcc07c0ba9516ccf087047ca2c1e04a462bd619346b1d92079f0fcedbb3</code></p>
+<p>Browser source SHA-256: <code class="wpt-fingerprint">53864da764bb3a6eaf1c2ec3aff309755f4efd009f73f3102de91556c718d454</code></p>
 </details>
 <!-- wpt-score:end -->
 <h3>Separate Window parsing tests</h3>
 <!-- wpt-window-score:start -->
-<p class="wpt-score"><strong>15 / 16 selected Window files passing</strong></p>
-<p>File outcomes: Fail: 1 · Timeouts: 0 · Precondition failed: 0 · Unsupported: 0 · Errors: 0 · Crashes: 0 · Pending: 0.</p>
-<p>Observed final subtests: Pass: 77 / 79 observed final rows; Fail: 2 · Timeouts: 0 · Not run: 0 · Precondition failed: 0.</p>
+<p class="wpt-score"><strong>16 / 16 selected Window files passing</strong></p>
+<p>File outcomes: Fail: 0 · Timeouts: 0 · Precondition failed: 0 · Unsupported: 0 · Errors: 0 · Crashes: 0 · Pending: 0.</p>
+<p>Observed final subtests: Pass: 79 / 79 observed final rows; Fail: 0 · Timeouts: 0 · Not run: 0 · Precondition failed: 0.</p>
 <p>Final inventories observed for 16 / 16 files. Every selected file has an observed final inventory. Source-declared calls: 79; this is not a result denominator. Result prefixes without Completion are not counted as final inventory.</p>
 <p class="muted">A fixed upstream flexbox declared-value parsing cohort using the real Browser and unchanged Window testharness. These are current-source measurements, not a score for the installed release. The separate static reftest selection is not added to these totals. This is not the full WPT suite or complete Window compatibility.</p>
 <p><a href="https://github.com/pierce403/mgbrowser/blob/main/docs/WPT_WINDOW_PARSING.md">Window method and limitations ↗</a> · <a href="/wpt-window-results.json">Full Window report and tested commit ↗</a></p>
@@ -68,7 +69,7 @@
 <details><summary>Window reproducibility fingerprints</summary>
 <p>Upstream WPT: <a href="https://github.com/web-platform-tests/wpt/commit/84daed4ae966d9624bed22f43587c79283ad1fea"><code class="wpt-fingerprint">84daed4ae966d9624bed22f43587c79283ad1fea</code></a></p>
 <p>Window manifest SHA-256: <code class="wpt-fingerprint">5223099747ed3b1669f311faa5007abb2c037bebb90aa7411b67c6470b4518d0</code></p>
-<p>Evaluated source SHA-256: <code class="wpt-fingerprint">4eed31022f432371c1381e21bbf1c9394ca245826f1be07d39c220975889777e</code></p>
+<p>Evaluated source SHA-256: <code class="wpt-fingerprint">c5789018e73bbf09baae4903afa5748e899c7b2bdf4b8fd9a50464f452e92496</code></p>
 </details>
 <!-- wpt-window-score:end -->
 <p class="muted">The historical first baseline failed at missing <code>style.getPropertyValue()</code>, before CSS comparisons. The v0.9.14 declaration bridge improves the unchanged selection to fifteen passing files and 77 passing final subtests; two <code>flex-valid</code> sign/container-unit calc assertions remain failing. The <a href="https://github.com/pierce403/mgbrowser/blob/main/docs/WPT_WINDOW_CI.md">genuinely cold CI build</a> and separate exact-source reports retain the existing limits and full inventories.</p>
@@ -101,6 +102,7 @@
 <!-- project-status:start -->
 <p class="muted">Latest work log: <time datetime="2026-10-30">2026-10-30</time>. Status comes from the repository’s feature specification.</p>
 <ul class="status-list">
+  <li><span>F-030 : CSS layout fidelity, rounded boxes, stacking &amp; WPT coverage</span><small>stable</small></li>
   <li><span>F-029 : Desktop browser UX, Omnibox, Find, History &amp; Downloads</span><small>stable</small></li>
   <li><span>F-028 : Native X11 clipboard and app-wide text selection</span><small>stable</small></li>
   <li><span>F-026 : Upstream Web Platform Tests coverage</span><small>in-progress</small></li>
