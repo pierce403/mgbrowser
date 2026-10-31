@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "Toolbar: Back, Forward, Refresh/Stop, Bookmark, Omnibox URL/Search, DevTools (</>), Menu.\nAlt+Left/Right: history; Ctrl+R/F5: refresh; Ctrl+Shift+R: hard reload; Esc: stop.\nCtrl+D: bookmark; Ctrl+Shift+O: bookmarks; Ctrl+Shift+B: bookmarks bar.\nCtrl+H: history; Ctrl+J: downloads; Ctrl+F / F3 / Shift+F3: find in page.\nCtrl+S: save page; Ctrl+U: view page source; Ctrl+Shift+Del: clear browsing data.\nHover a link for its URL; Ctrl+click, middle-click or right-click > Open link in new tab.\nRight-click > Inspect element, F12 or Ctrl+Shift+I: DevTools side panel.\nCtrl+Shift+C/J/E/P: Elements, Console, Network & Performance tabs.\n"
             );
             println!(
-                "Ctrl+T: new tab; Ctrl+Shift+T: reopen closed tab; Ctrl+N: new window.\nCtrl+W: close tab; Ctrl+Shift+W: close window; Ctrl+1..9 / Ctrl+Tab: switch tabs; F11: fullscreen.\nInternal pages: chrome://newtab, chrome://history, chrome://bookmarks, chrome://downloads, chrome://settings, chrome://version.\nDrag tabs to reorder, detach into windows or split left/right; middle-click or right-click tabs.\nMenu > Settings: theme, browser size, search engine and bookmarks bar (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
+                "Ctrl+T: new tab; Ctrl+Shift+T: reopen closed tab; Ctrl+N: new window.\nCtrl+W: close tab; Ctrl+Shift+W: close window; Ctrl+1..9 / Ctrl+Tab: switch tabs; F11: fullscreen.\nInternal pages: chrome://newtab, chrome://history, chrome://bookmarks, chrome://downloads, chrome://settings, chrome://version.\nDrag tabs to reorder, detach into windows or split left/right; middle-click or right-click tabs.\nMenu > Settings: theme, browser size, search engine and bookmarks bar (saved automatically).\nSize defaults to the desktop DPI; Ctrl+plus/minus changes size, Ctrl+0 restores System.\nAlt+plus/minus/0 or Ctrl+Wheel zooms the current tab (25%..500%) without scaling chrome.\nMenu > About: version, compile time and commit.\n  --about                      Print build details\n  --update                     Check, verify and install a newer release\n  --restore-session            Reopen tabs saved from the previous desktop session\n  --no-auto-update             Disable background updates for this launch\nMGBROWSER_NO_AUTO_UPDATE=1 also disables background checks.\n"
             );
             println!(
                 "mgbrowser {} : Experimental Preview\nUsage: mgbrowser [URL] [OPTIONS]\nExample: mgbrowser https://example.com/\n\n  --profile [URL]              Profile page load, external scripts, and render cache\n  --disable-scripts             Disable isolated Boa page JavaScript\n  --enable-scripts              Explicitly enable isolated Boa page JavaScript (default)\n  --remote-debugging-port PORT  Enable partial loopback CDP (0: free port)\n  --script-worker-selftest      Check restricted worker isolation\n  --version                    Print version\n  --help                       Show this help\n\nRequires Linux x86_64, X11/XWayland and a DejaVu/Liberation font.\nSet MGBROWSER_FONT to a TrueType/OpenType font file if needed.\nCtrl+L address; Enter navigate; Tab fields; Alt+Left back; wheel scroll.\nModern-web compatibility is poor. Do not use for sensitive browsing.",
@@ -93,6 +93,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut has_initial_url = false;
     let mut restart_scripts = true;
     let mut restore_tabs = Vec::new();
+    let mut restore_session = false;
+    let mut user_data_dir: Option<std::path::PathBuf> = None;
     let mut debug_port: Option<u16> = None;
     let mut remote_debugging_pipe = false;
     let mut headless = false;
@@ -102,6 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     while i < args.len() {
         match args[i].as_str() {
             "--no-auto-update" => auto_update = false,
+            "--restore-session" => restore_session = true,
             "--remote-debugging-pipe" => remote_debugging_pipe = true,
             "--headless" => headless = true,
             value if value.starts_with("--headless=") => {
@@ -110,11 +113,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-startup-window" => no_startup_window = true,
             "--enable-automation" => {}
             "--user-data-dir" => {
-                if args.get(i + 1).is_some_and(|next| !next.starts_with('-')) {
+                if let Some(next) = args.get(i + 1)
+                    && !next.starts_with('-')
+                {
+                    user_data_dir = Some(std::path::PathBuf::from(next));
                     i += 1;
                 }
             }
-            value if value.starts_with("--user-data-dir=") => {}
+            value if value.starts_with("--user-data-dir=") => {
+                if let Some((_, dir)) = value.split_once('=')
+                    && !dir.is_empty()
+                {
+                    user_data_dir = Some(std::path::PathBuf::from(dir));
+                }
+            }
             "--profile" => {
                 profile_mode = true;
                 if let Some(next) = args.get(i + 1)
@@ -243,6 +255,53 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
+    let abs_user_data_dir = user_data_dir.and_then(|dir| {
+        if dir.is_absolute() {
+            Some(dir)
+        } else {
+            std::env::current_dir().ok().map(|cwd| cwd.join(dir))
+        }
+    });
+    let allow_default_profile = !headless || std::env::var_os("XDG_CONFIG_HOME").is_some();
+    if let Some(dir) = &abs_user_data_dir {
+        let store = std::sync::Arc::new(mg_browser::local_storage::LocalStorageStore::at_path(
+            dir.join("local_storage.json"),
+        ));
+        if let Ok(snapshot) = store.load() {
+            session.load_local_storage_snapshot(snapshot);
+        }
+        session.set_storage_persistence(Some(store));
+    } else if allow_default_profile {
+        let store = std::sync::Arc::new(mg_browser::local_storage::LocalStorageStore::user());
+        if let Ok(snapshot) = store.load() {
+            session.load_local_storage_snapshot(snapshot);
+        }
+        session.set_storage_persistence(Some(store));
+    }
+    let session_store = if let Some(dir) = &abs_user_data_dir {
+        mg_browser::session_store::SessionStore::at_path(dir.join("session.json"))
+    } else {
+        mg_browser::session_store::SessionStore::user()
+    };
+    let mut previous_session = if abs_user_data_dir.is_some() || allow_default_profile {
+        session_store.load().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if restore_session && !previous_session.is_empty() {
+        let saved = std::mem::take(&mut previous_session);
+        let mut iter = saved.into_iter();
+        if !has_initial_url && let Some(first) = iter.next() {
+            initial = first.url;
+            has_initial_url = true;
+        }
+        for tab in iter {
+            if restore_tabs.len() >= 15 {
+                break;
+            }
+            restore_tabs.push(tab.url);
+        }
+    }
     // Test journeys/CDP are deterministic and never initiate unattended updates.
     if journey.query.is_some() || debug_port.is_some() || automation_mode {
         auto_update = false;
@@ -254,6 +313,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             initial,
             has_initial_url,
             restore_tabs,
+            previous_session,
             executable,
             scripts: restart_scripts,
             auto_update,

@@ -2,6 +2,9 @@
 //! remain logical while Sparkle rasterizes both pages and controls at this scale.
 
 pub const SCALE_STEPS: [u16; 8] = [75, 100, 125, 150, 175, 200, 250, 300];
+pub const PAGE_ZOOM_STEPS: [u16; 17] = [
+    25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500,
+];
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ScalePreference {
@@ -46,6 +49,21 @@ pub(super) fn next_step(percent: u16, increase: bool) -> u16 {
     }
 }
 
+pub(super) fn next_page_zoom_step(percent: u16, increase: bool) -> u16 {
+    if increase {
+        PAGE_ZOOM_STEPS
+            .into_iter()
+            .find(|step| *step > percent)
+            .unwrap_or(500)
+    } else {
+        PAGE_ZOOM_STEPS
+            .into_iter()
+            .rev()
+            .find(|step| *step < percent)
+            .unwrap_or(25)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +97,21 @@ mod tests {
         assert_eq!(next_step(300, true), 300);
         assert_eq!(next_step(133, false), 125);
         assert_eq!(next_step(133, true), 150);
+    }
+
+    #[test]
+    fn page_zoom_steps_cover_25_to_500_percent() {
+        assert_eq!(PAGE_ZOOM_STEPS.first(), Some(&25));
+        assert_eq!(PAGE_ZOOM_STEPS.last(), Some(&500));
+        assert!(PAGE_ZOOM_STEPS.contains(&100));
+        for pair in PAGE_ZOOM_STEPS.windows(2) {
+            assert!(pair[0] < pair[1]);
+            assert_eq!(next_page_zoom_step(pair[0], true), pair[1]);
+            assert_eq!(next_page_zoom_step(pair[1], false), pair[0]);
+        }
+        assert_eq!(next_page_zoom_step(25, false), 25);
+        assert_eq!(next_page_zoom_step(500, true), 500);
+        assert_eq!(next_page_zoom_step(100, true), 110);
+        assert_eq!(next_page_zoom_step(100, false), 90);
     }
 }

@@ -29,6 +29,12 @@ pub struct NewTabRequest {
     pub url: String,
     pub background: bool,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionTab {
+    pub url: String,
+    pub title: String,
+}
 use mg_sparkle::{
     document::{self, Document, Item},
     page_session::{
@@ -42,7 +48,7 @@ use mg_sparkle::{
     paint::{Canvas, Fonts},
 };
 pub(crate) use runtime_automation::AutomationCompletion;
-pub use scale::ScalePreference;
+pub use scale::{PAGE_ZOOM_STEPS, ScalePreference};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -82,6 +88,10 @@ enum Action {
     Scale(ScalePreference),
     ScaleDown,
     ScaleUp,
+    PageZoomIn,
+    PageZoomOut,
+    PageZoomReset,
+    RestorePreviousSession,
     Update,
     Restart,
     CloseMenu,
@@ -212,6 +222,7 @@ struct FrameCacheKey {
     viewport_height: u32,
     scroll: i32,
     scale_percent: u16,
+    page_zoom_percent: u16,
     focused_input: Option<usize>,
     select_all: bool,
     input_selection: Option<(usize, usize, usize)>,
@@ -360,6 +371,9 @@ pub struct Browser {
     scale_preference: ScalePreference,
     system_scale: u16,
     scale_change: Option<ScalePreference>,
+    page_zoom_percent: u16,
+    previous_session: Vec<SessionTab>,
+    restore_session_requested: bool,
     pub(crate) geometry_revision: u64,
     scroll_reflow_pending: bool,
     settings_status: String,
@@ -522,6 +536,72 @@ impl Browser {
         self.set_scale_preference(preference);
         self.scale_change = Some(self.scale_preference);
     }
+    /// Current per-tab page zoom percentage (`25..=500`, default `100`).
+    pub fn page_zoom_percent(&self) -> u16 {
+        self.page_zoom_percent
+    }
+    /// Set per-tab page zoom (`25..=500`), leaving toolbar chrome unscaled.
+    pub fn set_page_zoom_percent(&mut self, percent: u16) {
+        let clamped = percent.clamp(25, 500);
+        if self.page_zoom_percent != clamped {
+            self.page_zoom_percent = clamped;
+            self.last_synced_viewport = None;
+            self.invalidate_scaled_geometry();
+            if self.page_url == "chrome://settings" {
+                self.refresh_current_internal_page();
+            }
+        }
+    }
+    pub fn zoom_page_in(&mut self) {
+        self.set_page_zoom_percent(scale::next_page_zoom_step(self.page_zoom_percent, true));
+    }
+    pub fn zoom_page_out(&mut self) {
+        self.set_page_zoom_percent(scale::next_page_zoom_step(self.page_zoom_percent, false));
+    }
+    pub fn reset_page_zoom(&mut self) {
+        self.set_page_zoom_percent(100);
+    }
+    /// Handle `Ctrl+Wheel` over the page viewport without scaling browser chrome.
+    pub fn wheel_zoom_at(&mut self, x: i32, y: i32, zoom_in: bool) -> bool {
+        if self.modal_open() {
+            return false;
+        }
+        if self.chrome && y < self.page_top() {
+            return false;
+        }
+        if self.devtools.open
+            && self.devtools_is_docked()
+            && (x < 0
+                || x as u32 >= self.page_viewport_width()
+                || y >= self.page_top() + self.viewport_height() as i32)
+        {
+            return false;
+        }
+        if zoom_in {
+            self.zoom_page_in();
+        } else {
+            self.zoom_page_out();
+        }
+        self.status = format!("Page zoom: {}%", self.page_zoom_percent);
+        true
+    }
+    /// Supply the previous session's open HTTP(S) tabs (`<= 16`) for `chrome://newtab` and Menu restore.
+    pub fn set_previous_session(&mut self, tabs: Vec<SessionTab>) {
+        let truncated: Vec<SessionTab> = tabs.into_iter().take(16).collect();
+        if self.previous_session != truncated {
+            self.previous_session = truncated;
+            if self.page_url == "chrome://newtab" {
+                self.refresh_current_internal_page();
+            }
+            self.dirty = true;
+        }
+    }
+    pub fn previous_session(&self) -> &[SessionTab] {
+        &self.previous_session
+    }
+    pub fn take_restore_session_request(&mut self) -> bool {
+        std::mem::take(&mut self.restore_session_requested)
+    }
     /// Apply a host-loaded preference without generating a persistence request.
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
@@ -644,11 +724,20 @@ impl Browser {
                 Action::Settings,
                 Action::Bookmarks,
             ];
-            if self.height >= 450 {
+            if self.height >= 480 {
+                items.push(Action::PageZoomOut);
+                items.push(Action::PageZoomReset);
+                items.push(Action::PageZoomIn);
                 items.push(Action::History);
                 items.push(Action::Downloads);
+                items.push(Action::RestorePreviousSession);
                 items.push(Action::FindBar);
                 items.push(Action::ClearBrowsingData);
+                items.push(Action::ToggleDevTools);
+            } else if self.height >= 320 {
+                items.push(Action::PageZoomOut);
+                items.push(Action::PageZoomReset);
+                items.push(Action::PageZoomIn);
                 items.push(Action::ToggleDevTools);
             } else if self.height >= 280 {
                 items.push(Action::ToggleDevTools);
@@ -731,6 +820,10 @@ impl Browser {
             | Action::History
             | Action::Downloads
             | Action::FindBar => self.menu_open,
+            Action::PageZoomOut | Action::PageZoomReset | Action::PageZoomIn => {
+                self.menu_open && self.height >= 320
+            }
+            Action::RestorePreviousSession => self.menu_open && self.height >= 480,
             Action::ClearBrowsingData => self.menu_open || self.history_open,
             Action::OpenBookmark(_) | Action::RemoveBookmark(_) | Action::BookmarkPage(_) => {
                 self.bookmarks_open
@@ -952,6 +1045,9 @@ impl Browser {
             scale_preference: ScalePreference::System,
             system_scale: 100,
             scale_change: None,
+            page_zoom_percent: 100,
+            previous_session: Vec::new(),
+            restore_session_requested: false,
             geometry_revision: 0,
             scroll_reflow_pending: false,
             settings_status: String::new(),
@@ -1083,12 +1179,19 @@ impl Browser {
         self.stop_scroll();
         self.omnibox.open = false;
         self.omnibox.selected = None;
-        if body.is_none()
-            && !automatic
-            && let Some(internal) = omnibox::InternalPage::parse(&target)
-        {
-            self.load_internal_page(internal, add_history);
-            return;
+        if body.is_none() && !automatic {
+            let trimmed = target.trim().trim_end_matches('/');
+            if trimmed.eq_ignore_ascii_case("chrome://restore-session")
+                || trimmed.eq_ignore_ascii_case("about:restore-session")
+                || trimmed.eq_ignore_ascii_case("mg://restore-session")
+            {
+                self.activate(Action::RestorePreviousSession);
+                return;
+            }
+            if let Some(internal) = omnibox::InternalPage::parse(&target) {
+                self.load_internal_page(internal, add_history);
+                return;
+            }
         }
         let target = if target.contains("://") {
             target
@@ -2515,12 +2618,26 @@ impl Browser {
         }
     }
     fn current_viewport_state(&self) -> ViewportState {
-        ViewportState {
-            inner_width: self.page_viewport_width(),
-            inner_height: self.viewport_height(),
-            scroll_x: 0.0,
-            scroll_y: self.scroll.max(0) as f32,
-            device_pixel_ratio: self.effective_scale(),
+        if self.page_zoom_percent == 100 {
+            ViewportState {
+                inner_width: self.page_viewport_width(),
+                inner_height: self.viewport_height(),
+                scroll_x: 0.0,
+                scroll_y: self.scroll.max(0) as f32,
+                device_pixel_ratio: self.effective_scale(),
+            }
+        } else {
+            let zoom = f64::from(self.page_zoom_percent) / 100.0;
+            ViewportState {
+                inner_width: ((f64::from(self.page_viewport_width()) / zoom).round() as u32)
+                    .clamp(1, 4800),
+                inner_height: ((f64::from(self.viewport_height()) / zoom).round() as u32)
+                    .clamp(1, 3600),
+                scroll_x: 0.0,
+                scroll_y: (f64::from(self.scroll.max(0)) / zoom) as f32,
+                device_pixel_ratio: self.effective_scale()
+                    * (f32::from(self.page_zoom_percent) / 100.0),
+            }
         }
     }
     fn same_origin_http(base: &str, candidate: &str) -> bool {
@@ -3385,7 +3502,29 @@ impl Browser {
         // Initial resources stay parent-owned. Dynamic fetches are not supported;
         // workers receive no network/file capabilities or resource payloads.
         document.stylesheets = std::mem::take(&mut self.document.stylesheets);
-        document.resources = std::mem::take(&mut self.document.resources);
+        let mut resources = std::mem::take(&mut self.document.resources);
+        if resources
+            .keys()
+            .any(|k| k.starts_with("data:image/png;base64,"))
+        {
+            let active_inline: HashSet<&str> = document
+                .nodes
+                .iter()
+                .filter_map(|n| match n.tag.as_str() {
+                    "canvas" => n
+                        .attr(mg_sparkle::document::INTERNAL_CANVAS_ATTR)
+                        .map(str::trim),
+                    "img" => n.attr("src").map(str::trim),
+                    _ => None,
+                })
+                .filter(|s| s.starts_with("data:image/png;base64,"))
+                .collect();
+            resources.retain(|k, _| {
+                !k.starts_with("data:image/png;base64,") || active_inline.contains(k.as_str())
+            });
+        }
+        document.resources = resources;
+        document.materialize_inline_canvas_resources();
         document.resource_warnings = std::mem::take(&mut self.document.resource_warnings);
         self.document = document;
         for &(node, version) in ack {
@@ -3604,6 +3743,7 @@ impl Browser {
                 | Action::OpenHistory(_)
                 | Action::HistoryPage(_)
                 | Action::ClearBrowsingData
+                | Action::RestorePreviousSession
                 | Action::Downloads
                 | Action::DownloadPage(_)
                 | Action::ClearDownloads
@@ -4010,6 +4150,44 @@ impl Browser {
                     self.modal_focus = if increase { 5 } else { 4 };
                 }
             }
+            Action::PageZoomIn | Action::PageZoomOut | Action::PageZoomReset => {
+                match action {
+                    Action::PageZoomIn => {
+                        self.zoom_page_in();
+                        if self.menu_open {
+                            self.modal_focus = 6;
+                        }
+                    }
+                    Action::PageZoomOut => {
+                        self.zoom_page_out();
+                        if self.menu_open {
+                            self.modal_focus = 4;
+                        }
+                    }
+                    Action::PageZoomReset => {
+                        self.reset_page_zoom();
+                        if self.menu_open {
+                            self.modal_focus = 5;
+                        }
+                    }
+                    _ => {}
+                }
+                self.status = format!("Page zoom: {}%", self.page_zoom_percent);
+            }
+            Action::RestorePreviousSession => {
+                self.menu_open = false;
+                if self.previous_session.is_empty() {
+                    self.status = "No previous session to restore".into();
+                } else {
+                    self.restore_session_requested = true;
+                    let n = self.previous_session.len();
+                    self.status = format!(
+                        "Restoring previous session ({} tab{})...",
+                        n,
+                        if n == 1 { "" } else { "s" }
+                    );
+                }
+            }
             Action::Update => {
                 self.update_requested = !self.restart_available;
                 self.about_open = true;
@@ -4220,11 +4398,13 @@ impl Browser {
                 self.devtools.clear_network();
                 self.browsing_history.clear();
                 self.downloads.clear();
+                self.previous_session.clear();
                 self.history_changes.push(history::HistoryChange::ClearAll);
                 self.clear_browsing_data = true;
                 self.refresh_current_internal_page();
                 self.status =
-                    "Cleared browsing history, cookies, network log, and downloads".into();
+                    "Cleared browsing history, cookies, local storage, network log, and downloads"
+                        .into();
             }
             Action::Downloads => {
                 if !self.devtools_is_docked() {
@@ -4675,6 +4855,18 @@ impl Browser {
                 return;
             }
         }
+        if alt && !ctrl {
+            let zoom_action = match sym {
+                0x2b | 0x3d => Some(Action::PageZoomIn),
+                0x2d => Some(Action::PageZoomOut),
+                0x30 => Some(Action::PageZoomReset),
+                _ => None,
+            };
+            if let Some(action) = zoom_action {
+                self.activate(action);
+                return;
+            }
+        }
         if self.about_open && !alt && ctrl && !shift && matches!(sym, 0x63 | 0x43 | 0xff63 | 0xff9e)
         {
             let _ = self.copy_selection();
@@ -4983,6 +5175,15 @@ impl Browser {
         let top = self.page_top();
         let scale_percent = self.effective_scale_percent();
         let scale = f32::from(scale_percent) / 100.;
+        let page_zoom_percent = self.page_zoom_percent;
+        let zoomed = page_zoom_percent != 100;
+        let zoom = f64::from(page_zoom_percent) / 100.0;
+        let desired_page_scale = scale * (f32::from(page_zoom_percent) / 100.);
+        let render_scale = if zoomed {
+            desired_page_scale.clamp(0.75, 3.0)
+        } else {
+            scale
+        };
         let focused_input = if let Focus::Input(node) = self.focus {
             Some(node)
         } else {
@@ -5005,6 +5206,7 @@ impl Browser {
             viewport_height,
             scroll: self.scroll,
             scale_percent,
+            page_zoom_percent,
             focused_input,
             select_all: self.select_all,
             input_selection,
@@ -5036,17 +5238,25 @@ impl Browser {
                 select_all: self.select_all,
                 input_selection,
             };
-            let viewport = mg_sparkle::render::Viewport {
-                width: page_width,
-                height: viewport_height,
-                scroll: self.scroll,
+            let viewport = if zoomed {
+                mg_sparkle::render::Viewport {
+                    width: ((f64::from(page_width) / zoom).round() as u32).clamp(1, 4800),
+                    height: ((f64::from(viewport_height) / zoom).round() as u32).clamp(1, 3600),
+                    scroll: (f64::from(self.scroll) / zoom).round() as i32,
+                }
+            } else {
+                mg_sparkle::render::Viewport {
+                    width: page_width,
+                    height: viewport_height,
+                    scroll: self.scroll,
+                }
             };
             let (frame, timings) = mg_sparkle::render::render_scaled_cached(
                 &self.document,
                 &mut self.fonts,
                 viewport,
                 &controls,
-                scale,
+                render_scale,
                 doc_key,
                 &mut self.style_cache,
             );
@@ -5058,7 +5268,11 @@ impl Browser {
         };
         let composition_started = Instant::now();
         self.devtools.rendering = frame.diagnostics.clone();
-        self.content_height = frame.content_height + top;
+        self.content_height = if zoomed {
+            ((f64::from(frame.content_height) * zoom).round() as i32) + top
+        } else {
+            frame.content_height + top
+        };
         let bottom_dock = self.devtools_bottom_height().unwrap_or(0) as i32;
         let max_scroll = (self.content_height - (self.height as i32 - bottom_dock) + 40).max(0);
         if (clamp_scroll || self.smooth_scroll.is_some()) && self.scroll > max_scroll {
@@ -5073,31 +5287,76 @@ impl Browser {
             settled.frame_cached &= timings.frame_cached;
             return (canvas, settled);
         }
-        self.boxes = frame
-            .boxes
-            .iter()
-            .cloned()
-            .map(|mut rect| {
-                rect.y += top;
-                rect
-            })
-            .collect();
+        self.boxes = if zoomed {
+            frame
+                .boxes
+                .iter()
+                .cloned()
+                .map(|mut rect| {
+                    let x0 = (f64::from(rect.x) * zoom).round() as i32;
+                    let x1 = (f64::from(rect.x + rect.width as i32) * zoom).round() as i32;
+                    let y0 = (f64::from(rect.y) * zoom).round() as i32 + top;
+                    let y1 = (f64::from(rect.y + rect.height as i32) * zoom).round() as i32 + top;
+                    rect.x = x0;
+                    rect.y = y0;
+                    rect.width = (x1 - x0).max(0) as u32;
+                    rect.height = (y1 - y0).max(0) as u32;
+                    rect
+                })
+                .collect()
+        } else {
+            frame
+                .boxes
+                .iter()
+                .cloned()
+                .map(|mut rect| {
+                    rect.y += top;
+                    rect
+                })
+                .collect()
+        };
         if self.chrome {
             let max_x = page_width as i32;
-            self.selection.page_runs = frame
-                .text_runs
-                .iter()
-                .filter(|r| r.x < max_x && !r.text.is_empty())
-                .map(|r| clipboard::DocTextRun {
-                    node: r.node,
-                    x: r.x,
-                    doc_y: r.y + self.scroll,
-                    width: r.width,
-                    height: r.height,
-                    font_size: r.font_size,
-                    text: r.text.clone(),
-                })
-                .collect();
+            self.selection.page_runs = if zoomed {
+                frame
+                    .text_runs
+                    .iter()
+                    .filter(|r| !r.text.is_empty())
+                    .filter_map(|r| {
+                        let x0 = (f64::from(r.x) * zoom).round() as i32;
+                        if x0 >= max_x {
+                            return None;
+                        }
+                        let x1 = (f64::from(r.x + r.width as i32) * zoom).round() as i32;
+                        let y0 = (f64::from(r.y) * zoom).round() as i32;
+                        let y1 = (f64::from(r.y + r.height as i32) * zoom).round() as i32;
+                        Some(clipboard::DocTextRun {
+                            node: r.node,
+                            x: x0,
+                            doc_y: y0 + self.scroll,
+                            width: (x1 - x0).max(1) as u32,
+                            height: (y1 - y0).max(1) as u32,
+                            font_size: r.font_size * (zoom as f32),
+                            text: r.text.clone(),
+                        })
+                    })
+                    .collect()
+            } else {
+                frame
+                    .text_runs
+                    .iter()
+                    .filter(|r| r.x < max_x && !r.text.is_empty())
+                    .map(|r| clipboard::DocTextRun {
+                        node: r.node,
+                        x: r.x,
+                        doc_y: r.y + self.scroll,
+                        width: r.width,
+                        height: r.height,
+                        font_size: r.font_size,
+                        text: r.text.clone(),
+                    })
+                    .collect()
+            };
         } else {
             self.selection.page_runs.clear();
         }
@@ -5106,23 +5365,34 @@ impl Browser {
         self.hits = frame
             .hits
             .iter()
-            .map(|hit| Hit {
-                x: hit.x,
-                y: hit.y + top,
-                w: hit.w,
-                h: hit.h,
-                action: match &hit.action {
-                    mg_sparkle::render::Action::Input(node) => Action::Input(*node),
-                    mg_sparkle::render::Action::Submit(node) => Action::Submit(*node),
-                    mg_sparkle::render::Action::Click(node) => Action::PageClick(*node),
-                    mg_sparkle::render::Action::Toggle(node) => Action::PageToggle(*node),
-                    mg_sparkle::render::Action::Reset(node) => Action::PageReset(*node),
-                    mg_sparkle::render::Action::Select(node) => Action::PageSelect(*node),
-                    mg_sparkle::render::Action::Link { node, href } => Action::Link {
-                        node: *node,
-                        href: href.clone(),
+            .map(|hit| {
+                let (hx, hy, hw, hh) = if zoomed {
+                    let x0 = (f64::from(hit.x) * zoom).round() as i32;
+                    let x1 = (f64::from(hit.x + hit.w as i32) * zoom).round() as i32;
+                    let y0 = (f64::from(hit.y) * zoom).round() as i32 + top;
+                    let y1 = (f64::from(hit.y + hit.h as i32) * zoom).round() as i32 + top;
+                    (x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32)
+                } else {
+                    (hit.x, hit.y + top, hit.w, hit.h)
+                };
+                Hit {
+                    x: hx,
+                    y: hy,
+                    w: hw,
+                    h: hh,
+                    action: match &hit.action {
+                        mg_sparkle::render::Action::Input(node) => Action::Input(*node),
+                        mg_sparkle::render::Action::Submit(node) => Action::Submit(*node),
+                        mg_sparkle::render::Action::Click(node) => Action::PageClick(*node),
+                        mg_sparkle::render::Action::Toggle(node) => Action::PageToggle(*node),
+                        mg_sparkle::render::Action::Reset(node) => Action::PageReset(*node),
+                        mg_sparkle::render::Action::Select(node) => Action::PageSelect(*node),
+                        mg_sparkle::render::Action::Link { node, href } => Action::Link {
+                            node: *node,
+                            href: href.clone(),
+                        },
                     },
-                },
+                }
             })
             .collect();
         if !self.chrome
@@ -5151,17 +5421,64 @@ impl Browser {
             }
         }
         self.refresh_hovered_link();
+        let needs_resample = zoomed && (desired_page_scale - render_scale).abs() >= 1e-4;
         if !self.chrome {
             self.dirty = false;
+            if !zoomed {
+                timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
+                // No-chrome rendering does not retain a frame, so return the
+                // original surface without a pixel clone for embedding callers.
+                return (
+                    Rc::try_unwrap(frame)
+                        .unwrap_or_else(|_| unreachable!("no-chrome frame retained"))
+                        .canvas,
+                    timings,
+                );
+            }
+            let mut out = Canvas::new_scaled(page_width, viewport_height, BG, scale);
+            if !needs_resample
+                && frame.canvas.width == out.width
+                && frame.canvas.height == out.height
+            {
+                timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
+                return (
+                    Rc::try_unwrap(frame)
+                        .unwrap_or_else(|_| unreachable!("no-chrome frame retained"))
+                        .canvas,
+                    timings,
+                );
+            }
+            if needs_resample {
+                let dst_w = out.width;
+                let dst_h = out.height;
+                resample_bilinear_into(
+                    &mut out.pixels,
+                    dst_w as usize,
+                    0,
+                    dst_w,
+                    dst_h,
+                    &frame.canvas,
+                );
+            } else {
+                let rows = frame.canvas.height.min(out.height) as usize;
+                let copy_w = frame.canvas.width.min(out.width) as usize;
+                let dst_stride = out.width as usize;
+                let src_stride = frame.canvas.width as usize;
+                for row in 0..rows {
+                    out.pixels[row * dst_stride..row * dst_stride + copy_w].copy_from_slice(
+                        &frame.canvas.pixels[row * src_stride..row * src_stride + copy_w],
+                    );
+                }
+                if rows > 0 && copy_w > 0 {
+                    let last = (rows - 1) * dst_stride;
+                    for row in rows..out.height as usize {
+                        out.pixels
+                            .copy_within(last..last + copy_w, row * dst_stride);
+                    }
+                }
+            }
             timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
-            // No-chrome rendering does not retain a frame, so return the
-            // original surface without a pixel clone for embedding callers.
-            return (
-                Rc::try_unwrap(frame)
-                    .unwrap_or_else(|_| unreachable!("no-chrome frame retained"))
-                    .canvas,
-                timings,
-            );
+            return (out, timings);
         }
         let mut canvas = Canvas::new_scaled(self.width, self.height, BG, scale);
         let physical_top = canvas.physical_edge(i64::from(top)) as u32;
@@ -5169,30 +5486,55 @@ impl Browser {
             .physical_edge(i64::from(top) + i64::from(self.viewport_height()))
             .min(i64::from(canvas.height)) as u32;
         let page_rows = physical_bottom.saturating_sub(physical_top);
-        let rows = frame.canvas.height.min(page_rows);
-        let src_w = frame.canvas.width.min(canvas.width) as usize;
-        let dst_stride = canvas.width as usize;
-        let src_stride = frame.canvas.width as usize;
-        if src_stride == dst_stride {
-            let offset = physical_top as usize * dst_stride;
-            let length = rows as usize * dst_stride;
-            canvas.pixels[offset..offset + length].copy_from_slice(&frame.canvas.pixels[..length]);
+        if needs_resample {
+            let dst_w = canvas
+                .physical_edge(i64::from(page_width))
+                .min(i64::from(canvas.width))
+                .max(0) as u32;
+            let dst_stride = canvas.width as usize;
+            resample_bilinear_into(
+                &mut canvas.pixels,
+                dst_stride,
+                physical_top as usize,
+                dst_w,
+                page_rows,
+                &frame.canvas,
+            );
         } else {
-            for row in 0..rows as usize {
-                let dst_off = (physical_top as usize + row) * dst_stride;
-                let src_off = row * src_stride;
-                canvas.pixels[dst_off..dst_off + src_w]
-                    .copy_from_slice(&frame.canvas.pixels[src_off..src_off + src_w]);
+            let rows = frame.canvas.height.min(page_rows);
+            let max_dst_w = if zoomed {
+                canvas
+                    .physical_edge(i64::from(page_width))
+                    .min(i64::from(canvas.width))
+                    .max(0) as u32
+            } else {
+                canvas.width
+            };
+            let src_w = frame.canvas.width.min(max_dst_w) as usize;
+            let dst_stride = canvas.width as usize;
+            let src_stride = frame.canvas.width as usize;
+            if src_stride == dst_stride && src_w == dst_stride {
+                let offset = physical_top as usize * dst_stride;
+                let length = rows as usize * dst_stride;
+                canvas.pixels[offset..offset + length]
+                    .copy_from_slice(&frame.canvas.pixels[..length]);
+            } else {
+                for row in 0..rows as usize {
+                    let dst_off = (physical_top as usize + row) * dst_stride;
+                    let src_off = row * src_stride;
+                    canvas.pixels[dst_off..dst_off + src_w]
+                        .copy_from_slice(&frame.canvas.pixels[src_off..src_off + src_w]);
+                }
             }
-        }
-        // Independent rounding of the page height and its translated bottom
-        // edge can differ by one physical row. Extend only that terminal row,
-        // without stretching text or allocating a second resampled surface.
-        if rows > 0 && src_w > 0 {
-            let last = (physical_top as usize + rows as usize - 1) * dst_stride;
-            for row in rows..page_rows {
-                let dst_off = (physical_top as usize + row as usize) * dst_stride;
-                canvas.pixels.copy_within(last..last + src_w, dst_off);
+            // Independent rounding of the page height and its translated bottom
+            // edge can differ by one physical row. Extend only that terminal row,
+            // without stretching text or allocating a second resampled surface.
+            if rows > 0 && src_w > 0 {
+                let last = (physical_top as usize + rows as usize - 1) * dst_stride;
+                for row in rows..page_rows {
+                    let dst_off = (physical_top as usize + row as usize) * dst_stride;
+                    canvas.pixels.copy_within(last..last + src_w, dst_off);
+                }
             }
         }
         timings.composition_ms = composition_started.elapsed().as_secs_f64() * 1000.0;
@@ -5518,6 +5860,182 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn push_escaped_bounded(out: &mut String, text: &str, max_bytes: usize, attr: bool) -> bool {
+    for ch in text.chars() {
+        let esc = match ch {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' if attr => "&quot;",
+            _ => "",
+        };
+        let need = if esc.is_empty() {
+            ch.len_utf8()
+        } else {
+            esc.len()
+        };
+        if out.len() + need > max_bytes {
+            return true;
+        }
+        if esc.is_empty() {
+            out.push(ch);
+        } else {
+            out.push_str(esc);
+        }
+    }
+    false
+}
+
+/// Serialize `doc.nodes` into compact `<script>`-free HTML (`<= max_bytes`) so
+/// `ensure_automation_session` can initialize a modern utility-world realm on
+/// pages whose raw HTML exceeded the 1 MiB script worker source limit.
+fn synthesize_automation_html(doc: &Document, max_bytes: usize) -> (String, bool) {
+    enum Step {
+        Open(usize, usize),
+        Close(String),
+    }
+    if doc.nodes.is_empty() {
+        return ("<!doctype html><html><body></body></html>".into(), false);
+    }
+    let mut out = String::with_capacity(doc.nodes.len().saturating_mul(24).min(max_bytes));
+    out.push_str("<!doctype html>");
+    let mut stack = vec![Step::Open(0, 0)];
+    let mut visited = 0usize;
+    let mut truncated = false;
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Close(tag) => {
+                if out.len() + tag.len() + 3 > max_bytes {
+                    truncated = true;
+                    break;
+                }
+                out.push_str("</");
+                out.push_str(&tag);
+                out.push('>');
+            }
+            Step::Open(id, depth) => {
+                if depth > 128 {
+                    truncated = true;
+                    continue;
+                }
+                let Some(node) = doc.nodes.get(id) else {
+                    continue;
+                };
+                if id == 0 || node.tag == "#document" {
+                    for &child in node.children.iter().rev() {
+                        stack.push(Step::Open(child, depth + 1));
+                    }
+                    continue;
+                }
+                visited += 1;
+                if visited > 12_000 || out.len() + 16 >= max_bytes {
+                    truncated = true;
+                    continue;
+                }
+                if node.tag == "#text" {
+                    if push_escaped_bounded(&mut out, &node.text, max_bytes, false) {
+                        truncated = true;
+                    }
+                    continue;
+                }
+                if node.tag.starts_with('#') {
+                    continue;
+                }
+                let tag: String = node
+                    .tag
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | ':'))
+                    .take(48)
+                    .collect();
+                if tag.is_empty() {
+                    continue;
+                }
+                if tag.eq_ignore_ascii_case("script") {
+                    let placeholder = if node.children.is_empty() {
+                        "<script type=\"text/plain\"></script>"
+                    } else {
+                        "<script type=\"text/plain\"> </script>"
+                    };
+                    if out.len() + placeholder.len() <= max_bytes {
+                        out.push_str(placeholder);
+                    } else {
+                        truncated = true;
+                    }
+                    continue;
+                }
+                if tag.eq_ignore_ascii_case("style") {
+                    let placeholder = if node.children.is_empty() {
+                        "<style></style>"
+                    } else {
+                        "<style> </style>"
+                    };
+                    if out.len() + placeholder.len() <= max_bytes {
+                        out.push_str(placeholder);
+                    } else {
+                        truncated = true;
+                    }
+                    continue;
+                }
+                if out.len() + tag.len() + 2 > max_bytes {
+                    truncated = true;
+                    continue;
+                }
+                out.push('<');
+                out.push_str(&tag);
+                for (k, v) in node.attributes.iter().take(24) {
+                    if k == mg_sparkle::document::INTERNAL_CANVAS_ATTR {
+                        continue;
+                    }
+                    let key: String = k
+                        .chars()
+                        .filter(|c| {
+                            c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | ':' | '.')
+                        })
+                        .take(48)
+                        .collect();
+                    if key.is_empty() || out.len() + key.len() + 8 >= max_bytes {
+                        break;
+                    }
+                    out.push(' ');
+                    out.push_str(&key);
+                    out.push_str("=\"");
+                    let val_cap = out
+                        .len()
+                        .saturating_add(1024)
+                        .min(max_bytes.saturating_sub(2));
+                    let _ = push_escaped_bounded(&mut out, v, val_cap, true);
+                    out.push('"');
+                }
+                out.push('>');
+                let is_void = matches!(
+                    tag.to_ascii_lowercase().as_str(),
+                    "area"
+                        | "base"
+                        | "br"
+                        | "col"
+                        | "embed"
+                        | "hr"
+                        | "img"
+                        | "input"
+                        | "link"
+                        | "meta"
+                        | "param"
+                        | "source"
+                        | "track"
+                        | "wbr"
+                );
+                if !is_void {
+                    stack.push(Step::Close(tag));
+                    for &child in node.children.iter().rev() {
+                        stack.push(Step::Open(child, depth + 1));
+                    }
+                }
+            }
+        }
+    }
+    (out, truncated)
 }
 fn decode_text(bytes: &[u8], content_type: &str) -> String {
     if content_type
@@ -6558,7 +7076,33 @@ impl Browser {
         }
         if self.page_session.is_none() {
             self.child_pool.set_generation(self.generation)?;
-            let automation_only = !self.scripts_enabled;
+            let automation_only = true;
+            let is_blank_empty = self.raw_page_html.is_empty()
+                && self.document.title.is_empty()
+                && self.document.nodes.len() <= 4;
+            let use_synthesized = (!self.raw_page_html.is_empty()
+                && !resources::script_document_admissible(&self.page_url, &self.raw_page_html))
+                || (self.raw_page_html.is_empty() && !is_blank_empty);
+            let (html_for_session, synthesized_truncated) = if use_synthesized {
+                synthesize_automation_html(&self.document, 512 * 1024)
+            } else {
+                (self.raw_page_html.clone(), false)
+            };
+            let url_for_session =
+                if resources::script_document_admissible(&self.page_url, &html_for_session) {
+                    self.page_url.clone()
+                } else {
+                    url::Url::parse(&self.page_url)
+                        .ok()
+                        .and_then(|mut u| {
+                            u.set_query(None);
+                            u.set_fragment(None);
+                            let s = u.to_string();
+                            resources::script_document_admissible(&s, &html_for_session)
+                                .then_some(s)
+                        })
+                        .unwrap_or_else(|| "https://mgbrowser.local/".to_owned())
+                };
             let page_url_str = self.page_url.as_str();
             let sess_entries = net::storage_origin_key(page_url_str)
                 .and_then(|k| {
@@ -6589,8 +7133,8 @@ impl Browser {
             };
             let (mut session, mut reply) = self.child_pool.start_with_platform(
                 mg_sparkle::js_browser::Request {
-                    url: self.page_url.clone(),
-                    html: self.raw_page_html.clone(),
+                    url: url_for_session,
+                    html: html_for_session,
                     external_scripts: None,
                 },
                 self.generation,
@@ -6613,8 +7157,25 @@ impl Browser {
                 }
                 let wake = self.validate_task_wake(&reply, received)?;
                 let lifecycle = self.validate_lifecycle_reply(&reply, None)?;
-                let document =
-                    Self::project_reply(&mut reply, &self.page_url, Some(&self.document))?;
+                let matches_arena = reply.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.nodes.len() >= self.document.nodes.len()
+                        && self
+                            .document
+                            .nodes
+                            .iter()
+                            .zip(&snapshot.nodes)
+                            .all(|(a, b)| a.tag == b.tag)
+                });
+                let document = if use_synthesized && (synthesized_truncated || !matches_arena) {
+                    Self::validate_detached_reply(&mut reply)?;
+                    None
+                } else {
+                    Some(Self::project_reply(
+                        &mut reply,
+                        &self.page_url,
+                        Some(&self.document),
+                    )?)
+                };
                 reply
                     .validate_observer_frame(self.child_pool.observer_expectation())
                     .map_err(|e| e.to_string())?;
@@ -6633,7 +7194,12 @@ impl Browser {
                     return Err(error);
                 }
             };
-            self.acknowledge_projection(document, &[]);
+            if let Some(document) = document {
+                self.acknowledge_projection(document, &[]);
+                self.console_detached_dom = false;
+            } else {
+                self.console_detached_dom = true;
+            }
             self.observer_ledger = Some(ledger);
             self.lifecycle = lifecycle;
             self.last_accounting = Some(reply.accounting_snapshot());
@@ -7353,6 +7919,66 @@ impl Browser {
         (self.exit_after_smoke && self.smoke_stage == 3).then_some(!self.smoke_failed)
     }
 }
+
+fn resample_bilinear_into(
+    dst_pixels: &mut [u32],
+    dst_stride: usize,
+    dst_y_off: usize,
+    dst_w: u32,
+    dst_h: u32,
+    src: &Canvas,
+) {
+    if dst_w == 0 || dst_h == 0 || src.width == 0 || src.height == 0 {
+        return;
+    }
+    let sw = src.width as usize;
+    let sh = src.height as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+    for dy in 0..dh {
+        let sy_f =
+            ((dy as f64 + 0.5) * (sh as f64) / (dh as f64) - 0.5).clamp(0.0, (sh - 1) as f64);
+        let y0 = sy_f.floor() as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = ((sy_f - y0 as f64) * 256.0).round() as u32;
+        let row_dst = (dst_y_off + dy) * dst_stride;
+        for dx in 0..dw {
+            let sx_f =
+                ((dx as f64 + 0.5) * (sw as f64) / (dw as f64) - 0.5).clamp(0.0, (sw - 1) as f64);
+            let x0 = sx_f.floor() as usize;
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = ((sx_f - x0 as f64) * 256.0).round() as u32;
+            let p00 = src.pixels[y0 * sw + x0];
+            let p10 = src.pixels[y0 * sw + x1];
+            let p01 = src.pixels[y1 * sw + x0];
+            let p11 = src.pixels[y1 * sw + x1];
+            let w00 = (256 - wx) * (256 - wy);
+            let w10 = wx * (256 - wy);
+            let w01 = (256 - wx) * wy;
+            let w11 = wx * wy;
+            let r = (((p00 >> 16) & 0xff) * w00
+                + ((p10 >> 16) & 0xff) * w10
+                + ((p01 >> 16) & 0xff) * w01
+                + ((p11 >> 16) & 0xff) * w11
+                + 32768)
+                >> 16;
+            let g = (((p00 >> 8) & 0xff) * w00
+                + ((p10 >> 8) & 0xff) * w10
+                + ((p01 >> 8) & 0xff) * w01
+                + ((p11 >> 8) & 0xff) * w11
+                + 32768)
+                >> 16;
+            let b = ((p00 & 0xff) * w00
+                + (p10 & 0xff) * w10
+                + (p01 & 0xff) * w01
+                + (p11 & 0xff) * w11
+                + 32768)
+                >> 16;
+            dst_pixels[row_dst + dx] = (r.min(255) << 16) | (g.min(255) << 8) | b.min(255);
+        }
+    }
+}
+
 #[cfg(test)]
 fn test_app() -> Browser {
     let path = std::env::var("MGBROWSER_FONT")
@@ -8233,5 +8859,396 @@ mod chrome_ux_parity_tests {
         assert!(app.devtools.open);
 
         server.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_page_ensure_automation_session_supports_utility_world_title_and_dom() {
+        enum Msg {
+            Pump(TaskPump),
+            Automation(AutomationRequest),
+        }
+        struct Sess {
+            generation: u64,
+            session_id: u64,
+            seq: u64,
+            tx: std::sync::mpsc::Sender<Msg>,
+            rx: std::sync::mpsc::Receiver<(SessionReply, Option<AutomationResult>)>,
+        }
+        impl scripts::ScriptSession for Sess {
+            fn id(&self) -> u64 {
+                self.session_id
+            }
+            fn try_dispatch(&mut self, _: SessionInput, _: u64) -> Result<u64, String> {
+                Err("unexpected dispatch".into())
+            }
+            fn try_task_pump(&mut self, pump: TaskPump, _: u64) -> Result<u64, String> {
+                self.seq += 1;
+                self.tx.send(Msg::Pump(pump)).map_err(|e| e.to_string())?;
+                Ok(self.seq)
+            }
+            fn try_automation(&mut self, req: AutomationRequest, _: u64) -> Result<u64, String> {
+                self.seq += 1;
+                self.tx
+                    .send(Msg::Automation(req))
+                    .map_err(|e| e.to_string())?;
+                Ok(self.seq)
+            }
+            fn try_recv(&mut self) -> Option<scripts::SessionUpdate> {
+                let (reply, automation) = self.rx.try_recv().ok()?;
+                Some(scripts::SessionUpdate {
+                    generation: self.generation,
+                    session_id: self.session_id,
+                    sequence: Some(self.seq),
+                    reply: Ok(reply),
+                    automation,
+                    continuation: scripts::SessionContinuation::Live,
+                })
+            }
+            fn cancel(&self) {}
+            fn charge_active(&mut self, _: Duration) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        struct Rt;
+        impl scripts::ScriptRuntime for Rt {
+            fn set_generation(&self, _: u64) -> Result<(), String> {
+                Ok(())
+            }
+            fn start(
+                &self,
+                _: mg_sparkle::js_browser::Request,
+                _: u64,
+            ) -> Result<(Box<dyn scripts::ScriptSession>, SessionReply), String> {
+                Err("expected start_with_platform".into())
+            }
+            fn start_with_platform(
+                &self,
+                request: mg_sparkle::js_browser::Request,
+                generation: u64,
+                platform: PlatformInit,
+            ) -> Result<(Box<dyn scripts::ScriptSession>, SessionReply), String> {
+                assert!(platform.automation_only);
+                assert!(request.html.len() <= 512 * 1024);
+                let (tx_cmd, rx_cmd) = std::sync::mpsc::channel::<Msg>();
+                let (tx_out, rx_out) = std::sync::mpsc::channel();
+                let (tx_init, rx_init) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let (Some(mut realm), reply) =
+                        mg_sparkle::js_browser::boa::BoaPageRealm::start_with_platform(
+                            request,
+                            mg_sparkle::page_session::observer::ObserverInit::Disabled,
+                            platform,
+                            [7u8; 32],
+                        )
+                    else {
+                        let _ = tx_init.send(Err("BoaPageRealm failed".to_owned()));
+                        return;
+                    };
+                    if tx_init.send(Ok(reply)).is_err() {
+                        return;
+                    }
+                    while let Ok(msg) = rx_cmd.recv() {
+                        let out = match msg {
+                            Msg::Pump(p) => (realm.pump_tasks(p), None),
+                            Msg::Automation(req) => {
+                                let (rep, res) = realm.automation(req);
+                                (rep, Some(res))
+                            }
+                        };
+                        if tx_out.send(out).is_err() {
+                            break;
+                        }
+                    }
+                });
+                let reply = rx_init.recv().map_err(|e| e.to_string())??;
+                Ok((
+                    Box::new(Sess {
+                        generation,
+                        session_id: 99,
+                        seq: 0,
+                        tx: tx_cmd,
+                        rx: rx_out,
+                    }),
+                    reply,
+                ))
+            }
+            fn close(&self) {}
+            fn wait_idle(&self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        // Build a > 1.2 MiB HTML document simulating news.google.com with massive inline script blobs.
+        let big_script = format!(
+            "window.__ran_page_script = true; /* {} */",
+            "x".repeat(450_000)
+        );
+        let oversized_html = format!(
+            "<!doctype html><html><head><title>Google News - Headlines</title>\
+             <script>{big_script}</script><script>{big_script}</script><script>{big_script}</script>\
+             </head><body><h1>Top Stories</h1><a href=\"/world\">World</a></body></html>"
+        );
+        assert!(oversized_html.len() > mg_sparkle::js_browser::MAX_SOURCE);
+
+        let mut app = test_app();
+        app.child_pool = Arc::new(Rt);
+        app.scripts_enabled = true;
+        app.set_debugging(true);
+        app.page_url = "https://news.example.org/".into();
+        app.address = app.page_url.clone();
+        // Simulate > 1 MiB page load completion where raw_page_html was cleared and page scripts skipped.
+        app.raw_page_html.clear();
+        app.document = document::parse(&oversized_html, &app.page_url);
+        app.loading = false;
+        app.fetching = false;
+        app.generation = 5;
+
+        app.ensure_automation_session()
+            .expect("ensure_automation_session must succeed on > 1 MiB page");
+        assert!(app.automation_only_session);
+        assert!(app.runtime_identity().is_some());
+
+        // First create the isolated utility world, then evaluate inside it.
+        app.dispatch_automation(
+            AutomationRequest {
+                owner: 1,
+                operation: mg_sparkle::page_session::automation::Operation::CreateIsolatedWorld {
+                    world: "__playwright_utility_world__".into(),
+                },
+                edits: Vec::new(),
+            },
+            6,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            app.poll_page_session();
+            if app.take_automation_completion().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        app.dispatch_automation(
+            AutomationRequest {
+                owner: 1,
+                operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                    source:
+                        "document.title + '|' + document.querySelector('h1').textContent + '|' + String(typeof window.__ran_page_script)"
+                            .into(),
+                    group: None,
+                    return_by_value: false,
+                    await_promise: false,
+                    user_gesture: false,
+                    world: Some("__playwright_utility_world__".into()),
+                },
+                edits: Vec::new(),
+            },
+            7,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut completion = None;
+        while Instant::now() < deadline {
+            app.poll_page_session();
+            if let Some(c) = app.take_automation_completion() {
+                completion = Some(c);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let result = completion.expect("automation completion").result.unwrap();
+        assert_eq!(
+            result,
+            AutomationResult::Value(mg_sparkle::page_session::automation::RemoteValue::String(
+                "Google News - Headlines|Top Stories|undefined"
+                    .encode_utf16()
+                    .collect()
+            ))
+        );
+    }
+
+    #[test]
+    fn per_tab_page_zoom_shortcuts_pill_menu_and_hit_testing_leave_toolbar_unscaled() {
+        let mut app = test_app();
+        app.resize(800, 600);
+        app.document = document::parse(
+            "<!doctype html><html><body style=\"margin:20px\"><p><a href=\"https://example.test/about\">About Link</a></p></body></html>",
+            "https://example.test/",
+        );
+        assert_eq!(app.page_zoom_percent(), 100);
+        let base_canvas = app.paint();
+        let base_link = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Link { .. }))
+            .unwrap()
+            .clone();
+
+        // Alt+= zooms in (100% -> 110% -> 125%) without changing global UI scale.
+        app.handle_key(Key::Character('='), false, false, true);
+        assert_eq!(app.page_zoom_percent(), 110);
+        app.handle_key(Key::Character('+'), false, true, true);
+        assert_eq!(app.page_zoom_percent(), 125);
+        assert_eq!(app.effective_scale_percent(), 100);
+
+        // Ctrl+Wheel over page viewport zooms further (125% -> 150%), while toolbar ignores wheel zoom.
+        assert!(!app.wheel_zoom_at(100, 20, true));
+        assert!(app.wheel_zoom_at(100, 120, true));
+        assert_eq!(app.page_zoom_percent(), 150);
+
+        let zoomed_canvas = app.paint();
+        // Window dimensions and left toolbar buttons stay unscaled.
+        assert_eq!(
+            (zoomed_canvas.width, zoomed_canvas.height),
+            (base_canvas.width, base_canvas.height)
+        );
+        assert_eq!(
+            zoomed_canvas.pixels[20 * 800 + 20],
+            base_canvas.pixels[20 * 800 + 20]
+        );
+        // Page region pixels and link hit-box scale up.
+        let page_offset = TOP as usize * 800;
+        assert_ne!(
+            &zoomed_canvas.pixels[page_offset..],
+            &base_canvas.pixels[page_offset..]
+        );
+        let zoomed_link = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Link { .. }))
+            .unwrap()
+            .clone();
+        assert!(zoomed_link.w > base_link.w);
+        assert!(zoomed_link.h > base_link.h);
+
+        // Clicking the toolbar zoom pill resets zoom to 100%.
+        let pill_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::PageZoomReset))
+            .expect("address bar zoom pill hit")
+            .clone();
+        app.pointer_down(pill_hit.x + 4, pill_hit.y + 4);
+        app.pointer_up(pill_hit.x + 4, pill_hit.y + 4);
+        assert_eq!(app.page_zoom_percent(), 100);
+
+        // Browser Menu zoom buttons (- / 100% / +) keep menu open and step cleanly,
+        // and extreme 25% and 500% bilinear resampling paths render cleanly.
+        app.activate(Action::Menu);
+        let _ = app.paint();
+        let plus_hit = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::PageZoomIn))
+            .expect("menu zoom in")
+            .clone();
+        app.click(plus_hit.x + 4, plus_hit.y + 4);
+        assert!(app.menu_open);
+        assert_eq!(app.page_zoom_percent(), 110);
+        app.handle_key(Key::Character('0'), false, false, true);
+        assert_eq!(app.page_zoom_percent(), 100);
+        app.activate(Action::CloseMenu);
+
+        app.set_page_zoom_percent(25);
+        let c25 = app.paint();
+        assert_eq!((c25.width, c25.height), (800, 600));
+        app.set_page_zoom_percent(500);
+        let c500 = app.paint();
+        assert_eq!((c500.width, c500.height), (800, 600));
+    }
+
+    #[test]
+    fn local_storage_persistence_hook_and_session_restore_controls_work() {
+        #[derive(Default)]
+        struct MemPersist {
+            saves: Mutex<Vec<net::LocalStorageMap>>,
+            clears: AtomicU64,
+        }
+        impl net::LocalStoragePersistence for MemPersist {
+            fn save(&self, snapshot: &BTreeMap<String, Vec<(String, String)>>) {
+                self.saves.lock().unwrap().push(snapshot.clone());
+            }
+            fn clear(&self) {
+                self.clears.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let persist = Arc::new(MemPersist::default());
+        let session = net::Session::new();
+        session.load_local_storage_snapshot(BTreeMap::from([(
+            "https://example.org".to_string(),
+            vec![("theme".to_string(), "dark".to_string())],
+        )]));
+        session.set_storage_persistence(Some(persist.clone()));
+        session.apply_local_storage_ops(
+            "https://example.org/app",
+            &[mg_sparkle::page_session::platform::StorageOp::Set {
+                key: "token".into(),
+                value: "abc".into(),
+            }],
+        );
+        assert_eq!(persist.saves.lock().unwrap().len(), 1);
+        assert_eq!(
+            session
+                .local_storage_snapshot()
+                .get("https://example.org")
+                .cloned()
+                .unwrap_or_default(),
+            vec![
+                ("theme".to_string(), "dark".to_string()),
+                ("token".to_string(), "abc".to_string())
+            ]
+        );
+
+        let fonts = Fonts::from_bytes(
+            std::fs::read(
+                std::env::var("MGBROWSER_FONT")
+                    .unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = Browser::new_with_session(fonts, Arc::new(scripts::DisabledScripts), session);
+        app.resize(800, 600);
+        app.set_previous_session(vec![
+            SessionTab {
+                url: "https://example.org/one".into(),
+                title: "One".into(),
+            },
+            SessionTab {
+                url: "https://example.org/two".into(),
+                title: "Two".into(),
+            },
+        ]);
+        app.navigate("chrome://newtab".into(), None, true);
+        let _ = app.paint();
+        let restore_link = app
+            .hits
+            .iter()
+            .find(|h| matches!(&h.action, Action::Link { href, .. } if href == "chrome://restore-session"))
+            .expect("restore session link on chrome://newtab")
+            .clone();
+        app.click(restore_link.x + 4, restore_link.y + 4);
+        assert!(app.take_restore_session_request());
+        assert!(!app.take_restore_session_request());
+
+        // Menu -> Restore session also sets the request.
+        app.activate(Action::Menu);
+        let _ = app.paint();
+        let menu_restore = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::RestorePreviousSession))
+            .expect("menu restore session button")
+            .clone();
+        app.click(menu_restore.x + 4, menu_restore.y + 4);
+        assert!(app.take_restore_session_request());
+
+        // ClearBrowsingData wipes local storage (invoking clear()) and previous_session.
+        app.handle_key(Key::Delete, true, true, false);
+        assert!(app.take_clear_browsing_data());
+        assert_eq!(persist.clears.load(Ordering::Relaxed), 1);
+        assert!(app.previous_session().is_empty());
     }
 }

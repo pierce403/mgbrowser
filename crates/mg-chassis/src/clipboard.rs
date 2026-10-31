@@ -1167,13 +1167,15 @@ impl Browser {
         let Some((ax, _, aw, _)) = self.address_bar_rect() else {
             return self.address.len();
         };
+        let show_zoom_pill = self.page_zoom_percent != 100 && aw >= 110;
+        let avail_w = aw as f32 - 20. - if show_zoom_pill { 62. } else { 0. };
         let cur = clamp_utf8(&self.address, self.selection.address_cursor);
         let addr = self.address.clone();
         hit_byte_in_line(
             &mut self.fonts,
             &addr,
             16.,
-            aw as f32 - 20.,
+            avail_w,
             cur,
             (x - (ax + 10)) as f32,
         )
@@ -1196,7 +1198,8 @@ impl Browser {
         let font_size = self
             .style_cache
             .style_for(node)
-            .map_or(17., |s| s.font_size);
+            .map_or(17., |s| s.font_size)
+            * (f32::from(self.page_zoom_percent) / 100.);
         let cur_b = clamp_utf8(&raw, self.selection.input_cursor);
         if is_pw {
             let char_count = raw.chars().count();

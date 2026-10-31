@@ -10,7 +10,8 @@ use mg_sparkle::js_browser::{
     MAX_CLASSIC_SOURCE_URL_BYTES, MAX_EXTERNAL_SCRIPTS, MAX_EXTERNAL_SOURCE, MAX_SCRIPTS,
     MAX_SOURCE, MAX_TYPED_REQUEST_BYTES, SourceWireMode, classic_script_type,
     external_request_json_bytes, external_source_json_bytes_with_provenance,
-    unsupported_external_attribute,
+    extract_static_module_specifiers, unsupported_external_attribute,
+    unsupported_module_external_attribute,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -102,8 +103,9 @@ pub fn load_with_profile(
     let mut font_urls = Vec::new();
     let mut css_cache = HashMap::<String, StylesheetSource>::new();
     let mut sheet_limit_warned = false;
+    let mut out_sheets = std::mem::take(&mut document.stylesheets);
     for (index, request) in requests.into_iter().enumerate() {
-        if document.stylesheets.len() >= MAX_SHEETS {
+        if out_sheets.len() >= MAX_SHEETS {
             if !sheet_limit_warned {
                 loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
             }
@@ -142,24 +144,26 @@ pub fn load_with_profile(
         };
         let mut import_stack = vec![sheet.base_url.clone()];
         push_sheet_with_imports(
+            document,
             sheet,
             0,
             &mut import_stack,
             &mut loader,
             &mut css_cache,
-            &mut document.stylesheets,
+            &mut out_sheets,
             &mut image_urls,
             &mut font_urls,
             &mut sheet_limit_warned,
         );
     }
+    document.stylesheets = out_sheets;
     for id in document.resource_nodes() {
         if image_urls.len() == MAX_REQUESTS * 2 {
             loader.warn("Image candidate count exceeds 64; remaining images are skipped".into());
             break;
         }
         let node = &document.nodes[id];
-        if node.tag == "img"
+        if matches!(node.tag.as_str(), "img" | "canvas")
             && let Some(src) = document.effective_image_reference(id, 1280.0, 1.0)
         {
             image_urls.push((document.base_url.clone(), src));
@@ -376,6 +380,10 @@ pub fn prepare_script_sources(
     let mut cache = HashMap::<String, usize>::new();
     let mut eligible_count = 0usize;
     let mut external_count = 0usize;
+    let mut submodule_requested = 0usize;
+    let page_origin = Url::parse(page_url).ok().map(|u| u.origin());
+    let mut module_scan_queue: std::collections::VecDeque<(String, String)> =
+        std::collections::VecDeque::new();
     for (index, node) in document.nodes.iter().enumerate() {
         if node.tag != "script" || inert_script(&document.nodes, index) {
             continue;
@@ -388,10 +396,25 @@ pub fn prepare_script_sources(
         if eligible_count > MAX_SCRIPTS {
             break;
         }
-        if kind == "module" {
+        let is_module = kind == "module";
+        if is_module && mode == SourceWireMode::Legacy {
+            continue;
+        }
+        if !is_module && mode == SourceWireMode::Modern && node.attr("nomodule").is_some() {
             continue;
         }
         let Some(src) = node.attr("src") else {
+            if is_module && mode == SourceWireMode::Modern {
+                let inline_text: String = node
+                    .children
+                    .iter()
+                    .filter(|&&c| document.nodes[c].tag == "#text")
+                    .map(|&c| document.nodes[c].text.as_str())
+                    .collect();
+                if !inline_text.is_empty() {
+                    module_scan_queue.push_back((document.base_url.clone(), inline_text));
+                }
+            }
             continue;
         };
         external_count += 1;
@@ -400,7 +423,12 @@ pub fn prepare_script_sources(
                 .warn("External script count limit reached (16); remaining sources skipped".into());
             break;
         }
-        if let Some(attribute) = unsupported_external_attribute(node) {
+        let unsupported_attr = if is_module {
+            unsupported_module_external_attribute(node)
+        } else {
+            unsupported_external_attribute(node)
+        };
+        if let Some(attribute) = unsupported_attr {
             loader.warn(format!(
                 "External script attribute {attribute} is not implemented; source skipped: {}",
                 label(src)
@@ -424,6 +452,13 @@ pub fn prepare_script_sources(
             continue;
         };
         resolved.set_fragment(None);
+        if is_module && page_origin.as_ref() != Some(&resolved.origin()) {
+            loader.warn(format!(
+                "Cross-origin module script blocked by same-origin policy; skipped: {}",
+                label(resolved.as_str())
+            ));
+            continue;
+        }
         let url = resolved.to_string();
         if let Some(&previous) = cache.get(&url) {
             let previous = &entries[previous];
@@ -464,6 +499,13 @@ pub fn prepare_script_sources(
         let Some(response) = loader.fetch(&url, limit, ResourceKind::Script, "script") else {
             continue;
         };
+        if is_module && !response.resource_same_origin_chain {
+            loader.warn(format!(
+                "Module script redirected across origins; skipped: {}",
+                label(&url)
+            ));
+            continue;
+        }
         // A conservative MIME policy also refuses text/plain + nosniff without
         // needing to discard the server's no-sniff instruction.
         let content_type = mime(&response.content_type);
@@ -511,6 +553,13 @@ pub fn prepare_script_sources(
             ));
             continue;
         }
+        if is_module {
+            let ref_url = provenance
+                .as_ref()
+                .map(|p| p.response_url.clone())
+                .unwrap_or_else(|| url.clone());
+            module_scan_queue.push_back((ref_url, source.clone()));
+        }
         source_bytes += source.len();
         wire_bytes += additional_wire;
         cache.insert(url, entries.len());
@@ -520,6 +569,142 @@ pub fn prepare_script_sources(
             provenance,
         });
     }
+
+    if mode == SourceWireMode::Modern && !module_scan_queue.is_empty() {
+        let mut importmap = HashMap::<String, String>::new();
+        for (idx, n) in document.nodes.iter().enumerate() {
+            if n.tag == "script"
+                && !inert_script(&document.nodes, idx)
+                && n.attr("type")
+                    .is_some_and(|t| t.trim().eq_ignore_ascii_case("importmap"))
+            {
+                let txt: String = n
+                    .children
+                    .iter()
+                    .filter(|&&c| document.nodes[c].tag == "#text")
+                    .map(|&c| document.nodes[c].text.as_str())
+                    .collect();
+                if let Ok(serde_json::Value::Object(root)) =
+                    serde_json::from_str::<serde_json::Value>(&txt)
+                    && let Some(serde_json::Value::Object(imps)) = root.get("imports")
+                {
+                    let base = Url::parse(&document.base_url).ok();
+                    for (k, v) in imps {
+                        if let Some(target) = v.as_str()
+                            && let Some(b) = &base
+                            && let Ok(mut joined) = b.join(target.trim())
+                        {
+                            joined.set_fragment(None);
+                            importmap.insert(k.clone(), joined.into());
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        let mut seen_sub_urls: HashSet<String> = cache.keys().cloned().collect();
+        for entry in &entries {
+            if let Some(prov) = &entry.provenance {
+                seen_sub_urls.insert(prov.response_url.clone());
+            }
+        }
+        while let Some((referrer_url, mod_src)) = module_scan_queue.pop_front() {
+            for spec in extract_static_module_specifiers(&mod_src) {
+                let candidate_url = if let Some(mapped) = importmap.get(&spec) {
+                    Url::parse(mapped).ok()
+                } else {
+                    let trimmed = spec.trim();
+                    if trimmed.starts_with('/')
+                        || trimmed.starts_with("./")
+                        || trimmed.starts_with("../")
+                    {
+                        Url::parse(&referrer_url).and_then(|b| b.join(trimmed)).ok()
+                    } else {
+                        Url::parse(trimmed)
+                            .ok()
+                            .filter(|u| matches!(u.scheme(), "http" | "https"))
+                    }
+                };
+                let Some(mut resolved) = candidate_url else {
+                    continue;
+                };
+                resolved.set_fragment(None);
+                let url = resolved.to_string();
+                if !seen_sub_urls.insert(url.clone()) {
+                    continue;
+                }
+                if page_origin.as_ref() != Some(&resolved.origin()) {
+                    loader.warn(format!(
+                        "Cross-origin module dependency blocked by same-origin policy; skipped: {}",
+                        label(&url)
+                    ));
+                    continue;
+                }
+                if entries.len() >= MAX_EXTERNAL_SCRIPTS
+                    || external_count >= MAX_EXTERNAL_SCRIPTS
+                    || loader.stopped()
+                    || source_bytes >= MAX_SOURCE
+                    || wire_bytes >= MAX_TYPED_REQUEST_BYTES
+                {
+                    break;
+                }
+                external_count += 1;
+                submodule_requested += 1;
+                let limit = MAX_EXTERNAL_SOURCE.min(MAX_SOURCE.saturating_sub(source_bytes));
+                let Some(response) = loader.fetch(&url, limit, ResourceKind::Script, "script")
+                else {
+                    continue;
+                };
+                if !response.resource_same_origin_chain {
+                    loader.warn(format!(
+                        "Module dependency redirected across origins; skipped: {}",
+                        label(&url)
+                    ));
+                    continue;
+                }
+                let content_type = mime(&response.content_type);
+                if !classic_script_type(&content_type) || content_type.is_empty() {
+                    loader.warn(format!(
+                        "Module dependency has unsupported content type: {} at {}",
+                        label(&response.content_type),
+                        label(&url)
+                    ));
+                    continue;
+                }
+                let Ok(source) = String::from_utf8(response.body) else {
+                    continue;
+                };
+                if response.url.as_str().len() > MAX_CLASSIC_SOURCE_URL_BYTES {
+                    continue;
+                }
+                let resp_url: String = response.url.into();
+                seen_sub_urls.insert(resp_url.clone());
+                let provenance = Some(ClassicSourceProvenance {
+                    response_url: resp_url.clone(),
+                    error_visibility: ClassicErrorVisibility::SameOrigin,
+                });
+                let additional_wire = external_source_json_bytes_with_provenance(
+                    usize::MAX,
+                    &source,
+                    provenance.as_ref(),
+                )
+                .unwrap_or(usize::MAX)
+                .saturating_add(usize::from(!entries.is_empty()));
+                if additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes) {
+                    continue;
+                }
+                module_scan_queue.push_back((resp_url, source.clone()));
+                source_bytes += source.len();
+                wire_bytes += additional_wire;
+                entries.push(ExternalScriptSource {
+                    node: usize::MAX,
+                    source,
+                    provenance,
+                });
+            }
+        }
+    }
+
     profile.total_ms = started.elapsed().as_secs_f64() * 1000.0;
     profile.loaded = entries.len();
     let requested = document
@@ -534,14 +719,20 @@ pub fn prepare_script_sources(
         })
         .take(MAX_SCRIPTS)
         .filter(|(_, node)| {
-            !node
+            let is_mod = node
                 .attr("type")
                 .unwrap_or("")
                 .trim()
-                .eq_ignore_ascii_case("module")
-                && node.attr("src").is_some()
+                .eq_ignore_ascii_case("module");
+            match mode {
+                SourceWireMode::Legacy => !is_mod && node.attr("src").is_some(),
+                SourceWireMode::Modern => {
+                    node.attr("src").is_some() && (is_mod || node.attr("nomodule").is_none())
+                }
+            }
         })
-        .count();
+        .count()
+        .saturating_add(submodule_requested);
     profile.rejected_sources = requested.saturating_sub(profile.loaded);
     profile.bytes = loader.bytes.saturating_sub(resources.bytes);
     loader.compact_warnings();
@@ -870,6 +1061,7 @@ fn combine_import_media(parent: &str, child: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn push_sheet_with_imports<F: Fn() -> bool>(
+    document: &Document,
     mut sheet: StylesheetSource,
     depth: usize,
     import_stack: &mut Vec<String>,
@@ -918,6 +1110,7 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
             };
             import_stack.push(url);
             push_sheet_with_imports(
+                document,
                 child,
                 depth + 1,
                 import_stack,
@@ -944,7 +1137,7 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
             image_urls.push((sheet.base_url.clone(), value));
         }
     }
-    for (_, value) in mg_sparkle::document::font_face_rules(&sheet.css) {
+    for (_, value) in mg_sparkle::document::font_face_rules_for_document(&sheet.css, document) {
         if font_urls.len() < MAX_REQUESTS * 2 {
             font_urls.push((sheet.base_url.clone(), value));
         }
@@ -2147,6 +2340,83 @@ mod tests {
             diagnostics.entries.is_empty(),
             "blanked @import rules must not emit css-parse diagnostics: {:?}",
             diagnostics.entries
+        );
+    }
+
+    #[test]
+    fn es_module_scripts_prefetch_static_graph_skip_nomodule_and_warn_cross_origin() {
+        let (base, server) = server(vec![
+            (
+                "200 OK",
+                "text/javascript",
+                "import { value } from './dep.js';\nimport 'pkg/mapped';\nwindow.total = value;\n",
+            ),
+            (
+                "200 OK",
+                "application/javascript",
+                "export const value = 42;\n",
+            ),
+            ("200 OK", "text/javascript", "export const mapped = true;\n"),
+        ]);
+        let html = format!(
+            r#"<script type="importmap">{{"imports":{{"pkg/mapped":"{base}/mapped.js"}}}}</script>
+            <script nomodule src="/legacy-skip.js"></script>
+            <script type="module" crossorigin="anonymous" src="/entry.js"></script>
+            <script type="module" src="https://other.example/cross.js"></script>"#
+        );
+        let mut doc = mg_sparkle::document::parse_with_scripting(&html, &base, true);
+        let resources = load_with_profile(&Session::new(), &mut doc, &base, || false);
+        let (sources, profile) = prepare_script_sources(
+            &Session::new(),
+            &mut doc,
+            &html,
+            &base,
+            || false,
+            &resources,
+            SourceWireMode::Modern,
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            ["/entry.js", "/dep.js", "/mapped.js"]
+        );
+        let entry_node = doc
+            .nodes
+            .iter()
+            .position(|n| n.tag == "script" && n.attr("src") == Some("/entry.js"))
+            .expect("entry.js script node");
+        assert_eq!(sources.len(), 3);
+        assert_eq!(sources[0].node, entry_node);
+        assert_eq!(
+            sources[0]
+                .provenance
+                .as_ref()
+                .map(|p| p.response_url.as_str()),
+            Some(format!("{base}/entry.js").as_str())
+        );
+        assert_eq!(sources[1].node, usize::MAX);
+        assert_eq!(
+            sources[1]
+                .provenance
+                .as_ref()
+                .map(|p| p.response_url.as_str()),
+            Some(format!("{base}/dep.js").as_str())
+        );
+        assert_eq!(sources[2].node, usize::MAX);
+        assert_eq!(
+            sources[2]
+                .provenance
+                .as_ref()
+                .map(|p| p.response_url.as_str()),
+            Some(format!("{base}/mapped.js").as_str())
+        );
+        assert_eq!(profile.rejected_sources, 1);
+        assert!(
+            doc.resource_warnings.iter().any(|w| {
+                w.contains("https://other.example/cross.js")
+                    && w.to_ascii_lowercase().contains("cross-origin")
+            }),
+            "expected cross-origin module warning, got {:?}",
+            doc.resource_warnings
         );
     }
 }

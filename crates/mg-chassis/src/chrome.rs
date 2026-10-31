@@ -158,7 +158,22 @@ impl Browser {
             .width
             .saturating_sub(if self.width >= 480 { 296 } else { 252 });
         c.rect(196, 12, aw, 39, palette.field);
-        let avail_addr = aw as f32 - 20.;
+        let show_zoom_pill = self.page_zoom_percent != 100 && aw >= 110;
+        let pill_w = 54u32;
+        let avail_addr = aw as f32
+            - 20.
+            - if show_zoom_pill {
+                pill_w as f32 + 8.
+            } else {
+                0.
+            };
+        let max_sel_w = aw.saturating_sub(if show_zoom_pill { pill_w + 20 } else { 14 });
+        let caret_max_x = 196 + aw as i32
+            - if show_zoom_pill {
+                pill_w as i32 + 10
+            } else {
+                6
+            };
         if self.focus == Focus::Address && !self.select_all {
             self.ensure_address_range_synced();
             let cur_b = clipboard::clamp_utf8(&self.address, self.selection.address_cursor);
@@ -173,17 +188,16 @@ impl Browser {
                 cur_b,
             );
             if sx1 > sx0 {
-                let sw = ((sx1 - sx0) as u32 + 2).min(aw.saturating_sub(14));
+                let sw = ((sx1 - sx0) as u32 + 2).min(max_sel_w);
                 c.rect(205 + sx0, 20, sw, 25, palette.selection);
             }
             c.text(&mut self.fonts, 206, 22, &shown, 16., palette.ink);
-            let caret_x = (206 + cx).min(196 + aw as i32 - 6);
+            let caret_x = (206 + cx).min(caret_max_x);
             c.rect(caret_x, 21, 2, 22, palette.accent);
         } else {
             let address = fit_tail(&mut self.fonts, &self.address, 16., avail_addr);
             if self.focus == Focus::Address && self.select_all && !address.is_empty() {
-                let width =
-                    (self.fonts.width(&address, 16.).ceil() as u32 + 4).min(aw.saturating_sub(14));
+                let width = (self.fonts.width(&address, 16.).ceil() as u32 + 4).min(max_sel_w);
                 c.rect(204, 20, width, 25, palette.selection);
             }
             c.text(&mut self.fonts, 206, 22, &address, 16., palette.ink);
@@ -195,6 +209,23 @@ impl Browser {
             h: 39,
             action: Action::Address,
         });
+        if show_zoom_pill {
+            let pill_x = 196 + aw as i32 - pill_w as i32 - 5;
+            let pill_y = 17;
+            let pill_h = 29u32;
+            c.rect(pill_x, pill_y, pill_w, pill_h, palette.button);
+            let label = format!("{}%", self.page_zoom_percent);
+            let tw = self.fonts.width(&label, 12.).ceil() as i32;
+            let tx = pill_x + ((pill_w as i32 - tw).max(4) / 2);
+            c.text(&mut self.fonts, tx, pill_y + 7, &label, 12., palette.ink);
+            self.hits.push(Hit {
+                x: pill_x,
+                y: pill_y,
+                w: pill_w,
+                h: pill_h,
+                action: Action::PageZoomReset,
+            });
+        }
         c.rect(0, TOP - 1, self.width, 1, palette.border);
         if self.bookmarks_bar && self.height >= 320 {
             self.paint_bookmarks_bar(c);
@@ -263,10 +294,13 @@ impl Browser {
         if self.menu_open {
             let x = self.width as i32 - 226;
             let y = 54;
-            let full_menu = self.height >= 450;
+            let full_menu = self.height >= 480;
+            let show_zoom = self.height >= 320;
             let show_devtools = self.height >= 280;
             let menu_h = if full_menu {
-                352
+                420
+            } else if show_zoom {
+                250
             } else if show_devtools {
                 216
             } else {
@@ -289,26 +323,70 @@ impl Browser {
             self.dialog_button(c, (x, y + 74), 212, "Settings", Action::Settings, 2);
             self.dialog_button(c, (x, y + 108), 212, "Bookmarks", Action::Bookmarks, 3);
             if full_menu {
-                self.dialog_button(c, (x, y + 142), 212, "History", Action::History, 4);
-                self.dialog_button(c, (x, y + 176), 212, "Downloads", Action::Downloads, 5);
-                self.dialog_button(c, (x, y + 210), 212, "Find in page", Action::FindBar, 6);
+                let zoom_label = format!("{}%", self.page_zoom_percent);
+                c.rect(x, y + 142, 58, 34, palette.panel);
+                c.text(&mut self.fonts, x + 5, y + 150, "Zoom:", 14., palette.ink);
+                self.dialog_button(c, (x + 62, y + 142), 34, "-", Action::PageZoomOut, 4);
+                self.dialog_button(
+                    c,
+                    (x + 102, y + 142),
+                    68,
+                    &zoom_label,
+                    Action::PageZoomReset,
+                    5,
+                );
+                self.dialog_button(c, (x + 176, y + 142), 36, "+", Action::PageZoomIn, 6);
+                self.dialog_button(c, (x, y + 176), 212, "History", Action::History, 7);
+                self.dialog_button(c, (x, y + 210), 212, "Downloads", Action::Downloads, 8);
                 self.dialog_button(
                     c,
                     (x, y + 244),
                     212,
+                    "Restore session",
+                    Action::RestorePreviousSession,
+                    9,
+                );
+                self.dialog_button(c, (x, y + 278), 212, "Find in page", Action::FindBar, 10);
+                self.dialog_button(
+                    c,
+                    (x, y + 312),
+                    212,
                     "Clear browsing data",
                     Action::ClearBrowsingData,
-                    7,
+                    11,
                 );
                 self.dialog_button(
                     c,
-                    (x, y + 278),
+                    (x, y + 346),
                     212,
                     "Developer tools",
                     Action::ToggleDevTools,
-                    8,
+                    12,
                 );
-                self.dialog_button(c, (x, y + 312), 212, "Close", Action::CloseMenu, 9);
+                self.dialog_button(c, (x, y + 380), 212, "Close", Action::CloseMenu, 13);
+            } else if show_zoom {
+                let zoom_label = format!("{}%", self.page_zoom_percent);
+                c.rect(x, y + 142, 58, 34, palette.panel);
+                c.text(&mut self.fonts, x + 5, y + 150, "Zoom:", 14., palette.ink);
+                self.dialog_button(c, (x + 62, y + 142), 34, "-", Action::PageZoomOut, 4);
+                self.dialog_button(
+                    c,
+                    (x + 102, y + 142),
+                    68,
+                    &zoom_label,
+                    Action::PageZoomReset,
+                    5,
+                );
+                self.dialog_button(c, (x + 176, y + 142), 36, "+", Action::PageZoomIn, 6);
+                self.dialog_button(
+                    c,
+                    (x, y + 176),
+                    212,
+                    "Developer tools",
+                    Action::ToggleDevTools,
+                    7,
+                );
+                self.dialog_button(c, (x, y + 210), 212, "Close", Action::CloseMenu, 8);
             } else if show_devtools {
                 self.dialog_button(
                     c,

@@ -25,6 +25,7 @@ pub struct Options {
     pub initial: String,
     pub has_initial_url: bool,
     pub restore_tabs: Vec<String>,
+    pub previous_session: Vec<mg_chassis::SessionTab>,
     pub executable: PathBuf,
     pub scripts: bool,
     pub auto_update: bool,
@@ -116,6 +117,7 @@ struct Desktop {
     notice: Option<(String, Instant)>,
     titles: BTreeMap<TabId, String>,
     closed_tabs: Vec<String>,
+    previous_session: Vec<mg_chassis::SessionTab>,
     tab_menu: Option<TabContextMenu>,
 }
 
@@ -551,6 +553,7 @@ impl Desktop {
         app.set_bookmarks_bar(active.bookmarks_bar());
         app.set_browsing_history(active.browsing_history().to_vec());
         app.set_downloads(active.downloads().to_vec());
+        app.set_previous_session(self.previous_session.clone());
         app.set_system_theme(self.system_theme);
         app.set_system_scale(self.system_scale);
         app.set_scripts_enabled(self.scripts);
@@ -1026,11 +1029,19 @@ impl Desktop {
                 3 => app.context_menu_at(x, y),
                 4 => {
                     app.pointer_move(x, y);
-                    app.wheel_scroll_by(-100);
+                    if e.state.contains(KeyButMask::CONTROL) {
+                        let _ = app.wheel_zoom_at(x, y, true);
+                    } else {
+                        app.wheel_scroll_by(-100);
+                    }
                 }
                 5 => {
                     app.pointer_move(x, y);
-                    app.wheel_scroll_by(100);
+                    if e.state.contains(KeyButMask::CONTROL) {
+                        let _ = app.wheel_zoom_at(x, y, false);
+                    } else {
+                        app.wheel_scroll_by(100);
+                    }
                 }
                 8 => app.back(),
                 9 => app.forward(),
@@ -1946,6 +1957,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         initial,
         has_initial_url,
         restore_tabs,
+        previous_session,
         executable,
         scripts: restart_scripts,
         auto_update,
@@ -1959,6 +1971,8 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
     let bookmarks = crate::bookmarks::BookmarkStore::user();
     let history = crate::history::HistoryStore::user();
     let downloads = crate::downloads::DownloadStore::user();
+    let session_store = crate::session_store::SessionStore::user();
+    app.set_previous_session(previous_session.clone());
     match bookmarks.load() {
         Ok(entries) => app.set_bookmarks(entries),
         Err(error) => app.set_bookmark_status(error),
@@ -2184,6 +2198,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         notice: None,
         titles: BTreeMap::new(),
         closed_tabs: Vec::new(),
+        previous_session,
         tab_menu: None,
     };
     for url in restore_tabs {
@@ -2197,6 +2212,8 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
     .to_string();
     let mut update_progress = None;
     let mut last_tabs = Vec::new();
+    let mut last_saved_session: Vec<mg_chassis::SessionTab> = Vec::new();
+    let mut session_cleared_for_current = false;
     loop {
         while let Some(event) = conn.poll_for_event()? {
             match event {
@@ -2337,15 +2354,72 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                 .space
                 .get_mut(id)
                 .unwrap()
+                .take_restore_session_request()
+                && !desktop.previous_session.is_empty()
+                && let Some(location) = desktop.space.location(id)
+            {
+                let saved = std::mem::take(&mut desktop.previous_session);
+                for (_, app) in desktop.space.tabs_mut() {
+                    app.set_previous_session(Vec::new());
+                }
+                let replace_current = desktop
+                    .space
+                    .get(id)
+                    .is_some_and(|a| matches!(a.page_url(), "chrome://newtab" | "about:blank"));
+                let mut opened_count = 0usize;
+                let mut iter = saved.into_iter();
+                if replace_current
+                    && let Some(first) = iter.next()
+                    && let Some(app) = desktop.space.get_mut(id)
+                {
+                    app.navigate(first.url, None, true);
+                    opened_count += 1;
+                }
+                for (idx, item) in iter.enumerate() {
+                    if desktop.space.tabs().count() >= Limits::default().tabs {
+                        break;
+                    }
+                    let focus_this = !replace_current && idx == 0;
+                    if desktop
+                        .fresh_tab_with_focus(
+                            location.pane,
+                            Some(item.url),
+                            focus_this,
+                            &bookmarks,
+                            &conn,
+                        )
+                        .is_ok()
+                    {
+                        opened_count += 1;
+                    }
+                }
+                if opened_count > 0 {
+                    session_cleared_for_current = false;
+                    desktop.notify(format!(
+                        "Restored {opened_count} tab{} from previous session",
+                        if opened_count == 1 { "" } else { "s" }
+                    ));
+                }
+            }
+            if desktop
+                .space
+                .get_mut(id)
+                .unwrap()
                 .take_clear_browsing_data()
             {
                 let _ = history.apply_batch(&[mg_chassis::history::HistoryChange::ClearAll]);
+                let _ = session_store.clear();
+                desktop.previous_session.clear();
+                session_cleared_for_current = true;
                 for (_, app) in desktop.space.tabs_mut() {
                     app.set_browsing_history(Vec::new());
                     app.set_downloads(Vec::new());
+                    app.set_previous_session(Vec::new());
                     app.refresh_current_internal_page();
                 }
-                desktop.notify("Cleared browsing history, cookies, cache, and download list");
+                desktop.notify(
+                    "Cleared browsing history, cookies, local storage, session, cache, and download list",
+                );
             }
             let hist_changes = desktop.space.get_mut(id).unwrap().take_history_changes();
             if !hist_changes.is_empty() {
@@ -2449,6 +2523,29 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                         .unwrap()
                         .set_bookmark_status(error),
                 }
+            }
+        }
+        let current_session: Vec<mg_chassis::SessionTab> = desktop
+            .space
+            .windows()
+            .flat_map(|(_, window)| window.panes())
+            .flat_map(|pane| pane.tabs())
+            .filter_map(|&tab| {
+                let a = desktop.space.get(tab)?;
+                if a.is_loading() {
+                    return None;
+                }
+                crate::session_store::sanitize_session_tab(a.page_url(), &a.visible_title())
+            })
+            .take(crate::session_store::MAX_SESSION_TABS)
+            .collect();
+        if current_session != last_saved_session {
+            if session_cleared_for_current {
+                last_saved_session = current_session;
+                session_cleared_for_current = false;
+            } else if !current_session.is_empty() {
+                let _ = session_store.save(&current_session);
+                last_saved_session = current_session;
             }
         }
         while let Ok(theme) = system_themes.try_recv() {
@@ -2755,6 +2852,7 @@ mod display_coordinate_tests {
             notice: None,
             titles: BTreeMap::new(),
             closed_tabs: Vec::new(),
+            previous_session: Vec::new(),
             tab_menu: None,
         };
         let first_app = desktop.space.get_mut(first.tab).unwrap();

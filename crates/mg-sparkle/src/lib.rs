@@ -14,5 +14,4 @@ mod woff;
 
 pub use woff::brotli_decompress_limited;
 
-pub const USER_AGENT: &str =
-    "mgbrowser/0.1 (experimental Rust research browser; +https://mgbrowser.org)";
+pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) mgbrowser/0.9.30";

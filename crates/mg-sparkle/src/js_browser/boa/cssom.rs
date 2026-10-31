@@ -182,13 +182,36 @@ pub(super) fn set(name: &str, args: &[JsValue], context: &mut Context) -> JsResu
         None => declarations::replace_declared_css_text(raw, &text, &base),
     }
     .map_err(declaration_error)?;
-    if let Mutation::Replace(value) = mutation {
+    let replaced = if let Mutation::Replace(value) = mutation {
         // attr admits its original name+len before mutation. Admit additional
         // canonical String capacity first; all errors leave prior DOM intact.
         data.host
             .charge(value.capacity() - value.len())
             .map_err(failure)?;
+        let old = if observers_wc::has_any_interest(&data) {
+            data.host.document.nodes[id]
+                .attr("style")
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        let new_val = if observers_wc::has_any_interest(&data) {
+            Some(value.clone())
+        } else {
+            None
+        };
         data.host.attr(id, "style", value).map_err(failure)?;
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        if observers_wc::has_any_interest(&data) {
+            observers_wc::record_attribute_mutation(&mut data, id, "style", old, new_val);
+        }
+        true
+    } else {
+        false
+    };
+    drop(data);
+    if replaced {
+        observers_wc::after_dom_mutation(context)?;
     }
     Ok(true.into())
 }
@@ -233,7 +256,25 @@ fn commit(id: usize, mutation: Mutation, context: &mut Context) -> JsResult<()> 
         data.host
             .charge(value.capacity() - value.len())
             .map_err(failure)?;
+        let old = if observers_wc::has_any_interest(&data) {
+            data.host.document.nodes[id]
+                .attr("style")
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        let new_val = if observers_wc::has_any_interest(&data) {
+            Some(value.clone())
+        } else {
+            None
+        };
         data.host.attr(id, "style", value).map_err(failure)?;
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        if observers_wc::has_any_interest(&data) {
+            observers_wc::record_attribute_mutation(&mut data, id, "style", old, new_val);
+        }
+        drop(data);
+        observers_wc::after_dom_mutation(context)?;
     }
     Ok(())
 }

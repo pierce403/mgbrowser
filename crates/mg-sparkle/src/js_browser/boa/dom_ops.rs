@@ -388,6 +388,7 @@ const DOM_INTERFACES: &[(&str, DomInterfaceKind)] = &[
     ("HTMLSlotElement", DomInterfaceKind::Tag("slot")),
     ("HTMLDetailsElement", DomInterfaceKind::Tag("details")),
     ("HTMLDialogElement", DomInterfaceKind::Tag("dialog")),
+    ("HTMLCanvasElement", DomInterfaceKind::Tag("canvas")),
 ];
 
 fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<(), String> {
@@ -395,24 +396,35 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
 
     for (idx, &(iface_name, kind)) in DOM_INTERFACES.iter().enumerate() {
         let proto = JsObject::with_object_proto(context.intrinsics());
-        let ctor = FunctionObjectBuilder::new(
-            context.realm(),
+        let ctor_fn = if iface_name == "HTMLElement" {
+            NativeFunction::from_fn_ptr(|new_target, _, context| {
+                super::observers_wc::construct_html_element(new_target, context)
+            })
+        } else {
             NativeFunction::from_copy_closure(|_, _, context| {
                 modern::check_context(context)?;
                 Err(failure("Illegal constructor"))
-            }),
-        )
-        .name(JsString::from(iface_name))
-        .length(0)
-        .constructor(true)
-        .build();
+            })
+        };
+        let ctor = FunctionObjectBuilder::new(context.realm(), ctor_fn)
+            .name(JsString::from(iface_name))
+            .length(0)
+            .constructor(true)
+            .build();
 
         let has_inst = FunctionObjectBuilder::new(
             context.realm(),
             NativeFunction::from_copy_closure_with_captures(
-                |_, args, &i, ctx| {
+                |this, args, &i, ctx| {
                     modern::check_context(ctx)?;
                     let v = args.first().cloned().unwrap_or_default();
+                    if let Some(this_obj) = this.as_object()
+                        && !this_obj
+                            .has_own_property(modern::boa_engine::JsSymbol::has_instance(), ctx)?
+                    {
+                        return modern::boa_engine::JsValue::ordinary_has_instance(this, &v, ctx)
+                            .map(Into::into);
+                    }
                     matches_dom_interface(DOM_INTERFACES[i].1, &v, ctx).map(Into::into)
                 },
                 idx,
@@ -540,284 +552,6 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
             context,
         )
         .map_err(|_| "Global NodeFilter failed")?;
-
-    // Install Observer classes (`MutationObserver`, `ResizeObserver`, and live viewport `IntersectionObserver`)
-    for obs_name in ["MutationObserver", "ResizeObserver", "IntersectionObserver"] {
-        let is_io = obs_name == "IntersectionObserver";
-        let obs_proto = JsObject::with_object_proto(context.intrinsics());
-        let observe_fn = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |this, args, &is_io, ctx| {
-                    modern::check_context(ctx)?;
-                    if !is_io {
-                        return Ok(JsValue::undefined());
-                    }
-                    let Some(obs_obj) = this.as_object() else {
-                        return Err(failure("IntersectionObserver.observe requires receiver"));
-                    };
-                    let Some(target_el) = args.first().and_then(JsValue::as_object) else {
-                        return Err(failure(
-                            "IntersectionObserver.observe requires an Element argument",
-                        ));
-                    };
-                    obs_obj.set(js_string!("__mg_io_active"), true, false, ctx)?;
-                    let bcr_fn = target_el.get(js_string!("getBoundingClientRect"), ctx)?;
-                    let Some(bcr_call) = bcr_fn.as_callable() else {
-                        return Err(failure(
-                            "IntersectionObserver.observe requires an Element argument",
-                        ));
-                    };
-                    let rect_val = bcr_call.call(&target_el.clone().into(), &[], ctx)?;
-                    let rect_obj = rect_val
-                        .as_object()
-                        .ok_or_else(|| failure("Invalid getBoundingClientRect result"))?;
-                    let rx = rect_obj.get(js_string!("x"), ctx)?.to_number(ctx)?;
-                    let ry = rect_obj.get(js_string!("y"), ctx)?.to_number(ctx)?;
-                    let rw = rect_obj
-                        .get(js_string!("width"), ctx)?
-                        .to_number(ctx)?
-                        .max(0.0);
-                    let rh = rect_obj
-                        .get(js_string!("height"), ctx)?
-                        .to_number(ctx)?
-                        .max(0.0);
-                    let vp = state(ctx).borrow().viewport;
-                    let vw = vp.inner_width as f64;
-                    let vh = vp.inner_height as f64;
-                    let ix1 = rx.max(0.0);
-                    let iy1 = ry.max(0.0);
-                    let ix2 = (rx + rw).min(vw);
-                    let iy2 = (ry + rh).min(vh);
-                    let iw = (ix2 - ix1).max(0.0);
-                    let ih = (iy2 - iy1).max(0.0);
-                    let area = rw * rh;
-                    let ratio = if area > 0.0 {
-                        ((iw * ih) / area).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    let entry = modern::boa_engine::object::ObjectInitializer::new(ctx)
-                        .property(
-                            js_string!("target"),
-                            target_el,
-                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                        )
-                        .property(
-                            js_string!("boundingClientRect"),
-                            rect_val,
-                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                        )
-                        .property(
-                            js_string!("intersectionRatio"),
-                            ratio,
-                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                        )
-                        .property(
-                            js_string!("isIntersecting"),
-                            ratio > 0.0,
-                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                        )
-                        .property(
-                            js_string!("time"),
-                            0.0,
-                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                        )
-                        .build();
-                    let entries = modern::boa_engine::object::builtins::JsArray::from_iter(
-                        [entry.into()],
-                        ctx,
-                    );
-                    let holder = JsObject::with_object_proto(ctx.intrinsics());
-                    holder.set(js_string!("obs"), obs_obj, false, ctx)?;
-                    holder.set(js_string!("entries"), entries, false, ctx)?;
-                    let deliver = FunctionObjectBuilder::new(
-                        ctx.realm(),
-                        NativeFunction::from_fn_ptr(|this_h, _, c| {
-                            modern::check_context(c)?;
-                            let Some(h) = this_h.as_object() else {
-                                return Ok(JsValue::undefined());
-                            };
-                            let Some(obs) = h.get(js_string!("obs"), c)?.as_object() else {
-                                return Ok(JsValue::undefined());
-                            };
-                            if !obs.get(js_string!("__mg_io_active"), c)?.to_boolean() {
-                                return Ok(JsValue::undefined());
-                            }
-                            let Some(cb) = obs.get(js_string!("__mg_io_cb"), c)?.as_callable()
-                            else {
-                                return Ok(JsValue::undefined());
-                            };
-                            let ents = h.get(js_string!("entries"), c)?;
-                            let obs_val: JsValue = obs.into();
-                            cb.call(&obs_val.clone(), &[ents, obs_val], c)
-                        }),
-                    )
-                    .build();
-                    let bound = deliver
-                        .get(js_string!("bind"), ctx)?
-                        .as_callable()
-                        .ok_or_else(|| failure("Function.bind unavailable"))?
-                        .call(&deliver.into(), &[holder.into()], ctx)?;
-                    let qm = ctx
-                        .global_object()
-                        .get(js_string!("queueMicrotask"), ctx)?
-                        .as_callable()
-                        .ok_or_else(|| failure("queueMicrotask unavailable"))?;
-                    qm.call(&ctx.global_object().into(), &[bound], ctx)?;
-                    Ok(JsValue::undefined())
-                },
-                is_io,
-            ),
-        )
-        .name(js_string!("observe"))
-        .length(1)
-        .build();
-        obs_proto
-            .define_property_or_throw(
-                js_string!("observe"),
-                PropertyDescriptor::builder()
-                    .value(observe_fn)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Observer observe failed")?;
-        for mname in ["unobserve", "disconnect"] {
-            let is_disc = mname == "disconnect";
-            let fn_obj = FunctionObjectBuilder::new(
-                context.realm(),
-                NativeFunction::from_copy_closure_with_captures(
-                    |this, _, &(is_io, is_disc), ctx| {
-                        modern::check_context(ctx)?;
-                        if is_io
-                            && is_disc
-                            && let Some(obj) = this.as_object()
-                        {
-                            let _ = obj.set(js_string!("__mg_io_active"), false, false, ctx);
-                        }
-                        Ok(JsValue::undefined())
-                    },
-                    (is_io, is_disc),
-                ),
-            )
-            .name(JsString::from(mname))
-            .length(0)
-            .build();
-            obs_proto
-                .define_property_or_throw(
-                    JsString::from(mname),
-                    PropertyDescriptor::builder()
-                        .value(fn_obj)
-                        .writable(true)
-                        .enumerable(false)
-                        .configurable(true),
-                    context,
-                )
-                .map_err(|_| "Observer method failed")?;
-        }
-        let take_fn = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure(|_, _, ctx| {
-                modern::check_context(ctx)?;
-                Ok(modern::boa_engine::object::builtins::JsArray::new(ctx)?.into())
-            }),
-        )
-        .name(js_string!("takeRecords"))
-        .length(0)
-        .build();
-        obs_proto
-            .define_property_or_throw(
-                js_string!("takeRecords"),
-                PropertyDescriptor::builder()
-                    .value(take_fn)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Observer takeRecords failed")?;
-        let obs_ctor = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |new_target, args, &is_io, ctx| {
-                    modern::check_context(ctx)?;
-                    if new_target.is_undefined() {
-                        return Err(failure("Observer constructor requires 'new'"));
-                    }
-                    let Some(cb) = args.first().and_then(JsValue::as_callable) else {
-                        return Err(failure("Observer constructor requires a callback function"));
-                    };
-                    let proto = new_target
-                        .as_object()
-                        .and_then(|o| o.get(js_string!("prototype"), ctx).ok())
-                        .and_then(|v| v.as_object())
-                        .unwrap_or_else(|| ctx.intrinsics().constructors().object().prototype());
-                    let inst = JsObject::from_proto_and_data(proto, ());
-                    if is_io {
-                        inst.define_property_or_throw(
-                            js_string!("__mg_io_cb"),
-                            PropertyDescriptor::builder()
-                                .value(cb)
-                                .writable(true)
-                                .enumerable(false)
-                                .configurable(true),
-                            ctx,
-                        )?;
-                        inst.define_property_or_throw(
-                            js_string!("__mg_io_active"),
-                            PropertyDescriptor::builder()
-                                .value(true)
-                                .writable(true)
-                                .enumerable(false)
-                                .configurable(true),
-                            ctx,
-                        )?;
-                    }
-                    Ok(inst.into())
-                },
-                is_io,
-            ),
-        )
-        .name(JsString::from(obs_name))
-        .length(1)
-        .constructor(true)
-        .build();
-        obs_ctor
-            .define_property_or_throw(
-                js_string!("prototype"),
-                PropertyDescriptor::builder()
-                    .value(obs_proto.clone())
-                    .writable(false)
-                    .enumerable(false)
-                    .configurable(false),
-                context,
-            )
-            .map_err(|_| "Observer prototype failed")?;
-        obs_proto
-            .define_property_or_throw(
-                js_string!("constructor"),
-                PropertyDescriptor::builder()
-                    .value(obs_ctor.clone())
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Observer constructor prop failed")?;
-        global
-            .define_property_or_throw(
-                JsString::from(obs_name),
-                PropertyDescriptor::builder()
-                    .value(obs_ctor)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Global Observer failed")?;
-    }
 
     Ok(())
 }
@@ -1051,6 +785,41 @@ fn into_js_err(err: DomOpErr, context: &mut Context) -> JsError {
     }
 }
 
+fn detach_child_node(data: &mut State, parent: usize, child: usize) {
+    if super::observers_wc::has_any_interest(data) {
+        let was_connected = is_connected_node(&data.host.document.nodes, parent);
+        let (prev_sib, next_sib) = {
+            let kids = &data.host.document.nodes[parent].children;
+            if let Some(pos) = kids.iter().position(|&x| x == child) {
+                (
+                    pos.checked_sub(1).and_then(|i| kids.get(i).copied()),
+                    kids.get(pos + 1).copied(),
+                )
+            } else {
+                (None, None)
+            }
+        };
+        data.host.document.nodes[parent]
+            .children
+            .retain(|&x| x != child);
+        data.host.document.nodes[child].parent = child;
+        super::observers_wc::record_child_list_mutation(
+            data,
+            parent,
+            &[],
+            &[child],
+            prev_sib,
+            next_sib,
+            was_connected,
+        );
+    } else {
+        data.host.document.nodes[parent]
+            .children
+            .retain(|&x| x != child);
+        data.host.document.nodes[child].parent = child;
+    }
+}
+
 fn insert_node_before(
     data: &mut State,
     parent: usize,
@@ -1073,15 +842,27 @@ fn insert_node_before(
     if Some(new_child) == ref_child {
         return Ok(new_child);
     }
+    let track = super::observers_wc::has_any_interest(data);
     if data.host.document.nodes[new_child].tag == "#document-fragment" {
-        data.host.document.nodes[new_child].children.clear();
+        if track && !data.host.document.nodes[new_child].children.is_empty() {
+            let removed = std::mem::take(&mut data.host.document.nodes[new_child].children);
+            super::observers_wc::record_child_list_mutation(
+                data,
+                new_child,
+                &[],
+                &removed,
+                None,
+                None,
+                false,
+            );
+        } else {
+            data.host.document.nodes[new_child].children.clear();
+        }
     }
     for &ch in &inserting {
         let old_p = data.host.document.nodes[ch].parent;
         if old_p != ch {
-            data.host.document.nodes[old_p]
-                .children
-                .retain(|&x| x != ch);
+            detach_child_node(data, old_p, ch);
         }
         data.host.document.nodes[ch].parent = parent;
     }
@@ -1093,9 +874,29 @@ fn insert_node_before(
             .unwrap_or(data.host.document.nodes[parent].children.len()),
         None => data.host.document.nodes[parent].children.len(),
     };
-    data.host.document.nodes[parent]
-        .children
-        .splice(pos..pos, inserting);
+    if track && !inserting.is_empty() {
+        let prev_sib = pos
+            .checked_sub(1)
+            .and_then(|i| data.host.document.nodes[parent].children.get(i).copied());
+        let next_sib = data.host.document.nodes[parent].children.get(pos).copied();
+        let parent_connected = is_connected_node(&data.host.document.nodes, parent);
+        data.host.document.nodes[parent]
+            .children
+            .splice(pos..pos, inserting.iter().copied());
+        super::observers_wc::record_child_list_mutation(
+            data,
+            parent,
+            &inserting,
+            &[],
+            prev_sib,
+            next_sib,
+            parent_connected,
+        );
+    } else {
+        data.host.document.nodes[parent]
+            .children
+            .splice(pos..pos, inserting);
+    }
     data.dom_epoch = data.dom_epoch.wrapping_add(1);
     Ok(new_child)
 }
@@ -1117,6 +918,9 @@ fn clone_subtree(data: &mut State, src: usize, deep: bool) -> Result<usize, Stri
         data.host.new_node(tag.clone(), text)?
     };
     for (k, v) in attrs {
+        if k == crate::document::INTERNAL_CANVAS_ATTR {
+            continue;
+        }
         data.host.attr(clone_id, &k, v)?;
     }
     if deep {
@@ -1415,6 +1219,10 @@ pub(super) fn try_get(
             }
             "hasFocus" => {
                 return method(DOC_HAS_FOCUS, context).map(|o| Some(o.into()));
+            }
+            "getAnimations" => {
+                return method(super::observers_wc::DOC_GET_ANIMATIONS, context)
+                    .map(|o| Some(o.into()));
             }
             "write" => return method(DOC_WRITE, context).map(|o| Some(o.into())),
             "writeln" => return method(DOC_WRITELN, context).map(|o| Some(o.into())),
@@ -2030,7 +1838,22 @@ pub(super) fn try_get(
                     context,
                 )?;
             }
-            return Ok(Some(cw_val));
+            Ok(Some(cw_val))
+        }
+        "getContext" if tag == "canvas" => {
+            method(super::canvas::CANVAS_GET_CONTEXT, context).map(|o| Some(o.into()))
+        }
+        "toDataURL" if tag == "canvas" => {
+            method(super::canvas::CANVAS_TO_DATA_URL, context).map(|o| Some(o.into()))
+        }
+        "toBlob" if tag == "canvas" => {
+            method(super::canvas::CANVAS_TO_BLOB, context).map(|o| Some(o.into()))
+        }
+        "animate" if !tag.starts_with('#') => {
+            method(super::observers_wc::EL_ANIMATE, context).map(|o| Some(o.into()))
+        }
+        "getAnimations" if !tag.starts_with('#') => {
+            method(super::observers_wc::EL_GET_ANIMATIONS, context).map(|o| Some(o.into()))
         }
         _ => {
             let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
@@ -2065,15 +1888,40 @@ pub(super) fn try_set(
     if handle == "document" && name == "dir" {
         let text = utf8(value, context)?;
         modern::check_context(context)?;
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        if let Some(&hid) = data.host.document.nodes[0]
-            .children
-            .iter()
-            .find(|&&c| data.host.document.nodes[c].tag == "html")
-        {
-            data.host.attr(hid, "dir", text).map_err(failure)?;
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        let mutated = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            if let Some(&hid) = data.host.document.nodes[0]
+                .children
+                .iter()
+                .find(|&&c| data.host.document.nodes[c].tag == "html")
+            {
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[hid].attr("dir").map(str::to_owned)
+                } else {
+                    None
+                };
+                data.host.attr(hid, "dir", text.clone()).map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        hid,
+                        "dir",
+                        old,
+                        Some(text),
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if mutated {
+            super::observers_wc::after_dom_mutation(context)?;
         }
         return Ok(Some(()));
     }
@@ -2125,11 +1973,28 @@ pub(super) fn try_set(
             utf8(value, context)?
         };
         modern::check_context(context)?;
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        data.host.charge(text.len()).map_err(failure)?;
-        data.host.document.nodes[id].text = text;
-        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        let mutated = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            data.host.charge(text.len()).map_err(failure)?;
+            let track = super::observers_wc::has_any_interest(&data);
+            let old = if track {
+                std::mem::replace(&mut data.host.document.nodes[id].text, text)
+            } else {
+                data.host.document.nodes[id].text = text;
+                String::new()
+            };
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            if track {
+                super::observers_wc::record_character_data_mutation(&mut data, id, old);
+                true
+            } else {
+                false
+            }
+        };
+        if mutated {
+            super::observers_wc::after_dom_mutation(context)?;
+        }
         return Ok(Some(()));
     }
 
@@ -2143,17 +2008,47 @@ pub(super) fn try_set(
             utf8(value, context)?
         };
         modern::check_context(context)?;
-        let shared = state(context);
-        let mut data = shared.borrow_mut();
-        for old in std::mem::take(&mut data.host.document.nodes[id].children) {
-            data.host.document.nodes[old].parent = old;
+        let mutated = {
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            let track = super::observers_wc::has_any_interest(&data);
+            let was_connected = if track {
+                is_connected_node(&data.host.document.nodes, id)
+            } else {
+                false
+            };
+            let old_children = std::mem::take(&mut data.host.document.nodes[id].children);
+            for &old in &old_children {
+                data.host.document.nodes[old].parent = old;
+            }
+            let mut added = Vec::new();
+            if !text.is_empty() {
+                let tid = data.host.new_node("#text".into(), text).map_err(failure)?;
+                data.host.document.nodes[tid].parent = id;
+                data.host.document.nodes[id].children.push(tid);
+                if track {
+                    added.push(tid);
+                }
+            }
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            if track && (!old_children.is_empty() || !added.is_empty()) {
+                super::observers_wc::record_child_list_mutation(
+                    &mut data,
+                    id,
+                    &added,
+                    &old_children,
+                    None,
+                    None,
+                    was_connected,
+                );
+                true
+            } else {
+                false
+            }
+        };
+        if mutated {
+            super::observers_wc::after_dom_mutation(context)?;
         }
-        if !text.is_empty() {
-            let tid = data.host.new_node("#text".into(), text).map_err(failure)?;
-            data.host.document.nodes[tid].parent = id;
-            data.host.document.nodes[id].children.push(tid);
-        }
-        data.dom_epoch = data.dom_epoch.wrapping_add(1);
         return Ok(Some(()));
     }
 
@@ -2165,30 +2060,80 @@ pub(super) fn try_set(
                 utf8(value, context)?
             };
             modern::check_context(context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
             if tag == "template" {
-                let res: Result<(), DomOpErr> = (|| {
-                    let frag_id = ensure_template_content(&mut data, id).map_err(DomOpErr::Host)?;
-                    for old in std::mem::take(&mut data.host.document.nodes[frag_id].children) {
-                        data.host.document.nodes[old].parent = old;
-                    }
-                    let children = parse_html_into_fragment_children(&mut data, &html)
-                        .map_err(DomOpErr::Host)?;
-                    for ch in children {
-                        insert_node_before(&mut data, frag_id, ch, None)?;
-                    }
-                    Ok(())
-                })();
-                drop(data);
+                let res: Result<(), DomOpErr> = {
+                    let shared = state(context);
+                    let mut data = shared.borrow_mut();
+                    (|| {
+                        let frag_id =
+                            ensure_template_content(&mut data, id).map_err(DomOpErr::Host)?;
+                        let old_children =
+                            std::mem::take(&mut data.host.document.nodes[frag_id].children);
+                        for &old in &old_children {
+                            data.host.document.nodes[old].parent = old;
+                        }
+                        if super::observers_wc::has_any_interest(&data) && !old_children.is_empty()
+                        {
+                            super::observers_wc::record_child_list_mutation(
+                                &mut data,
+                                frag_id,
+                                &[],
+                                &old_children,
+                                None,
+                                None,
+                                false,
+                            );
+                        }
+                        let children = parse_html_into_fragment_children(&mut data, &html)
+                            .map_err(DomOpErr::Host)?;
+                        for ch in children {
+                            insert_node_before(&mut data, frag_id, ch, None)?;
+                        }
+                        Ok(())
+                    })()
+                };
                 res.map_err(|e| into_js_err(e, context))?;
+                super::observers_wc::after_dom_mutation(context)?;
                 return Ok(Some(()));
             }
-            let prev_len = data.host.document.nodes.len();
-            data.host.replace_html(id, html).map_err(failure)?;
-            lift_template_contents(&mut data, prev_len).map_err(failure)?;
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old_children = if track {
+                    data.host.document.nodes[id].children.clone()
+                } else {
+                    Vec::new()
+                };
+                let was_connected = if track {
+                    is_connected_node(&data.host.document.nodes, id)
+                } else {
+                    false
+                };
+                let prev_len = data.host.document.nodes.len();
+                data.host.replace_html(id, html).map_err(failure)?;
+                lift_template_contents(&mut data, prev_len).map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track {
+                    let added = data.host.document.nodes[id].children.clone();
+                    super::observers_wc::record_child_list_mutation(
+                        &mut data,
+                        id,
+                        &added,
+                        &old_children,
+                        None,
+                        None,
+                        was_connected,
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
+            Ok(Some(()))
         }
         "outerHTML" if !tag.starts_with('#') => {
             let html = if value.is_null() {
@@ -2216,24 +2161,28 @@ pub(super) fn try_set(
                         for ch in children {
                             insert_node_before(&mut data, parent, ch, Some(id))?;
                         }
-                        data.host.document.nodes[parent]
-                            .children
-                            .retain(|&x| x != id);
-                        data.host.document.nodes[id].parent = id;
+                        detach_child_node(&mut data, parent, id);
                         data.dom_epoch = data.dom_epoch.wrapping_add(1);
                         Ok(())
                     })()
                 }
             };
             res.map_err(|e| into_js_err(e, context))?;
-            return Ok(Some(()));
+            super::observers_wc::after_dom_mutation(context)?;
+            Ok(Some(()))
         }
         "open" if tag == "dialog" || tag == "details" => {
             let flag = value.to_boolean();
             let was_open = state(context).borrow().host.document.nodes[id].has("open");
-            {
+            let mutated = {
                 let shared = state(context);
                 let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[id].attr("open").map(str::to_owned)
+                } else {
+                    None
+                };
                 if flag {
                     data.host.attr(id, "open", String::new()).map_err(failure)?;
                 } else {
@@ -2242,11 +2191,26 @@ pub(super) fn try_set(
                         .retain(|(n, _)| n != "open");
                 }
                 data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track && was_open != flag {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "open",
+                        old,
+                        flag.then(String::new),
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
             }
             if tag == "details" && was_open != flag {
                 dom_events::queue_or_fire_simple_event(id, "toggle", false, false, context)?;
             }
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "returnValue" if tag == "dialog" => {
             let rv = utf8(value, context)?;
@@ -2255,14 +2219,14 @@ pub(super) fn try_set(
             let mut data = shared.borrow_mut();
             data.host.charge(rv.len()).map_err(failure)?;
             data.dialog_return_values.insert(id, rv);
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "checked" if tag == "input" => {
             let flag = value.to_boolean();
             let shared = state(context);
             let mut data = shared.borrow_mut();
             set_input_checked(&mut data, id, flag).map_err(failure)?;
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "selected" if tag == "option" => {
             let flag = value.to_boolean();
@@ -2296,7 +2260,7 @@ pub(super) fn try_set(
                     .retain(|(n, _)| n != "selected");
             }
             data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "value" if tag == "select" => {
             let v = utf8(value, context)?;
@@ -2304,7 +2268,7 @@ pub(super) fn try_set(
             let shared = state(context);
             let mut data = shared.borrow_mut();
             set_select_value(&mut data, id, &v).map_err(failure)?;
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "selectedIndex" if tag == "select" => {
             let idx = value.to_i32(context)?;
@@ -2312,7 +2276,7 @@ pub(super) fn try_set(
             let shared = state(context);
             let mut data = shared.borrow_mut();
             set_select_index(&mut data, id, idx).map_err(failure)?;
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "text" if tag == "option" => {
             let t = utf8(value, context)?;
@@ -2321,27 +2285,76 @@ pub(super) fn try_set(
             let mut data = shared.borrow_mut();
             data.host.replace_text(id, t).map_err(failure)?;
             data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "htmlFor" if tag == "label" => {
             let f = utf8(value, context)?;
             modern::check_context(context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            data.host.attr(id, "for", f).map_err(failure)?;
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[id].attr("for").map(str::to_owned)
+                } else {
+                    None
+                };
+                data.host.attr(id, "for", f.clone()).map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "for",
+                        old,
+                        Some(f),
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
+            Ok(Some(()))
         }
         "tabIndex" if !tag.starts_with('#') => {
             let ti = value.to_i32(context)?;
             modern::check_context(context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            data.host
-                .attr(id, "tabindex", ti.to_string())
-                .map_err(failure)?;
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            let ti_str = ti.to_string();
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[id]
+                        .attr("tabindex")
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
+                data.host
+                    .attr(id, "tabindex", ti_str.clone())
+                    .map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "tabindex",
+                        old,
+                        Some(ti_str),
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
+            Ok(Some(()))
         }
         "contentEditable" if !tag.starts_with('#') => {
             let raw = utf8(value, context)?;
@@ -2357,41 +2370,116 @@ pub(super) fn try_set(
                     context,
                 )?);
             }
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            if norm == "inherit" {
-                data.host.document.nodes[id]
-                    .attributes
-                    .retain(|(n, _)| n != "contenteditable");
-            } else {
-                data.host
-                    .attr(id, "contenteditable", norm)
-                    .map_err(failure)?;
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[id]
+                        .attr("contenteditable")
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
+                let new_val = if norm == "inherit" {
+                    data.host.document.nodes[id]
+                        .attributes
+                        .retain(|(n, _)| n != "contenteditable");
+                    None
+                } else {
+                    data.host
+                        .attr(id, "contenteditable", norm.clone())
+                        .map_err(failure)?;
+                    Some(norm)
+                };
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track && (new_val.is_some() || old.is_some()) {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "contenteditable",
+                        old,
+                        new_val,
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
             }
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            Ok(Some(()))
         }
         "slot" if !tag.starts_with('#') => {
             let s = utf8(value, context)?;
             modern::check_context(context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            data.host.attr(id, "slot", s).map_err(failure)?;
-            data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            return Ok(Some(()));
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let track = super::observers_wc::has_any_interest(&data);
+                let old = if track {
+                    data.host.document.nodes[id].attr("slot").map(str::to_owned)
+                } else {
+                    None
+                };
+                data.host.attr(id, "slot", s.clone()).map_err(failure)?;
+                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                if track {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "slot",
+                        old,
+                        Some(s),
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
+            Ok(Some(()))
         }
         _ if !tag.starts_with('#') => {
             let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
             if let Some(attr) = reflected_string_attr(tag.as_str(), name, is_svg) {
                 let text = utf8(value, context)?;
                 modern::check_context(context)?;
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                if matches!(tag.as_str(), "iframe" | "frame") && matches!(attr, "src" | "srcdoc") {
-                    data.iframe_documents.remove(&id);
+                let mutated = {
+                    let shared = state(context);
+                    let mut data = shared.borrow_mut();
+                    if matches!(tag.as_str(), "iframe" | "frame")
+                        && matches!(attr, "src" | "srcdoc")
+                    {
+                        data.iframe_documents.remove(&id);
+                    }
+                    let track = super::observers_wc::has_any_interest(&data);
+                    let old = if track {
+                        data.host.document.nodes[id].attr(attr).map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    data.host.attr(id, attr, text.clone()).map_err(failure)?;
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                    if track {
+                        super::observers_wc::record_attribute_mutation(
+                            &mut data,
+                            id,
+                            attr,
+                            old,
+                            Some(text),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if mutated {
+                    super::observers_wc::after_dom_mutation(context)?;
                 }
-                data.host.attr(id, attr, text).map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
                 return Ok(Some(()));
             }
             if !is_svg
@@ -2400,12 +2488,38 @@ pub(super) fn try_set(
                 let v = value.to_u32(context)?;
                 modern::check_context(context)?;
                 let effective = if non_zero && v == 0 { def_val } else { v };
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                data.host
-                    .attr(id, attr, effective.to_string())
-                    .map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                let eff_str = effective.to_string();
+                let mutated = {
+                    let shared = state(context);
+                    let mut data = shared.borrow_mut();
+                    let track = super::observers_wc::has_any_interest(&data);
+                    let old = if track {
+                        data.host.document.nodes[id].attr(attr).map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    data.host.attr(id, attr, eff_str.clone()).map_err(failure)?;
+                    if tag == "canvas" && matches!(attr, "width" | "height") {
+                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
+                            .map_err(failure)?;
+                    }
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                    if track {
+                        super::observers_wc::record_attribute_mutation(
+                            &mut data,
+                            id,
+                            attr,
+                            old,
+                            Some(eff_str),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if mutated {
+                    super::observers_wc::after_dom_mutation(context)?;
+                }
                 return Ok(Some(()));
             }
             Ok(None)
@@ -2489,8 +2603,10 @@ fn reflected_string_attr(tag: &str, prop: &str, is_svg: bool) -> Option<&'static
 
 fn reflected_uint_attr(tag: &str, prop: &str) -> Option<(&'static str, u32, bool)> {
     match (tag, prop) {
-        ("img" | "canvas" | "video" | "input", "width") => Some(("width", 0, false)),
-        ("img" | "canvas" | "video" | "input", "height") => Some(("height", 0, false)),
+        ("canvas", "width") => Some(("width", 300, false)),
+        ("canvas", "height") => Some(("height", 150, false)),
+        ("img" | "video" | "input", "width") => Some(("width", 0, false)),
+        ("img" | "video" | "input", "height") => Some(("height", 0, false)),
         ("textarea", "rows") => Some(("rows", 2, true)),
         ("textarea", "cols") => Some(("cols", 20, true)),
         ("input", "size") => Some(("size", 20, true)),
@@ -2648,6 +2764,7 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
         "writeln" => method(DOC_WRITELN, context).map(Into::into),
         "open" => method(DOC_OPEN, context).map(Into::into),
         "close" => method(DOC_CLOSE, context).map(Into::into),
+        "getAnimations" => method(super::observers_wc::DOC_GET_ANIMATIONS, context).map(Into::into),
         "currentScript" => Ok(JsValue::null()),
         "readyState" => Ok(js_string!("complete").into()),
         _ => Ok(JsValue::undefined()),
@@ -2694,6 +2811,7 @@ pub(super) fn call(
                 insert_node_before(&mut data, parent, child, None)
             };
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             wrap_node_id(child, context)
         }
         "host.dom.removeChild" => {
@@ -2713,12 +2831,10 @@ pub(super) fn call(
                         context,
                     )?);
                 }
-                data.host.document.nodes[parent]
-                    .children
-                    .retain(|&x| x != child);
-                data.host.document.nodes[child].parent = child;
+                detach_child_node(&mut data, parent, child);
                 data.dom_epoch = data.dom_epoch.wrapping_add(1);
             }
+            super::observers_wc::after_dom_mutation(context)?;
             wrap_node_id(child, context)
         }
         "host.dom.getElementById" => {
@@ -2843,6 +2959,18 @@ pub(super) fn call(
             }
             let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), context)?;
             modern::check_context(context)?;
+            let is_opt = if let Some(opts) = args.get(1).and_then(JsValue::as_object) {
+                let v = opts.get(js_string!("is"), context)?;
+                if v.is_undefined() {
+                    None
+                } else {
+                    let s = utf8(&v, context)?;
+                    modern::check_context(context)?;
+                    Some(s)
+                }
+            } else {
+                None
+            };
             let tag = raw.to_ascii_lowercase();
             if tag.is_empty()
                 || !tag.as_bytes()[0].is_ascii_alphabetic()
@@ -2866,6 +2994,13 @@ pub(super) fn call(
                 }
                 id
             };
+            if doc == 0 {
+                super::observers_wc::upgrade_created_element_if_defined(
+                    id,
+                    is_opt.as_deref(),
+                    context,
+                )?;
+            }
             wrap(&format!("node:{id}"), context)
         }
         "host.dom.createTextNode" => {
@@ -2927,6 +3062,7 @@ pub(super) fn call(
                 insert_node_before(&mut data, parent, new_child, ref_child)
             };
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             wrap_node_id(new_child, context)
         }
         REPLACE_CHILD => {
@@ -2950,27 +3086,32 @@ pub(super) fn call(
                 } else {
                     if new_child != old_child {
                         insert_node_before(&mut data, parent, new_child, Some(old_child))?;
-                        data.host.document.nodes[parent]
-                            .children
-                            .retain(|&x| x != old_child);
-                        data.host.document.nodes[old_child].parent = old_child;
+                        detach_child_node(&mut data, parent, old_child);
                         data.dom_epoch = data.dom_epoch.wrapping_add(1);
                     }
                     Ok(())
                 }
             })();
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             wrap_node_id(old_child, context)
         }
         REMOVE => {
             let id = receiver_node(this, context)?;
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            let p = data.host.document.nodes[id].parent;
-            if id != 0 && p != id {
-                data.host.document.nodes[p].children.retain(|&x| x != id);
-                data.host.document.nodes[id].parent = id;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let p = data.host.document.nodes[id].parent;
+                if id != 0 && p != id {
+                    detach_child_node(&mut data, p, id);
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                    true
+                } else {
+                    false
+                }
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
             }
             Ok(JsValue::undefined())
         }
@@ -3013,16 +3154,14 @@ pub(super) fn call(
                         insert_node_before(&mut data, parent, node_to_insert, ref_sibling)?;
                     }
                     if name == REPLACE_WITH && data.host.document.nodes[id].parent == parent {
-                        data.host.document.nodes[parent]
-                            .children
-                            .retain(|&x| x != id);
-                        data.host.document.nodes[id].parent = id;
+                        detach_child_node(&mut data, parent, id);
                         data.dom_epoch = data.dom_epoch.wrapping_add(1);
                     }
                     Ok(())
                 }
             })();
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             Ok(JsValue::undefined())
         }
         PREPEND | APPEND | REPLACE_CHILDREN => {
@@ -3037,8 +3176,27 @@ pub(super) fn call(
                         check_insert_hierarchy(&data.host.document.nodes, parent, n)
                             .map_err(|(k, m)| DomOpErr::Dom(k, m))?;
                     }
-                    for old in std::mem::take(&mut data.host.document.nodes[parent].children) {
+                    let track = super::observers_wc::has_any_interest(&data);
+                    let was_connected = if track {
+                        is_connected_node(&data.host.document.nodes, parent)
+                    } else {
+                        false
+                    };
+                    let old_children =
+                        std::mem::take(&mut data.host.document.nodes[parent].children);
+                    for &old in &old_children {
                         data.host.document.nodes[old].parent = old;
+                    }
+                    if track && !old_children.is_empty() {
+                        super::observers_wc::record_child_list_mutation(
+                            &mut data,
+                            parent,
+                            &[],
+                            &old_children,
+                            None,
+                            None,
+                            was_connected,
+                        );
                     }
                     if let Some(n) = node_opt {
                         insert_node_before(&mut data, parent, n, None)?;
@@ -3059,6 +3217,7 @@ pub(super) fn call(
                 Ok(())
             })();
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             Ok(JsValue::undefined())
         }
         CONTAINS => {
@@ -3102,6 +3261,9 @@ pub(super) fn call(
             if id == 0 || data.host.document.nodes[id].tag.starts_with('#') {
                 return Err(failure("hasAttribute requires an Element receiver"));
             }
+            if attr == crate::document::INTERNAL_CANVAS_ATTR {
+                return Ok(false.into());
+            }
             Ok(data.host.document.nodes[id].has(&attr).into())
         }
         TOGGLE_ATTRIBUTE => {
@@ -3120,23 +3282,63 @@ pub(super) fn call(
                     context,
                 )?);
             }
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            if id == 0 || data.host.document.nodes[id].tag.starts_with('#') {
-                return Err(failure("toggleAttribute requires an Element receiver"));
-            }
-            let present = data.host.document.nodes[id].has(&attr);
-            let next = force.unwrap_or(!present);
-            if next && !present {
-                data.host.attr(id, &attr, String::new()).map_err(failure)?;
-                dom_events::invalidate_inline_handler(&mut data, id, &attr);
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-            } else if !next && present {
-                data.host.document.nodes[id]
-                    .attributes
-                    .retain(|(n, _)| n != &attr);
-                dom_events::invalidate_inline_handler(&mut data, id, &attr);
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            let (next, mutated) = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                if id == 0 || data.host.document.nodes[id].tag.starts_with('#') {
+                    return Err(failure("toggleAttribute requires an Element receiver"));
+                }
+                if attr == crate::document::INTERNAL_CANVAS_ATTR {
+                    return Ok(force.unwrap_or(true).into());
+                }
+                let track = super::observers_wc::has_any_interest(&data);
+                let old_val = if track {
+                    data.host.document.nodes[id].attr(&attr).map(str::to_owned)
+                } else {
+                    None
+                };
+                let present = data.host.document.nodes[id].has(&attr);
+                let next = force.unwrap_or(!present);
+                let mut did_obs = false;
+                if next && !present {
+                    data.host.attr(id, &attr, String::new()).map_err(failure)?;
+                    dom_events::invalidate_inline_handler(&mut data, id, &attr);
+                    if matches!(attr.as_str(), "width" | "height") {
+                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
+                            .map_err(failure)?;
+                    }
+                    if track {
+                        super::observers_wc::record_attribute_mutation(
+                            &mut data,
+                            id,
+                            &attr,
+                            old_val,
+                            Some(String::new()),
+                        );
+                        did_obs = true;
+                    }
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                } else if !next && present {
+                    data.host.document.nodes[id]
+                        .attributes
+                        .retain(|(n, _)| n != &attr);
+                    dom_events::invalidate_inline_handler(&mut data, id, &attr);
+                    if matches!(attr.as_str(), "width" | "height") {
+                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
+                            .map_err(failure)?;
+                    }
+                    if track {
+                        super::observers_wc::record_attribute_mutation(
+                            &mut data, id, &attr, old_val, None,
+                        );
+                        did_obs = true;
+                    }
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                }
+                (next, did_obs)
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
             }
             Ok(next.into())
         }
@@ -3151,6 +3353,7 @@ pub(super) fn call(
                 data.host.document.nodes[id]
                     .attributes
                     .iter()
+                    .filter(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR)
                     .map(|(k, _)| k.clone())
                     .collect()
             };
@@ -3212,6 +3415,7 @@ pub(super) fn call(
                     if !inserted {
                         return Ok(JsValue::null());
                     }
+                    super::observers_wc::after_dom_mutation(context)?;
                     wrap(&format!("node:{el}"), context)
                 }
                 INSERT_ADJACENT_TEXT => {
@@ -3223,6 +3427,7 @@ pub(super) fn call(
                         .new_node("#text".into(), text)
                         .map_err(failure)?;
                     insert_adjacent_nodes(target, &pos, &[tid], context)?;
+                    super::observers_wc::after_dom_mutation(context)?;
                     Ok(JsValue::undefined())
                 }
                 _ => {
@@ -3234,13 +3439,14 @@ pub(super) fn call(
                         parse_html_into_fragment_children(&mut data, &html).map_err(failure)?
                     };
                     insert_adjacent_nodes(target, &pos, &children, context)?;
+                    super::observers_wc::after_dom_mutation(context)?;
                     Ok(JsValue::undefined())
                 }
             }
         }
         DIALOG_SHOW | DIALOG_SHOW_MODAL => {
             let id = receiver_node(this, context)?;
-            {
+            let mutated = {
                 let shared = state(context);
                 let mut data = shared.borrow_mut();
                 if data.host.document.nodes[id].tag != "dialog" {
@@ -3265,8 +3471,22 @@ pub(super) fn call(
                         context,
                     )?);
                 }
+                let track = super::observers_wc::has_any_interest(&data);
                 data.host.attr(id, "open", String::new()).map_err(failure)?;
+                if track {
+                    super::observers_wc::record_attribute_mutation(
+                        &mut data,
+                        id,
+                        "open",
+                        None,
+                        Some(String::new()),
+                    );
+                }
                 data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                track
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
             }
             Ok(JsValue::undefined())
         }
@@ -3281,14 +3501,21 @@ pub(super) fn call(
             } else {
                 None
             };
-            let was_open = {
+            let (was_open, mutated) = {
                 let shared = state(context);
                 let mut data = shared.borrow_mut();
                 if data.host.document.nodes[id].tag != "dialog" {
                     return Err(failure("Dialog method requires a HTMLDialogElement"));
                 }
                 let open = data.host.document.nodes[id].has("open");
+                let mut did_obs = false;
                 if open {
+                    let track = super::observers_wc::has_any_interest(&data);
+                    let old = if track {
+                        data.host.document.nodes[id].attr("open").map(str::to_owned)
+                    } else {
+                        None
+                    };
                     data.host.document.nodes[id]
                         .attributes
                         .retain(|(n, _)| n != "open");
@@ -3296,10 +3523,19 @@ pub(super) fn call(
                         data.host.charge(rv.len()).map_err(failure)?;
                         data.dialog_return_values.insert(id, rv);
                     }
+                    if track {
+                        super::observers_wc::record_attribute_mutation(
+                            &mut data, id, "open", old, None,
+                        );
+                        did_obs = true;
+                    }
                     data.dom_epoch = data.dom_epoch.wrapping_add(1);
                 }
-                open
+                (open, did_obs)
             };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
             if was_open {
                 dom_events::queue_or_fire_simple_event(id, "close", false, false, context)?;
             }
@@ -3621,6 +3857,7 @@ pub(super) fn call(
                 Ok(())
             })();
             res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             Ok(JsValue::undefined())
         }
         _ => Err(failure("Unknown DOM operation")),
@@ -3666,7 +3903,12 @@ fn build_named_node_map(id: usize, context: &mut Context) -> JsResult<JsValue> {
     let attrs: Vec<(String, String)> = {
         let shared = state(context);
         let mut data = shared.borrow_mut();
-        let list = data.host.document.nodes[id].attributes.clone();
+        let list: Vec<(String, String)> = data.host.document.nodes[id]
+            .attributes
+            .iter()
+            .filter(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR)
+            .cloned()
+            .collect();
         data.host.charge(128 + list.len() * 64).map_err(failure)?;
         list
     };
