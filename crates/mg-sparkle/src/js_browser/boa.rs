@@ -226,6 +226,8 @@ struct State {
     host: BrowserHost,
     realm: u64,
     listeners: Vec<Listener>,
+    #[unsafe_ignore_trace]
+    max_listeners: usize,
     timers: Vec<Timer>,
     #[unsafe_ignore_trace]
     cancelled_intervals: HashSet<u32>,
@@ -995,7 +997,7 @@ fn property_set(
     }) {
         listener.callback = callback;
     } else if callback.is_some() {
-        if data.listeners.len() >= dom_events::MAX_BOA_LISTENERS {
+        if data.listeners.len() >= data.max_listeners {
             return Err(failure("Listener limit exceeded"));
         }
         data.host.charge(128).map_err(failure)?;
@@ -2541,6 +2543,7 @@ impl BoaPageRealm {
         };
         if modules_enabled {
             let mut data = realm.state.borrow_mut();
+            data.max_listeners = dom_events::MAX_BROWSER_LISTENERS;
             data.esm.enabled = true;
             data.esm.page_url = doc_base_url;
             data.esm.importmap = esm_importmap;
@@ -2686,6 +2689,7 @@ impl BoaPageRealm {
             host,
             realm: NEXT_REALM.fetch_add(1, Ordering::Relaxed),
             listeners: Vec::new(),
+            max_listeners: dom_events::MAX_STANDALONE_LISTENERS,
             timers: Vec::new(),
             cancelled_intervals: HashSet::new(),
             rejections: Vec::new(),
@@ -4070,8 +4074,8 @@ impl BoaPageRealm {
         if reply.state == RealmState::Ready {
             canvas::flush_dirty_canvases_to_dom(&mut data);
         }
-        match data.host.serialize(0, true) {
-            Ok(_) => {
+        match data.host.validate_serialized_bounds(0, true) {
+            Ok(()) => {
                 reply.snapshot = Some(ArenaSnapshot {
                     nodes: data.host.document.nodes.clone(),
                 });

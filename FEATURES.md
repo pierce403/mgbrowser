@@ -6,6 +6,25 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-033 : CSS visual parity, responsive Grid, HTML5 Canvas 2D, ES modules & desktop session UX
+
+Stability: stable
+
+### Dependencies
+
+F-003 local document rendering, F-005 styled text and images, F-014 Stylo CSS, F-016 JavaScript/DOM worker isolation, F-018 desktop-aware browser size, F-024 Playwright control, F-026 WPT coverage, F-031 DOM/Web Platform APIs, F-032 real-site compatibility.
+
+### Properties
+
+Pure-Rust CSS visual/grid/sizing parity, HTML5 `<canvas>` 2D graphics, browser-hosted ES modules, DOM Observers, Custom Elements, Wikipedia SVG/sprite/runtime parity, large-page CDP automation, and desktop session UX across `mg-sparkle`, `mg-chassis`, and `mg-browser` within unchanged resource and worker isolation limits (`MAX_SHEETS = 16`, `MAX_REQUESTS = 32`, `MAX_TOTAL = 2 MiB`, `MAX_SIDE = 2048`, `MAX_PIXELS = 1,048,576`, `RLIMIT_NOFILE = 3`, `RLIMIT_FSIZE = 0`): CSS Grid explicit `[line-name]` lists, implicit `<area>-start`/`<area>-end` lines, `span <name>`, `fit-content(<length-percentage>)`, and `repeat(auto-fill | auto-fit, ...)` track expansion/collapse; generalized `min-content`, `max-content`, and `fit-content` box sizing across block/inline/flex/grid and HTML5 `<canvas>` `300x150` intrinsic/attribute sizing; `box-shadow` (`0..=8`) and `text-shadow` (`0..=4`) analytical Gaussian blur, multi-stop (`2..=16`) linear/repeating-linear/radial/repeating-radial gradients, 2D `transform` (`translate`, `scale`, `matrix`), `clip: rect(...)` / `clip-path: inset(... round ...)`, `color: transparent` text alpha, intrinsic `background-size: auto` + `background-position` CSS sprite clipping, bounded SVG `<style>` + acyclic `<use href="#id">`, and single-line `text-overflow: ellipsis`; pure-Rust `HTMLCanvasElement.getContext('2d')` (`Path2D`, transforms, `DOMMatrix`, gradients/patterns, shadows, compositing, zero-FD bitmap text, `ImageData`, LZ77+Huffman PNG `toDataURL`/`toBlob`, and live styled-layout pixel projection); browser-hosted static `<script type="module">` preloading/linking, `window.Image`, `2,048` browser-session listeners, zero-allocation reply serialized-byte validation, `MutationObserver`, `ResizeObserver`, `IntersectionObserver`, `CustomElementRegistry` (`window.customElements`), `Element.animate`/`getAnimations`, and `window.visualViewport`; `@font-face` `unicode-range` codepoint filtering, honest Linux desktop `User-Agent` (`www.npr.org`), and `<script>`-free DOM snapshot synthesis (`<= 128 KiB`, `<= 2,500` nodes) for large-page (`> 1 MiB`) CDP utility-world queries (`news.google.com`, `en.wikipedia.org`); plus independent per-tab page zoom (`25%..=500%`, `Alt+=`/`Alt+-`/`Alt+0`, `Ctrl+MouseWheel`), persistent `0o600` `localStorage` (`local-storage.json`, wiped on `Ctrl+Shift+Delete`), and open-tab session snapshot & restore (`session.json`, Menu -> `Restore session`, `chrome://newtab`, `--restore-session`). Advances honest WPT static reftests to `558 PASS / 391 FAIL / 62 UNSUPPORTED` of `1,011` (`+17` passes over `v0.9.29`, `0` losses) while retaining `16/16` files and `79/79` final subtests (`100%`) on the Window lane. See [docs/RELEASE-v0.9.30.md](docs/RELEASE-v0.9.30.md).
+
+### Test criteria
+
+- [x] Named CSS Grid lines, `fit-content()`, `repeat(auto-fill | auto-fit)`, generalized intrinsic box sizing, `<canvas>` `300x150` sizing, `box-shadow`/`text-shadow`, multi-stop linear/radial gradients, 2D `transform`, `clip`/`clip-path: inset()`, `color: transparent` text alpha, CSS background sprites, SVG `<style>`/`<use>`, and `text-overflow: ellipsis` pass unit and visual parity suites (`visual_parity`, `real_site_compat`) and advance pinned WPT static reftests to `558 PASS / 391 FAIL / 62 UNSUPPORTED` of `1,011` (`0` losses).
+- [x] HTML5 `<canvas>` 2D rasterization/PNG export/DOM projection, browser-hosted `<script type="module">`, `MutationObserver`/`ResizeObserver`/`IntersectionObserver`, `CustomElementRegistry`, `@font-face` `unicode-range` filtering, and large-page CDP utility worlds pass unit, isolated worker, and Playwright real-site suites (`canvas`, `esm`, `observers_wc`, `news.google.com`, `developer.mozilla.org`, `www.npr.org`).
+- [x] Independent per-tab page zoom, persistent `0o600` `localStorage`, and tab session snapshot/restore pass unit and desktop UX tests while preserving all frozen standalone `boa_pages`, `external_scripts`, and `boa_worker` assertions.
+- [x] Component boundary, no-chrome embedding, workspace/JSPLAN, both WPT score lanes, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-032 : Real-site compatibility, HTTP decompression & cross-origin/@import CSS
 
 Stability: stable

@@ -1049,34 +1049,37 @@ pub(crate) fn render_scaled_profiled(
                         sh.blur_radius * 0.5 * (sx + sy),
                     );
                 }
-                canvas.text_styled_alpha(
-                    layout.fonts.select_family(&style.font_families),
-                    (
-                        rect.x.round() as i32,
-                        rect.y.round() as i32 - viewport.scroll,
-                    ),
-                    text,
-                    eff_font_size,
-                    style.color.rgb,
-                    bold,
-                    style.italic,
-                    opacity,
-                );
-                if style.underline {
-                    paint_rect(
-                        &mut canvas,
-                        Rect {
-                            x: rect.x.round(),
-                            y: (rect.y + eff_font_size).round(),
-                            w: rect.w.ceil(),
-                            h: 1.0,
-                        },
-                        Color {
-                            rgb: style.color.rgb,
-                            alpha: opacity,
-                        },
-                        viewport.scroll,
+                let text_alpha = style.color.alpha * opacity;
+                if text_alpha > 0.0 {
+                    canvas.text_styled_alpha(
+                        layout.fonts.select_family(&style.font_families),
+                        (
+                            rect.x.round() as i32,
+                            rect.y.round() as i32 - viewport.scroll,
+                        ),
+                        text,
+                        eff_font_size,
+                        style.color.rgb,
+                        bold,
+                        style.italic,
+                        text_alpha,
                     );
+                    if style.underline {
+                        paint_rect(
+                            &mut canvas,
+                            Rect {
+                                x: rect.x.round(),
+                                y: (rect.y + eff_font_size).round(),
+                                w: rect.w.ceil(),
+                                h: 1.0,
+                            },
+                            Color {
+                                rgb: style.color.rgb,
+                                alpha: text_alpha,
+                            },
+                            viewport.scroll,
+                        );
+                    }
                 }
             }
             Paint::Image(rect, source, fallback) => {
@@ -2199,6 +2202,69 @@ impl Layout<'_, '_> {
             self.scene.hit(id, r, action);
         }
     }
+    fn resolve_background_image_rect(
+        &self,
+        r: Rect,
+        bg: &crate::style::BackgroundImage,
+        url: &str,
+    ) -> Rect {
+        let natural = if matches!(bg.width, Length::Auto) || matches!(bg.height, Length::Auto) {
+            self.natural_images
+                .get(url)
+                .copied()
+                .or_else(|| {
+                    self.document
+                        .resources
+                        .get(url)
+                        .and_then(|res| {
+                            crate::images::decode(&res.bytes, &res.content_type, None, None).ok()
+                        })
+                        .or_else(|| {
+                            crate::images::decode_data_url(url)
+                                .ok()
+                                .and_then(|(ct, bytes)| {
+                                    crate::images::decode(&bytes, &ct, None, None).ok()
+                                })
+                        })
+                        .map(|img| (img.width as f32, img.height as f32))
+                })
+                .filter(|&(nw, nh)| nw > 0.0 && nh > 0.0)
+        } else {
+            None
+        };
+        let (w, h) = match (bg.width.resolve(r.w), bg.height.resolve(r.h)) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, natural.map_or(w, |(nw, nh)| w * nh / nw)),
+            (None, Some(h)) => (natural.map_or(h, |(nw, nh)| h * nw / nh), h),
+            (None, None) => natural.unwrap_or((r.w, r.h)),
+        };
+        let w = if w.is_finite() {
+            w.clamp(0.0, MAX_EXTENT)
+        } else {
+            0.0
+        };
+        let h = if h.is_finite() {
+            h.clamp(0.0, MAX_EXTENT)
+        } else {
+            0.0
+        };
+        let resolve_pos = |pos: Length, span: f32| -> f32 {
+            let raw = pos.resolve(span).unwrap_or(0.0);
+            if raw.is_finite() {
+                raw.clamp(-MAX_EXTENT, MAX_EXTENT)
+            } else {
+                0.0
+            }
+        };
+        let dx = resolve_pos(bg.pos_x, r.w - w);
+        let dy = resolve_pos(bg.pos_y, r.h - h);
+        Rect {
+            x: r.x + dx,
+            y: r.y + dy,
+            w,
+            h,
+        }
+    }
     fn decorate(&mut self, id: usize, r: Rect, padding: [f32; 4]) {
         let s = &self.styles[id];
         if !s.visible {
@@ -2249,15 +2315,16 @@ impl Layout<'_, '_> {
                 rounded_background_box(outer, s.border_width, padding, s.background_clip)
             })
             .flatten();
+        let bg_clip = r.paint_edges();
         for bg in s.background_images.iter().rev() {
-            let w = bg.width.resolve(r.w).unwrap_or(r.w);
-            let h = bg.height.resolve(r.h).unwrap_or(w);
             let url = resolve_layout_image_url(&self.document.base_url, &bg.url)
                 .unwrap_or_else(|| bg.url.clone());
-            self.scene.paint(
-                id,
-                Paint::Image(Rect { w, h, ..r }, ImageSource::Resource(url), None),
-            );
+            let img_rect = self.resolve_background_image_rect(r, bg, &url);
+            self.scene
+                .paint(id, Paint::Image(img_rect, ImageSource::Resource(url), None));
+            if let Some(slot) = self.scene.clips.last_mut() {
+                *slot = Some(slot.map_or(bg_clip, |prev| prev.intersect(bg_clip)));
+            }
             if let Some(rr) = bg_rr
                 && let Some(slot) = self.scene.rounded_clips.last_mut()
             {
@@ -3546,12 +3613,17 @@ impl Layout<'_, '_> {
                 rounded_background_box(outer, s.border_width, padding, s.background_clip)
             })
             .flatten();
+        let bg_clip = r.paint_edges();
         for (i, bg) in s.background_images.iter().rev().enumerate() {
-            let w = bg.width.resolve(r.w).unwrap_or(r.w);
-            let h = bg.height.resolve(r.h).unwrap_or(w);
+            let url = resolve_layout_image_url(&self.document.base_url, &bg.url)
+                .unwrap_or_else(|| bg.url.clone());
+            let img_rect = self.resolve_background_image_rect(r, bg, &url);
             let idx = cursor + i;
             if let Some(Paint::Image(old, ..)) = self.scene.paints.get_mut(idx) {
-                *old = Rect { w, h, ..r };
+                *old = img_rect;
+            }
+            if let Some(slot) = self.scene.clips.get_mut(idx) {
+                *slot = Some(bg_clip);
             }
             if let Some(rr) = bg_rr
                 && let Some(slot) = self.scene.rounded_clips.get_mut(idx)
@@ -5532,31 +5604,34 @@ impl Layout<'_, '_> {
                 let owner = self.scene.paint_nodes[p];
                 let mut clip: Option<Rect> = None;
                 let mut rrs: Vec<crate::paint::RoundedRect> = Vec::new();
-                // Preserve own background-image rounded mask if present.
+                // Preserve own background-image rectangular clip and rounded mask if present.
                 if matches!(
                     self.scene.paints[p],
                     Paint::Image(_, ImageSource::Resource(_), None)
-                ) && has_nonzero_border_radius(&self.styles[owner])
-                    && let Some(own_r) = updated_borders.get(owner).copied().flatten()
+                ) && let Some(own_r) = updated_borders.get(owner).copied().flatten()
                 {
-                    let own_parent_w = if owner == 0 {
-                        own_r.w
-                    } else {
-                        updated_borders
-                            .get(self.document.nodes[owner].parent)
-                            .copied()
-                            .flatten()
-                            .map_or(self.viewport.width as f32, |r| r.w)
-                    };
-                    let (_, own_pad) = self.edges(owner, own_parent_w);
-                    let outer = resolve_rounded_rect(&self.styles[owner], own_r);
-                    if let Some(bg_rr) = rounded_background_box(
-                        outer,
-                        self.styles[owner].border_width,
-                        own_pad,
-                        self.styles[owner].background_clip,
-                    ) {
-                        rrs.push(bg_rr);
+                    let bg_c = own_r.paint_edges();
+                    clip = Some(clip.map_or(bg_c, |prev| prev.intersect(bg_c)));
+                    if has_nonzero_border_radius(&self.styles[owner]) {
+                        let own_parent_w = if owner == 0 {
+                            own_r.w
+                        } else {
+                            updated_borders
+                                .get(self.document.nodes[owner].parent)
+                                .copied()
+                                .flatten()
+                                .map_or(self.viewport.width as f32, |r| r.w)
+                        };
+                        let (_, own_pad) = self.edges(owner, own_parent_w);
+                        let outer = resolve_rounded_rect(&self.styles[owner], own_r);
+                        if let Some(bg_rr) = rounded_background_box(
+                            outer,
+                            self.styles[owner].border_width,
+                            own_pad,
+                            self.styles[owner].background_clip,
+                        ) {
+                            rrs.push(bg_rr);
+                        }
                     }
                 }
                 if let Some(own_r) = updated_borders.get(owner).copied().flatten() {
@@ -5890,46 +5965,49 @@ impl Layout<'_, '_> {
             let Some((clip, base_rrs)) = node_clips.get(owner).and_then(|c| c.as_ref()) else {
                 continue;
             };
-            let clip = *clip;
+            let mut clip = *clip;
             let mut rrs = base_rrs.clone();
             if matches!(
                 self.scene.paints[p],
                 Paint::Image(_, ImageSource::Resource(_), None)
-            ) && has_nonzero_border_radius(&self.styles[owner])
-                && let Some(own_r) = updated_borders.get(owner).copied().flatten()
+            ) && let Some(own_r) = updated_borders.get(owner).copied().flatten()
             {
-                let own_parent_w = if owner == 0 {
-                    own_r.w
-                } else {
-                    updated_borders
-                        .get(self.document.nodes[owner].parent)
+                let bg_c = own_r.paint_edges();
+                clip = Some(clip.map_or(bg_c, |prev| prev.intersect(bg_c)));
+                if has_nonzero_border_radius(&self.styles[owner]) {
+                    let own_parent_w = if owner == 0 {
+                        own_r.w
+                    } else {
+                        updated_borders
+                            .get(self.document.nodes[owner].parent)
+                            .copied()
+                            .flatten()
+                            .map_or(self.viewport.width as f32, |r| r.w)
+                    };
+                    let (_, own_pad) = self.edges(owner, own_parent_w);
+                    let (osx, osy) = self
+                        .scene
+                        .node_scales
+                        .get(owner)
                         .copied()
-                        .flatten()
-                        .map_or(self.viewport.width as f32, |r| r.w)
-                };
-                let (_, own_pad) = self.edges(owner, own_parent_w);
-                let (osx, osy) = self
-                    .scene
-                    .node_scales
-                    .get(owner)
-                    .copied()
-                    .unwrap_or((1.0, 1.0));
-                let bw = self.styles[owner].border_width;
-                let scaled_bw = [bw[0] * osy, bw[1] * osx, bw[2] * osy, bw[3] * osx];
-                let scaled_pad = [
-                    own_pad[0] * osy,
-                    own_pad[1] * osx,
-                    own_pad[2] * osy,
-                    own_pad[3] * osx,
-                ];
-                let outer = resolve_rounded_rect_scaled(&self.styles[owner], own_r, (osx, osy));
-                if let Some(bg_rr) = rounded_background_box(
-                    outer,
-                    scaled_bw,
-                    scaled_pad,
-                    self.styles[owner].background_clip,
-                ) {
-                    rrs.insert(0, bg_rr);
+                        .unwrap_or((1.0, 1.0));
+                    let bw = self.styles[owner].border_width;
+                    let scaled_bw = [bw[0] * osy, bw[1] * osx, bw[2] * osy, bw[3] * osx];
+                    let scaled_pad = [
+                        own_pad[0] * osy,
+                        own_pad[1] * osx,
+                        own_pad[2] * osy,
+                        own_pad[3] * osx,
+                    ];
+                    let outer = resolve_rounded_rect_scaled(&self.styles[owner], own_r, (osx, osy));
+                    if let Some(bg_rr) = rounded_background_box(
+                        outer,
+                        scaled_bw,
+                        scaled_pad,
+                        self.styles[owner].background_clip,
+                    ) {
+                        rrs.insert(0, bg_rr);
+                    }
                 }
             }
             self.scene.clips[p] = clip;
@@ -6802,6 +6880,8 @@ mod tests {
                 url: "https://example.test/image.svg".into(),
                 width: Length::Px(f32::MAX),
                 height: Length::Px(f32::MAX),
+                pos_x: Length::Px(0.0),
+                pos_y: Length::Px(0.0),
             });
         let frame = render_test(&doc, computed, 200, 0);
         assert!(frame.canvas.pixels.iter().any(|pixel| *pixel != 0xffffff));

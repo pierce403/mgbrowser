@@ -504,13 +504,91 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
             .define_property_or_throw(
                 JsString::from(iface_name),
                 PropertyDescriptor::builder()
-                    .value(ctor)
+                    .value(ctor.clone())
                     .writable(true)
                     .enumerable(false)
                     .configurable(true),
                 context,
             )
             .map_err(|_| "Global DOM interface failed")?;
+
+        if iface_name == "HTMLImageElement" {
+            let image_ctor = FunctionObjectBuilder::new(
+                context.realm(),
+                NativeFunction::from_copy_closure(|new_target, args, context| {
+                    modern::check_context(context)?;
+                    if new_target.is_undefined() {
+                        return Err(failure("Image constructor requires 'new'"));
+                    }
+                    let w_arg = match args.first() {
+                        Some(v) if !v.is_undefined() => Some(v.to_u32(context)?),
+                        _ => None,
+                    };
+                    let h_arg = match args.get(1) {
+                        Some(v) if !v.is_undefined() => Some(v.to_u32(context)?),
+                        _ => None,
+                    };
+                    modern::check_context(context)?;
+                    let id = {
+                        let shared = state(context);
+                        let mut data = shared.borrow_mut();
+                        let id = data
+                            .host
+                            .new_node("img".to_owned(), String::new())
+                            .map_err(failure)?;
+                        if let Some(w) = w_arg {
+                            data.host.document.nodes[id]
+                                .attributes
+                                .push(("width".to_owned(), w.to_string()));
+                        }
+                        if let Some(h) = h_arg {
+                            data.host.document.nodes[id]
+                                .attributes
+                                .push(("height".to_owned(), h.to_string()));
+                        }
+                        id
+                    };
+                    wrap(&format!("node:{id}"), context)
+                }),
+            )
+            .name(js_string!("Image"))
+            .length(0)
+            .constructor(true)
+            .build();
+            image_ctor
+                .define_property_or_throw(
+                    js_string!("prototype"),
+                    PropertyDescriptor::builder()
+                        .value(proto.clone())
+                        .writable(false)
+                        .enumerable(false)
+                        .configurable(false),
+                    context,
+                )
+                .map_err(|_| "Image.prototype failed")?;
+            if let Ok(hi) = ctor.get(has_instance_sym.clone(), context) {
+                let _ = image_ctor.define_property_or_throw(
+                    has_instance_sym.clone(),
+                    PropertyDescriptor::builder()
+                        .value(hi)
+                        .writable(false)
+                        .enumerable(false)
+                        .configurable(true),
+                    context,
+                );
+            }
+            global
+                .define_property_or_throw(
+                    js_string!("Image"),
+                    PropertyDescriptor::builder()
+                        .value(image_ctor)
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true),
+                    context,
+                )
+                .map_err(|_| "Global Image failed")?;
+        }
     }
 
     // Install `NodeFilter`

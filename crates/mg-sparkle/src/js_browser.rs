@@ -215,15 +215,19 @@ pub fn extract_static_module_specifiers(source: &str) -> Vec<String> {
         if b == b'`' {
             i += 1;
             while i < len {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(len);
+                let ch = source[i..].chars().next().unwrap_or('\0');
+                if ch == '\\' {
+                    i += 1;
+                    if i < len {
+                        i += source[i..].chars().next().map_or(1, char::len_utf8);
+                    }
                     continue;
                 }
-                if bytes[i] == b'`' {
+                if ch == '`' {
                     i += 1;
                     break;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             continue;
         }
@@ -1031,12 +1035,37 @@ fn text_content(nodes: &[Node], root: usize) -> String {
     }
     output
 }
-fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+fn escaped_byte_len(value: &str) -> usize {
+    let mut len = value.len();
+    for b in value.bytes() {
+        len += match b {
+            b'&' => 4,        // &amp;
+            b'<' | b'>' => 3, // &lt; / &gt;
+            b'"' => 5,        // &quot;
+            _ => 0,
+        };
+    }
+    len
+}
+fn push_escaped(out: &mut String, value: &str) {
+    let mut last = 0usize;
+    for (i, b) in value.bytes().enumerate() {
+        let rep = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            _ => continue,
+        };
+        if last < i {
+            out.push_str(&value[last..i]);
+        }
+        out.push_str(rep);
+        last = i + 1;
+    }
+    if last < value.len() {
+        out.push_str(&value[last..]);
+    }
 }
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -1317,8 +1346,66 @@ impl BrowserHost {
         }
         Ok(())
     }
+    #[cfg(feature = "modern")]
+    pub(crate) fn validate_serialized_bounds(
+        &self,
+        root: usize,
+        include_root: bool,
+    ) -> Result<(), String> {
+        let mut out_len = 0usize;
+        let mut pending = Vec::with_capacity(64);
+        if include_root {
+            pending.push((root, false, 0usize));
+        } else {
+            pending.extend(
+                self.document.nodes[root]
+                    .children
+                    .iter()
+                    .rev()
+                    .map(|&i| (i, false, 0usize)),
+            );
+        }
+        let mut visited = 0usize;
+        while let Some((id, close, depth)) = pending.pop() {
+            visited += 1;
+            if depth > 256 || visited > MAX_NODES * 2 {
+                return Err("Serialized DOM traversal limit exceeded".into());
+            }
+            let node = &self.document.nodes[id];
+            if close {
+                out_len += 3 + node.tag.len();
+            } else if node.tag == "#text" {
+                if matches!(
+                    self.document.nodes[node.parent].tag.as_str(),
+                    "script" | "style"
+                ) {
+                    out_len += node.text.len();
+                } else {
+                    out_len += escaped_byte_len(&node.text);
+                }
+            } else {
+                if node.tag != "#document" {
+                    out_len += 2 + node.tag.len();
+                    for (name, value) in &node.attributes {
+                        if name == crate::document::INTERNAL_CANVAS_ATTR {
+                            continue;
+                        }
+                        out_len += 4 + name.len() + escaped_byte_len(value);
+                    }
+                    if !void(&node.tag) {
+                        pending.push((id, true, depth));
+                    }
+                }
+                pending.extend(node.children.iter().rev().map(|&i| (i, false, depth + 1)));
+            }
+            if out_len > MAX_SOURCE * 2 {
+                return Err("Serialized DOM byte limit exceeded".into());
+            }
+        }
+        Ok(())
+    }
     fn serialize(&self, root: usize, include_root: bool) -> Result<String, String> {
-        let mut output = String::new();
+        let mut output = String::with_capacity(256);
         let mut pending = if include_root {
             vec![(root, false, 0)]
         } else {
@@ -1337,7 +1424,9 @@ impl BrowserHost {
             }
             let node = &self.document.nodes[id];
             if close {
-                output.push_str(&format!("</{}>", node.tag));
+                output.push_str("</");
+                output.push_str(&node.tag);
+                output.push('>');
             } else if node.tag == "#text" {
                 if matches!(
                     self.document.nodes[node.parent].tag.as_str(),
@@ -1345,7 +1434,7 @@ impl BrowserHost {
                 ) {
                     output.push_str(&node.text);
                 } else {
-                    output.push_str(&escape(&node.text));
+                    push_escaped(&mut output, &node.text);
                 }
             } else {
                 if node.tag != "#document" {
@@ -1355,7 +1444,11 @@ impl BrowserHost {
                         if name == crate::document::INTERNAL_CANVAS_ATTR {
                             continue;
                         }
-                        output.push_str(&format!(" {}=\"{}\"", name, escape(value)));
+                        output.push(' ');
+                        output.push_str(name);
+                        output.push_str("=\"");
+                        push_escaped(&mut output, value);
+                        output.push('"');
                     }
                     output.push('>');
                     if !void(&node.tag) {

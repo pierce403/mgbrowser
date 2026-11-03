@@ -408,6 +408,9 @@ pub struct Browser {
     cdp_network_events: Vec<cdp_browser::NetworkEvent>,
     scripts_enabled: bool,
     automation_only_session: bool,
+    automation_after_script_failure: bool,
+    automation_recovered_generation: Option<u64>,
+    automation_revoked: bool,
     raw_page_html: String,
     last_synced_viewport: Option<ViewportState>,
     child_pool: Arc<dyn scripts::ScriptRuntime>,
@@ -1087,6 +1090,9 @@ impl Browser {
             cdp_network_events: Vec::new(),
             scripts_enabled: false,
             automation_only_session: false,
+            automation_after_script_failure: false,
+            automation_recovered_generation: None,
+            automation_revoked: false,
             raw_page_html: if blank {
                 String::new()
             } else {
@@ -1258,6 +1264,8 @@ impl Browser {
             session.cancel();
         }
         self.automation_only_session = false;
+        self.automation_after_script_failure = false;
+        self.automation_revoked = false;
         self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.console_detached_dom = false;
@@ -1498,6 +1506,8 @@ impl Browser {
             self.edit_versions.clear();
             self.pending_transaction = None;
             self.automation_only_session = false;
+            self.automation_after_script_failure = false;
+            self.automation_revoked = false;
             self.last_synced_viewport = None;
             self.console_detached_dom = false;
             self.queued_console.clear();
@@ -2437,6 +2447,7 @@ impl Browser {
     fn dispatch_arbitrary_page_click(&mut self, x: i32, y: i32) -> Result<(), String> {
         if self.loading
             || self.script_blocked
+            || self.automation_after_script_failure
             || self.pending_transaction.is_some()
             || self.automation_completion.is_some()
         {
@@ -2460,6 +2471,7 @@ impl Browser {
         }
         self.finish_automation(Err(error.into()), scripts::SessionContinuation::Terminal);
         self.automation_only_session = false;
+        self.automation_after_script_failure = false;
         self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.queued_console.clear();
@@ -2975,7 +2987,7 @@ impl Browser {
     // Ok(true) means queued; Ok(false) permits native-only activation. Immediate
     // rejection must remain observable to CDP, never a successful dropped click.
     fn dispatch_page(&mut self, kind: InputKind) -> Result<bool, String> {
-        if self.loading || self.script_blocked {
+        if self.loading || self.script_blocked || self.automation_after_script_failure {
             self.status =
                 "Page activation unavailable while loading or after script failure".into();
             self.dirty = true;
@@ -4509,6 +4521,7 @@ impl Browser {
                         session.cancel();
                     }
                     self.automation_only_session = false;
+                    self.automation_after_script_failure = false;
                     self.last_synced_viewport = None;
                     self.pending_transaction = None;
                     self.queued_console.clear();
@@ -5930,7 +5943,7 @@ fn synthesize_automation_html(doc: &Document, max_bytes: usize) -> (String, bool
                     continue;
                 }
                 visited += 1;
-                if visited > 12_000 || out.len() + 16 >= max_bytes {
+                if visited > 2_500 || out.len() + 16 >= max_bytes {
                     truncated = true;
                     continue;
                 }
@@ -6968,7 +6981,7 @@ impl Browser {
     /// Hosts may explicitly wait for script work under their own finite deadline.
     /// This does not redefine navigation loading or wait for arbitrary timers.
     pub fn script_work_status(&self) -> ScriptWorkStatus {
-        if self.script_blocked {
+        if self.script_blocked || self.automation_after_script_failure {
             ScriptWorkStatus::Blocked
         } else if self.pending_transaction.is_some()
             || self.script_fetch_inflight > 0
@@ -7049,6 +7062,10 @@ impl Browser {
                     session.cancel();
                 }
                 self.automation_only_session = false;
+                if self.automation_after_script_failure {
+                    self.script_blocked = true;
+                    self.automation_after_script_failure = false;
+                }
                 self.last_synced_viewport = None;
                 self.lifecycle = None;
             }
@@ -7056,23 +7073,40 @@ impl Browser {
         self.cdp_enabled = enabled;
     }
 
+    pub(crate) fn can_recover_automation_after_script_failure(&self) -> bool {
+        self.script_blocked
+            && self.last_load_ok
+            && !self.loading
+            && !self.fetching
+            && !self.automation_revoked
+            && self.automation_recovered_generation != Some(self.generation)
+    }
+
     pub(crate) fn ensure_automation_session(&mut self) -> Result<(), String> {
-        if self.page_session.is_some()
+        if !self.script_blocked
+            && self.page_session.is_some()
             && self
                 .lifecycle
                 .is_some_and(|p| p.phase == LifecyclePhase::LoadComplete)
         {
             return Ok(());
         }
+        let recovering = self.can_recover_automation_after_script_failure();
         if !self.cdp_enabled
             || self.loading
             || self.fetching
-            || self.script_blocked
+            || (self.script_blocked && !recovering)
             || self.pending_transaction.is_some()
             || self.child_pool.source_wire_mode() != scripts::SourceWireMode::Modern
             || self.child_pool.observer_expectation() != ObserverExpectation::Disabled
         {
             return Err("Automation requires an idle modern CDP page".into());
+        }
+        if recovering {
+            self.automation_recovered_generation = Some(self.generation);
+            if let Some(dead_session) = self.page_session.take() {
+                dead_session.cancel();
+            }
         }
         if self.page_session.is_none() {
             self.child_pool.set_generation(self.generation)?;
@@ -7080,11 +7114,12 @@ impl Browser {
             let is_blank_empty = self.raw_page_html.is_empty()
                 && self.document.title.is_empty()
                 && self.document.nodes.len() <= 4;
-            let use_synthesized = (!self.raw_page_html.is_empty()
-                && !resources::script_document_admissible(&self.page_url, &self.raw_page_html))
+            let use_synthesized = recovering
+                || (!self.raw_page_html.is_empty()
+                    && !resources::script_document_admissible(&self.page_url, &self.raw_page_html))
                 || (self.raw_page_html.is_empty() && !is_blank_empty);
             let (html_for_session, synthesized_truncated) = if use_synthesized {
-                synthesize_automation_html(&self.document, 512 * 1024)
+                synthesize_automation_html(&self.document, 128 * 1024)
             } else {
                 (self.raw_page_html.clone(), false)
             };
@@ -7208,6 +7243,10 @@ impl Browser {
             self.task_wake = None;
             self.replace_task_wake(wake);
             self.automation_only_session = automation_only;
+            self.automation_after_script_failure = recovering;
+            if recovering {
+                self.script_blocked = false;
+            }
             self.last_synced_viewport = Some(viewport);
             self.page_session = Some(session);
         }
@@ -9066,6 +9105,109 @@ mod chrome_ux_parity_tests {
                     .collect()
             ))
         );
+
+        // Also verify utility-world recovery after initial page script EngineLimit failure
+        // (e.g. heavy real-world bundles like MDN) while preserving post-failure activation blocks.
+        let mut failed_app = test_app();
+        failed_app.child_pool = Arc::new(Rt);
+        failed_app.scripts_enabled = true;
+        failed_app.set_debugging(true);
+        failed_app.page_url = "https://developer.example.org/en-US/".into();
+        failed_app.address = failed_app.page_url.clone();
+        let failed_html = "<!doctype html><html><head><title>MDN Web Docs</title>\
+            <script>while(true){}</script></head><body><h1>Resources for Developers</h1>\
+            <a href=\"/docs\">Docs</a></body></html>";
+        failed_app.raw_page_html = failed_html.into();
+        failed_app.document = document::parse(failed_html, &failed_app.page_url);
+        failed_app.loading = false;
+        failed_app.fetching = false;
+        failed_app.last_load_ok = true;
+        failed_app.script_blocked = true;
+        failed_app.initial_script = InitialScriptOutcome::new(true);
+        failed_app
+            .initial_script
+            .fail(InitialScriptFailure::Script, "Owned fuel exhaustion");
+        failed_app.generation = 9;
+
+        assert!(failed_app.can_recover_automation_after_script_failure());
+        failed_app
+            .ensure_automation_session()
+            .expect("ensure_automation_session must recover isolated realm after script failure");
+        assert!(failed_app.automation_only_session);
+        assert!(failed_app.automation_after_script_failure);
+        assert_eq!(failed_app.script_work_status(), ScriptWorkStatus::Blocked);
+        assert!(
+            failed_app
+                .dispatch_page(InputKind::Click { target: 1 })
+                .is_err()
+        );
+        failed_app
+            .dispatch_automation(
+                AutomationRequest {
+                    owner: 1,
+                    operation:
+                        mg_sparkle::page_session::automation::Operation::CreateIsolatedWorld {
+                            world: "__playwright_utility_world__".into(),
+                        },
+                    edits: Vec::new(),
+                },
+                8,
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            failed_app.poll_page_session();
+            if failed_app.take_automation_completion().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        failed_app
+            .dispatch_automation(
+                AutomationRequest {
+                    owner: 1,
+                    operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                        source: "document.title + '|' + document.querySelector('h1').textContent"
+                            .into(),
+                        group: None,
+                        return_by_value: false,
+                        await_promise: false,
+                        user_gesture: false,
+                        world: Some("__playwright_utility_world__".into()),
+                    },
+                    edits: Vec::new(),
+                },
+                9,
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut recovered_completion = None;
+        while Instant::now() < deadline {
+            failed_app.poll_page_session();
+            if let Some(c) = failed_app.take_automation_completion() {
+                recovered_completion = Some(c);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            recovered_completion
+                .expect("recovered automation completion")
+                .result
+                .unwrap(),
+            AutomationResult::Value(mg_sparkle::page_session::automation::RemoteValue::String(
+                "MDN Web Docs|Resources for Developers"
+                    .encode_utf16()
+                    .collect()
+            ))
+        );
+
+        // Explicit permission revocation still forbids restarting on the same generation.
+        failed_app.set_debugging(false);
+        assert!(failed_app.script_blocked);
+        failed_app.set_debugging(true);
+        assert!(!failed_app.can_recover_automation_after_script_failure());
+        assert!(failed_app.ensure_automation_session().is_err());
     }
 
     #[test]

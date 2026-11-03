@@ -2,7 +2,34 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.29
+## Latest verified release: v0.9.30
+
+v0.9.30 delivers responsive CSS Grid (`[named-lines]`, `fit-content()`,
+`repeat(auto-fill | auto-fit, ...)` — rendering MDN Web Docs in full styled
+layout), generalized intrinsic box sizing (`min-content`, `max-content`,
+`fit-content`), CSS `box-shadow` and `text-shadow` Gaussian blur rendering,
+multi-stop (`2..=16`) linear, repeating-linear, radial, and repeating-radial
+gradients, CSS 2D `transform` (`translate`, `scale`, `matrix`), `clip: rect(...)`
+/ `clip-path: inset(... round ...)`, `color: transparent` text alpha, CSS
+background-position/size sprite clipping, SVG `<style>` + internal `<use
+href="#id">`, and `text-overflow: ellipsis` (advancing honest WPT static
+reftests to **558 PASS / 391 FAIL / 62 UNSUPPORTED of 1,011**, `+17` new passes,
+`0` losses, with **16/16 files and 79/79 subtests** on the Window lane),
+alongside a pure-Rust HTML5 `<canvas>` 2D immediate-mode engine (`Path2D`,
+transforms, gradients, shadows, compositing, bitmap text, `ImageData`,
+LZ77+Huffman PNG `toDataURL`/`toBlob`, and live DOM pixel projection),
+browser-hosted ES `<script type="module">` execution, `window.Image`, `2,048`
+browser-session event listeners, DOM Observers (`MutationObserver`,
+`ResizeObserver`, `IntersectionObserver`), `CustomElementRegistry`
+(`window.customElements`), `@font-face` `unicode-range` subset filtering,
+large-page (`> 1 MiB`) CDP utility-world automation (`news.google.com`,
+`en.wikipedia.org`), honest Linux desktop `User-Agent` compatibility
+(`www.npr.org`), clean zero-diagnostic Wikipedia portal rendering
+(`www.wikipedia.org`), independent per-tab page zoom (`25%..=500%`, `Alt+=`/`Alt+-`/
+`Alt+0`, `Ctrl+MouseWheel`), persistent `0o600` `localStorage`, and tab session
+snapshot & restore. [Release notes](docs/RELEASE-v0.9.30.md).
+
+## Previous release: v0.9.29
 
 v0.9.29 delivers pinned unmodified Playwright `1.58.2` browser automation parity
 (`chromium.connectOverCDP` over HTTP and WebSocket plus `chromium.launch` over

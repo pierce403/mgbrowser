@@ -3,8 +3,8 @@
   "counts": {
     "CRASH": 0,
     "ERROR": 0,
-    "FAIL": 408,
-    "PASS": 541,
+    "FAIL": 391,
+    "PASS": 558,
     "TIMEOUT": 0,
     "UNSUPPORTED": 62,
     "total": 1011
@@ -591,7 +591,7 @@
       "test": "css/css-flexbox/balance/webkit-box-no-balance.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/baseline-outside-flex-item.html"
     },
     {
@@ -1159,7 +1159,7 @@
       "test": "css/css-flexbox/flex-grow-009.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-height-min-content.html"
     },
     {
@@ -1179,11 +1179,11 @@
       "test": "css/css-flexbox/flex-item-content-is-min-width-max-content.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-item-max-height-min-content.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-item-max-width-min-content-002.html"
     },
     {
@@ -1195,7 +1195,7 @@
       "test": "css/css-flexbox/flex-item-min-height-min-content-overflow.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-item-min-height-min-content.html"
     },
     {
@@ -1339,7 +1339,7 @@
       "test": "css/css-flexbox/flex-minimum-height-flex-items-023.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flex-minimum-height-flex-items-024.html"
     },
     {
@@ -1503,7 +1503,7 @@
       "test": "css/css-flexbox/flexbox-align-items-center-nested-001.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-align-self-baseline-compatability.html"
     },
     {
@@ -1699,7 +1699,7 @@
       "test": "css/css-flexbox/flexbox-basic-block-vert-001v.xhtml"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-basic-canvas-horiz-001.xhtml"
     },
     {
@@ -1707,7 +1707,7 @@
       "test": "css/css-flexbox/flexbox-basic-canvas-horiz-001v.xhtml"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-basic-canvas-vert-001.xhtml"
     },
     {
@@ -1787,7 +1787,7 @@
       "test": "css/css-flexbox/flexbox-break-request-vert-002b.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/flexbox-collapsed-item-baseline-001.html"
     },
     {
@@ -3363,7 +3363,7 @@
       "test": "css/css-flexbox/gap-014.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/gap-015.html"
     },
     {
@@ -3435,7 +3435,7 @@
       "test": "css/css-flexbox/inline-flex-column-image-load.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/inline-flex-min-content-height.html"
     },
     {
@@ -3475,7 +3475,7 @@
       "test": "css/css-flexbox/intrinsic-size/col-wrap-009.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/intrinsic-size/col-wrap-011.html"
     },
     {
@@ -3731,7 +3731,7 @@
       "test": "css/css-flexbox/percentage-heights-019.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/percentage-heights-020.html"
     },
     {
@@ -3811,7 +3811,7 @@
       "test": "css/css-flexbox/position-relative-percentage-top-003.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/relayout-intrinsic-block-size.html"
     },
     {
@@ -3987,7 +3987,7 @@
       "test": "css/css-flexbox/table-as-item-narrow-content.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/table-as-item-percent-width-cell-001.html"
     },
     {
@@ -4043,7 +4043,7 @@
       "test": "css/css-flexbox/table-with-infinite-max-intrinsic-width.html"
     },
     {
-      "status": "FAIL",
+      "status": "PASS",
       "test": "css/css-flexbox/text-overflow-on-flexbox-001.html"
     },
     {
@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "f275bb60480a7d243342cd6f7b7bd869f958525f30fb885b530fea9b0b4299bb",
+  "source_sha256": "48ca33f478682077cc82df8ebcd8bf400bdd4ba32ec7b45611f77a71b336aa2b",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

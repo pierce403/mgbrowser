@@ -2268,6 +2268,7 @@ pub(super) fn signal_listener_call(
     };
     let shared = state(context);
     let mut data = shared.borrow_mut();
+    let max_listeners = data.max_listeners;
     let Some(sig) = data.abort_signals.get_mut(sig_id) else {
         return Ok(JsValue::undefined());
     };
@@ -2279,7 +2280,7 @@ pub(super) fn signal_listener_call(
             sig.listeners[i].callback = None;
         }
     } else if idx.is_none() {
-        if sig.listeners.len() >= dom_events::MAX_BOA_LISTENERS {
+        if sig.listeners.len() >= max_listeners {
             return Err(failure("Listener limit exceeded"));
         }
         sig.listeners.push(SignalListener {
@@ -2313,6 +2314,7 @@ pub(super) fn xhr_listener_call(
     };
     let shared = state(context);
     let mut data = shared.borrow_mut();
+    let max_listeners = data.max_listeners;
     let Some(xhr) = data.xhr_instances.get_mut(xhr_id) else {
         return Ok(JsValue::undefined());
     };
@@ -2324,7 +2326,7 @@ pub(super) fn xhr_listener_call(
             xhr.listeners[i].callback = None;
         }
     } else if idx.is_none() {
-        if xhr.listeners.len() >= dom_events::MAX_BOA_LISTENERS {
+        if xhr.listeners.len() >= max_listeners {
             return Err(failure("Listener limit exceeded"));
         }
         xhr.listeners.push(SignalListener {

@@ -16,7 +16,8 @@ use modern::boa_engine::{
 };
 use modern::boa_gc::{Finalize, Trace};
 
-pub(super) const MAX_BOA_LISTENERS: usize = 32;
+pub(super) const MAX_STANDALONE_LISTENERS: usize = 32;
+pub(super) const MAX_BROWSER_LISTENERS: usize = 2048;
 pub(super) const MAX_MODERN_EVENTS: usize = 512;
 
 pub(super) const DISPATCH_EVENT: &str = "host.m2.dispatchEvent";
@@ -826,7 +827,8 @@ pub(super) fn listener_call(
             data.listeners[index].callback = None;
         }
     } else if index.is_none() {
-        if data.listeners.len() >= MAX_BOA_LISTENERS {
+        let max_listeners = data.max_listeners;
+        if data.listeners.len() >= max_listeners {
             return Err(failure("Listener limit exceeded"));
         }
         data.host.charge(128 + event_type.len()).map_err(failure)?;
@@ -837,7 +839,7 @@ pub(super) fn listener_call(
             && !data.listeners.iter().any(|l| {
                 l.property && l.world_id == 0 && l.target == target && l.event_type == event_type
             })
-            && data.listeners.len() + 1 < MAX_BOA_LISTENERS
+            && data.listeners.len() + 1 < max_listeners
         {
             data.listeners.push(Listener {
                 target,
@@ -1753,7 +1755,7 @@ pub(super) fn ensure_inline_handler_compiled(
         };
         data.suppressed_inline_handlers
             .insert((node_id, event_type.to_owned()));
-        if body.len() > 65_536 || data.listeners.len() >= MAX_BOA_LISTENERS {
+        if body.len() > 65_536 || data.listeners.len() >= data.max_listeners {
             return Ok(());
         }
         data.host
@@ -1784,6 +1786,7 @@ pub(super) fn ensure_inline_handler_compiled(
     };
     let shared = state(context);
     let mut data = shared.borrow_mut();
+    let max_listeners = data.max_listeners;
     if let Some(slot) = data.listeners.iter_mut().find(|l| {
         l.property
             && l.world_id == 0
@@ -1792,7 +1795,7 @@ pub(super) fn ensure_inline_handler_compiled(
             && l.callback.is_none()
     }) {
         slot.callback = Some(fn_obj);
-    } else if data.listeners.len() < MAX_BOA_LISTENERS {
+    } else if data.listeners.len() < max_listeners {
         data.listeners.push(super::Listener {
             target,
             event_type: event_type.to_owned(),

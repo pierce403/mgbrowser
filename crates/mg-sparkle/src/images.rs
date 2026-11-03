@@ -354,8 +354,20 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
     if xml.root_element().tag_name().name() != "svg" {
         return Err("Image is not SVG".into());
     }
+    let mut defined_ids = std::collections::HashSet::new();
+    let mut id_use_targets: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for node in xml.descendants().filter(|node| node.is_element()) {
+        if let Some(id) = node.attribute("id")
+            && !id.is_empty()
+            && id.len() <= 256
+        {
+            defined_ids.insert(id);
+        }
+    }
+    let mut use_count = 0usize;
     // Restrict complexity before the renderer sees the document. In particular,
-    // exclude filters, recursive use, embedded images, stylesheets and SVG text.
+    // exclude filters, recursive/unbounded use, embedded images, external stylesheets and SVG text.
     for node in xml.descendants().filter(|node| node.is_element()) {
         if node.ancestors().take(34).count() > 33 {
             return Err("SVG nesting exceeds 32 levels".into());
@@ -382,15 +394,42 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
                 | "symbol"
                 | "mask"
                 | "metadata"
+                | "style"
+                | "use"
         ) {
             return Err("Unsupported SVG element; only simple shapes are supported".into());
         }
+        if tag == "style" {
+            let css = node.text().unwrap_or("");
+            if css.len() > 32 * 1024
+                || css.to_ascii_lowercase().contains("@import")
+                || has_disallowed_svg_url(css)
+            {
+                return Err("Unsupported SVG stylesheet rule or external URL".into());
+            }
+        }
+        let mut use_target_id: Option<&str> = None;
         for attribute in node.attributes() {
             let attr_name = attribute.name();
             let attr_val = attribute.value();
             let invalid_href = if attr_name == "href" {
-                !matches!(tag, "linearGradient" | "radialGradient")
-                    || !is_internal_svg_fragment_id(attr_val.trim())
+                let ns_ok = attribute
+                    .namespace()
+                    .is_none_or(|ns| ns == "http://www.w3.org/1999/xlink");
+                let frag = attr_val.trim();
+                if tag == "use" && ns_ok && is_internal_svg_fragment_id(frag) {
+                    let target = &frag[1..];
+                    if defined_ids.contains(target) {
+                        use_target_id = Some(target);
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    !ns_ok
+                        || !matches!(tag, "linearGradient" | "radialGradient")
+                        || !is_internal_svg_fragment_id(frag)
+                }
             } else {
                 false
             };
@@ -400,6 +439,39 @@ fn svg(bytes: &[u8], width: Option<u32>, height: Option<u32>) -> Result<RasterIm
                 || attr_val.len() > 32 * 1024
             {
                 return Err("Unsupported SVG reference, event or oversized attribute".into());
+            }
+        }
+        if tag == "use" {
+            use_count += 1;
+            if use_count > 64 {
+                return Err("SVG <use> count exceeds 64".into());
+            }
+            let Some(target) = use_target_id else {
+                return Err("Unsupported SVG <use> reference".into());
+            };
+            for anc in node.ancestors().filter(|a| a.is_element()) {
+                if let Some(anc_id) = anc.attribute("id") {
+                    if anc_id == target {
+                        return Err("Recursive SVG <use> reference".into());
+                    }
+                    id_use_targets.entry(anc_id).or_default().push(target);
+                }
+            }
+        }
+    }
+    for &start in id_use_targets.keys() {
+        let mut frontier = vec![(start, 0usize)];
+        while let Some((cur, depth)) = frontier.pop() {
+            if depth > 4 {
+                return Err("SVG <use> chain depth exceeds 4".into());
+            }
+            if let Some(nexts) = id_use_targets.get(cur) {
+                for &nxt in nexts {
+                    if nxt == start {
+                        return Err("Cyclic SVG <use> reference".into());
+                    }
+                    frontier.push((nxt, depth + 1));
+                }
             }
         }
     }

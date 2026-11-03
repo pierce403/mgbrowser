@@ -613,6 +613,8 @@ impl crate::Browser {
             session.cancel();
         }
         self.automation_only_session = false;
+        self.automation_after_script_failure = false;
+        self.automation_revoked = false;
         self.last_synced_viewport = None;
         self.pending_transaction = None;
         self.console_detached_dom = false;

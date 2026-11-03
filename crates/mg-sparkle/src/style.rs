@@ -575,6 +575,8 @@ pub struct BackgroundImage {
     pub url: String,
     pub width: Length,
     pub height: Length,
+    pub pos_x: Length,
+    pub pos_y: Length,
 }
 
 /// Rectangular background painting/positioning areas. Non-rectangular clipping
@@ -2581,26 +2583,161 @@ fn parse_dom_selector_list(selector: &str) -> Result<selectors::SelectorList<Sel
 }
 
 #[cfg(feature = "modern")]
+fn is_simple_ident(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.is_empty() || b.len() > 256 {
+        return false;
+    }
+    let valid_start = b[0].is_ascii_alphabetic()
+        || b[0] == b'_'
+        || (b[0] == b'-'
+            && b.len() >= 2
+            && (b[1].is_ascii_alphabetic() || b[1] == b'_' || b[1] == b'-'));
+    valid_start
+        && b.iter()
+            .all(|&c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+}
+
+#[cfg(feature = "modern")]
+fn try_simple_compound_selector<'a>(
+    nodes: &[Node],
+    root: usize,
+    raw_selector: &'a str,
+    first_only: bool,
+) -> Option<Vec<usize>> {
+    let s = raw_selector.trim();
+    if s.is_empty() || s.len() > 512 {
+        return None;
+    }
+    // Reject anything with combinators, commas, pseudo-classes, attributes, escapes, or namespaces.
+    if s.bytes()
+        .any(|b| !b.is_ascii_alphanumeric() && !matches!(b, b'-' | b'_' | b'#' | b'.'))
+    {
+        return None;
+    }
+    let mut tag_req: Option<&'a str> = None;
+    let mut id_req: Option<&'a str> = None;
+    let mut class_reqs: [&'a str; 4] = [""; 4];
+    let mut class_count = 0usize;
+
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    if bytes[0] != b'#' && bytes[0] != b'.' {
+        let start = 0;
+        while i < bytes.len() && bytes[i] != b'#' && bytes[i] != b'.' {
+            i += 1;
+        }
+        let t = &s[start..i];
+        if !t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            || !t.as_bytes()[0].is_ascii_alphabetic()
+        {
+            return None;
+        }
+        tag_req = Some(t);
+    }
+    while i < bytes.len() {
+        let kind = bytes[i];
+        if kind != b'#' && kind != b'.' {
+            return None;
+        }
+        i += 1;
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'#' && bytes[i] != b'.' {
+            i += 1;
+        }
+        let ident = &s[start..i];
+        if !is_simple_ident(ident) {
+            return None;
+        }
+        if kind == b'#' {
+            if id_req.is_some() {
+                return None;
+            }
+            id_req = Some(ident);
+        } else {
+            if class_count >= class_reqs.len() {
+                return None;
+            }
+            class_reqs[class_count] = ident;
+            class_count += 1;
+        }
+    }
+    if tag_req.is_none() && id_req.is_none() && class_count == 0 {
+        return None;
+    }
+    if root >= nodes.len() || nodes[root].tag == "template" {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut stack: Vec<usize> = nodes[root].children.iter().rev().copied().collect();
+    let mut visited = 0usize;
+    while let Some(id) = stack.pop() {
+        visited += 1;
+        if visited > crate::document::MAX_NODES {
+            break;
+        }
+        let node = &nodes[id];
+        if !node.tag.starts_with('#') {
+            let tag_ok = tag_req.is_none_or(|t| node.tag.eq_ignore_ascii_case(t));
+            let id_ok = id_req.is_none_or(|want| node.attr("id") == Some(want));
+            let classes_ok = if class_count == 0 {
+                true
+            } else if let Some(cls_attr) = node.attr("class") {
+                class_reqs[..class_count]
+                    .iter()
+                    .all(|&want| cls_attr.split_ascii_whitespace().any(|tok| tok == want))
+            } else {
+                false
+            };
+            if tag_ok && id_ok && classes_ok {
+                out.push(id);
+                if first_only {
+                    return Some(out);
+                }
+            }
+        }
+        if node.tag != "template" {
+            stack.extend(node.children.iter().rev().copied());
+        }
+    }
+    Some(out)
+}
+
+#[cfg(feature = "modern")]
 fn build_selector_arena(nodes_slice: &[Node]) -> StyleDocument<'_> {
     let nodes = nodes_slice
         .iter()
-        .map(|node| NodeStyleData {
-            local_name: node.tag.as_str().into(),
-            id: node.attr("id").map(AtomIdent::from),
-            classes: node
-                .attr("class")
-                .unwrap_or("")
-                .split_ascii_whitespace()
-                .map(AtomIdent::from)
-                .collect(),
-            attr_names: node
-                .attributes
-                .iter()
-                .map(|(name, _)| name.as_str().into())
-                .collect(),
-            inline: None,
-            hints: None,
-            data: ElementDataWrapper::default(),
+        .map(|node| {
+            if node.tag.starts_with('#') {
+                NodeStyleData {
+                    local_name: Default::default(),
+                    id: None,
+                    classes: Vec::new(),
+                    attr_names: Vec::new(),
+                    inline: None,
+                    hints: None,
+                    data: ElementDataWrapper::default(),
+                }
+            } else {
+                NodeStyleData {
+                    local_name: node.tag.as_str().into(),
+                    id: node.attr("id").map(AtomIdent::from),
+                    classes: node
+                        .attr("class")
+                        .unwrap_or("")
+                        .split_ascii_whitespace()
+                        .map(AtomIdent::from)
+                        .collect(),
+                    attr_names: node
+                        .attributes
+                        .iter()
+                        .map(|(name, _)| name.as_str().into())
+                        .collect(),
+                    inline: None,
+                    hints: None,
+                    data: ElementDataWrapper::default(),
+                }
+            }
         })
         .collect();
     StyleDocument {
@@ -2640,6 +2777,9 @@ pub(crate) fn query_selector_dom(
     selector: &str,
     first_only: bool,
 ) -> Result<Vec<usize>, ()> {
+    if let Some(fast) = try_simple_compound_selector(nodes, root, selector, first_only) {
+        return Ok(fast);
+    }
     let list = parse_dom_selector_list(selector)?;
     if root >= nodes.len() || nodes[root].tag == "template" {
         return Ok(Vec::new());
@@ -2880,6 +3020,10 @@ fn report_unsupported(
             .0
             .iter()
             .any(|image| matches!(image, style::values::generics::image::Image::Gradient(_)))
+        && !is_noop_transparent_gradient_over_other_layers(
+            background,
+            &values.get_inherited_text().color,
+        )
     {
         diagnostics.record(
             "css-unsupported",
@@ -4238,6 +4382,47 @@ fn bounded_box_length(
     }
 }
 
+fn is_noop_transparent_gradient_over_other_layers(
+    background: &style::properties::style_structs::Background,
+    current_color: &style::color::AbsoluteColor,
+) -> bool {
+    use style::values::generics::image::{Gradient, GradientCompatMode, GradientItem, Image};
+    let layers = background.background_image.0.as_ref();
+    if layers.len() < 2 || !layers.iter().any(|l| !matches!(l, Image::Gradient(_))) {
+        return false;
+    }
+    layers.iter().all(|layer| match layer {
+        Image::Gradient(grad) => match &**grad {
+            Gradient::Linear {
+                color_interpolation_method,
+                items,
+                compat_mode,
+                ..
+            }
+            | Gradient::Radial {
+                color_interpolation_method,
+                items,
+                compat_mode,
+                ..
+            } => {
+                *compat_mode == GradientCompatMode::Modern
+                    && color_interpolation_method.space == style::color::ColorSpace::Srgb
+                    && items.len() >= 2
+                    && items.iter().all(|item| match item {
+                        GradientItem::SimpleColorStop(c)
+                        | GradientItem::ComplexColorStop { color: c, .. } => {
+                            let resolved = absolute_color(&c.resolve_to_absolute(current_color));
+                            resolved.alpha == 0.0
+                        }
+                        GradientItem::InterpolationHint(_) => true,
+                    })
+            }
+            Gradient::Conic { .. } => false,
+        },
+        _ => true,
+    })
+}
+
 /// Convert the explicitly implemented sRGB linear/radial background gradient
 /// slice from Stylo's computed values (`2..=16` stops, optional midpoint hints).
 fn renderer_gradient(values: &ComputedValues) -> Option<Box<BackgroundGradient>> {
@@ -4921,10 +5106,24 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
                         }
                     }
                 }
+                let pos_x = background
+                    .background_position_x
+                    .0
+                    .get(index % background.background_position_x.0.len().max(1))
+                    .and_then(|p| bounded_box_length(p, false))
+                    .unwrap_or(Length::Px(0.0));
+                let pos_y = background
+                    .background_position_y
+                    .0
+                    .get(index % background.background_position_y.0.len().max(1))
+                    .and_then(|p| bounded_box_length(p, false))
+                    .unwrap_or(Length::Px(0.0));
                 background_images.push(BackgroundImage {
                     url: url.as_str().to_owned(),
                     width,
                     height,
+                    pos_x,
+                    pos_y,
                 });
             }
         }

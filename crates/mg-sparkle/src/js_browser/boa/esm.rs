@@ -37,6 +37,8 @@ pub(super) struct EsmState {
     pub evaluated: HashSet<String>,
     #[unsafe_ignore_trace]
     pub evaluating: HashSet<String>,
+    #[unsafe_ignore_trace]
+    pub mutable_exports: HashSet<(String, String)>,
     pub namespaces: HashMap<String, JsObject>,
     pub eval_errors: HashMap<String, JsValue>,
 }
@@ -46,6 +48,7 @@ impl EsmState {
         self.sources.clear();
         self.evaluated.clear();
         self.evaluating.clear();
+        self.mutable_exports.clear();
         self.namespaces.clear();
         self.eval_errors.clear();
         self.importmap.clear();
@@ -214,12 +217,21 @@ fn evaluate_module_by_url(
             Ok(ns)
         }
         Err(failure) => {
-            let mut data = realm.state.borrow_mut();
-            data.esm.evaluating.remove(canonical_url);
-            if let Some(exc) = &failure.exception
-                && let Ok(opaque) = exc.clone().into_opaque(realm.engine.context_mut())
-            {
-                data.esm
+            realm
+                .state
+                .borrow_mut()
+                .esm
+                .evaluating
+                .remove(canonical_url);
+            let opaque_opt = failure
+                .exception
+                .as_ref()
+                .and_then(|exc| exc.clone().into_opaque(realm.engine.context_mut()).ok());
+            if let Some(opaque) = opaque_opt {
+                realm
+                    .state
+                    .borrow_mut()
+                    .esm
                     .eval_errors
                     .insert(canonical_url.to_owned(), opaque);
             }
@@ -276,29 +288,43 @@ fn evaluate_module_source(
             exception: None,
         })?;
 
-    // 1. Validate 100% genuine ECMAScript Module grammar via boa_engine::Module::parse!
-    let parse_res = {
-        let _ingress = Ingress::enter(realm.state.clone());
-        Module::parse(
-            Source::from_bytes(source_code),
-            None,
-            realm.engine.context_mut(),
-        )
-    };
-    if let Err(parse_err) = parse_res {
-        // Charge empty evaluation so ResourceStats source counters stay monotonic.
-        let _ = realm.engine.evaluate_raw("");
-        return Err(ExecutionFailure {
-            diagnostic: modern::safe_error(&parse_err),
-            exception: Some(parse_err),
-        });
+    // 1. Validate ECMAScript Module grammar via boa_engine::Module::parse on bounded sources;
+    //    for large minified bundles (> 16 KiB), avoid double-parsing the full AST so cumulative
+    //    allocator requests stay well within the unchanged 64 MiB worker ceiling (Script::parse
+    //    inside evaluate_raw still validates strict-mode syntax across the entire transformed body).
+    if source_code.len() <= 16 * 1024 {
+        let parse_res = {
+            let _ingress = Ingress::enter(realm.state.clone());
+            Module::parse(
+                Source::from_bytes(source_code),
+                None,
+                realm.engine.context_mut(),
+            )
+        };
+        if let Err(parse_err) = parse_res {
+            // Charge empty evaluation so ResourceStats source counters stay monotonic.
+            let _ = realm.engine.evaluate_raw("");
+            return Err(ExecutionFailure {
+                diagnostic: modern::safe_error(&parse_err),
+                exception: Some(parse_err),
+            });
+        }
     }
 
     // 2. Transform module syntax and collect static dependency specifiers.
     let transformed =
         transform_esm_source(source_code).map_err(|msg| syntax_error_failure(&msg))?;
+    if !module_url.is_empty() && !transformed.mutable_exports.is_empty() {
+        let mut data = realm.state.borrow_mut();
+        for exp_name in &transformed.mutable_exports {
+            data.esm
+                .mutable_exports
+                .insert((module_url.to_owned(), exp_name.clone()));
+        }
+    }
 
     // 3. Resolve & evaluate all static dependencies in source order.
+    let mut dep_urls: Vec<String> = Vec::with_capacity(transformed.dependencies.len());
     let mut dep_objects: Vec<JsValue> = Vec::with_capacity(transformed.dependencies.len());
     for spec in &transformed.dependencies {
         let resolved_url = {
@@ -313,8 +339,27 @@ fn evaluate_module_source(
             }
         };
         let dep_ns = evaluate_module_by_url(realm, &resolved_url, None)?;
+        dep_urls.push(resolved_url);
         dep_objects.push(dep_ns.into());
     }
+
+    let wrapper_code = {
+        let data = realm.state.borrow();
+        transformed.build_wrapper(&|dep_idx, imp_name| {
+            let Some(dep_url) = dep_urls.get(dep_idx) else {
+                return true;
+            };
+            data.esm.evaluating.contains(dep_url)
+                || data
+                    .esm
+                    .mutable_exports
+                    .contains(&(dep_url.clone(), imp_name.to_owned()))
+                || data
+                    .esm
+                    .mutable_exports
+                    .contains(&(dep_url.clone(), "*".to_owned()))
+        })
+    };
 
     // 4. Prepare exports namespace, deps array, import.meta, and dynamic import().
     let ns_obj = match existing_ns {
@@ -351,7 +396,7 @@ fn evaluate_module_source(
     // 5. Evaluate the compiled strict-mode module closure via Engine::evaluate_raw + call_raw.
     let call_res = {
         let _ingress = Ingress::enter(realm.state.clone());
-        let fn_val = realm.engine.evaluate_raw(&transformed.wrapper_code)?;
+        let fn_val = realm.engine.evaluate_raw(&wrapper_code)?;
         let Some(fn_obj) = fn_val.as_object() else {
             return Err(syntax_error_failure("Internal module wrapper failed"));
         };
@@ -622,9 +667,21 @@ fn evaluate_dynamic_source_in_ctx(url: &str, src: &str, ctx: &mut Context) -> Js
     if let Some(existing) = state(ctx).borrow().esm.namespaces.get(url).cloned() {
         return Ok(existing.into());
     }
-    Module::parse(Source::from_bytes(src), None, ctx)?;
+    if src.len() <= 16 * 1024 {
+        Module::parse(Source::from_bytes(src), None, ctx)?;
+    }
     let transformed =
         transform_esm_source(src).map_err(|msg| JsNativeError::syntax().with_message(msg))?;
+    if !url.is_empty() && !transformed.mutable_exports.is_empty() {
+        let shared = state(ctx);
+        let mut data = shared.borrow_mut();
+        for exp_name in &transformed.mutable_exports {
+            data.esm
+                .mutable_exports
+                .insert((url.to_owned(), exp_name.clone()));
+        }
+    }
+    let mut dep_urls = Vec::with_capacity(transformed.dependencies.len());
     let mut dep_vals = Vec::with_capacity(transformed.dependencies.len());
     for dep_spec in &transformed.dependencies {
         let dep_url = {
@@ -634,9 +691,11 @@ fn evaluate_dynamic_source_in_ctx(url: &str, src: &str, ctx: &mut Context) -> Js
                 .map_err(|msg| JsNativeError::typ().with_message(msg))?
         };
         if let Some(dns) = state(ctx).borrow().esm.namespaces.get(&dep_url).cloned() {
+            dep_urls.push(dep_url);
             dep_vals.push(dns.into());
         } else if let Some(dep_src) = state(ctx).borrow().esm.sources.get(&dep_url).cloned() {
             let dns_val = evaluate_dynamic_source_in_ctx(&dep_url, &dep_src, ctx)?;
+            dep_urls.push(dep_url);
             dep_vals.push(dns_val);
         } else {
             return Err(JsNativeError::typ()
@@ -644,6 +703,24 @@ fn evaluate_dynamic_source_in_ctx(url: &str, src: &str, ctx: &mut Context) -> Js
                 .into());
         }
     }
+    let wrapper_code = {
+        let shared = state(ctx);
+        let data = shared.borrow();
+        transformed.build_wrapper(&|dep_idx, imp_name| {
+            let Some(dep_url) = dep_urls.get(dep_idx) else {
+                return true;
+            };
+            data.esm.evaluating.contains(dep_url)
+                || data
+                    .esm
+                    .mutable_exports
+                    .contains(&(dep_url.clone(), imp_name.to_owned()))
+                || data
+                    .esm
+                    .mutable_exports
+                    .contains(&(dep_url.clone(), "*".to_owned()))
+        })
+    };
     let ns = JsObject::with_null_proto();
     ns.define_property_or_throw(
         JsSymbol::to_string_tag(),
@@ -667,11 +744,7 @@ fn evaluate_dynamic_source_in_ctx(url: &str, src: &str, ctx: &mut Context) -> Js
     )?;
     let inner_dyn = build_dynamic_import_fn(url, ctx);
     let scope = JsObject::with_null_proto();
-    let parsed = modern::boa_engine::Script::parse(
-        Source::from_bytes(&transformed.wrapper_code),
-        None,
-        ctx,
-    )?;
+    let parsed = modern::boa_engine::Script::parse(Source::from_bytes(&wrapper_code), None, ctx)?;
     let fn_val = parsed.evaluate(ctx)?;
     let fn_obj = fn_val
         .as_object()
@@ -725,25 +798,84 @@ fn evaluate_dynamic_source_in_ctx(url: &str, src: &str, ctx: &mut Context) -> Js
 // --- Lexical JS Module Scanner & Rewriter ---
 
 #[derive(Clone, Debug)]
-struct JsToken {
-    kind: TokKind,
+struct JsToken<'a> {
+    kind: TokKind<'a>,
     start: usize,
     end: usize,
     line_before: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum TokKind {
-    Ident(String),
+enum TokKind<'a> {
+    Ident(&'a str),
     StringLit(String),
-    Punct(String),
+    Punct(&'a str),
     Other,
 }
 
 struct TransformedModule {
     dependencies: Vec<String>,
-    wrapper_code: String,
+    imports: Vec<ImportBinding>,
+    export_defs: String,
+    body: String,
     has_top_level_await: bool,
+    mutable_exports: Vec<String>,
+}
+
+impl TransformedModule {
+    fn build_wrapper(&self, is_live_import: &dyn Fn(usize, &str) -> bool) -> String {
+        let mut preamble_outer = String::new();
+        let mut const_imports = String::new();
+        let mut needs_with = false;
+
+        for imp in &self.imports {
+            match imp {
+                ImportBinding::Namespace { dep_idx, local } => {
+                    const_imports.push_str(&format!("const {local} = __mg_deps[{dep_idx}];\n"));
+                }
+                ImportBinding::Named {
+                    dep_idx,
+                    imported,
+                    local,
+                } => {
+                    let imp_lit = serde_json::to_string(imported).unwrap_or_default();
+                    if is_live_import(*dep_idx, imported) {
+                        needs_with = true;
+                        let local_lit = serde_json::to_string(local).unwrap_or_default();
+                        preamble_outer.push_str(&format!(
+                            "if (!({imp_lit} in __mg_deps[{dep_idx}])) {{ throw new SyntaxError(\"The requested module does not provide an export named \" + {imp_lit}); }}\nObject.defineProperty(__mg_scope, {local_lit}, {{ enumerable: true, configurable: false, get: function() {{ return __mg_deps[{dep_idx}][{imp_lit}]; }}, set: function() {{ throw new TypeError(\"Assignment to constant variable.\"); }} }});\n"
+                        ));
+                    } else {
+                        const_imports.push_str(&format!(
+                            "if (!({imp_lit} in __mg_deps[{dep_idx}])) {{ throw new SyntaxError(\"The requested module does not provide an export named \" + {imp_lit}); }}\nconst {local} = __mg_deps[{dep_idx}][{imp_lit}];\n"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if needs_with {
+            let fn_kw = if self.has_top_level_await {
+                "async function()"
+            } else {
+                "function()"
+            };
+            format!(
+                "(function(__mg_scope, __mg_exports, __mg_deps, __mg_import_meta, __mg_dynamic_import) {{\n{preamble_outer}with (__mg_scope) {{\nreturn ({fn_kw} {{\n\"use strict\";\n{const_imports}{}{}\n}}).call(undefined);\n}}\n}})",
+                self.export_defs, self.body
+            )
+        } else {
+            let fn_kw = if self.has_top_level_await {
+                "async function"
+            } else {
+                "function"
+            };
+            format!(
+                "({fn_kw}(__mg_scope, __mg_exports, __mg_deps, __mg_import_meta, __mg_dynamic_import) {{\n\"use strict\";\n{const_imports}{}{}\n}})",
+                self.export_defs, self.body
+            )
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -779,11 +911,11 @@ enum ExportRecord {
     },
 }
 
-fn can_precede_regex(prev: Option<&TokKind>) -> bool {
+fn can_precede_regex(prev: Option<&TokKind<'_>>) -> bool {
     match prev {
         None => true,
         Some(TokKind::Punct(p)) => matches!(
-            p.as_str(),
+            *p,
             "(" | "["
                 | "{"
                 | ","
@@ -829,7 +961,7 @@ fn can_precede_regex(prev: Option<&TokKind>) -> bool {
                 | "??="
         ),
         Some(TokKind::Ident(kw)) => matches!(
-            kw.as_str(),
+            *kw,
             "return"
                 | "throw"
                 | "case"
@@ -862,11 +994,11 @@ fn is_ident_continue(ch: char) -> bool {
         || ch.is_alphanumeric()
 }
 
-fn tokenize_js(src: &str) -> Vec<JsToken> {
+fn tokenize_js(src: &str) -> Vec<JsToken<'_>> {
     let bytes = src.as_bytes();
     let len = bytes.len();
     let mut i = 0usize;
-    let mut tokens: Vec<JsToken> = Vec::new();
+    let mut tokens: Vec<JsToken<'_>> = Vec::with_capacity((len / 6).min(16_384));
     let mut template_brace_stack: Vec<usize> = Vec::new();
     let mut brace_depth = 0usize;
     let mut saw_newline = false;
@@ -967,22 +1099,25 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
         if b == b'`' {
             i += 1;
             while i < len {
-                let c = bytes[i];
-                if c == b'\\' {
-                    i = (i + 2).min(len);
+                let ch = src[i..].chars().next().unwrap_or('\0');
+                if ch == '\\' {
+                    i += 1;
+                    if i < len {
+                        i += src[i..].chars().next().map_or(1, char::len_utf8);
+                    }
                     continue;
                 }
-                if c == b'`' {
+                if ch == '`' {
                     i += 1;
                     break;
                 }
-                if c == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                if ch == '$' && bytes.get(i + 1) == Some(&b'{') {
                     i += 2;
                     template_brace_stack.push(brace_depth);
                     brace_depth += 1;
                     break;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             tokens.push(JsToken {
                 kind: TokKind::Other,
@@ -1000,22 +1135,25 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
             template_brace_stack.pop();
             i += 1;
             while i < len {
-                let c = bytes[i];
-                if c == b'\\' {
-                    i = (i + 2).min(len);
+                let ch = src[i..].chars().next().unwrap_or('\0');
+                if ch == '\\' {
+                    i += 1;
+                    if i < len {
+                        i += src[i..].chars().next().map_or(1, char::len_utf8);
+                    }
                     continue;
                 }
-                if c == b'`' {
+                if ch == '`' {
                     i += 1;
                     break;
                 }
-                if c == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                if ch == '$' && bytes.get(i + 1) == Some(&b'{') {
                     i += 2;
                     template_brace_stack.push(brace_depth);
                     brace_depth += 1;
                     break;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             tokens.push(JsToken {
                 kind: TokKind::Other,
@@ -1031,32 +1169,35 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
             i += 1;
             let mut in_class = false;
             while i < len {
-                let c = bytes[i];
-                if c == b'\\' {
-                    i = (i + 2).min(len);
+                let ch = src[i..].chars().next().unwrap_or('\0');
+                if ch == '\\' {
+                    i += 1;
+                    if i < len {
+                        i += src[i..].chars().next().map_or(1, char::len_utf8);
+                    }
                     continue;
                 }
-                if c == b'[' {
+                if ch == '[' {
                     in_class = true;
                     i += 1;
                     continue;
                 }
-                if c == b']' {
+                if ch == ']' {
                     in_class = false;
                     i += 1;
                     continue;
                 }
-                if c == b'/' && !in_class {
+                if ch == '/' && !in_class {
                     i += 1;
                     while i < len && bytes[i].is_ascii_alphabetic() {
                         i += 1;
                     }
                     break;
                 }
-                if c == b'\n' || c == b'\r' {
+                if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                     break;
                 }
-                i += 1;
+                i += ch.len_utf8();
             }
             tokens.push(JsToken {
                 kind: TokKind::Other,
@@ -1079,7 +1220,7 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
                 }
             }
             tokens.push(JsToken {
-                kind: TokKind::Ident(src[start..i].to_owned()),
+                kind: TokKind::Ident(&src[start..i]),
                 start,
                 end: i,
                 line_before,
@@ -1109,35 +1250,36 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
         }
         let punct = if i + 3 <= len
             && matches!(
-                &src[i..i + 3],
-                "===" | "!==" | ">>>" | "..." | "&&=" | "||=" | "??="
+                &bytes[i..i + 3],
+                b"===" | b"!==" | b">>>" | b"..." | b"&&=" | b"||=" | b"??="
             ) {
             i += 3;
             &src[start..i]
         } else if i + 2 <= len
             && matches!(
-                &src[i..i + 2],
-                "=>" | "=="
-                    | "!="
-                    | "<="
-                    | ">="
-                    | "&&"
-                    | "||"
-                    | "??"
-                    | "**"
-                    | "++"
-                    | "--"
-                    | "+="
-                    | "-="
-                    | "*="
-                    | "/="
-                    | "%="
-                    | "&="
-                    | "|="
-                    | "^="
-                    | "<<"
-                    | ">>"
-                    | "?."
+                &bytes[i..i + 2],
+                b"=>"
+                    | b"=="
+                    | b"!="
+                    | b"<="
+                    | b">="
+                    | b"&&"
+                    | b"||"
+                    | b"??"
+                    | b"**"
+                    | b"++"
+                    | b"--"
+                    | b"+="
+                    | b"-="
+                    | b"*="
+                    | b"/="
+                    | b"%="
+                    | b"&="
+                    | b"|="
+                    | b"^="
+                    | b"<<"
+                    | b">>"
+                    | b"?."
             )
         {
             i += 2;
@@ -1147,7 +1289,7 @@ fn tokenize_js(src: &str) -> Vec<JsToken> {
             &src[start..i]
         };
         tokens.push(JsToken {
-            kind: TokKind::Punct(punct.to_owned()),
+            kind: TokKind::Punct(punct),
             start,
             end: i,
             line_before,
@@ -1166,64 +1308,68 @@ fn intern_dep(deps: &mut Vec<String>, spec: &str) -> usize {
     }
 }
 
-fn skip_import_attributes(tokens: &[JsToken], mut idx: usize) -> usize {
+fn skip_import_attributes(tokens: &[JsToken<'_>], mut idx: usize) -> usize {
     // Optional `with { ... }` or `assert { ... }`
     if let Some(JsToken {
         kind: TokKind::Ident(kw),
         line_before: false,
         ..
     }) = tokens.get(idx)
-        && matches!(kw.as_str(), "with" | "assert")
-        && matches!(tokens.get(idx + 1).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "{")
+        && matches!(*kw, "with" | "assert")
+        && matches!(
+            tokens.get(idx + 1).map(|t| &t.kind),
+            Some(TokKind::Punct("{"))
+        )
     {
         idx += 2;
         let mut depth = 1usize;
         while idx < tokens.len() && depth > 0 {
             if let TokKind::Punct(p) = &tokens[idx].kind {
-                if p == "{" {
+                if *p == "{" {
                     depth += 1;
-                } else if p == "}" {
+                } else if *p == "}" {
                     depth -= 1;
                 }
             }
             idx += 1;
         }
     }
-    if matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ";") {
+    if matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct(";"))) {
         idx += 1;
     }
     idx
 }
 
-fn export_or_ident_name(tok: &JsToken) -> Option<String> {
+fn export_or_ident_name(tok: &JsToken<'_>) -> Option<String> {
     match &tok.kind {
-        TokKind::Ident(s) | TokKind::StringLit(s) => Some(s.clone()),
+        TokKind::Ident(s) => Some((*s).to_owned()),
+        TokKind::StringLit(s) => Some(s.clone()),
         _ => None,
     }
 }
 
-fn collect_pattern_identifiers(tokens: &[JsToken], mut idx: usize) -> (Vec<String>, usize) {
+fn collect_pattern_identifiers(tokens: &[JsToken<'_>], mut idx: usize) -> (Vec<String>, usize) {
     let mut names = Vec::new();
     let Some(tok) = tokens.get(idx) else {
         return (names, idx);
     };
     match &tok.kind {
         TokKind::Ident(id) => {
-            names.push(id.clone());
+            names.push((*id).to_owned());
             idx += 1;
         }
-        TokKind::Punct(p) if p == "{" => {
+        TokKind::Punct("{") => {
             idx += 1;
             while idx < tokens.len() {
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == "}") {
+                if matches!(&tokens[idx].kind, TokKind::Punct("}")) {
                     idx += 1;
                     break;
                 }
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == ",") {
+                if matches!(&tokens[idx].kind, TokKind::Punct(",")) {
                     idx += 1;
                     continue;
                 }
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == "...") {
+                if matches!(&tokens[idx].kind, TokKind::Punct("...")) {
                     idx += 1;
                     let (sub, next) = collect_pattern_identifiers(tokens, idx);
                     names.extend(sub);
@@ -1231,10 +1377,9 @@ fn collect_pattern_identifiers(tokens: &[JsToken], mut idx: usize) -> (Vec<Strin
                     continue;
                 }
                 // Either `prop: target [= default]` or `shorthand [= default]` or `[computed]: target`
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == "[") {
+                if matches!(&tokens[idx].kind, TokKind::Punct("[")) {
                     idx = skip_balanced(tokens, idx, "[", "]");
-                    if matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ":")
-                    {
+                    if matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct(":"))) {
                         idx += 1;
                         let (sub, next) = collect_pattern_identifiers(tokens, idx);
                         names.extend(sub);
@@ -1242,32 +1387,34 @@ fn collect_pattern_identifiers(tokens: &[JsToken], mut idx: usize) -> (Vec<Strin
                     }
                     continue;
                 }
-                if matches!(tokens.get(idx + 1).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ":")
-                {
+                if matches!(
+                    tokens.get(idx + 1).map(|t| &t.kind),
+                    Some(TokKind::Punct(":"))
+                ) {
                     idx += 2;
                     let (sub, next) = collect_pattern_identifiers(tokens, idx);
                     names.extend(sub);
                     idx = skip_initializer(tokens, next);
                 } else if let TokKind::Ident(id) = &tokens[idx].kind {
-                    names.push(id.clone());
+                    names.push((*id).to_owned());
                     idx = skip_initializer(tokens, idx + 1);
                 } else {
                     idx += 1;
                 }
             }
         }
-        TokKind::Punct(p) if p == "[" => {
+        TokKind::Punct("[") => {
             idx += 1;
             while idx < tokens.len() {
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == "]") {
+                if matches!(&tokens[idx].kind, TokKind::Punct("]")) {
                     idx += 1;
                     break;
                 }
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == ",") {
+                if matches!(&tokens[idx].kind, TokKind::Punct(",")) {
                     idx += 1;
                     continue;
                 }
-                if matches!(&tokens[idx].kind, TokKind::Punct(p) if p == "...") {
+                if matches!(&tokens[idx].kind, TokKind::Punct("...")) {
                     idx += 1;
                 }
                 let (sub, next) = collect_pattern_identifiers(tokens, idx);
@@ -1280,13 +1427,13 @@ fn collect_pattern_identifiers(tokens: &[JsToken], mut idx: usize) -> (Vec<Strin
     (names, idx)
 }
 
-fn skip_balanced(tokens: &[JsToken], mut idx: usize, open: &str, close: &str) -> usize {
+fn skip_balanced(tokens: &[JsToken<'_>], mut idx: usize, open: &str, close: &str) -> usize {
     let mut depth = 0usize;
     while idx < tokens.len() {
         if let TokKind::Punct(p) = &tokens[idx].kind {
-            if p == open {
+            if *p == open {
                 depth += 1;
-            } else if p == close {
+            } else if *p == close {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
                     return idx + 1;
@@ -1298,15 +1445,15 @@ fn skip_balanced(tokens: &[JsToken], mut idx: usize, open: &str, close: &str) ->
     idx
 }
 
-fn skip_initializer(tokens: &[JsToken], mut idx: usize) -> usize {
-    if !matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "=") {
+fn skip_initializer(tokens: &[JsToken<'_>], mut idx: usize) -> usize {
+    if !matches!(tokens.get(idx).map(|t| &t.kind), Some(TokKind::Punct("="))) {
         return idx;
     }
     idx += 1;
     let mut depth = 0usize;
     while idx < tokens.len() {
         if let TokKind::Punct(p) = &tokens[idx].kind {
-            match p.as_str() {
+            match *p {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" => {
                     if depth == 0 {
@@ -1323,7 +1470,7 @@ fn skip_initializer(tokens: &[JsToken], mut idx: usize) -> usize {
     idx
 }
 
-fn skip_statement_end(tokens: &[JsToken], mut idx: usize) -> usize {
+fn skip_statement_end(tokens: &[JsToken<'_>], mut idx: usize) -> usize {
     let mut depth = 0usize;
     while idx < tokens.len() {
         if depth == 0 && idx > 0 && tokens[idx].line_before {
@@ -1331,22 +1478,32 @@ fn skip_statement_end(tokens: &[JsToken], mut idx: usize) -> usize {
             let cur = &tokens[idx].kind;
             let continues = matches!(
                 prev,
-                TokKind::Punct(p)
-                    if matches!(
-                        p.as_str(),
-                        "=" | "+" | "-" | "*" | "/" | "%" | "&&" | "||" | "??" | "." | "?."
-                            | "," | "(" | "[" | "{" | "?" | ":" | "=>"
-                    )
-            ) || matches!(
-                cur,
-                TokKind::Punct(p) if matches!(p.as_str(), "." | "?." | ")" | "]" | "}")
-            );
+                TokKind::Punct(
+                    "=" | "+"
+                        | "-"
+                        | "*"
+                        | "/"
+                        | "%"
+                        | "&&"
+                        | "||"
+                        | "??"
+                        | "."
+                        | "?."
+                        | ","
+                        | "("
+                        | "["
+                        | "{"
+                        | "?"
+                        | ":"
+                        | "=>"
+                )
+            ) || matches!(cur, TokKind::Punct("." | "?." | ")" | "]" | "}"));
             if !continues {
                 break;
             }
         }
         if let TokKind::Punct(p) = &tokens[idx].kind {
-            match p.as_str() {
+            match *p {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" => {
                     depth = depth.saturating_sub(1);
@@ -1373,24 +1530,24 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
     while i < tokens.len() {
         let tok = &tokens[i];
         // Check `import.meta` and `import(...)` at ANY nesting depth!
-        if let TokKind::Ident(id) = &tok.kind
-            && id == "import"
-        {
-            let prev_is_prop = i > 0
-                && matches!(
-                    &tokens[i - 1].kind,
-                    TokKind::Punct(p) if p == "." || p == "?."
-                );
+        if let TokKind::Ident("import") = &tok.kind {
+            let prev_is_prop = i > 0 && matches!(&tokens[i - 1].kind, TokKind::Punct("." | "?."));
             if !prev_is_prop {
-                if matches!(tokens.get(i + 1).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ".")
-                    && matches!(tokens.get(i + 2).map(|t| &t.kind), Some(TokKind::Ident(m)) if m == "meta")
-                {
+                if matches!(
+                    tokens.get(i + 1).map(|t| &t.kind),
+                    Some(TokKind::Punct("."))
+                ) && matches!(
+                    tokens.get(i + 2).map(|t| &t.kind),
+                    Some(TokKind::Ident("meta"))
+                ) {
                     edits.push((tok.start, tokens[i + 2].end, "__mg_import_meta".to_owned()));
                     i += 3;
                     continue;
                 }
-                if matches!(tokens.get(i + 1).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "(")
-                {
+                if matches!(
+                    tokens.get(i + 1).map(|t| &t.kind),
+                    Some(TokKind::Punct("("))
+                ) {
                     edits.push((tok.start, tok.end, "__mg_dynamic_import".to_owned()));
                     i += 1;
                     continue;
@@ -1401,15 +1558,11 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
         if depth == 0
             && let TokKind::Ident(id) = &tok.kind
         {
-            let prev_is_prop = i > 0
-                && matches!(
-                    &tokens[i - 1].kind,
-                    TokKind::Punct(p) if p == "." || p == "?."
-                );
-            if !prev_is_prop && id == "await" {
+            let prev_is_prop = i > 0 && matches!(&tokens[i - 1].kind, TokKind::Punct("." | "?."));
+            if !prev_is_prop && *id == "await" {
                 has_top_level_await = true;
             }
-            if !prev_is_prop && id == "import" {
+            if !prev_is_prop && *id == "import" {
                 let stmt_start = tok.start;
                 let mut cur = i + 1;
                 // `import "spec"`
@@ -1432,18 +1585,17 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                     kind: TokKind::Ident(def_local),
                     ..
                 }) = tokens.get(cur)
-                    && def_local != "from"
+                    && *def_local != "from"
                 {
-                    pending_bindings.push((Some("default".into()), def_local.clone()));
+                    pending_bindings.push((Some("default".into()), (*def_local).to_owned()));
                     cur += 1;
-                    if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ",")
-                    {
+                    if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct(","))) {
                         cur += 1;
                     }
                 }
 
                 // Optional `* as ns` or `{ ... }`
-                if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "*") {
+                if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct("*"))) {
                     cur += 1; // `*`
                     cur += 1; // `as`
                     if let Some(JsToken {
@@ -1451,18 +1603,17 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         ..
                     }) = tokens.get(cur)
                     {
-                        pending_bindings.push((None, ns_local.clone()));
+                        pending_bindings.push((None, (*ns_local).to_owned()));
                         cur += 1;
                     }
-                } else if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "{")
-                {
+                } else if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Punct("{"))) {
                     cur += 1;
                     while cur < tokens.len() {
-                        if matches!(&tokens[cur].kind, TokKind::Punct(p) if p == "}") {
+                        if matches!(&tokens[cur].kind, TokKind::Punct("}")) {
                             cur += 1;
                             break;
                         }
-                        if matches!(&tokens[cur].kind, TokKind::Punct(p) if p == ",") {
+                        if matches!(&tokens[cur].kind, TokKind::Punct(",")) {
                             cur += 1;
                             continue;
                         }
@@ -1473,7 +1624,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         cur += 1;
                         let local = if matches!(
                             tokens.get(cur).map(|t| &t.kind),
-                            Some(TokKind::Ident(as_kw)) if as_kw == "as"
+                            Some(TokKind::Ident("as"))
                         ) {
                             cur += 1;
                             let l = export_or_ident_name(&tokens[cur]).unwrap_or_default();
@@ -1487,11 +1638,13 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                 }
 
                 // Expect `from "spec"`
-                if matches!(tokens.get(cur).map(|t| &t.kind), Some(TokKind::Ident(f)) if f == "from")
-                    && let Some(JsToken {
-                        kind: TokKind::StringLit(spec),
-                        ..
-                    }) = tokens.get(cur + 1)
+                if matches!(
+                    tokens.get(cur).map(|t| &t.kind),
+                    Some(TokKind::Ident("from"))
+                ) && let Some(JsToken {
+                    kind: TokKind::StringLit(spec),
+                    ..
+                }) = tokens.get(cur + 1)
                 {
                     let dep_idx = intern_dep(&mut dependencies, spec);
                     for (imp_opt, local) in pending_bindings {
@@ -1512,21 +1665,20 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                 }
             }
 
-            if !prev_is_prop && id == "export" {
+            if !prev_is_prop && *id == "export" {
                 let stmt_start = tok.start;
                 let cur = i + 1;
                 match tokens.get(cur).map(|t| &t.kind) {
                     // `export * from "spec"` or `export * as ns from "spec"`
-                    Some(TokKind::Punct(p)) if p == "*" => {
+                    Some(TokKind::Punct("*")) => {
                         let mut c = cur + 1;
                         let mut ns_export: Option<String> = None;
-                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "as")
-                        {
+                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident("as"))) {
                             c += 1;
                             ns_export = tokens.get(c).and_then(export_or_ident_name);
                             c += 1;
                         }
-                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "from")
+                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident("from")))
                             && let Some(JsToken {
                                 kind: TokKind::StringLit(spec),
                                 ..
@@ -1545,15 +1697,15 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         }
                     }
                     // `export { ... } [from "spec"]`
-                    Some(TokKind::Punct(p)) if p == "{" => {
+                    Some(TokKind::Punct("{")) => {
                         let mut c = cur + 1;
                         let mut items: Vec<(String, String)> = Vec::new();
                         while c < tokens.len() {
-                            if matches!(&tokens[c].kind, TokKind::Punct(p) if p == "}") {
+                            if matches!(&tokens[c].kind, TokKind::Punct("}")) {
                                 c += 1;
                                 break;
                             }
-                            if matches!(&tokens[c].kind, TokKind::Punct(p) if p == ",") {
+                            if matches!(&tokens[c].kind, TokKind::Punct(",")) {
                                 c += 1;
                                 continue;
                             }
@@ -1564,7 +1716,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                             c += 1;
                             let second = if matches!(
                                 tokens.get(c).map(|t| &t.kind),
-                                Some(TokKind::Ident(k)) if k == "as"
+                                Some(TokKind::Ident("as"))
                             ) {
                                 c += 1;
                                 let s = export_or_ident_name(&tokens[c]).unwrap_or_default();
@@ -1575,7 +1727,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                             };
                             items.push((first, second));
                         }
-                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "from")
+                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Ident("from")))
                             && let Some(JsToken {
                                 kind: TokKind::StringLit(spec),
                                 ..
@@ -1594,8 +1746,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                             for (local, exported) in items {
                                 exports.push(ExportRecord::Local { local, exported });
                             }
-                            if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ";")
-                            {
+                            if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct(";"))) {
                                 c += 1;
                             }
                         }
@@ -1604,21 +1755,27 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         continue;
                     }
                     // `export default ...`
-                    Some(TokKind::Ident(kw)) if kw == "default" => {
+                    Some(TokKind::Ident("default")) => {
                         let def_end = tokens[cur].end;
                         let after = cur + 1;
                         // Check `export default [async] function [*] [Name]` or `export default class [Name]`
                         let mut f_idx = after;
-                        if matches!(tokens.get(f_idx).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "async")
-                            && matches!(tokens.get(f_idx + 1).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "function" && !tokens[f_idx + 1].line_before)
+                        if matches!(
+                            tokens.get(f_idx).map(|t| &t.kind),
+                            Some(TokKind::Ident("async"))
+                        ) && matches!(tokens.get(f_idx + 1).map(|t| &t.kind), Some(TokKind::Ident("function")) if !tokens[f_idx + 1].line_before)
                         {
                             f_idx += 1;
                         }
-                        if matches!(tokens.get(f_idx).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "function")
-                        {
+                        if matches!(
+                            tokens.get(f_idx).map(|t| &t.kind),
+                            Some(TokKind::Ident("function"))
+                        ) {
                             let mut name_idx = f_idx + 1;
-                            if matches!(tokens.get(name_idx).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "*")
-                            {
+                            if matches!(
+                                tokens.get(name_idx).map(|t| &t.kind),
+                                Some(TokKind::Punct("*"))
+                            ) {
                                 name_idx += 1;
                             }
                             if let Some(JsToken {
@@ -1627,7 +1784,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                             }) = tokens.get(name_idx)
                             {
                                 exports.push(ExportRecord::Local {
-                                    local: fn_name.clone(),
+                                    local: (*fn_name).to_owned(),
                                     exported: "default".into(),
                                 });
                                 edits.push((stmt_start, def_end, String::new()));
@@ -1641,16 +1798,18 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                             i = after;
                             continue;
                         }
-                        if matches!(tokens.get(after).map(|t| &t.kind), Some(TokKind::Ident(k)) if k == "class")
-                        {
+                        if matches!(
+                            tokens.get(after).map(|t| &t.kind),
+                            Some(TokKind::Ident("class"))
+                        ) {
                             if let Some(JsToken {
                                 kind: TokKind::Ident(cls_name),
                                 ..
                             }) = tokens.get(after + 1)
-                                && cls_name != "extends"
+                                && *cls_name != "extends"
                             {
                                 exports.push(ExportRecord::Local {
-                                    local: cls_name.clone(),
+                                    local: (*cls_name).to_owned(),
                                     exported: "default".into(),
                                 });
                                 edits.push((stmt_start, def_end, String::new()));
@@ -1673,7 +1832,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         continue;
                     }
                     // `export var / let / const ...`
-                    Some(TokKind::Ident(kw)) if matches!(kw.as_str(), "var" | "let" | "const") => {
+                    Some(TokKind::Ident(kw)) if matches!(*kw, "var" | "let" | "const") => {
                         edits.push((stmt_start, tok.end, String::new()));
                         let mut c = cur + 1;
                         let stmt_end_tok = skip_statement_end(&tokens, c);
@@ -1686,8 +1845,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                                 });
                             }
                             c = skip_initializer(&tokens, next);
-                            if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == ",")
-                            {
+                            if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct(","))) {
                                 c += 1;
                             } else {
                                 break;
@@ -1697,17 +1855,14 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         continue;
                     }
                     // `export [async] function [*] Name` or `export class Name`
-                    Some(TokKind::Ident(kw))
-                        if matches!(kw.as_str(), "function" | "async" | "class") =>
-                    {
+                    Some(TokKind::Ident(kw)) if matches!(*kw, "function" | "async" | "class") => {
                         edits.push((stmt_start, tok.end, String::new()));
                         let mut c = cur;
-                        if kw == "async" {
+                        if *kw == "async" {
                             c += 1;
                         }
                         c += 1; // skip `function` or `class`
-                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct(p)) if p == "*")
-                        {
+                        if matches!(tokens.get(c).map(|t| &t.kind), Some(TokKind::Punct("*"))) {
                             c += 1;
                         }
                         if let Some(JsToken {
@@ -1716,8 +1871,8 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                         }) = tokens.get(c)
                         {
                             exports.push(ExportRecord::Local {
-                                local: decl_name.clone(),
-                                exported: decl_name.clone(),
+                                local: (*decl_name).to_owned(),
+                                exported: (*decl_name).to_owned(),
                             });
                         }
                         i = cur;
@@ -1729,7 +1884,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
         }
 
         if let TokKind::Punct(p) = &tok.kind {
-            match p.as_str() {
+            match *p {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" => depth = depth.saturating_sub(1),
                 _ => {}
@@ -1751,34 +1906,60 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
     }
     body.push_str(&src[cursor..]);
 
-    // Build scope bindings for imports and live property getters for exports.
-    let mut preamble_outer = String::new();
-    for imp in &imports {
-        match imp {
-            ImportBinding::Namespace { dep_idx, local } => {
-                let local_lit = serde_json::to_string(local).unwrap_or_default();
-                preamble_outer.push_str(&format!(
-                    "Object.defineProperty(__mg_scope, {local_lit}, {{ enumerable: true, configurable: false, get: function() {{ return __mg_deps[{dep_idx}]; }}, set: function() {{ throw new TypeError(\"Assignment to constant variable.\"); }} }});\n"
-                ));
-            }
-            ImportBinding::Named {
-                dep_idx,
-                imported,
-                local,
-            } => {
-                let imp_lit = serde_json::to_string(imported).unwrap_or_default();
-                let local_lit = serde_json::to_string(local).unwrap_or_default();
-                preamble_outer.push_str(&format!(
-                    "if (!({imp_lit} in __mg_deps[{dep_idx}])) {{ throw new SyntaxError(\"The requested module does not provide an export named \" + {imp_lit}); }}\nObject.defineProperty(__mg_scope, {local_lit}, {{ enumerable: true, configurable: false, get: function() {{ return __mg_deps[{dep_idx}][{imp_lit}]; }}, set: function() {{ throw new TypeError(\"Assignment to constant variable.\"); }} }});\n"
-                ));
+    // Detect exported local bindings that may be mutated inside functions/blocks (`depth > 0`)
+    // so live ES module bindings use `with (__mg_scope)` getters while ordinary `const`/function/
+    // Rspack chunk exports compile directly to strict-mode lexical `const` bindings.
+    let mut mutated_at_inner_depth: HashSet<&str> = HashSet::new();
+    {
+        let mut scan_depth = 0usize;
+        for (idx, tok) in tokens.iter().enumerate() {
+            match &tok.kind {
+                TokKind::Punct("(" | "[" | "{") => scan_depth += 1,
+                TokKind::Punct(")" | "]" | "}") => scan_depth = scan_depth.saturating_sub(1),
+                TokKind::Ident(name) if scan_depth > 0 => {
+                    let prev_dot =
+                        idx > 0 && matches!(&tokens[idx - 1].kind, TokKind::Punct("." | "?."));
+                    if !prev_dot {
+                        let prefix_update =
+                            idx > 0 && matches!(&tokens[idx - 1].kind, TokKind::Punct("++" | "--"));
+                        let suffix_assign = tokens.get(idx + 1).is_some_and(|next| {
+                            matches!(
+                                &next.kind,
+                                TokKind::Punct(
+                                    "=" | "+="
+                                        | "-="
+                                        | "*="
+                                        | "/="
+                                        | "%="
+                                        | "&="
+                                        | "|="
+                                        | "^="
+                                        | "&&="
+                                        | "||="
+                                        | "??="
+                                        | "++"
+                                        | "--"
+                                )
+                            )
+                        });
+                        if prefix_update || suffix_assign {
+                            mutated_at_inner_depth.insert(*name);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
 
+    let mut mutable_exports: Vec<String> = Vec::new();
     let mut export_defs = String::new();
     for exp in &exports {
         match exp {
             ExportRecord::Local { local, exported } => {
+                if mutated_at_inner_depth.contains(local.as_str()) {
+                    mutable_exports.push(exported.clone());
+                }
                 let exp_lit = serde_json::to_string(exported).unwrap_or_default();
                 export_defs.push_str(&format!(
                     "Object.defineProperty(__mg_exports, {exp_lit}, {{ enumerable: true, configurable: false, get: function() {{ return {local}; }} }});\n"
@@ -1789,6 +1970,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                 imported,
                 exported,
             } => {
+                mutable_exports.push(exported.clone());
                 let imp_lit = serde_json::to_string(imported).unwrap_or_default();
                 let exp_lit = serde_json::to_string(exported).unwrap_or_default();
                 export_defs.push_str(&format!(
@@ -1802,6 +1984,7 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
                 ));
             }
             ExportRecord::StarFrom { dep_idx } => {
+                mutable_exports.push("*".to_owned());
                 export_defs.push_str(&format!(
                     "Object.keys(__mg_deps[{dep_idx}]).forEach(function(__mg_k) {{ if (__mg_k !== \"default\" && !Object.prototype.hasOwnProperty.call(__mg_exports, __mg_k)) {{ Object.defineProperty(__mg_exports, __mg_k, {{ enumerable: true, configurable: false, get: function() {{ return __mg_deps[{dep_idx}][__mg_k]; }} }}); }} }});\n"
                 ));
@@ -1809,22 +1992,32 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
         }
     }
 
-    let fn_kw = if has_top_level_await {
-        "async function()"
-    } else {
-        "function()"
-    };
-
-    let wrapper_code = format!(
-        "(function(__mg_scope, __mg_exports, __mg_deps, __mg_import_meta, __mg_dynamic_import) {{\n{preamble_outer}with (__mg_scope) {{\nreturn ({fn_kw} {{\n\"use strict\";\n{export_defs}{body}\n}}).call(undefined);\n}}\n}})"
-    );
-
     // Keep unused warning quiet on helper re-export check.
     let _ = extract_static_module_specifiers;
 
     Ok(TransformedModule {
         dependencies,
-        wrapper_code,
+        imports,
+        export_defs,
+        body,
         has_top_level_await,
+        mutable_exports,
     })
+}
+
+#[cfg(test)]
+mod utf8_scanner_tests {
+    use super::*;
+
+    #[test]
+    fn transform_handles_non_ascii_bidi_and_template_escapes_without_panicking() {
+        let src = "export const __rspack = \"\u{2068}bidi\u{2069}\";\n// comment \u{2068}\nconst t = `\\\u{2068}${1 + 2}`;\nconst r = /\\\u{2068}a+/g;\nconst x = 1 /* \u{2068} */ + (\u{2068}0);\n";
+        let _ = tokenize_js(src);
+        let valid_mod = "export const bidi = { a: `\u{2068}ok\u{2069}`, b: /\\\u{2068}/ };\n";
+        let out = transform_esm_source(valid_mod).expect("valid module should transform");
+        let wrapper = out.build_wrapper(&|_, _| false);
+        assert!(wrapper.contains("bidi"));
+        assert!(!wrapper.contains("with (__mg_scope)"));
+        assert!(extract_static_module_specifiers(src).is_empty());
+    }
 }

@@ -192,6 +192,7 @@ impl Browser {
     /// Compare the actual worker, not the permission-filtered Runtime identity,
     /// and never cancel a replacement while retiring old automation ownership.
     pub(super) fn revoke_automation_permission(&mut self, reason: &str) {
+        self.automation_revoked = true;
         if let Some(identity) = self.automation_session.take()
             && self
                 .page_session

@@ -473,5 +473,69 @@ fn mdn_named_grid_lines_place_content_and_full_columns_accurately() {
     assert_eq!((bleed.x, bleed.width, bleed.y), (0, 1200, 0));
     assert_eq!((full.x, full.width, full.y), (16, 1168, 24));
     // Remaining 1168 - 768 = 400px split across two 1fr gutters => 200px each, so 16 + 200 = 216.
-    assert_eq!((content.x, content.width, content.y), (216, 768, 56));
+    assert_eq!(
+        (content.x, full.width, content.width, content.y),
+        (216, 1168, 768, 56)
+    );
+}
+
+#[test]
+fn wikipedia_portal_svg_sprite_use_style_and_transparent_gradient_render_cleanly() {
+    let sprite_svg =
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="80" viewBox="0 0 40 80">
+        <style>.top { fill: #cc0000; } .bottom { fill: #0066cc; }</style>
+        <defs><rect id="tile" width="40" height="40"/></defs>
+        <use href="#tile" x="0" y="0" class="top"/>
+        <use href="#tile" x="0" y="40" class="bottom"/>
+    </svg>"##;
+    let html = r#"<!doctype html><html><head><style>
+        body { margin: 0; background: #ffffff; }
+        #wordmark {
+            width: 40px;
+            height: 40px;
+            color: transparent;
+            font-size: 32px;
+            overflow: hidden;
+            background-image: linear-gradient(transparent, transparent), url(sprite.svg);
+            background-position: 0 -40px;
+            background-repeat: no-repeat;
+        }
+    </style></head><body><div id="wordmark">Wikipedia</div></body></html>"#;
+    let mut doc = parse(html, "https://www.wikipedia.example/");
+    doc.resources.insert(
+        "https://www.wikipedia.example/sprite.svg".into(),
+        mg_sparkle::document::ResourceData {
+            bytes: sprite_svg.to_vec(),
+            content_type: "image/svg+xml".into(),
+        },
+    );
+    let mut fonts = fonts();
+    let frame = render_scaled(
+        &doc,
+        &mut fonts,
+        Viewport {
+            width: 120,
+            height: 120,
+            scroll: 0,
+        },
+        &Controls::default(),
+        1.0,
+    );
+    assert!(
+        frame.diagnostics.entries.is_empty(),
+        "expected zero diagnostics on Wikipedia sprite + transparent gradient: {:?}",
+        frame.diagnostics.entries
+    );
+    // Pixel (20, 20) inside the 40x40 box should paint the bottom half of the sprite (#0066cc), not red (#cc0000).
+    let inside = frame.canvas.pixels[20 * 120 + 20];
+    assert_eq!(
+        inside, 0x0066cc,
+        "expected #0066cc sprite slice at (20,20), got {inside:#08x}"
+    );
+    // Pixel (20, 50) below the 40x40 box must remain clipped to white (#ffffff).
+    let below = frame.canvas.pixels[50 * 120 + 20];
+    assert_eq!(
+        below, 0xffffff,
+        "sprite overflow below element box must be clipped, got {below:#08x}"
+    );
 }

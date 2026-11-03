@@ -64,16 +64,19 @@ impl Host for App {
         self.ensure_automation_session()
     }
     fn can_preload(&self) -> Option<u64> {
+        let recovering = self.can_recover_automation_after_script_failure();
         if !self.cdp_enabled
             || self.loading
             || self.fetching
-            || self.script_blocked
+            || (self.script_blocked && !recovering)
             || self.child_pool.source_wire_mode() != crate::scripts::SourceWireMode::Modern
             || self.child_pool.observer_expectation()
                 != mg_sparkle::page_session::observer::ObserverExpectation::Disabled
-            || self
-                .lifecycle
-                .is_some_and(|p| p.phase != crate::LifecyclePhase::LoadComplete)
+            || (!recovering
+                && self.page_session.is_some()
+                && self
+                    .lifecycle
+                    .is_some_and(|p| p.phase != crate::LifecyclePhase::LoadComplete))
         {
             None
         } else {
@@ -302,7 +305,9 @@ impl Broker {
         }
     }
 
-    fn destroyed(&self, target: &str, context: &Context) -> Vec<Delivery> {
+    fn destroyed(&mut self, target: &str, context: &Context) -> Vec<Delivery> {
+        self.preloaded_generations
+            .retain(|(_, t, _), g| !(t == target && *g == context.identity.0));
         let mut out = Vec::new();
         for (route, t) in &self.enabled {
             if t.as_str() != target {
@@ -519,8 +524,8 @@ impl Broker {
                 if let Some(ref mut context) = context {
                     Self::pending_error(context, "Runtime completion token mismatch", &mut out);
                 }
-            } else if let Some(ref mut context) = context {
-                let pending = context.pending.take().unwrap();
+            } else if let Some(mut ctx) = context.take() {
+                let pending = ctx.pending.take().unwrap();
                 match pending.recipient {
                     Recipient::Client {
                         route,
@@ -529,7 +534,7 @@ impl Broker {
                         exec_context,
                         kind,
                     } => {
-                        let live = context.owners.iter().any(|o| o.id == owner && !o.revoked);
+                        let live = ctx.owners.iter().any(|o| o.id == owner && !o.revoked);
                         let result = match completion.result {
                             Err(error) => Err(failed(error)),
                             Ok(result) => {
@@ -542,7 +547,7 @@ impl Broker {
                                         if crate::runtime_automation::has_handles(&result)
                                             && (completion.continuation
                                                 == SessionContinuation::Terminal
-                                                || host.identity() != Some(context.identity))
+                                                || host.identity() != Some(ctx.identity))
                                         {
                                             return Err(failed(
                                                 "Destroyed Runtime contexts cannot publish object handles",
@@ -568,7 +573,7 @@ impl Broker {
                                             self.record_node_handles(
                                                 &route,
                                                 target,
-                                                context.identity.0,
+                                                ctx.identity.0,
                                                 exec_context,
                                                 owner,
                                                 &result,
@@ -595,7 +600,7 @@ impl Broker {
                                     });
                                 if converted.is_err()
                                     && !ordinary_rejection
-                                    && host.identity() == Some(context.identity)
+                                    && host.identity() == Some(ctx.identity)
                                 {
                                     host.cancel(
                                         "Runtime result cannot be represented safely by this CDP codec",
@@ -614,7 +619,7 @@ impl Broker {
                         owner,
                         world_name,
                     } => {
-                        let live = context.owners.iter().any(|o| o.id == owner && !o.revoked);
+                        let live = ctx.owners.iter().any(|o| o.id == owner && !o.revoked);
                         let reply_res = match completion.result {
                             Err(err) => Err(failed(err)),
                             Ok(AutomationResult::Rejected { diagnostic }) => {
@@ -622,12 +627,12 @@ impl Broker {
                             }
                             Ok(AutomationResult::Released | AutomationResult::Value(_)) => {
                                 if completion.continuation == SessionContinuation::Terminal
-                                    || host.identity() != Some(context.identity)
+                                    || host.identity() != Some(ctx.identity)
                                 {
                                     Err(failed("Runtime context was destroyed"))
                                 } else if let Some(iso_id) = self.ensure_isolated_world_registered(
                                     target,
-                                    context,
+                                    &mut ctx,
                                     &world_name,
                                     host,
                                     &mut out,
@@ -651,11 +656,11 @@ impl Broker {
                         if let Ok(AutomationResult::Released | AutomationResult::Value(_)) =
                             completion.result
                             && completion.continuation != SessionContinuation::Terminal
-                            && host.identity() == Some(context.identity)
+                            && host.identity() == Some(ctx.identity)
                         {
                             let _ = self.ensure_isolated_world_registered(
                                 target,
-                                context,
+                                &mut ctx,
                                 &world_name,
                                 host,
                                 &mut out,
@@ -666,16 +671,17 @@ impl Broker {
                     Recipient::Cleanup { owners } => {
                         let accepted = matches!(completion.result, Ok(AutomationResult::Released));
                         if accepted {
-                            context.owners.retain(|owner| !owners.contains(&owner.id));
-                        } else if host.identity() == Some(context.identity) {
+                            ctx.owners.retain(|owner| !owners.contains(&owner.id));
+                        } else if host.identity() == Some(ctx.identity) {
                             host.cancel("Runtime revoked-owner cleanup was not accepted");
                         }
                     }
                 }
                 if completion.continuation == SessionContinuation::Terminal {
                     self.node_handles.retain(|_, (t, _, _)| t != target);
-                    out.extend(self.destroyed(target, context));
-                    return out;
+                    out.extend(self.destroyed(target, &ctx));
+                } else {
+                    context = Some(ctx);
                 }
             }
         }
