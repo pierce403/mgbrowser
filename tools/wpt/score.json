@@ -4057,6 +4057,6 @@
   ],
   "schema_version": 1,
   "scope": "static-reftest-pilot",
-  "source_sha256": "48ca33f478682077cc82df8ebcd8bf400bdd4ba32ec7b45611f77a71b336aa2b",
+  "source_sha256": "035938e74293d1ab106827f051a792de8691fdeefa1237b28b1d1f5b50a36927",
   "upstream_revision": "84daed4ae966d9624bed22f43587c79283ad1fea"
 }

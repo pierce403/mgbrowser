@@ -539,3 +539,94 @@ fn wikipedia_portal_svg_sprite_use_style_and_transparent_gradient_render_cleanly
         "sprite overflow below element box must be clipped, got {below:#08x}"
     );
 }
+
+#[test]
+fn google_search_send_beacon_method_override_timing_substr_and_iframe_intrinsics_work() {
+    let html = r#"<!doctype html><html><head><title>init</title></head><body>
+        <div id="yvlrue" style="display:none">Fallback link</div>
+        <iframe id="f"></iframe>
+        <script>
+            if (typeof navigator.sendBeacon !== "function") throw "missing sendBeacon";
+            if (navigator.sendBeacon("/gen_204?cad=sg_trbl", "") !== true) throw "sendBeacon empty failed";
+            if (navigator.sendBeacon("/gen_204", new Uint8Array([1, 2, 3])) !== true) throw "sendBeacon u8 failed";
+            if (navigator.sendBeacon("/gen_204", new URLSearchParams("a=1&b=2")) !== true) throw "sendBeacon params failed";
+            if (navigator.sendBeacon("/gen_204", "x".repeat(70000)) !== false) throw "sendBeacon >64KiB must return false";
+
+            let threwBadScheme = false;
+            try { navigator.sendBeacon("javascript:alert(1)"); } catch (e) { threwBadScheme = e instanceof TypeError; }
+            if (!threwBadScheme) throw "sendBeacon javascript: must throw TypeError";
+
+            let threwDetached = false;
+            const unbound = navigator.sendBeacon;
+            try { unbound("/gen_204"); } catch (e) { threwDetached = e instanceof TypeError; }
+            if (!threwDetached) throw "unbound sendBeacon must throw TypeError";
+
+            // Readonly IDL data attributes on navigator remain non-writable.
+            const origUa = navigator.userAgent;
+            navigator.userAgent = "spoof";
+            if (navigator.userAgent !== origUa) throw "userAgent should stay readonly";
+            let strictReadonly = false;
+            try { (function() { "use strict"; navigator.webdriver = true; })(); } catch (e) { strictReadonly = e instanceof TypeError; }
+            if (!strictReadonly || navigator.webdriver !== false) throw "webdriver should stay readonly";
+
+            // WebIDL operations and expandos on navigator/console are writable in strict mode too.
+            const calls = [];
+            (function() {
+                "use strict";
+                navigator.sendBeacon = function(url, data) { calls.push(url + ":" + data); return true; };
+                navigator.__customTag = "ok";
+            })();
+            if (navigator.__customTag !== "ok") throw "navigator expando failed";
+
+            // Annex-B string/date compatibility & Navigation Timing + iframe intrinsics.
+            if ("https://www.google.com/search".substr(0, 6) !== "https:") throw "substr prefix failed";
+            if ("abcdef".substr(-3, 2) !== "de" || "abcdef".substr(2) !== "cdef") throw "substr negative/omitted failed";
+            if ("  hi ".trimLeft() !== "hi " || " hi  ".trimRight() !== " hi") throw "trimLeft/Right failed";
+            if (typeof Date.prototype.toGMTString !== "function") throw "missing toGMTString";
+            if (!performance.timing || !(performance.timing.navigationStart > 0)) throw "missing performance.timing";
+            if (performance.timing.responseStart < performance.timing.navigationStart) throw "bad responseStart";
+            if (!performance.navigation || performance.navigation.type !== 0) throw "missing performance.navigation";
+
+            const subWin = document.getElementById("f").contentWindow;
+            if (!subWin || typeof subWin.String !== "function" || subWin.String("abc") !== "abc") {
+                throw "iframe contentWindow missing String constructor";
+            }
+
+            setTimeout(function() {
+                document.getElementById("yvlrue").setAttribute("style", "");
+                navigator.sendBeacon("/gen_204?cad=sg_trbl&ei=test", "");
+                document.title = calls.join("|");
+            }, 0);
+        </script>
+    </body></html>"#;
+
+    let (realm_opt, init) = BoaPageRealm::start(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(init.errors.is_empty(), "init errors: {:?}", init.errors);
+    assert_eq!(init.state, RealmState::Ready);
+    let mut realm = realm_opt.expect("live realm");
+    let mut last = init;
+    for seq in 1..=8 {
+        let Some(wake) = last.task_wake else { break };
+        if wake.delay_ms != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(wake.delay_ms as u64));
+        }
+        last = realm.pump_tasks(TaskPump {
+            wake_token: wake.token,
+        });
+        assert!(
+            last.errors.is_empty(),
+            "pump {seq} errors: {:?}",
+            last.errors
+        );
+    }
+    let snap = last.snapshot.expect("final snapshot");
+    let final_doc =
+        document::project_nodes(snap.nodes, "https://www.google.com/search?q=ninjas").unwrap();
+    assert_eq!(final_doc.title, "/gen_204?cad=sg_trbl&ei=test:");
+    let yv = final_doc.query_selector(0, "#yvlrue").unwrap().unwrap();
+    assert_eq!(final_doc.nodes[yv].attr("style"), Some(""));
+}

@@ -1746,7 +1746,20 @@ impl Browser {
                                         staged.commit();
                                     }
                                     self.ingest_wire_console_and_sync(init_console, true);
-                                    projected = document;
+                                    projected = if startup.reply.state == RealmState::Fatal
+                                        && document.as_ref().is_some_and(|doc| doc.items.is_empty())
+                                    {
+                                        let noscript_doc = document::parse(&source, &self.address);
+                                        if !noscript_doc.items.is_empty()
+                                            || noscript_doc.refresh.is_some()
+                                        {
+                                            None
+                                        } else {
+                                            document
+                                        }
+                                    } else {
+                                        document
+                                    };
                                     scripting = projected.is_some();
                                     self.lifecycle = lifecycle;
                                     if !rejected {
@@ -6586,6 +6599,102 @@ mod tests {
             assert!(app.last_load_ok);
             assert!(!app.loading);
         }
+    }
+
+    #[test]
+    fn fatal_initial_script_with_empty_projection_falls_back_to_noscript() {
+        let html = "<html><body><noscript><p>Noscript fallback link</p></noscript><div id='hidden' style='display:none'>Hidden</div><script>while(true){}</script></body></html>";
+        let mut boa_report = mg_butane::modern::Engine::new().unwrap().report();
+        boa_report.fatal_reason = Some("EngineLimit: Boa engine runtime limit reached".into());
+        let state = Arc::new(Mutex::new(false));
+        struct CancelProbe(Arc<Mutex<bool>>);
+        impl crate::scripts::ScriptSession for CancelProbe {
+            fn id(&self) -> u64 {
+                1
+            }
+            fn try_dispatch(
+                &mut self,
+                _: mg_sparkle::page_session::SessionInput,
+                _: u64,
+            ) -> Result<u64, String> {
+                Ok(1)
+            }
+            fn try_recv(&mut self) -> Option<crate::scripts::SessionUpdate> {
+                None
+            }
+            fn cancel(&self) {
+                *self.0.lock().unwrap() = true;
+            }
+            fn charge_active(&mut self, _: Duration) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let mut app = test_app();
+        app.scripts_enabled = true;
+        app.generation = 1;
+        app.address = "https://example.test/search".into();
+        let scripted_nodes =
+            document::parse_with_scripting(html, "https://example.test/search", true).nodes;
+        app.tx
+            .send(Loaded {
+                generation: 1,
+                script: Some(Ok(ScriptLoad {
+                    session: Some(Box::new(CancelProbe(state.clone()))),
+                    reply: SessionReply {
+                        revision: 0,
+                        snapshot: Some(mg_sparkle::page_session::ArenaSnapshot {
+                            nodes: scripted_nodes,
+                        }),
+                        outcome: Default::default(),
+                        default_action: DefaultAction::None,
+                        state: RealmState::Fatal,
+                        acknowledgements: vec![],
+                        navigation: None,
+                        errors: vec!["EngineLimit: Boa engine runtime limit reached".into()],
+                        scripts_executed: 1,
+                        allocations: None,
+                        boa: Some(boa_report),
+                        task_wake: None,
+                        lifecycle: Some(mg_sparkle::page_session::LifecycleProgress {
+                            phase: LifecyclePhase::Initializing,
+                            initial_failure: true,
+                        }),
+                        observer: Some(mg_sparkle::page_session::observer::ObserverReply::Disabled),
+                        local_storage_ops: vec![],
+                        session_storage_ops: vec![],
+                        cookie_writes: vec![],
+                        history_ops: vec![],
+                        fetch_requests: vec![],
+                        scroll_request: None,
+                    },
+                })),
+                document: None,
+                result: Ok(net::Response {
+                    resource_same_origin_chain: false,
+                    url: url::Url::parse("https://example.test/search").unwrap(),
+                    status: 200,
+                    content_type: "text/html".into(),
+                    content_disposition: None,
+                    body: html.as_bytes().to_vec(),
+                }),
+                fetch_html_ms: 0.0,
+                parse_html_ms: 0.0,
+                resource_profile: Default::default(),
+                script_fetch_profile: Default::default(),
+                script_worker_ms: 0.0,
+            })
+            .unwrap();
+        app.poll();
+        assert!(*state.lock().unwrap());
+        assert!(app.script_blocked);
+        assert!(
+            app.document
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::Text { text, .. } if text == "Noscript fallback link")),
+            "expected noscript fallback items, got {:?}",
+            app.document.items
+        );
     }
 
     #[test]

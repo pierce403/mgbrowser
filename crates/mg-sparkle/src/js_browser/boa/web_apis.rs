@@ -141,6 +141,7 @@ pub(super) const HISTORY_REPLACE_STATE: &str = "host.m2.history.replaceState";
 pub(super) const HISTORY_BACK: &str = "host.m2.history.back";
 pub(super) const HISTORY_FORWARD: &str = "host.m2.history.forward";
 pub(super) const HISTORY_GO: &str = "host.m2.history.go";
+pub(super) const NAVIGATOR_SEND_BEACON: &str = "host.navigator.sendBeacon";
 
 pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
     match name {
@@ -163,6 +164,7 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         HISTORY_BACK => Some(("back", 0)),
         HISTORY_FORWARD => Some(("forward", 0)),
         HISTORY_GO => Some(("go", 0)),
+        NAVIGATOR_SEND_BEACON => Some(("sendBeacon", 1)),
         _ => None,
     }
 }
@@ -346,6 +348,7 @@ struct TextDecoderData {
 // --- Global Registration ---
 
 pub(super) fn register(context: &mut Context) -> Result<(), String> {
+    register_annex_b_compat(context)?;
     register_url_and_params(context)?;
     register_text_encoding(context)?;
     register_crypto(context)?;
@@ -353,6 +356,115 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
     register_window_globals(context)?;
     register_storage_and_history(context)?;
     Ok(())
+}
+
+fn register_annex_b_compat(context: &mut Context) -> Result<(), String> {
+    let substr_fn = FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_fn_ptr(string_proto_substr),
+    )
+    .name(js_string!("substr"))
+    .length(2)
+    .build();
+    let str_proto = context.intrinsics().constructors().string().prototype();
+    str_proto
+        .define_property_or_throw(
+            js_string!("substr"),
+            PropertyDescriptor::builder()
+                .value(substr_fn)
+                .writable(true)
+                .enumerable(false)
+                .configurable(true),
+            context,
+        )
+        .map_err(|_| "String.prototype.substr bind failed")?;
+    for (alias, canonical) in [("trimLeft", "trimStart"), ("trimRight", "trimEnd")] {
+        if let Ok(fn_val) = str_proto.get(JsString::from(canonical), context)
+            && fn_val.is_callable()
+        {
+            str_proto
+                .define_property_or_throw(
+                    JsString::from(alias),
+                    PropertyDescriptor::builder()
+                        .value(fn_val)
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true),
+                    context,
+                )
+                .map_err(|_| "String.prototype trim alias bind failed")?;
+        }
+    }
+    let date_proto = context.intrinsics().constructors().date().prototype();
+    if let Ok(utc_fn) = date_proto.get(js_string!("toUTCString"), context)
+        && utc_fn.is_callable()
+    {
+        date_proto
+            .define_property_or_throw(
+                js_string!("toGMTString"),
+                PropertyDescriptor::builder()
+                    .value(utc_fn)
+                    .writable(true)
+                    .enumerable(false)
+                    .configurable(true),
+                context,
+            )
+            .map_err(|_| "Date.prototype.toGMTString bind failed")?;
+    }
+    Ok(())
+}
+
+fn string_proto_substr(
+    this: &JsValue,
+    args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    if this.is_null_or_undefined() {
+        return Err(JsNativeError::typ()
+            .with_message("String.prototype.substr called on null or undefined")
+            .into());
+    }
+    let s = this.to_string(context)?;
+    let len_usize = s.len();
+    let size = len_usize as f64;
+    let raw_start = match args.first() {
+        None => 0.0,
+        Some(v) if v.is_undefined() => 0.0,
+        Some(v) => v.to_number(context)?,
+    };
+    if raw_start == f64::INFINITY {
+        return Ok(js_string!("").into());
+    }
+    let st = if raw_start.is_nan() || raw_start == 0.0 || raw_start == f64::NEG_INFINITY {
+        0usize
+    } else {
+        let trunc = raw_start.trunc();
+        if trunc < 0.0 {
+            ((size + trunc).max(0.0) as usize).min(len_usize)
+        } else {
+            (trunc as usize).min(len_usize)
+        }
+    };
+    let end = match args.get(1) {
+        None => len_usize,
+        Some(v) if v.is_undefined() => len_usize,
+        Some(v) => {
+            let n = v.to_number(context)?;
+            if n.is_nan() || n <= 0.0 {
+                0usize
+            } else if n == f64::INFINITY {
+                len_usize
+            } else {
+                st.saturating_add(n.trunc() as usize).min(len_usize)
+            }
+        }
+    };
+    if end <= st {
+        return Ok(js_string!("").into());
+    }
+    let units: Vec<u16> = s.iter().skip(st).take(end - st).collect();
+    Ok(JsString::from(units.as_slice()).into())
 }
 
 fn register_window_globals(context: &mut Context) -> Result<(), String> {
@@ -890,6 +1002,63 @@ fn register_performance(context: &mut Context) -> Result<(), String> {
     .length(0)
     .build();
 
+    let nav_start = time_origin.floor().max(0.0);
+    let mut timing_init = ObjectInitializer::new(context);
+    for zero_prop in [
+        "redirectStart",
+        "redirectEnd",
+        "unloadEventStart",
+        "unloadEventEnd",
+    ] {
+        timing_init.property(
+            JsString::from(zero_prop),
+            0.0,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        );
+    }
+    for ts_prop in [
+        "navigationStart",
+        "fetchStart",
+        "domainLookupStart",
+        "domainLookupEnd",
+        "connectStart",
+        "connectEnd",
+        "secureConnectionStart",
+        "requestStart",
+        "responseStart",
+        "responseEnd",
+        "domLoading",
+        "domInteractive",
+        "domContentLoadedEventStart",
+        "domContentLoadedEventEnd",
+        "domComplete",
+        "loadEventStart",
+        "loadEventEnd",
+    ] {
+        timing_init.property(
+            JsString::from(ts_prop),
+            nav_start,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        );
+    }
+    let timing_obj = timing_init.build();
+    let nav_obj = ObjectInitializer::new(context)
+        .property(
+            js_string!("type"),
+            0,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        )
+        .property(
+            js_string!("redirectCount"),
+            0,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        )
+        .property(js_string!("TYPE_NAVIGATE"), 0, Attribute::ENUMERABLE)
+        .property(js_string!("TYPE_RELOAD"), 1, Attribute::ENUMERABLE)
+        .property(js_string!("TYPE_BACK_FORWARD"), 2, Attribute::ENUMERABLE)
+        .property(js_string!("TYPE_RESERVED"), 255, Attribute::ENUMERABLE)
+        .build();
+
     let perf = ObjectInitializer::new(context)
         .property(
             js_string!("now"),
@@ -939,6 +1108,16 @@ fn register_performance(context: &mut Context) -> Result<(), String> {
         .property(
             js_string!("timeOrigin"),
             time_origin,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        )
+        .property(
+            js_string!("timing"),
+            timing_obj,
+            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+        )
+        .property(
+            js_string!("navigation"),
+            nav_obj,
             Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
         )
         .build();
@@ -2520,8 +2699,64 @@ pub(super) fn call(
             record_history_go(delta, context)?;
             Ok(JsValue::undefined())
         }
+        NAVIGATOR_SEND_BEACON => navigator_send_beacon(this, args, context),
         _ => Err(failure("Unknown Web API method")),
     }
+}
+
+fn navigator_send_beacon(
+    this: &JsValue,
+    args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    match receiver(this, context)? {
+        Value::Host(h) if h == "navigator" => {}
+        _ => return Err(failure("Invalid Navigator receiver")),
+    }
+    let Some(url_arg) = args.first() else {
+        return Err(failure("Navigator.sendBeacon requires at least 1 argument"));
+    };
+    let raw_url = utf8(url_arg, context)?;
+    let base_url = state(context).borrow().host.url.clone();
+    let Ok(parsed_url) = base_url.join(&raw_url) else {
+        return Err(failure(
+            "Failed to execute 'sendBeacon' on 'Navigator': Invalid URL",
+        ));
+    };
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err(failure(
+            "Failed to execute 'sendBeacon' on 'Navigator': URL scheme must be http or https",
+        ));
+    }
+    let payload_len = match args.get(1) {
+        None => 0usize,
+        Some(v) if v.is_null_or_undefined() => 0usize,
+        Some(v) => {
+            if let Some(s) = v.as_string() {
+                s.to_std_string_escaped().len()
+            } else if let Some(obj) = v.as_object() {
+                if let Some(encoded) = try_serialize_search_params(&obj) {
+                    encoded.len()
+                } else if JsArrayBuffer::from_object(obj.clone()).is_ok()
+                    || JsTypedArray::from_object(obj.clone()).is_ok()
+                    || JsDataView::from_object(obj.clone()).is_ok()
+                {
+                    extract_buffer_source_bytes(v, context)?.len()
+                } else {
+                    utf8(v, context)?.len()
+                }
+            } else {
+                utf8(v, context)?.len()
+            }
+        }
+    };
+    const MAX_BEACON_PAYLOAD_BYTES: usize = 65_536;
+    if payload_len > MAX_BEACON_PAYLOAD_BYTES
+        || parsed_url.as_str().len() > crate::page_session::platform::MAX_FETCH_URL_BYTES
+    {
+        return Ok(false.into());
+    }
+    Ok(true.into())
 }
 
 // --- Web Storage (`storage:local` & `storage:session`) ---
@@ -2950,6 +3185,31 @@ pub(super) fn try_get(
     if handle == "document" && name == "cookie" {
         return document_cookie_get(context).map(Some);
     }
+    if handle == "navigator" {
+        return match name {
+            "sendBeacon" => super::method(NAVIGATOR_SEND_BEACON, context).map(|o| Some(o.into())),
+            "cookieEnabled" | "onLine" => Ok(Some(true.into())),
+            "webdriver" | "pdfViewerEnabled" => Ok(Some(false.into())),
+            "vendor" => Ok(Some(js_string!("").into())),
+            "productSub" => Ok(Some(js_string!("20030107").into())),
+            "appCodeName" => Ok(Some(js_string!("Mozilla").into())),
+            "appName" => Ok(Some(js_string!("Netscape").into())),
+            "product" => Ok(Some(js_string!("Gecko").into())),
+            "maxTouchPoints" => Ok(Some(0.into())),
+            "hardwareConcurrency" => Ok(Some(4.into())),
+            "languages" => {
+                let arr = JsArray::from_iter(
+                    [
+                        JsValue::from(js_string!("en-US")),
+                        JsValue::from(js_string!("en")),
+                    ],
+                    context,
+                );
+                Ok(Some(arr.into()))
+            }
+            _ => Ok(None),
+        };
+    }
     if handle == "history" {
         return match name {
             "length" => Ok(Some((state(context).borrow().history_length as f64).into())),
@@ -3004,6 +3264,26 @@ pub(super) fn try_set(
 
 pub(super) fn try_has(handle: &str, name: &str) -> Option<bool> {
     if handle == "document" && name == "cookie" {
+        return Some(true);
+    }
+    if handle == "navigator"
+        && matches!(
+            name,
+            "sendBeacon"
+                | "cookieEnabled"
+                | "onLine"
+                | "webdriver"
+                | "pdfViewerEnabled"
+                | "vendor"
+                | "productSub"
+                | "appCodeName"
+                | "appName"
+                | "product"
+                | "maxTouchPoints"
+                | "hardwareConcurrency"
+                | "languages"
+        )
+    {
         return Some(true);
     }
     if handle == "history"

@@ -1904,7 +1904,8 @@ pub(super) fn try_get(
                     context,
                 )?;
             }
-            let top_val: JsValue = context.global_object().into();
+            let top_obj = context.global_object();
+            let top_val: JsValue = top_obj.clone().into();
             for alias in ["parent", "top"] {
                 cw.define_property_or_throw(
                     JsString::from(alias),
@@ -1915,6 +1916,52 @@ pub(super) fn try_get(
                         .configurable(true),
                     context,
                 )?;
+            }
+            for global_name in [
+                "Object",
+                "Array",
+                "String",
+                "Number",
+                "Boolean",
+                "Function",
+                "Math",
+                "Date",
+                "RegExp",
+                "Error",
+                "TypeError",
+                "RangeError",
+                "SyntaxError",
+                "Symbol",
+                "Promise",
+                "Map",
+                "Set",
+                "WeakMap",
+                "WeakSet",
+                "Uint8Array",
+                "ArrayBuffer",
+                "DataView",
+                "JSON",
+                "Reflect",
+                "Proxy",
+                "atob",
+                "btoa",
+                "navigator",
+                "performance",
+                "screen",
+            ] {
+                if let Ok(val) = top_obj.get(JsString::from(global_name), context)
+                    && !val.is_undefined()
+                {
+                    cw.define_property_or_throw(
+                        JsString::from(global_name),
+                        PropertyDescriptor::builder()
+                            .value(val)
+                            .writable(true)
+                            .enumerable(false)
+                            .configurable(true),
+                        context,
+                    )?;
+                }
             }
             Ok(Some(cw_val))
         }

@@ -2,7 +2,22 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.30
+## Latest verified release: v0.9.31
+
+v0.9.31 delivers W3C Beacon (`navigator.sendBeacon`), WebIDL host method-override
+and expando assignment semantics across `navigator`/`console`/`history`/DOM
+wrappers, Navigation Timing (`performance.timing` & `performance.navigation`),
+ECMA-262 Annex B string/date compatibility (`String.prototype.substr`,
+`trimLeft`/`trimRight`, `Date.prototype.toGMTString`), same-origin
+`iframe.contentWindow` intrinsic constructors, and `<noscript>` fallback
+projection when initial page scripts hit cooperative `EngineLimit` with zero
+rendered items — resolving all JavaScript console errors and blank-screen traps
+on Google Search (`https://www.google.com/` -> `/search?...` ->
+`/httpservice/retry/enablejs` with `0` diagnostics) while preserving `558 PASS /
+391 FAIL / 62 UNSUPPORTED of 1,011` on WPT static reftests and `16/16` files
+(`79/79` subtests) on the Window lane. [Release notes](docs/RELEASE-v0.9.31.md).
+
+## Previous release: v0.9.30
 
 v0.9.30 delivers responsive CSS Grid (`[named-lines]`, `fit-content()`,
 `repeat(auto-fill | auto-fit, ...)` — rendering MDN Web Docs in full styled

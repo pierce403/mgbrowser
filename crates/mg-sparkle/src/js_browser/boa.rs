@@ -1069,6 +1069,12 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     if handle.starts_with("style:") {
         return cssom::get(&name, args, context);
     }
+    if handle != "location"
+        && let Some(target_obj) = args[0].as_object()
+        && target_obj.has_own_property(property.clone(), context)?
+    {
+        return fallback_get(args, context);
+    }
     if (handle.starts_with("collection:") || handle.starts_with("classlist:"))
         && matches!(name.as_str(), "forEach" | "values" | "entries" | "keys")
     {
@@ -1233,23 +1239,19 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             .host
             .string_assignment(&handle, &name);
         if !is_string {
-            if handle.starts_with("node:")
-                || handle == "document"
-                || handle.starts_with("subdoc:")
-                || handle.starts_with("event:")
-                || handle.starts_with("mevent:")
-            {
+            if handle != "location" && !handle.starts_with("dataset:") {
+                let is_non_callable = |opt: Option<JsValue>| opt.is_some_and(|v| !v.is_callable());
                 let is_readonly_idl = error_property(&args[0], &name).is_some()
                     || rejection_property(&args[0], &name).is_some()
                     || message_property(&args[0], &name).is_some()
-                    || fetch_xhr::try_get(&handle, &name, context)?.is_some()
-                    || dom_events::try_get(&handle, &name, context)?.is_some()
-                    || dom_ops::try_get(&handle, &name, context)?.is_some()
-                    || web_apis::try_get(&handle, &name, context)?.is_some()
-                    || geometry_style::try_get(&handle, &name, context)?.is_some()
+                    || is_non_callable(fetch_xhr::try_get(&handle, &name, context)?)
+                    || is_non_callable(dom_events::try_get(&handle, &name, context)?)
+                    || is_non_callable(dom_ops::try_get(&handle, &name, context)?)
+                    || is_non_callable(web_apis::try_get(&handle, &name, context)?)
+                    || is_non_callable(geometry_style::try_get(&handle, &name, context)?)
                     || matches!(
                         state(context).borrow_mut().host.get(&handle, &name),
-                        Ok(val) if !matches!(val, Value::Undefined)
+                        Ok(val) if !matches!(val, Value::Undefined | Value::Native(_))
                     );
                 if is_readonly_idl {
                     return Ok(false.into());
