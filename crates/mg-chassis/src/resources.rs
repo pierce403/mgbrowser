@@ -1137,7 +1137,8 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
             image_urls.push((sheet.base_url.clone(), value));
         }
     }
-    for (_, value) in mg_sparkle::document::font_face_rules_for_document(&sheet.css, document) {
+    for (_, value) in mg_sparkle::document::font_face_base_rules_for_document(&sheet.css, document)
+    {
         if font_urls.len() < MAX_REQUESTS * 2 {
             font_urls.push((sheet.base_url.clone(), value));
         }

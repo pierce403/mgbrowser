@@ -2,7 +2,17 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.32
+## Current source preview: v0.9.33
+
+v0.9.33 fixes rounded backgrounds, borders and clipping masks growing taller
+while scrolling, including Google News search/sign-in controls and metadata
+separator dots, and keeps inline nowrap navigation labels on one line.
+Downloaded font families now use a normal base nearest weight
+400, so italic-first stylesheets no longer turn ordinary text italic. Existing
+bold/italic synthesis remains; full downloaded face matching is not implemented.
+[Release notes](docs/RELEASE-v0.9.33.md).
+
+## Previous release: v0.9.32
 
 v0.9.32 delivers end-to-end live Google Search compatibility (`https://www.google.com/`
 -> search query -> SearchGuard `knitsail` challenge & `SG_SS` cookie -> `HTTP 200`

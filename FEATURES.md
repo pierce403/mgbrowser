@@ -378,6 +378,12 @@ The user renewed the explicit news.google.com loading/visual-fidelity goal on
 2026-10-25. Follow docs/SITE_COMPATIBILITY.md for real-site/reference comparison
 and packaged/public acceptance; previous incremental checks are not a completed
 faithful-reading milestone.
+The v0.9.33 correction translates both edges of rounded paint/mask geometry
+when scrolling and selects normal downloaded font bases instead of italic-first
+faces. Saved actual News HTML matches compact 48px search and 40px sign-in
+heights at 1280x800 and 1024x768, including scroll 600. Pixel regressions cover
+fractional display scale and overflow masks. External assets/scripts were
+blocked in that matched-input comparison; full live acceptance stays open.
 The v0.9.0 reading increment adds bounded flex/grid, positioning/clipping,
 inline SVG, gradients, fit-content and reviewed JPEG/foreign-image loading.
 Saved HN screenshots and geometry remain byte-identical. Same-input News

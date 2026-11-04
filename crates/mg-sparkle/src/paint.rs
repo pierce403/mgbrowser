@@ -202,7 +202,9 @@ impl RoundedRect {
         let x0 = canvas.physical_edge(self.x.round() as i64) as f32;
         let y0 = canvas.physical_edge(self.y.round() as i64 - i64::from(scroll)) as f32;
         let x1 = canvas.physical_edge(self.x.round() as i64 + self.w.ceil().max(0.0) as i64) as f32;
-        let y1 = canvas.physical_edge(self.y.round() as i64 + self.h.ceil().max(0.0) as i64) as f32;
+        let y1 = canvas.physical_edge(
+            self.y.round() as i64 + self.h.ceil().max(0.0) as i64 - i64::from(scroll),
+        ) as f32;
         let scale = canvas.scale();
         let raw_radii = self.radii.map(|(rx, ry)| (rx * scale, ry * scale));
         Self::from_raw(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0), raw_radii)

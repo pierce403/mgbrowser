@@ -186,3 +186,11 @@
   and the kernel stops it with `SIGTTIN` (`do_signal_stop`). Keep
   `[profile.release]` `lto = "thin"` enabled so `mgbrowser-linux-x86_64.tar.gz`
   stays well below the 8 MiB (`8,388,608`-byte) self-updater download ceiling.
+
+- 2026-11-04: Rounded shape scrolling must translate both rectangle edges before
+  physical-pixel conversion. Zero-scroll screenshots missed height inflation;
+  pixel-equivalence controls at nonzero scroll and fractional scale catch both
+  fixed backgrounds and rounded clipping masks.
+- 2026-11-04: Downloaded CSS may list italic font faces before normal ones. A
+  one-base-per-family renderer must choose a normal base explicitly instead of
+  letting stylesheet order silently make normal text italic.

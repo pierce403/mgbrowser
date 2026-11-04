@@ -703,7 +703,9 @@ pub(crate) fn render_scaled_profiled(
     let viewport_overflow = viewport_overflow_node(document, &styles);
     fonts.clear_families();
     for sheet in &document.stylesheets {
-        for (family, reference) in crate::document::font_face_rules(&sheet.css) {
+        for (family, reference) in
+            crate::document::font_face_base_rules_for_document(&sheet.css, document)
+        {
             if let Ok(mut url) =
                 url::Url::parse(&sheet.base_url).and_then(|base| base.join(reference.trim()))
             {
@@ -3884,6 +3886,40 @@ impl Layout<'_, '_> {
         let node = &self.document.nodes[id];
         let s = self.styles[id].clone();
         if node.tag == "#text" {
+            if s.white_space == WhiteSpace::NoWrap {
+                // Shape a nowrap text run as the same unbreakable phrase used
+                // by intrinsic sizing. Keep edge spaces collapsible across nodes.
+                let text = collapse(material_icon_ligature(&node.text, &s.font_families));
+                let word = text.trim_matches(is_css_space);
+                let parts = [
+                    text.starts_with(' ').then_some(" "),
+                    (!word.is_empty()).then_some(word),
+                    (!word.is_empty() && text.ends_with(' ')).then_some(" "),
+                ];
+                if parts.iter().flatten().count() > MAX_OPS.saturating_sub(out.len()) {
+                    self.exhausted = true;
+                    return;
+                }
+                for part in parts.into_iter().flatten() {
+                    let width = self.fonts.select_family(&s.font_families).width_weight(
+                        part,
+                        s.font_size,
+                        s.font_weight >= 600,
+                    );
+                    if part == " " {
+                        if !matches!(out.last(), Some(Token::Space { .. })) {
+                            out.push(Token::Space { node: id, width });
+                        }
+                    } else {
+                        out.push(Token::Word {
+                            node: id,
+                            text: part.to_owned(),
+                            width,
+                        });
+                    }
+                }
+                return;
+            }
             let mut word = String::new();
             for ch in material_icon_ligature(&node.text, &s.font_families).chars() {
                 if out.len() >= MAX_OPS {

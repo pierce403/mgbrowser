@@ -890,7 +890,7 @@ impl Document {
 /// Discover bounded `@font-face` `(font-family, src_url)` pairs for `.woff2`/`.woff`/`.ttf`/`.otf`
 /// sources without network I/O.
 pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
-    scan_font_face_rules(css, None)
+    scan_font_face_rules(css, None, false)
 }
 
 /// Discover up to 16 `@font-face` `(font-family, src_url)` pairs whose `unicode-range`
@@ -900,7 +900,27 @@ pub fn font_face_rules(css: &str) -> Vec<(String, String)> {
 /// the cap.
 pub fn font_face_rules_for_document(css: &str, document: &Document) -> Vec<(String, String)> {
     let codepoints = collect_document_codepoints(document);
-    scan_font_face_rules(css, Some(&codepoints))
+    scan_font_face_rules(css, Some(&codepoints), false)
+}
+
+/// The renderer currently stores one normal base per family and synthesizes
+/// bold/italic. Choose the normal face nearest weight 400, never an italic face
+/// merely because it occurs first. Unicode filtering and the 16-family cap apply.
+pub fn font_face_base_rules_for_document(css: &str, document: &Document) -> Vec<(String, String)> {
+    let codepoints = collect_document_codepoints(document);
+    scan_font_face_rules(css, Some(&codepoints), true)
+}
+
+fn font_base_weight(value: &str) -> u16 {
+    let parse = |v: &str| match v {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        _ => v.parse::<u16>().ok(),
+    };
+    let mut words = value.split_ascii_whitespace();
+    let low = words.next().and_then(parse).unwrap_or(400).clamp(1, 1000);
+    let high = words.next().and_then(parse).unwrap_or(low).clamp(low, 1000);
+    400u16.clamp(low, high)
 }
 
 fn collect_document_codepoints(document: &Document) -> Vec<u32> {
@@ -1006,10 +1026,15 @@ fn parse_unicode_ranges(value: &str) -> Vec<(u32, u32)> {
     ranges
 }
 
-fn scan_font_face_rules(css: &str, codepoints: Option<&[u32]>) -> Vec<(String, String)> {
-    let mut rules = Vec::new();
+fn scan_font_face_rules(
+    css: &str,
+    codepoints: Option<&[u32]>,
+    bases: bool,
+) -> Vec<(String, String)> {
+    let mut rules: Vec<(String, String)> = Vec::new();
+    let mut weights = Vec::new();
     let mut at = 0;
-    while at < css.len() && rules.len() < 16 {
+    while at < css.len() && (bases || rules.len() < 16) {
         let rest = &css[at..];
         if rest.starts_with("/*") {
             at = rest.find("*/").map_or(css.len(), |end| at + end + 2);
@@ -1072,6 +1097,8 @@ fn scan_font_face_rules(css: &str, codepoints: Option<&[u32]>) -> Vec<(String, S
                 let mut family = None;
                 let mut src = None;
                 let mut unicode_range: Option<String> = None;
+                let mut normal = true;
+                let mut weight = 400u16;
                 for decl in block.split(';') {
                     let Some((prop, val)) = decl.split_once(':') else {
                         continue;
@@ -1109,6 +1136,10 @@ fn scan_font_face_rules(css: &str, codepoints: Option<&[u32]>) -> Vec<(String, S
                         }
                     } else if prop.eq_ignore_ascii_case("unicode-range") && !val.is_empty() {
                         unicode_range = Some(val.to_owned());
+                    } else if prop.eq_ignore_ascii_case("font-style") {
+                        normal = val.eq_ignore_ascii_case("normal");
+                    } else if prop.eq_ignore_ascii_case("font-weight") {
+                        weight = font_base_weight(&val.to_ascii_lowercase());
                     }
                 }
                 let range_matches = match (codepoints, unicode_range.as_deref()) {
@@ -1122,8 +1153,23 @@ fn scan_font_face_rules(css: &str, codepoints: Option<&[u32]>) -> Vec<(String, S
                     }
                     _ => true,
                 };
-                if range_matches && let (Some(f), Some(s)) = (family, src) {
-                    rules.push((f, s));
+                if range_matches
+                    && (!bases || normal)
+                    && let (Some(f), Some(s)) = (family, src)
+                {
+                    if bases
+                        && let Some(i) = rules
+                            .iter()
+                            .position(|(name, _)| name.eq_ignore_ascii_case(&f))
+                    {
+                        if weight.abs_diff(400) < weights[i] {
+                            rules[i] = (f, s);
+                            weights[i] = weight.abs_diff(400);
+                        }
+                    } else if rules.len() < 16 {
+                        rules.push((f, s));
+                        weights.push(weight.abs_diff(400));
+                    }
                 }
                 continue;
             }
