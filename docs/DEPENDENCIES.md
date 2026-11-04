@@ -169,13 +169,18 @@ Primary references: [zbus](https://github.com/z-galaxy/zbus),
 [Settings portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html),
 [non-GTK X11 theme hint](https://docs.gtk.org/gdk3-x11/method.X11Window.set_theme_variant.html).
 
-### Boa page adoption: 2026-09-16, v0.4.0 increment
+### Boa page adoption: 2026-09-16, v0.4.0 increment (updated 2026-11-03, v0.9.32)
 
-`mg-butane::modern` uses exactly `boa_engine = 0.22.0` and `boa_gc = 0.22.0`,
-default features disabled. The engine's `fuzz` feature exposes cumulative opcode
+`mg-butane::modern` uses `boa_engine = 0.22.0` and `boa_gc = 0.22.0`, default
+features disabled. The engine's `fuzz` feature exposes cumulative opcode
 accounting; it does not select a fuzz runner or native backend. Sparkle names the
 same types directly because upstream GC/native-data derive macros require those
-crate names. No engine fork or upstream source patch is carried.
+crate names. Starting in `v0.9.32`, `[patch.crates-io]` points `boa_engine` at
+`vendor/boa_engine-0.22.0/`, carrying only a narrow pure-Rust fix for sloppy
+direct-`eval` dynamic `var` binding slot indexing across repeated function
+invocations (`FunctionEnvironment` static binding reservation, outer-scope
+deleted-binding lookup, and `GetNameOrUndefined` post-lookup global check) with
+zero dependency-graph, feature, unsafe-code, or MIT-license changes.
 
 The isolated [source/feature/license review](jsplan/DEPENDENCY_AUDIT.md) records
 the pinned engine. The combined production lock graph is independently guarded

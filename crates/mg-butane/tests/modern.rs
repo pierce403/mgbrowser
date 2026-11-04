@@ -1093,3 +1093,28 @@ mod context_dynamic_compilation {
         }
     }
 }
+
+#[test]
+fn sloppy_direct_eval_var_bindings_stay_isolated_across_function_calls() {
+    let mut engine = Engine::new().unwrap();
+    let result = engine
+        .evaluate(
+            r#"
+            (function() {
+                var outerValue = 77;
+                var helper = function(code) { return eval(code); };
+                var first = helper('var eval = "shadowed"; eval');
+                var nested = helper('0, function() { return (function(code) { return eval(code); })("outerValue"); }');
+                var second = nested();
+                var delFirst = helper('var dyn = 9; delete dyn');
+                var delSecond = helper('var dyn = 11; dyn + ":" + (delete dyn)');
+                return [first, second, delFirst, delSecond].join("|");
+            })()
+            "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.as_string().unwrap().to_std_string_escaped(),
+        "shadowed|77|true|11:true"
+    );
+}

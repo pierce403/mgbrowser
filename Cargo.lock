@@ -325,8 +325,6 @@ dependencies = [
 [[package]]
 name = "boa_engine"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6aaf7fdc4299df68adb67e1a5440a51d34630a1f5271b9698fd74bc97b60d9"
 dependencies = [
  "aligned-vec",
  "arrayvec",
@@ -1770,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "mg-browser"
-version = "0.9.31"
+version = "0.9.32"
 dependencies = [
  "base64",
  "flate2",
@@ -1791,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "mg-butane"
-version = "0.9.31"
+version = "0.9.32"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -1801,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "mg-chassis"
-version = "0.9.31"
+version = "0.9.32"
 dependencies = [
  "base64",
  "flate2",
@@ -1820,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "mg-sparkle"
-version = "0.9.31"
+version = "0.9.32"
 dependencies = [
  "app_units",
  "atomic_refcell",
@@ -3283,7 +3281,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

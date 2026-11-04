@@ -10,7 +10,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub const OUTSTANDING_LIMIT: u64 = mg_butane::modern::WORKER_OUTSTANDING_LIMIT;
 pub const CUMULATIVE_LIMIT: u64 = mg_butane::modern::WORKER_CUMULATIVE_LIMIT;
+pub const INTERACTIVE_OUTSTANDING_LIMIT: u64 =
+    mg_butane::modern::INTERACTIVE_WORKER_OUTSTANDING_LIMIT;
+pub const INTERACTIVE_CUMULATIVE_LIMIT: u64 =
+    mg_butane::modern::INTERACTIVE_WORKER_CUMULATIVE_LIMIT;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static ACTIVE_OUTSTANDING_LIMIT: AtomicU64 = AtomicU64::new(OUTSTANDING_LIMIT);
+static ACTIVE_CUMULATIVE_LIMIT: AtomicU64 = AtomicU64::new(CUMULATIVE_LIMIT);
 static LIVE: AtomicU64 = AtomicU64::new(0);
 static PEAK: AtomicU64 = AtomicU64::new(0);
 static TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -69,8 +75,16 @@ unsafe impl GlobalAlloc for WorkerAllocator {
         let tracked = ACTIVE.load(Ordering::SeqCst);
         if tracked {
             let amount = whole.size() as u64;
-            reserve(&TOTAL, amount, CUMULATIVE_LIMIT);
-            let live = reserve(&LIVE, amount, OUTSTANDING_LIMIT);
+            reserve(
+                &TOTAL,
+                amount,
+                ACTIVE_CUMULATIVE_LIMIT.load(Ordering::SeqCst),
+            );
+            let live = reserve(
+                &LIVE,
+                amount,
+                ACTIVE_OUTSTANDING_LIMIT.load(Ordering::SeqCst),
+            );
             PEAK.fetch_max(live, Ordering::SeqCst);
             COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -136,14 +150,23 @@ pub fn activate() {
     }
 }
 
+/// Called once for `boa-interactive-page-v1`, only after confinement in a fresh child.
+pub fn activate_interactive() {
+    ACTIVE_OUTSTANDING_LIMIT.store(INTERACTIVE_OUTSTANDING_LIMIT, Ordering::SeqCst);
+    ACTIVE_CUMULATIVE_LIMIT.store(INTERACTIVE_CUMULATIVE_LIMIT, Ordering::SeqCst);
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        rejected();
+    }
+}
+
 pub fn report() -> WorkerMemory {
     WorkerMemory {
         outstanding_bytes: LIVE.load(Ordering::SeqCst),
         peak_bytes: PEAK.load(Ordering::SeqCst),
         cumulative_bytes: TOTAL.load(Ordering::SeqCst),
         allocations: COUNT.load(Ordering::SeqCst),
-        outstanding_limit_bytes: OUTSTANDING_LIMIT,
-        cumulative_limit_bytes: CUMULATIVE_LIMIT,
+        outstanding_limit_bytes: ACTIVE_OUTSTANDING_LIMIT.load(Ordering::SeqCst),
+        cumulative_limit_bytes: ACTIVE_CUMULATIVE_LIMIT.load(Ordering::SeqCst),
     }
 }
 

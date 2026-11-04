@@ -630,3 +630,285 @@ fn google_search_send_beacon_method_override_timing_substr_and_iframe_intrinsics
     let yv = final_doc.query_selector(0, "#yvlrue").unwrap().unwrap();
     assert_eq!(final_doc.nodes[yv].attr("style"), Some(""));
 }
+
+#[test]
+fn webidl_window_navigator_iframe_and_media_prototypes_enforce_brand_and_descriptors() {
+    let html = r#"<!doctype html><html><body>
+        <iframe id="f"></iframe>
+        <video id="v"></video>
+        <audio id="a"></audio>
+        <div id="out"></div>
+        <script>
+        var checks = [];
+        checks.push("winProto:" + (Object.getPrototypeOf(window) === Window.prototype));
+        checks.push("winInst:" + (window instanceof Window));
+        checks.push("winTag:" + Object.prototype.toString.call(window));
+        checks.push("navProto:" + (Object.getPrototypeOf(navigator) === Navigator.prototype));
+        checks.push("navInst:" + (navigator instanceof Navigator));
+        checks.push("pluginsInst:" + (navigator.plugins instanceof PluginArray));
+        checks.push("mimesInst:" + (navigator.mimeTypes instanceof MimeTypeArray));
+        var wdDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, "webdriver");
+        checks.push("wdOwn:" + Object.prototype.hasOwnProperty.call(navigator, "webdriver"));
+        checks.push("wdGet:" + (typeof (wdDesc && wdDesc.get) === "function" && navigator.webdriver === false));
+        var brandThrew = false;
+        try { wdDesc.get.call(window); } catch (e) { brandThrew = e instanceof TypeError; }
+        checks.push("wdBrand:" + brandThrew);
+        var f = document.getElementById("f");
+        checks.push("ifInst:" + (f instanceof HTMLIFrameElement));
+        var cwDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow");
+        checks.push("cwGet:" + (typeof (cwDesc && cwDesc.get) === "function"));
+        var cw = f.contentWindow;
+        checks.push("cwTag:" + Object.prototype.toString.call(cw));
+        checks.push("cwWin:" + (cw.window === cw && cw.self === cw && cw.parent === window));
+        checks.push("cwEval:" + (typeof cw.eval === "function" && typeof cw.Navigator === "function"));
+        var detached = document.createElement("iframe");
+        checks.push("detachedNull:" + (detached.contentWindow === null && detached.contentDocument === null));
+        var v = document.getElementById("v");
+        var a = document.getElementById("a");
+        checks.push("mediaInst:" + (v instanceof HTMLVideoElement && v instanceof HTMLMediaElement && a instanceof HTMLAudioElement));
+        checks.push("canPlay:" + (typeof HTMLMediaElement.prototype.canPlayType === "function" && v.canPlayType("video/mp4") === ""));
+        document.title = checks.join(",");
+        </script>
+    </body></html>"#;
+    let out = execute(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
+    assert_eq!(
+        doc.title,
+        "winProto:true,winInst:true,winTag:[object Window],navProto:true,navInst:true,\
+         pluginsInst:true,mimesInst:true,wdOwn:false,wdGet:true,wdBrand:true,ifInst:true,\
+         cwGet:true,cwTag:[object Window],cwWin:true,cwEval:true,detachedNull:true,\
+         mediaInst:true,canPlay:true"
+    );
+}
+
+#[test]
+fn large_data_image_attribute_materializes_inline_image_resource() {
+    // Build a valid 1x1 GIF89a with a ~57 KB standard comment extension so its
+    // base64 data:image/gif URL exceeds 75 KB (matching Google SERP inline thumbnails).
+    let mut gif = vec![
+        b'G', b'I', b'F', b'8', b'9', b'a', // Header
+        1, 0, 1, 0, 0x80, 0, 0, // Logical screen descriptor (1x1, GCT 2 colors)
+        0x12, 0x34, 0x56, 0x00, 0x00, 0x00, // GCT #0 = #123456, #1 = #000000
+        0x21, 0xFE, // Comment Extension
+    ];
+    for _ in 0..230 {
+        gif.push(250);
+        gif.extend(std::iter::repeat_n(b'g', 250));
+    }
+    gif.push(0); // End of comment sub-blocks
+    gif.extend_from_slice(&[
+        0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, // Image descriptor (0,0 1x1)
+        2, 2, 0x44, 0x01, 0,    // LZW minimum code size 2, pixel 0, block terminator
+        0x3B, // Trailer
+    ]);
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut data_url = String::from("data:image/gif;base64,");
+    for chunk in gif.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        let v = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+        data_url.push(alphabet[((v >> 18) & 63) as usize] as char);
+        data_url.push(alphabet[((v >> 12) & 63) as usize] as char);
+        data_url.push(if chunk.len() > 1 {
+            alphabet[((v >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        data_url.push(if chunk.len() > 2 {
+            alphabet[(v & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    assert!(data_url.len() > 75_000, "len={}", data_url.len());
+
+    let html = format!(
+        r#"<!doctype html><html><body><img id="thumb" width="16" height="16"><script>
+        var u = "{data_url}";
+        var img = document.getElementById("thumb");
+        img.src = u;
+        document.title = "len:" + img.getAttribute("src").length;
+        </script></body></html>"#
+    );
+    let (_, reply) = BoaPageRealm::start_with_platform_and_profile(
+        Request {
+            url: "https://www.google.com/search?q=ninjas&gbv=2".into(),
+            html,
+            external_scripts: None,
+        },
+        mg_sparkle::page_session::observer::ObserverInit::Disabled,
+        mg_sparkle::page_session::platform::PlatformInit::default(),
+        [0u8; 32],
+        mg_butane::modern::ResourceProfile::InteractivePageV1,
+    );
+    assert!(reply.errors.is_empty(), "errors: {:?}", reply.errors);
+    let snap = reply.snapshot.expect("snapshot");
+    let doc = document::project_nodes(snap.nodes, "https://www.google.com/search?q=ninjas&gbv=2")
+        .expect("project_nodes");
+    assert_eq!(doc.title, format!("len:{}", data_url.len()));
+    let res = doc
+        .resources
+        .get(&data_url)
+        .expect("materialized data:image/gif");
+    assert_eq!(res.content_type, "image/gif");
+    let decoded = images::decode(&res.bytes, &res.content_type, None, None).unwrap();
+    assert_eq!((decoded.width, decoded.height), (1, 1));
+    assert_eq!(&decoded.pixels[..4], &[0x12, 0x34, 0x56, 0xFF]);
+}
+
+#[test]
+fn webidl_window_mouse_event_and_image_surface_covers_audited_properties() {
+    let html = r#"<!doctype html><html><body>
+        <iframe id="ifr"></iframe>
+        <script>
+        var winProps = [
+            "name","status","closed","frames","length","frameElement","origin",
+            "screenX","screenY","screenLeft","screenTop","clientInformation",
+            "offscreenBuffering","event","locationbar","menubar","personalbar",
+            "scrollbars","statusbar","toolbar","external","alert","blur",
+            "cancelIdleCallback","captureEvents","close","confirm","createImageBitmap",
+            "find","focus","getSelection","moveBy","moveTo","open","print","prompt",
+            "releaseEvents","reportError","requestIdleCallback","resizeBy","resizeTo","stop"
+        ];
+        var missingWin = winProps.filter(function(k) { return !(k in window); });
+        for (var i = 0; i < winProps.length; i++) { void window[winProps[i]]; }
+
+        var ev = document.createEvent("MouseEvents");
+        ev.initMouseEvent("click", true, true, window, 1, 10, 20, 30, 40, false, false, true, false, 0, null);
+        var evProps = [
+            "screenX","screenY","x","y","offsetX","offsetY","movementX","movementY",
+            "fromElement","toElement","layerX","layerY","getModifierState","view","which"
+        ];
+        var missingEv = evProps.filter(function(k) { return ev[k] === undefined; });
+        var evUnknownOk = (ev.nonExistentCanary === undefined) && !("nonExistentCanary" in ev);
+        var modOk = (ev.getModifierState("Shift") === true && ev.getModifierState("Control") === false);
+        var coordsOk = (ev.screenX === 10 && ev.screenY === 20 && ev.x === 30 && ev.y === 40 && ev.which === 1 && ev.view === window);
+
+        var img = document.createElement("img");
+        var imgProps = [
+            "baseURI","nodeValue","ENTITY_REFERENCE_NODE","ENTITY_NODE","NOTATION_NODE",
+            "isDefaultNamespace","isEqualNode","isSameNode","lookupNamespaceURI",
+            "lookupPrefix","normalize","part","attachShadow","checkVisibility",
+            "getAttributeNS","getAttributeNode","getAttributeNodeNS","getElementsByTagNameNS",
+            "hasAttributeNS","hasAttributes","removeAttributeNS","removeAttributeNode",
+            "requestFullscreen","scroll","scrollBy","scrollIntoViewIfNeeded","scrollTo",
+            "setAttributeNS","setAttributeNode","setAttributeNodeNS","translate","inert",
+            "accessKey","draggable","spellcheck","autocapitalize","enterKeyHint","inputMode",
+            "outerText","nonce","autofocus","useMap","naturalWidth","naturalHeight",
+            "complete","currentSrc","fetchPriority","lowsrc","align","hspace","vspace",
+            "longDesc","border","x","y","decode"
+        ];
+        var missingImg = imgProps.filter(function(k) { return img[k] === undefined; });
+
+        var ifr = document.getElementById("ifr");
+        var subDoc = ifr.contentDocument;
+        var subDocOk = !("nonExistentCanary" in subDoc) && (subDoc.nonExistentCanary === undefined) && (ifr.contentWindow.frameElement === ifr);
+        window.name = "mgtest";
+        var winMetaOk = (window.name === "mgtest" && window.origin === "https://www.google.com" && window.length === 1 && window.getSelection().isCollapsed === true);
+
+        document.title = [
+            "mw:" + missingWin.length,
+            "me:" + missingEv.length,
+            "mi:" + missingImg.length,
+            "eu:" + evUnknownOk,
+            "mo:" + modOk,
+            "co:" + coordsOk,
+            "sd:" + subDocOk,
+            "wm:" + winMetaOk
+        ].join(",");
+        </script>
+    </body></html>"#;
+    let out = execute(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
+    assert_eq!(
+        doc.title,
+        "mw:0,me:0,mi:0,eu:true,mo:true,co:true,sd:true,wm:true"
+    );
+}
+
+#[test]
+fn styled_inline_anchor_wrapping_heading_exposes_non_zero_bounding_client_rect() {
+    let html = r#"<!doctype html><html><head>
+        <style>body { margin: 8px; } h3 { margin: 0; font-size: 20px; }</style>
+    </head><body>
+        <a id="hit" href="https://en.wikipedia.org/wiki/Ninja"><h3>Ninja - Wikipedia</h3></a>
+        <a id="empty" href="/empty"></a>
+        <script>
+        var hit = document.getElementById("hit").getBoundingClientRect();
+        var hitRects = document.getElementById("hit").getClientRects();
+        var emp = document.getElementById("empty").getBoundingClientRect();
+        document.title = [
+            "hw:" + (hit.width > 40),
+            "hh:" + (hit.height >= 16),
+            "hr:" + (hitRects.length >= 1),
+            "ew:" + (emp.width === 0 && emp.height === 0)
+        ].join(",");
+        </script>
+    </body></html>"#;
+    let out = execute(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
+    assert_eq!(doc.title, "hw:true,hh:true,hr:true,ew:true");
+}
+
+#[test]
+fn sloppy_direct_eval_dynamic_var_bindings_stay_isolated_across_repeated_calls() {
+    let html = r#"<!doctype html><html><body><script>
+        function runStep(code, seed) {
+            var local = seed;
+            return eval(code);
+        }
+        var r1 = runStep("var dynA = local + 1; var dynB = dynA * 2; (function(){ return dynB + local; })()", 10);
+        var r2 = runStep("var dynC = local + 3; (function(){ return (typeof dynA) + ':' + dynC; })()", 20);
+        var r3 = runStep("var dynA = 99; function innerFn(){ return dynA - local; } innerFn()", 30);
+        document.title = [r1, r2, r3].join("|");
+    </script></body></html>"#;
+    let out = execute(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
+    assert_eq!(doc.title, "32|undefined:23|69");
+}
+
+#[test]
+fn worker_layout_cache_handles_over_sixty_four_inline_stylesheets_without_zero_rects() {
+    let mut styles = String::new();
+    for i in 0..72 {
+        styles.push_str(&format!("<style>.s{i} {{ padding-left: 1px; }}</style>"));
+    }
+    let html = format!(
+        r#"<!doctype html><html><head>{styles}</head><body>
+        <div id="card" class="s0" style="width: 240px; height: 36px;">Result card</div>
+        <script>
+            var r = document.getElementById("card").getBoundingClientRect();
+            document.title = Math.round(r.width) + "x" + Math.round(r.height);
+        </script>
+        </body></html>"#
+    );
+    let out = execute(Request {
+        url: "https://www.google.com/search?q=ninjas".into(),
+        html,
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
+    assert_eq!(doc.title, "241x36");
+}

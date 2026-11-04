@@ -22,15 +22,27 @@ use std::time::Duration;
 pub struct LinuxScripts {
     pool: script_worker::ChildPool,
     observer: mg_sparkle::page_session::observer::ObserverInit,
+    interactive: bool,
 }
 
 impl LinuxScripts {
+    /// Interactive desktop page profile (`boa-interactive-page-v1`), keeping the
+    /// identical seccomp/FD/FSIZE worker boundary with interactive opcode/heap headroom.
+    pub fn interactive() -> Self {
+        Self {
+            pool: script_worker::ChildPool::default(),
+            observer: mg_sparkle::page_session::observer::ObserverInit::Disabled,
+            interactive: true,
+        }
+    }
+
     /// Trusted control-host capability, never selected from page contents.
     /// The caller must verify its entire input inventory before `start`.
     pub fn with_observer(observer: mg_sparkle::page_session::observer::ObserverInit) -> Self {
         Self {
             pool: script_worker::ChildPool::default(),
             observer,
+            interactive: false,
         }
     }
 }
@@ -54,11 +66,19 @@ impl ScriptRuntime for LinuxScripts {
         request: Request,
         generation: u64,
     ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
-        script_worker::Session::start_with_observer(
+        let interactive = self.interactive
+            && !script_worker::legacy_test_mode()
+            && matches!(
+                self.observer,
+                mg_sparkle::page_session::observer::ObserverInit::Disabled
+            );
+        script_worker::Session::start_with_platform_and_profile(
             request,
             generation,
             self.pool.clone(),
             self.observer,
+            mg_sparkle::page_session::platform::PlatformInit::default(),
+            interactive,
         )
         .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
     }
@@ -68,21 +88,23 @@ impl ScriptRuntime for LinuxScripts {
         generation: u64,
         platform: mg_sparkle::page_session::platform::PlatformInit,
     ) -> Result<(Box<dyn ScriptSession>, SessionReply), String> {
-        let effective = if script_worker::legacy_test_mode()
+        let constrained = script_worker::legacy_test_mode()
             || !matches!(
                 self.observer,
                 mg_sparkle::page_session::observer::ObserverInit::Disabled
-            ) {
+            );
+        let effective = if constrained {
             mg_sparkle::page_session::platform::PlatformInit::default()
         } else {
             platform
         };
-        script_worker::Session::start_with_platform(
+        script_worker::Session::start_with_platform_and_profile(
             request,
             generation,
             self.pool.clone(),
             self.observer,
             effective,
+            self.interactive && !constrained,
         )
         .map(|(session, reply)| (Box::new(session) as Box<dyn ScriptSession>, reply))
     }

@@ -12,9 +12,23 @@ pub(crate) const MAX_NODES: usize = 50_000;
 pub(crate) const MAX_DEPTH: usize = 256;
 const MAX_ATTRIBUTE: usize = 16_384;
 const MAX_INTERNAL_CANVAS_ATTRIBUTE: usize = 256 * 1024;
+pub const MAX_DATA_IMAGE_ATTRIBUTE: usize = 256 * 1024;
 /// Internal live bitmap projection attribute populated on `<canvas>` elements before
 /// `ArenaSnapshot` projection and hidden from JS DOM attribute APIs and HTML serialization.
 pub const INTERNAL_CANVAS_ATTR: &str = "__mg_canvas_src";
+
+pub fn is_allowed_data_image_attr(tag: &str, key: &str, value: &str) -> bool {
+    let attr_ok = match tag {
+        "img" | "input" | "source" => key.eq_ignore_ascii_case("src"),
+        "image" => key.eq_ignore_ascii_case("href") || key.eq_ignore_ascii_case("xlink:href"),
+        _ => false,
+    };
+    attr_ok
+        && value
+            .trim_start()
+            .get(..11)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:image/"))
+}
 const MAX_FORMS: usize = 256;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 
@@ -754,6 +768,8 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
         for (index, (key, value)) in node.attributes.iter().enumerate() {
             let max_attr_len = if node.tag == "canvas" && key == INTERNAL_CANVAS_ATTR {
                 MAX_INTERNAL_CANVAS_ATTRIBUTE
+            } else if is_allowed_data_image_attr(&node.tag, key, value) {
+                MAX_DATA_IMAGE_ATTRIBUTE
             } else {
                 MAX_ATTRIBUTE
             };
@@ -818,24 +834,35 @@ pub fn project_nodes(nodes: Vec<Node>, page_url: &str) -> Result<Document, Strin
 }
 
 impl Document {
-    /// Materialize bounded inline `<canvas>` PNG projections (`__mg_canvas_src`) into
-    /// `self.resources` without any file or network I/O (`<= 2 MiB` total).
+    /// Materialize bounded inline `<canvas>` PNG projections (`__mg_canvas_src`) and
+    /// inline `data:image/` attributes into `self.resources` without any file or network
+    /// I/O (`<= 2 MiB` total).
     pub fn materialize_inline_canvas_resources(&mut self) {
         const MAX_INLINE_CANVAS_RESOURCE_BYTES: usize = 2 * 1024 * 1024;
         let mut total_bytes: usize = 0;
         let mut seen_entries = 0usize;
         for node in &self.nodes {
-            if node.tag != "canvas" {
-                continue;
-            }
-            let Some(data_url) = node
-                .attr(INTERNAL_CANVAS_ATTR)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            else {
+            let candidate = match node.tag.as_str() {
+                "canvas" => node.attr(INTERNAL_CANVAS_ATTR),
+                "img" | "input" => node.attr("src").filter(|v| {
+                    v.trim_start()
+                        .get(..11)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
+                }),
+                "image" => node
+                    .attr("href")
+                    .or_else(|| node.attr("xlink:href"))
+                    .filter(|v| {
+                        v.trim_start()
+                            .get(..11)
+                            .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
+                    }),
+                _ => None,
+            };
+            let Some(data_url) = candidate.map(str::trim).filter(|s| !s.is_empty()) else {
                 continue;
             };
-            if seen_entries >= 32 {
+            if seen_entries >= 64 {
                 break;
             }
             if let Some(existing) = self.resources.get(data_url) {
@@ -1362,10 +1389,15 @@ fn build_xml_tree(source: &str) -> Vec<Node> {
             for attr in xml_node.attributes() {
                 let key = attr.name().to_ascii_lowercase();
                 let value = attr.value();
+                let max_attr_len = if is_allowed_data_image_attr(&tag, &key, value) {
+                    MAX_DATA_IMAGE_ATTRIBUTE
+                } else {
+                    MAX_ATTRIBUTE
+                };
                 if attributes.len() < 256
                     && !key.is_empty()
                     && key.len() <= 256
-                    && value.len() <= MAX_ATTRIBUTE
+                    && value.len() <= max_attr_len
                     && !attributes.iter().any(|(old, _)| *old == key)
                 {
                     attributes.push((key, value.to_owned()));
@@ -1526,7 +1558,7 @@ fn build_tree_inner(source: &str, synthesize_body: bool) -> Vec<Node> {
                 .unwrap_or(false);
         let svg_self_closing = svg_context && inside.trim_end().ends_with('/');
         let id = nodes.len();
-        let attributes = attributes(&inside[name_end..]);
+        let attributes = attributes(&tag, &inside[name_end..]);
         nodes.push(Node {
             tag: tag.clone(),
             attributes,
@@ -1654,7 +1686,7 @@ fn raw_end(source: &str, mut start: usize, name: &str) -> Option<usize> {
     None
 }
 
-fn attributes(source: &str) -> Vec<(String, String)> {
+fn attributes(tag: &str, source: &str) -> Vec<(String, String)> {
     let bytes = source.as_bytes();
     let mut pos = 0;
     let mut result = Vec::new();
@@ -1699,12 +1731,20 @@ fn attributes(source: &str) -> Vec<(String, String)> {
                 value = &source[start..pos];
             }
         }
+        let max_attr_len = if is_allowed_data_image_attr(tag, &key, value) {
+            MAX_DATA_IMAGE_ATTRIBUTE
+        } else {
+            MAX_ATTRIBUTE
+        };
         if result.len() < 256
             && key.len() <= 256
-            && value.len() <= MAX_ATTRIBUTE
+            && value.len() <= max_attr_len
             && !result.iter().any(|(old, _)| *old == key)
         {
-            result.push((key, decode_entities(value)));
+            let decoded = decode_entities(value);
+            if decoded.len() <= max_attr_len {
+                result.push((key, decoded));
+            }
         }
     }
     result

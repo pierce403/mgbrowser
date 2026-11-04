@@ -2,8 +2,9 @@
 //! Custom Elements v1 (`window.customElements`), Web Animations (`Element.animate`,
 //! `getAnimations`), and `window.visualViewport`.
 use super::{
-    BoaPageRealm, Ingress, State, dom_events, dom_exception, dom_ops, enter_world_in_context,
-    failure, geometry_style, modern, page_session, receiver, state, utf8, wrap,
+    BoaPageRealm, Ingress, State, def_cap, def_fn, def_get_set_cap, def_getter_cap, def_prop,
+    dom_events, dom_exception, dom_ops, enter_world_in_context, failure, geometry_style,
+    link_ctor_global, modern, page_session, receiver, state, utf8, wrap,
 };
 use mg_butane::runtime::Value;
 use modern::boa_engine::{
@@ -14,7 +15,7 @@ use modern::boa_engine::{
         FunctionObjectBuilder, JsObject, ObjectInitializer,
         builtins::{JsArray, JsFunction, JsPromise},
     },
-    property::{Attribute, PropertyDescriptor},
+    property::Attribute,
 };
 use modern::boa_gc::{Finalize, Trace};
 use std::collections::{HashMap, HashSet};
@@ -338,31 +339,48 @@ fn build_nodelist_array(ids: &[usize], context: &mut Context) -> JsResult<JsObje
     for &id in ids {
         vals.push(wrap_any_node(id, context)?);
     }
-    let arr = JsArray::from_iter(vals, context);
-    let item_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    let arr: JsObject = JsArray::from_iter(vals, context).into();
+    def_fn(
+        &arr,
+        "item",
+        1,
+        false,
+        |this, args, ctx| {
             let obj = this
                 .as_object()
                 .ok_or_else(|| failure("NodeList.item requires an object receiver"))?;
             let idx = args.first().unwrap_or(&JsValue::undefined()).to_u32(ctx)?;
             let v = obj.get(idx, ctx)?;
             Ok(if v.is_undefined() { JsValue::null() } else { v })
-        }),
-    )
-    .name(js_string!("item"))
-    .length(1)
-    .build();
-    arr.define_property_or_throw(
-        js_string!("item"),
-        PropertyDescriptor::builder()
-            .value(item_fn)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
+        },
         context,
     )?;
-    Ok(arr.into())
+    Ok(arr)
+}
+
+fn new_observer_instance(
+    new_target: &JsValue,
+    args: &[JsValue],
+    name: &str,
+    ctx: &mut Context,
+) -> JsResult<(JsObject, JsObject)> {
+    modern::check_context(ctx)?;
+    if new_target.is_undefined() {
+        return Err(JsNativeError::typ()
+            .with_message(format!("{name} constructor requires 'new'"))
+            .into());
+    }
+    let Some(cb) = args.first().and_then(JsValue::as_callable) else {
+        return Err(JsNativeError::typ()
+            .with_message(format!("{name} constructor requires a callback function"))
+            .into());
+    };
+    let inst_proto = new_target
+        .as_object()
+        .and_then(|o| o.get(js_string!("prototype"), ctx).ok())
+        .and_then(|v| v.as_object())
+        .unwrap_or_else(|| ctx.intrinsics().constructors().object().prototype());
+    Ok((JsObject::from_proto_and_data(inst_proto, ()), cb))
 }
 
 // ============================================================================
@@ -371,65 +389,23 @@ fn build_nodelist_array(ids: &[usize], context: &mut Context) -> JsResult<JsObje
 
 fn install_mutation_observer(global: &JsObject, context: &mut Context) -> Result<(), String> {
     let proto = JsObject::with_object_proto(context.intrinsics());
-
-    let observe_fn =
-        FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(mo_observe))
-            .name(js_string!("observe"))
-            .length(2)
-            .build();
-
-    let disconnect_fn =
-        FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(mo_disconnect))
-            .name(js_string!("disconnect"))
-            .length(0)
-            .build();
-
-    let take_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(mo_take_records),
-    )
-    .name(js_string!("takeRecords"))
-    .length(0)
-    .build();
-
-    for (k, f) in [
-        ("observe", observe_fn),
-        ("disconnect", disconnect_fn),
-        ("takeRecords", take_fn),
+    for (k, len, f) in [
+        (
+            "observe",
+            2usize,
+            mo_observe as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+        ),
+        ("disconnect", 0, mo_disconnect),
+        ("takeRecords", 0, mo_take_records),
     ] {
-        proto
-            .define_property_or_throw(
-                JsString::from(k),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
+        def_fn(&proto, k, len, false, f, context)
             .map_err(|_| "MutationObserver method install failed")?;
     }
 
-    let ctor = FunctionObjectBuilder::new(
+    let ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|new_target, args, ctx| {
-            modern::check_context(ctx)?;
-            if new_target.is_undefined() {
-                return Err(JsNativeError::typ()
-                    .with_message("MutationObserver constructor requires 'new'")
-                    .into());
-            }
-            let Some(cb) = args.first().and_then(JsValue::as_callable) else {
-                return Err(JsNativeError::typ()
-                    .with_message("MutationObserver constructor requires a callback function")
-                    .into());
-            };
-            let inst_proto = new_target
-                .as_object()
-                .and_then(|o| o.get(js_string!("prototype"), ctx).ok())
-                .and_then(|v| v.as_object())
-                .unwrap_or_else(|| ctx.intrinsics().constructors().object().prototype());
-            let inst = JsObject::from_proto_and_data(inst_proto, ());
+            let (inst, cb) = new_observer_instance(new_target, args, "MutationObserver", ctx)?;
             {
                 let shared = state(ctx);
                 let mut data = shared.borrow_mut();
@@ -452,9 +428,10 @@ fn install_mutation_observer(global: &JsObject, context: &mut Context) -> Result
     .name(js_string!("MutationObserver"))
     .length(1)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(global, "MutationObserver", ctor, proto, context)
+    link_ctor_global(global, "MutationObserver", &ctor, &proto, context)
 }
 
 fn find_mo_index(this: &JsValue, data: &State) -> JsResult<usize> {
@@ -672,52 +649,17 @@ fn build_mutation_records_js(
             Some(v) => JsString::from(v).into(),
             None => JsValue::null(),
         };
+        let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
         let entry = ObjectInitializer::new(ctx)
-            .property(
-                js_string!("type"),
-                JsString::from(type_str),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("target"),
-                target_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("addedNodes"),
-                added_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("removedNodes"),
-                removed_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("previousSibling"),
-                prev_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("nextSibling"),
-                next_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("attributeName"),
-                attr_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("attributeNamespace"),
-                JsValue::null(),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("oldValue"),
-                old_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
+            .property(js_string!("type"), JsString::from(type_str), ec)
+            .property(js_string!("target"), target_js, ec)
+            .property(js_string!("addedNodes"), added_js, ec)
+            .property(js_string!("removedNodes"), removed_js, ec)
+            .property(js_string!("previousSibling"), prev_js, ec)
+            .property(js_string!("nextSibling"), next_js, ec)
+            .property(js_string!("attributeName"), attr_js, ec)
+            .property(js_string!("attributeNamespace"), JsValue::null(), ec)
+            .property(js_string!("oldValue"), old_js, ec)
             .build();
         out.push(entry.into());
     }
@@ -728,32 +670,37 @@ fn build_mutation_records_js(
 // ResizeObserver
 // ============================================================================
 
+fn find_ro_mut<'a>(this: &JsValue, data: &'a mut State) -> JsResult<&'a mut ResizeObserverRecord> {
+    let Some(obj) = this.as_object() else {
+        return Err(JsNativeError::typ()
+            .with_message("Illegal invocation on ResizeObserver")
+            .into());
+    };
+    data.observers_wc
+        .resize_observers
+        .iter_mut()
+        .find(|r| r.object == obj)
+        .ok_or_else(|| {
+            JsNativeError::typ()
+                .with_message("Illegal invocation on ResizeObserver")
+                .into()
+        })
+}
+
 fn install_resize_observer(global: &JsObject, context: &mut Context) -> Result<(), String> {
     let proto = JsObject::with_object_proto(context.intrinsics());
-
-    let observe_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    def_fn(
+        &proto,
+        "observe",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let target = element_id_from_js(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             {
                 let shared = state(ctx);
                 let mut data = shared.borrow_mut();
-                let Some(obj) = this.as_object() else {
-                    return Err(JsNativeError::typ()
-                        .with_message("Illegal invocation on ResizeObserver")
-                        .into());
-                };
-                let Some(ro) = data
-                    .observers_wc
-                    .resize_observers
-                    .iter_mut()
-                    .find(|r| r.object == obj)
-                else {
-                    return Err(JsNativeError::typ()
-                        .with_message("Illegal invocation on ResizeObserver")
-                        .into());
-                };
+                let ro = find_ro_mut(this, &mut data)?;
                 if let Some(existing) = ro.targets.iter_mut().find(|(id, _)| *id == target) {
                     existing.1 = None;
                 } else {
@@ -763,109 +710,50 @@ fn install_resize_observer(global: &JsObject, context: &mut Context) -> Result<(
             }
             ensure_layout_observer_job(ctx)?;
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("observe"))
-    .length(1)
-    .build();
+    .map_err(|_| "ResizeObserver.observe failed")?;
 
-    let unobserve_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    def_fn(
+        &proto,
+        "unobserve",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let target = element_id_from_js(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             let shared = state(ctx);
             let mut data = shared.borrow_mut();
-            let Some(obj) = this.as_object() else {
-                return Err(JsNativeError::typ()
-                    .with_message("Illegal invocation on ResizeObserver")
-                    .into());
-            };
-            let Some(ro) = data
-                .observers_wc
-                .resize_observers
-                .iter_mut()
-                .find(|r| r.object == obj)
-            else {
-                return Err(JsNativeError::typ()
-                    .with_message("Illegal invocation on ResizeObserver")
-                    .into());
-            };
-            ro.targets.retain(|(id, _)| *id != target);
+            find_ro_mut(this, &mut data)?
+                .targets
+                .retain(|(id, _)| *id != target);
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("unobserve"))
-    .length(1)
-    .build();
+    .map_err(|_| "ResizeObserver.unobserve failed")?;
 
-    let disconnect_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, ctx| {
+    def_fn(
+        &proto,
+        "disconnect",
+        0,
+        false,
+        |this, _, ctx| {
             modern::check_context(ctx)?;
             let shared = state(ctx);
             let mut data = shared.borrow_mut();
-            let Some(obj) = this.as_object() else {
-                return Err(JsNativeError::typ()
-                    .with_message("Illegal invocation on ResizeObserver")
-                    .into());
-            };
-            let Some(ro) = data
-                .observers_wc
-                .resize_observers
-                .iter_mut()
-                .find(|r| r.object == obj)
-            else {
-                return Err(JsNativeError::typ()
-                    .with_message("Illegal invocation on ResizeObserver")
-                    .into());
-            };
-            ro.targets.clear();
+            find_ro_mut(this, &mut data)?.targets.clear();
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("disconnect"))
-    .length(0)
-    .build();
+    .map_err(|_| "ResizeObserver.disconnect failed")?;
 
-    for (k, f) in [
-        ("observe", observe_fn),
-        ("unobserve", unobserve_fn),
-        ("disconnect", disconnect_fn),
-    ] {
-        proto
-            .define_property_or_throw(
-                JsString::from(k),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "ResizeObserver method install failed")?;
-    }
-
-    let ctor = FunctionObjectBuilder::new(
+    let ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|new_target, args, ctx| {
-            modern::check_context(ctx)?;
-            if new_target.is_undefined() {
-                return Err(JsNativeError::typ()
-                    .with_message("ResizeObserver constructor requires 'new'")
-                    .into());
-            }
-            let Some(cb) = args.first().and_then(JsValue::as_callable) else {
-                return Err(JsNativeError::typ()
-                    .with_message("ResizeObserver constructor requires a callback function")
-                    .into());
-            };
-            let inst_proto = new_target
-                .as_object()
-                .and_then(|o| o.get(js_string!("prototype"), ctx).ok())
-                .and_then(|v| v.as_object())
-                .unwrap_or_else(|| ctx.intrinsics().constructors().object().prototype());
-            let inst = JsObject::from_proto_and_data(inst_proto, ());
+            let (inst, cb) = new_observer_instance(new_target, args, "ResizeObserver", ctx)?;
             {
                 let shared = state(ctx);
                 let mut data = shared.borrow_mut();
@@ -887,9 +775,10 @@ fn install_resize_observer(global: &JsObject, context: &mut Context) -> Result<(
     .name(js_string!("ResizeObserver"))
     .length(1)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(global, "ResizeObserver", ctor, proto, context)
+    link_ctor_global(global, "ResizeObserver", &ctor, &proto, context)
 }
 
 // ============================================================================
@@ -947,10 +836,12 @@ fn parse_root_margin(raw: &str) -> Result<([MarginValue; 4], String), &'static s
 
 fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Result<(), String> {
     let proto = JsObject::with_object_proto(context.intrinsics());
-
-    let observe_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    def_fn(
+        &proto,
+        "observe",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let target = element_id_from_js(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             {
@@ -965,32 +856,37 @@ fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Re
             }
             ensure_layout_observer_job(ctx)?;
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("observe"))
-    .length(1)
-    .build();
+    .map_err(|_| "IntersectionObserver.observe failed")?;
 
-    let unobserve_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    def_fn(
+        &proto,
+        "unobserve",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let target = element_id_from_js(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             let shared = state(ctx);
             let mut data = shared.borrow_mut();
             let idx = find_io_index(this, &data)?;
-            let io = &mut data.observers_wc.intersection_observers[idx];
-            io.targets.retain(|(id, _)| *id != target);
+            data.observers_wc.intersection_observers[idx]
+                .targets
+                .retain(|(id, _)| *id != target);
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("unobserve"))
-    .length(1)
-    .build();
+    .map_err(|_| "IntersectionObserver.unobserve failed")?;
 
-    let disconnect_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, ctx| {
+    def_fn(
+        &proto,
+        "disconnect",
+        0,
+        false,
+        |this, _, ctx| {
             modern::check_context(ctx)?;
             let shared = state(ctx);
             let mut data = shared.borrow_mut();
@@ -999,15 +895,17 @@ fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Re
             io.targets.clear();
             io.records.clear();
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("disconnect"))
-    .length(0)
-    .build();
+    .map_err(|_| "IntersectionObserver.disconnect failed")?;
 
-    let take_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, ctx| {
+    def_fn(
+        &proto,
+        "takeRecords",
+        0,
+        false,
+        |this, _, ctx| {
             modern::check_context(ctx)?;
             let drained = {
                 let shared = state(ctx);
@@ -1017,94 +915,37 @@ fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Re
                 std::mem::take(&mut data.observers_wc.intersection_observers[idx].records)
             };
             build_io_entries_js(&drained, ctx).map(Into::into)
-        }),
+        },
+        context,
     )
-    .name(js_string!("takeRecords"))
-    .length(0)
-    .build();
-
-    for (k, f) in [
-        ("observe", observe_fn),
-        ("unobserve", unobserve_fn),
-        ("disconnect", disconnect_fn),
-        ("takeRecords", take_fn),
-    ] {
-        proto
-            .define_property_or_throw(
-                JsString::from(k),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "IntersectionObserver method install failed")?;
-    }
+    .map_err(|_| "IntersectionObserver.takeRecords failed")?;
 
     for prop in ["root", "rootMargin", "thresholds"] {
-        let getter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |this, _, &p, ctx| {
-                    modern::check_context(ctx)?;
-                    match p {
-                        "root" => {
-                            let root_opt = {
-                                let shared = state(ctx);
-                                let data = shared.borrow();
-                                let idx = find_io_index(this, &data)?;
-                                data.observers_wc.intersection_observers[idx].root
-                            };
-                            match root_opt {
-                                Some(rid) => wrap_any_node(rid, ctx),
-                                None => Ok(JsValue::null()),
-                            }
-                        }
-                        "rootMargin" => {
-                            let s = {
-                                let shared = state(ctx);
-                                let data = shared.borrow();
-                                let idx = find_io_index(this, &data)?;
-                                data.observers_wc.intersection_observers[idx]
-                                    .root_margin_str
-                                    .clone()
-                            };
-                            Ok(JsString::from(s.as_str()).into())
-                        }
-                        "thresholds" => {
-                            let ts = {
-                                let shared = state(ctx);
-                                let data = shared.borrow();
-                                let idx = find_io_index(this, &data)?;
-                                data.observers_wc.intersection_observers[idx]
-                                    .thresholds
-                                    .clone()
-                            };
-                            let arr = JsArray::from_iter(ts.into_iter().map(JsValue::from), ctx);
-                            Ok(arr.into())
-                        }
-                        _ => Ok(JsValue::undefined()),
-                    }
-                },
-                prop,
-            ),
+        def_getter_cap(
+            &proto,
+            prop,
+            true,
+            prop,
+            |this, _, &p, ctx| {
+                modern::check_context(ctx)?;
+                let (root_opt, margin_s, ts) = {
+                    let shared = state(ctx);
+                    let data = shared.borrow();
+                    let io = &data.observers_wc.intersection_observers[find_io_index(this, &data)?];
+                    (io.root, io.root_margin_str.clone(), io.thresholds.clone())
+                };
+                match p {
+                    "root" => root_opt.map_or(Ok(JsValue::null()), |rid| wrap_any_node(rid, ctx)),
+                    "rootMargin" => Ok(JsString::from(margin_s.as_str()).into()),
+                    _ => Ok(JsArray::from_iter(ts.into_iter().map(JsValue::from), ctx).into()),
+                }
+            },
+            context,
         )
-        .name(JsString::from(format!("get {prop}")))
-        .build();
-        proto
-            .define_property_or_throw(
-                JsString::from(prop),
-                PropertyDescriptor::builder()
-                    .get(getter)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "IntersectionObserver getter install failed")?;
+        .map_err(|_| "IntersectionObserver getter install failed")?;
     }
 
-    let ctor = FunctionObjectBuilder::new(
+    let ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|new_target, args, ctx| {
             modern::check_context(ctx)?;
@@ -1163,8 +1004,7 @@ fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Re
                     if let Some(tobj) = th.as_object() {
                         let len = tobj.get(js_string!("length"), ctx)?.to_u32(ctx)?.min(128);
                         for i in 0..len {
-                            let item = tobj.get(i, ctx)?.to_number(ctx)?;
-                            raw_list.push(item);
+                            raw_list.push(tobj.get(i, ctx)?.to_number(ctx)?);
                         }
                     } else {
                         raw_list.push(th.to_number(ctx)?);
@@ -1217,9 +1057,10 @@ fn install_intersection_observer(global: &JsObject, context: &mut Context) -> Re
     .name(js_string!("IntersectionObserver"))
     .length(1)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(global, "IntersectionObserver", ctor, proto, context)
+    link_ctor_global(global, "IntersectionObserver", &ctor, &proto, context)
 }
 
 fn find_io_index(this: &JsValue, data: &State) -> JsResult<usize> {
@@ -1337,66 +1178,22 @@ fn build_io_entries_js(
     entries: &[PendingIntersectionEntry],
     ctx: &mut Context,
 ) -> JsResult<JsArray> {
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         let target_js = wrap(&format!("node:{}", e.target), ctx)?;
-        let rb = geometry_style::build_dom_rect(
-            e.root_bounds.0,
-            e.root_bounds.1,
-            e.root_bounds.2,
-            e.root_bounds.3,
-            ctx,
-        );
-        let bcr = geometry_style::build_dom_rect(
-            e.bounding_client_rect.0,
-            e.bounding_client_rect.1,
-            e.bounding_client_rect.2,
-            e.bounding_client_rect.3,
-            ctx,
-        );
-        let ir = geometry_style::build_dom_rect(
-            e.intersection_rect.0,
-            e.intersection_rect.1,
-            e.intersection_rect.2,
-            e.intersection_rect.3,
-            ctx,
-        );
+        let (rb_t, bcr_t, ir_t) = (e.root_bounds, e.bounding_client_rect, e.intersection_rect);
+        let rb = geometry_style::build_dom_rect(rb_t.0, rb_t.1, rb_t.2, rb_t.3, ctx);
+        let bcr = geometry_style::build_dom_rect(bcr_t.0, bcr_t.1, bcr_t.2, bcr_t.3, ctx);
+        let ir = geometry_style::build_dom_rect(ir_t.0, ir_t.1, ir_t.2, ir_t.3, ctx);
         let obj = ObjectInitializer::new(ctx)
-            .property(
-                js_string!("time"),
-                e.time,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("target"),
-                target_js,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("rootBounds"),
-                rb,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("boundingClientRect"),
-                bcr,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("intersectionRect"),
-                ir,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("isIntersecting"),
-                e.is_intersecting,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("intersectionRatio"),
-                e.intersection_ratio,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
+            .property(js_string!("time"), e.time, ec)
+            .property(js_string!("target"), target_js, ec)
+            .property(js_string!("rootBounds"), rb, ec)
+            .property(js_string!("boundingClientRect"), bcr, ec)
+            .property(js_string!("intersectionRect"), ir, ec)
+            .property(js_string!("isIntersecting"), e.is_intersecting, ec)
+            .property(js_string!("intersectionRatio"), e.intersection_ratio, ec)
             .build();
         out.push(obj.into());
     }
@@ -1438,16 +1235,14 @@ fn is_valid_custom_element_name(name: &str) -> bool {
 
 fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(), String> {
     let reg_proto = JsObject::with_object_proto(context.intrinsics());
-
-    let define_fn =
-        FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(ce_define))
-            .name(js_string!("define"))
-            .length(2)
-            .build();
-
-    let get_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    def_fn(&reg_proto, "define", 2, true, ce_define, context)
+        .map_err(|_| "CustomElementRegistry.define failed")?;
+    def_fn(
+        &reg_proto,
+        "get",
+        1,
+        true,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let name = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             modern::check_context(ctx)?;
@@ -1459,15 +1254,16 @@ fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(
                 .find(|d| d.name == name)
                 .map(|d| d.constructor.clone());
             Ok(found.map(Into::into).unwrap_or_else(JsValue::undefined))
-        }),
+        },
+        context,
     )
-    .name(js_string!("get"))
-    .length(1)
-    .build();
-
-    let get_name_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    .map_err(|_| "CustomElementRegistry.get failed")?;
+    def_fn(
+        &reg_proto,
+        "getName",
+        1,
+        true,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let Some(ctor) = args.first().and_then(JsValue::as_object) else {
                 return Err(JsNativeError::typ()
@@ -1484,15 +1280,16 @@ fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(
             Ok(found
                 .map(|n| JsString::from(n.as_str()).into())
                 .unwrap_or_else(JsValue::null))
-        }),
+        },
+        context,
     )
-    .name(js_string!("getName"))
-    .length(1)
-    .build();
-
-    let when_defined_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    .map_err(|_| "CustomElementRegistry.getName failed")?;
+    def_fn(
+        &reg_proto,
+        "whenDefined",
+        1,
+        true,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let name = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             modern::check_context(ctx)?;
@@ -1541,15 +1338,16 @@ fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(
                     });
             }
             Ok(p_obj.into())
-        }),
+        },
+        context,
     )
-    .name(js_string!("whenDefined"))
-    .length(1)
-    .build();
-
-    let upgrade_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    .map_err(|_| "CustomElementRegistry.whenDefined failed")?;
+    def_fn(
+        &reg_proto,
+        "upgrade",
+        1,
+        true,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let root = node_id_from_js(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             let candidates = collect_unupgraded_candidates_in_subtree(root, ctx);
@@ -1558,33 +1356,12 @@ fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(
             }
             after_dom_mutation(ctx)?;
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("upgrade"))
-    .length(1)
-    .build();
+    .map_err(|_| "CustomElementRegistry.upgrade failed")?;
 
-    for (k, f) in [
-        ("define", define_fn),
-        ("get", get_fn),
-        ("getName", get_name_fn),
-        ("whenDefined", when_defined_fn),
-        ("upgrade", upgrade_fn),
-    ] {
-        reg_proto
-            .define_property_or_throw(
-                JsString::from(k),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "CustomElementRegistry method install failed")?;
-    }
-
-    let reg_ctor = FunctionObjectBuilder::new(
+    let reg_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|_, _, ctx| {
             modern::check_context(ctx)?;
@@ -1594,29 +1371,27 @@ fn install_custom_elements(global: &JsObject, context: &mut Context) -> Result<(
     .name(js_string!("CustomElementRegistry"))
     .length(0)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(
+    link_ctor_global(
         global,
         "CustomElementRegistry",
-        reg_ctor,
-        reg_proto.clone(),
+        &reg_ctor,
+        &reg_proto,
         context,
     )?;
-
     let registry_inst = JsObject::from_proto_and_data(reg_proto, ());
-    global
-        .define_property_or_throw(
-            js_string!("customElements"),
-            PropertyDescriptor::builder()
-                .value(registry_inst)
-                .writable(false)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "window.customElements install failed")?;
-    Ok(())
+    def_prop(
+        global,
+        js_string!("customElements"),
+        registry_inst,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "window.customElements install failed".to_owned())
 }
 
 fn ce_define(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -2463,75 +2238,27 @@ fn flush_layout_observers(ctx: &mut Context) -> JsResult<JsValue> {
     };
 
     for (obs_obj, cb, items) in ro_deliveries {
+        let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+        let box_arr = |inl: f64, blk: f64, ctx: &mut Context| {
+            let o = ObjectInitializer::new(ctx)
+                .property(js_string!("inlineSize"), inl, ec)
+                .property(js_string!("blockSize"), blk, ec)
+                .build();
+            JsArray::from_iter([o.into()], ctx)
+        };
         let mut js_entries = Vec::with_capacity(items.len());
         for (tid, crect, (bw, bh), dpr) in items {
             let target_js = wrap(&format!("node:{tid}"), ctx)?;
             let cr_obj = geometry_style::build_dom_rect(crect.0, crect.1, crect.2, crect.3, ctx);
-            let bsize = ObjectInitializer::new(ctx)
-                .property(
-                    js_string!("inlineSize"),
-                    bw,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("blockSize"),
-                    bh,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .build();
-            let csize = ObjectInitializer::new(ctx)
-                .property(
-                    js_string!("inlineSize"),
-                    crect.2,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("blockSize"),
-                    crect.3,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .build();
-            let dpsize = ObjectInitializer::new(ctx)
-                .property(
-                    js_string!("inlineSize"),
-                    (crect.2 * dpr).round(),
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("blockSize"),
-                    (crect.3 * dpr).round(),
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .build();
-            let bsize_arr = JsArray::from_iter([bsize.into()], ctx);
-            let csize_arr = JsArray::from_iter([csize.into()], ctx);
-            let dp_arr = JsArray::from_iter([dpsize.into()], ctx);
+            let bsize_arr = box_arr(bw, bh, ctx);
+            let csize_arr = box_arr(crect.2, crect.3, ctx);
+            let dp_arr = box_arr((crect.2 * dpr).round(), (crect.3 * dpr).round(), ctx);
             let entry = ObjectInitializer::new(ctx)
-                .property(
-                    js_string!("target"),
-                    target_js,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("contentRect"),
-                    cr_obj,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("borderBoxSize"),
-                    bsize_arr,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("contentBoxSize"),
-                    csize_arr,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("devicePixelContentBoxSize"),
-                    dp_arr,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
+                .property(js_string!("target"), target_js, ec)
+                .property(js_string!("contentRect"), cr_obj, ec)
+                .property(js_string!("borderBoxSize"), bsize_arr, ec)
+                .property(js_string!("contentBoxSize"), csize_arr, ec)
+                .property(js_string!("devicePixelContentBoxSize"), dp_arr, ec)
                 .build();
             js_entries.push(entry.into());
         }
@@ -2599,23 +2326,11 @@ fn install_web_animations(
         ("removeEventListener", anim_remove_listener),
         ("dispatchEvent", anim_dispatch_event),
     ] {
-        let f = FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(fn_ptr))
-            .name(JsString::from(mname))
-            .build();
-        anim_proto
-            .define_property_or_throw(
-                JsString::from(mname),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
+        def_fn(&anim_proto, mname, 0, false, fn_ptr, context)
             .map_err(|_| "Animation method install failed")?;
     }
 
-    let anim_ctor = FunctionObjectBuilder::new(
+    let anim_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|new_target, args, ctx| {
             modern::check_context(ctx)?;
@@ -2631,9 +2346,10 @@ fn install_web_animations(
     .name(js_string!("Animation"))
     .length(0)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    let effect_ctor = FunctionObjectBuilder::new(
+    let effect_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|new_target, args, ctx| {
             modern::check_context(ctx)?;
@@ -2653,14 +2369,15 @@ fn install_web_animations(
     .name(js_string!("KeyframeEffect"))
     .length(2)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(global, "Animation", anim_ctor, anim_proto.clone(), context)?;
-    bind_ctor_and_global(
+    link_ctor_global(global, "Animation", &anim_ctor, &anim_proto, context)?;
+    link_ctor_global(
         global,
         "KeyframeEffect",
-        effect_ctor,
-        effect_proto.clone(),
+        &effect_ctor,
+        &effect_proto,
         context,
     )?;
 
@@ -2916,32 +2633,25 @@ fn build_keyframe_effect(
     eff.set(js_string!("__mg_timing"), timing_obj, false, ctx)?;
 
     for mname in ["getKeyframes", "getTiming", "getComputedTiming"] {
-        let is_kf = mname == "getKeyframes";
-        let f = FunctionObjectBuilder::new(
-            ctx.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |this, _, &is_kf, c| {
-                    let Some(o) = this.as_object() else {
-                        return Ok(JsValue::undefined());
-                    };
+        def_cap(
+            &eff,
+            mname,
+            0,
+            false,
+            mname == "getKeyframes",
+            |this, _, &is_kf, c| {
+                let Some(o) = this.as_object() else {
+                    return Ok(JsValue::undefined());
+                };
+                o.get(
                     if is_kf {
-                        o.get(js_string!("__mg_kf"), c)
+                        js_string!("__mg_kf")
                     } else {
-                        o.get(js_string!("__mg_timing"), c)
-                    }
-                },
-                is_kf,
-            ),
-        )
-        .name(JsString::from(mname))
-        .build();
-        eff.define_property_or_throw(
-            JsString::from(mname),
-            PropertyDescriptor::builder()
-                .value(f)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
+                        js_string!("__mg_timing")
+                    },
+                    c,
+                )
+            },
             ctx,
         )?;
     }
@@ -3463,100 +3173,76 @@ fn install_visual_viewport(
         "height",
         "scale",
     ] {
-        let getter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |_, _, &p, ctx| {
-                    modern::check_context(ctx)?;
-                    let vp = state(ctx).borrow().viewport;
-                    let v: f64 = match p {
-                        "width" => vp.inner_width as f64,
-                        "height" => vp.inner_height as f64,
-                        "pageLeft" => vp.scroll_x as f64,
-                        "pageTop" => vp.scroll_y as f64,
-                        "scale" => 1.0,
-                        _ => 0.0,
-                    };
-                    Ok(v.into())
-                },
-                prop,
-            ),
+        def_getter_cap(
+            &proto,
+            prop,
+            true,
+            prop,
+            |_, _, &p, ctx| {
+                modern::check_context(ctx)?;
+                let vp = state(ctx).borrow().viewport;
+                let v: f64 = match p {
+                    "width" => vp.inner_width as f64,
+                    "height" => vp.inner_height as f64,
+                    "pageLeft" => vp.scroll_x as f64,
+                    "pageTop" => vp.scroll_y as f64,
+                    "scale" => 1.0,
+                    _ => 0.0,
+                };
+                Ok(v.into())
+            },
+            context,
         )
-        .name(JsString::from(format!("get {prop}")))
-        .build();
-        proto
-            .define_property_or_throw(
-                JsString::from(prop),
-                PropertyDescriptor::builder()
-                    .get(getter)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "VisualViewport getter install failed")?;
+        .map_err(|_| "VisualViewport getter install failed")?;
     }
 
     for (hprop, etype) in [("onresize", "resize"), ("onscroll", "scroll")] {
-        let getter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |_, _, &ev_t, ctx| {
-                    modern::check_context(ctx)?;
-                    let cb = state(ctx)
-                        .borrow()
-                        .observers_wc
-                        .vv_listeners
-                        .iter()
-                        .find(|l| l.property && l.event_type == ev_t)
-                        .map(|l| l.callback.clone());
-                    Ok(cb.map(Into::into).unwrap_or_else(JsValue::null))
-                },
-                etype,
-            ),
+        def_get_set_cap(
+            &proto,
+            hprop,
+            true,
+            etype,
+            |_, _, &ev_t, ctx| {
+                modern::check_context(ctx)?;
+                let cb = state(ctx)
+                    .borrow()
+                    .observers_wc
+                    .vv_listeners
+                    .iter()
+                    .find(|l| l.property && l.event_type == ev_t)
+                    .map(|l| l.callback.clone());
+                Ok(cb.map(Into::into).unwrap_or_else(JsValue::null))
+            },
+            |_, args, &ev_t, ctx| {
+                modern::check_context(ctx)?;
+                let cb_opt = args.first().and_then(JsValue::as_callable);
+                let shared = state(ctx);
+                let mut data = shared.borrow_mut();
+                data.observers_wc
+                    .vv_listeners
+                    .retain(|l| !(l.property && l.event_type == ev_t));
+                if let Some(cb) = cb_opt {
+                    data.host.charge(128).map_err(failure)?;
+                    data.observers_wc.vv_listeners.push(VvListener {
+                        event_type: ev_t.to_owned(),
+                        callback: cb,
+                        once: false,
+                        property: true,
+                    });
+                }
+                Ok(JsValue::undefined())
+            },
+            context,
         )
-        .build();
-        let setter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |_, args, &ev_t, ctx| {
-                    modern::check_context(ctx)?;
-                    let cb_opt = args.first().and_then(JsValue::as_callable);
-                    let shared = state(ctx);
-                    let mut data = shared.borrow_mut();
-                    data.observers_wc
-                        .vv_listeners
-                        .retain(|l| !(l.property && l.event_type == ev_t));
-                    if let Some(cb) = cb_opt {
-                        data.host.charge(128).map_err(failure)?;
-                        data.observers_wc.vv_listeners.push(VvListener {
-                            event_type: ev_t.to_owned(),
-                            callback: cb,
-                            once: false,
-                            property: true,
-                        });
-                    }
-                    Ok(JsValue::undefined())
-                },
-                etype,
-            ),
-        )
-        .build();
-        proto
-            .define_property_or_throw(
-                JsString::from(hprop),
-                PropertyDescriptor::builder()
-                    .get(getter)
-                    .set(setter)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "VisualViewport event handler install failed")?;
+        .map_err(|_| "VisualViewport event handler install failed")?;
     }
 
-    let add_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    def_fn(
+        &proto,
+        "addEventListener",
+        2,
+        false,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let etype = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             modern::check_context(ctx)?;
@@ -3588,15 +3274,17 @@ fn install_visual_viewport(
                 });
             }
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("addEventListener"))
-    .length(2)
-    .build();
+    .map_err(|_| "VisualViewport.addEventListener failed")?;
 
-    let rem_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, ctx| {
+    def_fn(
+        &proto,
+        "removeEventListener",
+        2,
+        false,
+        |_, args, ctx| {
             modern::check_context(ctx)?;
             let etype = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
             modern::check_context(ctx)?;
@@ -3609,15 +3297,17 @@ fn install_visual_viewport(
                 .vv_listeners
                 .retain(|l| !(!l.property && l.event_type == etype && l.callback == cb));
             Ok(JsValue::undefined())
-        }),
+        },
+        context,
     )
-    .name(js_string!("removeEventListener"))
-    .length(2)
-    .build();
+    .map_err(|_| "VisualViewport.removeEventListener failed")?;
 
-    let disp_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, ctx| {
+    def_fn(
+        &proto,
+        "dispatchEvent",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let Some(ev) = args.first().and_then(JsValue::as_object) else {
                 return Err(JsNativeError::typ()
@@ -3628,31 +3318,12 @@ fn install_visual_viewport(
             modern::check_context(ctx)?;
             dispatch_vv_event_with_obj(this.clone(), &etype, ev.into(), ctx)?;
             Ok(true.into())
-        }),
+        },
+        context,
     )
-    .name(js_string!("dispatchEvent"))
-    .length(1)
-    .build();
+    .map_err(|_| "VisualViewport.dispatchEvent failed")?;
 
-    for (k, f) in [
-        ("addEventListener", add_fn),
-        ("removeEventListener", rem_fn),
-        ("dispatchEvent", disp_fn),
-    ] {
-        proto
-            .define_property_or_throw(
-                JsString::from(k),
-                PropertyDescriptor::builder()
-                    .value(f)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "VisualViewport method install failed")?;
-    }
-
-    let ctor = FunctionObjectBuilder::new(
+    let ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_fn_ptr(|_, _, ctx| {
             modern::check_context(ctx)?;
@@ -3662,9 +3333,10 @@ fn install_visual_viewport(
     .name(js_string!("VisualViewport"))
     .length(0)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    bind_ctor_and_global(global, "VisualViewport", ctor, proto.clone(), context)?;
+    link_ctor_global(global, "VisualViewport", &ctor, &proto, context)?;
 
     let vv_inst = JsObject::from_proto_and_data(proto, ());
     if !is_extra_realm {
@@ -3673,18 +3345,16 @@ fn install_visual_viewport(
             .observers_wc
             .main_visual_viewport = Some(vv_inst.clone());
     }
-    global
-        .define_property_or_throw(
-            js_string!("visualViewport"),
-            PropertyDescriptor::builder()
-                .value(vv_inst)
-                .writable(false)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "window.visualViewport install failed")?;
-    Ok(())
+    def_prop(
+        global,
+        js_string!("visualViewport"),
+        vv_inst,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "window.visualViewport install failed".to_owned())
 }
 
 fn dispatch_vv_event_if_observed(etype: &str, ctx: &mut Context) -> JsResult<()> {
@@ -3809,50 +3479,8 @@ pub(super) fn on_viewport_sync(
 }
 
 // ============================================================================
-// Shared Constructor & Synthetic Event Helpers
+// Synthetic Event Helper
 // ============================================================================
-
-fn bind_ctor_and_global(
-    global: &JsObject,
-    name: &str,
-    ctor: JsFunction,
-    proto: JsObject,
-    context: &mut Context,
-) -> Result<(), String> {
-    ctor.define_property_or_throw(
-        js_string!("prototype"),
-        PropertyDescriptor::builder()
-            .value(proto.clone())
-            .writable(false)
-            .enumerable(false)
-            .configurable(false),
-        context,
-    )
-    .map_err(|_| "Interface prototype bind failed")?;
-    proto
-        .define_property_or_throw(
-            js_string!("constructor"),
-            PropertyDescriptor::builder()
-                .value(ctor.clone())
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Interface constructor bind failed")?;
-    global
-        .define_property_or_throw(
-            JsString::from(name),
-            PropertyDescriptor::builder()
-                .value(ctor)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global interface bind failed")?;
-    Ok(())
-}
 
 fn build_synthetic_event(etype: &str, target: JsValue, ctx: &mut Context) -> JsResult<JsValue> {
     let ts = dom_events::elapsed_ms(&state(ctx).borrow());
@@ -3861,62 +3489,23 @@ fn build_synthetic_event(etype: &str, target: JsValue, ctx: &mut Context) -> JsR
         NativeFunction::from_fn_ptr(|_, _, _| Ok(JsValue::undefined())),
     )
     .build();
-    let ev = ObjectInitializer::new(ctx)
-        .property(
-            js_string!("type"),
-            JsString::from(etype),
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("target"),
-            target.clone(),
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("currentTarget"),
-            target,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("bubbles"),
-            false,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("cancelable"),
-            false,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("defaultPrevented"),
-            false,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("isTrusted"),
-            true,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("timeStamp"),
-            ts,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("preventDefault"),
-            noop.clone(),
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("stopPropagation"),
-            noop.clone(),
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("stopImmediatePropagation"),
-            noop,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
-    Ok(ev.into())
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+    let wc = Attribute::WRITABLE | Attribute::CONFIGURABLE;
+    let mut ev = ObjectInitializer::new(ctx);
+    ev.property(js_string!("type"), JsString::from(etype), ec)
+        .property(js_string!("target"), target.clone(), ec)
+        .property(js_string!("currentTarget"), target, ec)
+        .property(js_string!("isTrusted"), true, ec)
+        .property(js_string!("timeStamp"), ts, ec);
+    for b in ["bubbles", "cancelable", "defaultPrevented"] {
+        ev.property(JsString::from(b), false, ec);
+    }
+    for m in [
+        "preventDefault",
+        "stopPropagation",
+        "stopImmediatePropagation",
+    ] {
+        ev.property(JsString::from(m), noop.clone(), wc);
+    }
+    Ok(ev.build().into())
 }

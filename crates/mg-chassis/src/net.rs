@@ -924,10 +924,10 @@ fn submit_with_limits_recorded(
             req_headers.push(("user-agent".into(), USER_AGENT.to_owned()));
             req_headers.push((
                 "accept".into(),
-                "text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5".into(),
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8".into(),
             ));
             req_headers.push(("accept-language".into(), "en-US,en;q=0.8".into()));
-            req_headers.push(("accept-encoding".into(), "identity".into()));
+            req_headers.push(("accept-encoding".into(), "br, gzip, deflate".into()));
             req_headers.push(("connection".into(), "close".into()));
             if no_cache {
                 req_headers.push(("cache-control".into(), "no-cache".into()));
@@ -1609,7 +1609,7 @@ fn request_bytes_with_options(
     }
     let method = if body.is_some() { "POST" } else { "GET" };
     let mut request = format!(
-        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,image/png;q=0.8,*/*;q=0.5\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: br, gzip, deflate\r\nConnection: close\r\n"
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: br, gzip, deflate\r\nConnection: close\r\n"
     );
     if no_cache {
         request.push_str("Cache-Control: no-cache\r\nPragma: no-cache\r\n");

@@ -1746,20 +1746,7 @@ impl Browser {
                                         staged.commit();
                                     }
                                     self.ingest_wire_console_and_sync(init_console, true);
-                                    projected = if startup.reply.state == RealmState::Fatal
-                                        && document.as_ref().is_some_and(|doc| doc.items.is_empty())
-                                    {
-                                        let noscript_doc = document::parse(&source, &self.address);
-                                        if !noscript_doc.items.is_empty()
-                                            || noscript_doc.refresh.is_some()
-                                        {
-                                            None
-                                        } else {
-                                            document
-                                        }
-                                    } else {
-                                        document
-                                    };
+                                    projected = document;
                                     scripting = projected.is_some();
                                     self.lifecycle = lifecycle;
                                     if !rejected {
@@ -2013,8 +2000,13 @@ impl Browser {
             .scripts_executed
             .max(reply.scripts_executed);
         if let Some(report) = &reply.boa {
+            let opcode_limit = if report.profile == "boa-interactive-page-v1" {
+                32_000_000usize
+            } else {
+                1_000_000usize
+            };
             self.devtools.performance.boa_opcodes =
-                1_000_000usize.saturating_sub(report.opcodes_remaining) as u64;
+                opcode_limit.saturating_sub(report.opcodes_remaining) as u64;
             if let Some(mem) = &report.worker_memory {
                 self.devtools.performance.boa_alloc_bytes = mem.cumulative_bytes as usize;
                 self.devtools.performance.boa_peak_bytes = mem.peak_bytes as usize;
@@ -3528,10 +3520,11 @@ impl Browser {
         // workers receive no network/file capabilities or resource payloads.
         document.stylesheets = std::mem::take(&mut self.document.stylesheets);
         let mut resources = std::mem::take(&mut self.document.resources);
-        if resources
-            .keys()
-            .any(|k| k.starts_with("data:image/png;base64,"))
-        {
+        let is_data_image = |s: &str| {
+            s.get(..11)
+                .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
+        };
+        if resources.keys().any(|k| is_data_image(k)) {
             let active_inline: HashSet<&str> = document
                 .nodes
                 .iter()
@@ -3539,14 +3532,16 @@ impl Browser {
                     "canvas" => n
                         .attr(mg_sparkle::document::INTERNAL_CANVAS_ATTR)
                         .map(str::trim),
-                    "img" => n.attr("src").map(str::trim),
+                    "img" | "input" => n.attr("src").map(str::trim),
+                    "image" => n
+                        .attr("href")
+                        .or_else(|| n.attr("xlink:href"))
+                        .map(str::trim),
                     _ => None,
                 })
-                .filter(|s| s.starts_with("data:image/png;base64,"))
+                .filter(|s| is_data_image(s))
                 .collect();
-            resources.retain(|k, _| {
-                !k.starts_with("data:image/png;base64,") || active_inline.contains(k.as_str())
-            });
+            resources.retain(|k, _| !is_data_image(k) || active_inline.contains(k.as_str()));
         }
         document.resources = resources;
         document.materialize_inline_canvas_resources();
@@ -6602,8 +6597,8 @@ mod tests {
     }
 
     #[test]
-    fn fatal_initial_script_with_empty_projection_falls_back_to_noscript() {
-        let html = "<html><body><noscript><p>Noscript fallback link</p></noscript><div id='hidden' style='display:none'>Hidden</div><script>while(true){}</script></body></html>";
+    fn fatal_initial_script_never_activates_noscript_or_meta_refresh() {
+        let html = "<html><body><noscript><meta http-equiv='refresh' content='0;url=https://example.test/enablejs'><p>Noscript fallback link</p></noscript><div id='hidden' style='display:none'>Hidden</div><script>while(true){}</script></body></html>";
         let mut boa_report = mg_butane::modern::Engine::new().unwrap().report();
         boa_report.fatal_reason = Some("EngineLimit: Boa engine runtime limit reached".into());
         let state = Arc::new(Mutex::new(false));
@@ -6687,12 +6682,14 @@ mod tests {
         app.poll();
         assert!(*state.lock().unwrap());
         assert!(app.script_blocked);
+        assert_eq!(app.address, "https://example.test/search");
+        assert!(app.document.refresh.is_none());
         assert!(
-            app.document
+            !app.document
                 .items
                 .iter()
                 .any(|i| matches!(i, Item::Text { text, .. } if text == "Noscript fallback link")),
-            "expected noscript fallback items, got {:?}",
+            "noscript fallback must remain inactive when scripts_enabled=true, got {:?}",
             app.document.items
         );
     }

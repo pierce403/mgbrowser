@@ -40,6 +40,62 @@ pub const DIAGNOSTIC_LIMIT: usize = 512;
 pub const WORKER_OUTSTANDING_LIMIT: u64 = 32 * 1024 * 1024;
 pub const WORKER_CUMULATIVE_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// Reviewed interactive desktop page profile (see docs/BOA.md).
+pub const INTERACTIVE_PROFILE: &str = "boa-interactive-page-v1";
+pub const INTERACTIVE_OPCODE_LIMIT: usize = 32_000_000;
+pub const INTERACTIVE_WORKER_OUTSTANDING_LIMIT: u64 = 64 * 1024 * 1024;
+pub const INTERACTIVE_WORKER_CUMULATIVE_LIMIT: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResourceProfile {
+    #[default]
+    PageProcessV1,
+    InteractivePageV1,
+}
+
+impl ResourceProfile {
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            PROFILE => Some(Self::PageProcessV1),
+            INTERACTIVE_PROFILE => Some(Self::InteractivePageV1),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::PageProcessV1 => PROFILE,
+            Self::InteractivePageV1 => INTERACTIVE_PROFILE,
+        }
+    }
+
+    #[must_use]
+    pub const fn opcode_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => OPCODE_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_OPCODE_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn worker_outstanding_limit(self) -> u64 {
+        match self {
+            Self::PageProcessV1 => WORKER_OUTSTANDING_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_WORKER_OUTSTANDING_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn worker_cumulative_limit(self) -> u64 {
+        match self {
+            Self::PageProcessV1 => WORKER_CUMULATIVE_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_WORKER_CUMULATIVE_LIMIT,
+        }
+    }
+}
+
 const SOURCE_FAILURE: &str = "Boa source admission budget exhausted";
 const JOB_FAILURE: &str = "Boa shared job/task budget exhausted";
 const INVALID_PERMIT: &str = "Invalid Boa host work permit";
@@ -143,8 +199,13 @@ pub struct WorkerMemory {
 impl WorkerMemory {
     #[must_use]
     pub const fn is_valid(&self) -> bool {
-        self.outstanding_limit_bytes == WORKER_OUTSTANDING_LIMIT
-            && self.cumulative_limit_bytes == WORKER_CUMULATIVE_LIMIT
+        self.is_valid_for_profile(ResourceProfile::PageProcessV1)
+    }
+
+    #[must_use]
+    pub const fn is_valid_for_profile(&self, profile: ResourceProfile) -> bool {
+        self.outstanding_limit_bytes == profile.worker_outstanding_limit()
+            && self.cumulative_limit_bytes == profile.worker_cumulative_limit()
             && self.outstanding_bytes <= self.peak_bytes
             && self.peak_bytes <= self.outstanding_limit_bytes
             && self.peak_bytes <= self.cumulative_bytes
@@ -160,13 +221,33 @@ impl WorkerMemory {
             && self.cumulative_bytes >= previous.cumulative_bytes
             && self.allocations >= previous.allocations
     }
+
+    #[must_use]
+    pub const fn is_valid_after_for_profile(
+        &self,
+        previous: &Self,
+        profile: ResourceProfile,
+    ) -> bool {
+        self.is_valid_for_profile(profile)
+            && previous.is_valid_for_profile(profile)
+            && self.peak_bytes >= previous.peak_bytes
+            && self.cumulative_bytes >= previous.cumulative_bytes
+            && self.allocations >= previous.allocations
+    }
 }
 
 impl ResourceStats {
     /// Validate untrusted worker counters before accepting a projection.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.profile != PROFILE
-            || self.opcodes_remaining > OPCODE_LIMIT
+        let Some(profile) = ResourceProfile::from_name(&self.profile) else {
+            return Err("Invalid Boa resource report");
+        };
+        self.validate_for_profile(profile)
+    }
+
+    pub fn validate_for_profile(&self, profile: ResourceProfile) -> Result<(), &'static str> {
+        if self.profile != profile.name()
+            || self.opcodes_remaining > profile.opcode_limit()
             || self.source_bytes > CUMULATIVE_SOURCE_LIMIT
             || self.source_admissions > self.source_bytes
             || self.jobs_admitted > CUMULATIVE_JOB_LIMIT
@@ -175,7 +256,9 @@ impl ResourceStats {
             || self.pending_jobs > self.jobs_admitted - self.jobs_executed
             || (self.opcodes_remaining == 0 && self.fatal_reason.is_none())
             || (self.fatal_reason.is_some() && self.pending_jobs != 0)
-            || self.worker_memory.is_some_and(|memory| !memory.is_valid())
+            || self
+                .worker_memory
+                .is_some_and(|memory| !memory.is_valid_for_profile(profile))
             || self
                 .fatal_reason
                 .as_ref()
@@ -193,8 +276,11 @@ impl ResourceStats {
 
     /// A retained page must not renew counters or recover from fatal termination.
     pub fn validate_after(&self, previous: &Self) -> Result<(), &'static str> {
-        self.validate()?;
-        previous.validate()?;
+        let Some(profile) = ResourceProfile::from_name(&self.profile) else {
+            return Err("Invalid Boa resource report");
+        };
+        self.validate_for_profile(profile)?;
+        previous.validate_for_profile(profile)?;
         if self.opcodes_remaining > previous.opcodes_remaining
             || self.source_bytes < previous.source_bytes
             || self.source_admissions < previous.source_admissions
@@ -205,7 +291,9 @@ impl ResourceStats {
                 .as_ref()
                 .is_some_and(|reason| self.fatal_reason.as_ref() != Some(reason))
             || match (self.worker_memory, previous.worker_memory) {
-                (Some(current), Some(previous)) => !current.is_valid_after(&previous),
+                (Some(current), Some(previous)) => {
+                    !current.is_valid_after_for_profile(&previous, profile)
+                }
                 (None, Some(_)) => true,
                 _ => false,
             }
@@ -509,10 +597,16 @@ pub struct Engine {
     context: Context,
     state: Rc<RefCell<State>>,
     jobs: Rc<Jobs>,
+    profile: ResourceProfile,
 }
 
 impl Engine {
     pub fn new() -> Result<Self, Error> {
+        Self::with_profile(ResourceProfile::PageProcessV1)
+    }
+
+    pub fn with_profile(profile: ResourceProfile) -> Result<Self, Error> {
+        let opcode_limit = profile.opcode_limit();
         let state = Rc::new(RefCell::new(State::default()));
         let policy = Policy(state.clone());
         let jobs = Rc::new(Jobs {
@@ -520,7 +614,7 @@ impl Engine {
             queue: RefCell::new(VecDeque::new()),
         });
         let mut context = Context::builder()
-            .instructions_remaining(OPCODE_LIMIT)
+            .instructions_remaining(opcode_limit)
             .host_hooks(Rc::new(policy.clone()))
             .job_executor(jobs.clone())
             .module_loader(Rc::new(IdleModuleLoader))
@@ -536,13 +630,19 @@ impl Engine {
             .set_stack_size_limit(STACK_LIMIT);
         context
             .runtime_limits_mut()
-            .set_loop_iteration_limit(OPCODE_LIMIT as u64);
+            .set_loop_iteration_limit(opcode_limit as u64);
         context.runtime_limits_mut().set_backtrace_limit(16);
         Ok(Self {
             context,
             state,
             jobs,
+            profile,
         })
+    }
+
+    #[must_use]
+    pub const fn resource_profile(&self) -> ResourceProfile {
+        self.profile
     }
 
     pub fn context(&self) -> &Context {
@@ -715,7 +815,7 @@ impl Engine {
     pub fn stats(&self) -> Report {
         let state = self.state.borrow();
         Report {
-            profile: PROFILE.into(),
+            profile: self.profile.name().into(),
             opcodes_remaining: self.context.instructions_remaining(),
             source_bytes: state.source_bytes,
             source_admissions: state.source_admissions,

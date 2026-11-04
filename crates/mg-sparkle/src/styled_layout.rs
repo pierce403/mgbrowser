@@ -612,7 +612,7 @@ pub(crate) fn compute_boxes(
         anonymous_tables: Vec::new(),
         floats: Vec::new(),
         last_float_top: 0.0,
-        budget: 200_000,
+        budget: 2_000_000,
         exhausted: false,
         failure: None,
     };

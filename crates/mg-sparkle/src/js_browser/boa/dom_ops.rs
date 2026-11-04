@@ -36,6 +36,31 @@ pub(super) const DOC_WRITE: &str = "host.dom.write";
 pub(super) const DOC_WRITELN: &str = "host.dom.writeln";
 pub(super) const DOC_OPEN: &str = "host.dom.docOpen";
 pub(super) const DOC_CLOSE: &str = "host.dom.docClose";
+pub(super) const IS_SAME_NODE: &str = "host.dom.isSameNode";
+pub(super) const IS_EQUAL_NODE: &str = "host.dom.isEqualNode";
+pub(super) const NORMALIZE: &str = "host.dom.normalize";
+pub(super) const LOOKUP_NAMESPACE_URI: &str = "host.dom.lookupNamespaceURI";
+pub(super) const LOOKUP_PREFIX: &str = "host.dom.lookupPrefix";
+pub(super) const IS_DEFAULT_NAMESPACE: &str = "host.dom.isDefaultNamespace";
+pub(super) const HAS_ATTRIBUTES: &str = "host.dom.hasAttributes";
+pub(super) const GET_ATTRIBUTE_NS: &str = "host.dom.getAttributeNS";
+pub(super) const SET_ATTRIBUTE_NS: &str = "host.dom.setAttributeNS";
+pub(super) const REMOVE_ATTRIBUTE_NS: &str = "host.dom.removeAttributeNS";
+pub(super) const HAS_ATTRIBUTE_NS: &str = "host.dom.hasAttributeNS";
+pub(super) const GET_ELEMENTS_BY_TAG_NAME_NS: &str = "host.dom.getElementsByTagNameNS";
+pub(super) const GET_ATTRIBUTE_NODE: &str = "host.dom.getAttributeNode";
+pub(super) const GET_ATTRIBUTE_NODE_NS: &str = "host.dom.getAttributeNodeNS";
+pub(super) const SET_ATTRIBUTE_NODE: &str = "host.dom.setAttributeNode";
+pub(super) const SET_ATTRIBUTE_NODE_NS: &str = "host.dom.setAttributeNodeNS";
+pub(super) const REMOVE_ATTRIBUTE_NODE: &str = "host.dom.removeAttributeNode";
+pub(super) const ATTACH_SHADOW: &str = "host.dom.attachShadow";
+pub(super) const CHECK_VISIBILITY: &str = "host.dom.checkVisibility";
+pub(super) const REQUEST_FULLSCREEN: &str = "host.dom.requestFullscreen";
+pub(super) const EL_SCROLL: &str = "host.dom.elScroll";
+pub(super) const EL_SCROLL_TO: &str = "host.dom.elScrollTo";
+pub(super) const EL_SCROLL_BY: &str = "host.dom.elScrollBy";
+pub(super) const EL_SCROLL_INTO_VIEW_IF_NEEDED: &str = "host.dom.scrollIntoViewIfNeeded";
+pub(super) const IMG_DECODE: &str = "host.dom.imgDecode";
 
 pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
     match name {
@@ -79,6 +104,31 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         DOC_WRITELN => Some(("writeln", 0)),
         DOC_OPEN => Some(("open", 0)),
         DOC_CLOSE => Some(("close", 0)),
+        IS_SAME_NODE => Some(("isSameNode", 1)),
+        IS_EQUAL_NODE => Some(("isEqualNode", 1)),
+        NORMALIZE => Some(("normalize", 0)),
+        LOOKUP_NAMESPACE_URI => Some(("lookupNamespaceURI", 1)),
+        LOOKUP_PREFIX => Some(("lookupPrefix", 1)),
+        IS_DEFAULT_NAMESPACE => Some(("isDefaultNamespace", 1)),
+        HAS_ATTRIBUTES => Some(("hasAttributes", 0)),
+        GET_ATTRIBUTE_NS => Some(("getAttributeNS", 2)),
+        SET_ATTRIBUTE_NS => Some(("setAttributeNS", 3)),
+        REMOVE_ATTRIBUTE_NS => Some(("removeAttributeNS", 2)),
+        HAS_ATTRIBUTE_NS => Some(("hasAttributeNS", 2)),
+        GET_ELEMENTS_BY_TAG_NAME_NS => Some(("getElementsByTagNameNS", 2)),
+        GET_ATTRIBUTE_NODE => Some(("getAttributeNode", 1)),
+        GET_ATTRIBUTE_NODE_NS => Some(("getAttributeNodeNS", 2)),
+        SET_ATTRIBUTE_NODE => Some(("setAttributeNode", 1)),
+        SET_ATTRIBUTE_NODE_NS => Some(("setAttributeNodeNS", 1)),
+        REMOVE_ATTRIBUTE_NODE => Some(("removeAttributeNode", 1)),
+        ATTACH_SHADOW => Some(("attachShadow", 1)),
+        CHECK_VISIBILITY => Some(("checkVisibility", 0)),
+        REQUEST_FULLSCREEN => Some(("requestFullscreen", 0)),
+        EL_SCROLL => Some(("scroll", 0)),
+        EL_SCROLL_TO => Some(("scrollTo", 0)),
+        EL_SCROLL_BY => Some(("scrollBy", 0)),
+        EL_SCROLL_INTO_VIEW_IF_NEEDED => Some(("scrollIntoViewIfNeeded", 0)),
+        IMG_DECODE => Some(("decode", 0)),
         _ => None,
     }
 }
@@ -89,18 +139,17 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
     // 1. Install `DOMParser` constructor
     let parse_fn = method(DOM_PARSER_PARSE, context).map_err(|_| "DOMParser method failed")?;
     let parser_proto = JsObject::with_object_proto(context.intrinsics());
-    parser_proto
-        .define_property_or_throw(
-            js_string!("parseFromString"),
-            PropertyDescriptor::builder()
-                .value(parse_fn)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "DOMParser prototype failed")?;
-    let parser_ctor = FunctionObjectBuilder::new(
+    def_prop(
+        &parser_proto,
+        js_string!("parseFromString"),
+        parse_fn,
+        true,
+        false,
+        true,
+        context,
+    )
+    .map_err(|_| "DOMParser prototype failed")?;
+    let parser_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure(|new_target, _, context| {
             modern::check_context(context)?;
@@ -110,93 +159,58 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
             let proto = new_target
                 .as_object()
                 .and_then(|o| o.get(js_string!("prototype"), context).ok())
-                .and_then(|v| v.as_object());
-            let proto =
-                proto.unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
+                .and_then(|v| v.as_object())
+                .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
             Ok(JsObject::from_proto_and_data(proto, ()).into())
         }),
     )
     .name(js_string!("DOMParser"))
     .length(0)
     .constructor(true)
-    .build();
-    parser_ctor
-        .define_property_or_throw(
-            js_string!("prototype"),
-            PropertyDescriptor::builder()
-                .value(parser_proto.clone())
-                .writable(false)
-                .enumerable(false)
-                .configurable(false),
-            context,
-        )
-        .map_err(|_| "DOMParser.prototype failed")?;
-    parser_proto
-        .define_property_or_throw(
-            js_string!("constructor"),
-            PropertyDescriptor::builder()
-                .value(parser_ctor.clone())
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "DOMParser.prototype.constructor failed")?;
-    global
-        .define_property_or_throw(
-            js_string!("DOMParser"),
-            PropertyDescriptor::builder()
-                .value(parser_ctor)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global DOMParser failed")?;
+    .build()
+    .into();
+    link_ctor_global(&global, "DOMParser", &parser_ctor, &parser_proto, context)?;
 
     // 2. Install `window.CSS = { supports, escape }`
     let css_obj = JsObject::with_object_proto(context.intrinsics());
     let supports_fn = method(CSS_SUPPORTS, context).map_err(|_| "CSS.supports failed")?;
     let escape_fn = method(CSS_ESCAPE, context).map_err(|_| "CSS.escape failed")?;
-    css_obj
-        .define_property_or_throw(
-            js_string!("supports"),
-            PropertyDescriptor::builder()
-                .value(supports_fn)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "CSS.supports define failed")?;
-    css_obj
-        .define_property_or_throw(
-            js_string!("escape"),
-            PropertyDescriptor::builder()
-                .value(escape_fn)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "CSS.escape define failed")?;
-    global
-        .define_property_or_throw(
-            js_string!("CSS"),
-            PropertyDescriptor::builder()
-                .value(css_obj)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global CSS failed")?;
+    def_prop(
+        &css_obj,
+        js_string!("supports"),
+        supports_fn,
+        true,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "CSS.supports define failed")?;
+    def_prop(
+        &css_obj,
+        js_string!("escape"),
+        escape_fn,
+        true,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "CSS.escape define failed")?;
+    def_prop(
+        &global,
+        js_string!("CSS"),
+        css_obj,
+        true,
+        false,
+        true,
+        context,
+    )
+    .map_err(|_| "Global CSS failed")?;
 
     // 3. Install DOM interface constructors, NodeFilter, and Observer stubs
     install_dom_interfaces(&global, context)?;
 
     // 4. Install WindowProperties named-id fallback Proxy in `window`'s prototype chain:
-    // global -> named_props_proxy -> original_proto (Object.prototype)
+    // global -> Window.prototype -> named_props_proxy -> original_proto (Object.prototype)
     let orig_proto = global.prototype();
     let target = JsObject::from_proto_and_data(orig_proto, ());
     let named_proxy: JsObject = JsProxy::builder(target)
@@ -205,7 +219,17 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
         .build(context)
         .map_err(|_| "WindowProperties proxy failed")?
         .into();
-    global.set_prototype(Some(named_proxy));
+    let window_proto = state(context)
+        .borrow()
+        .dom_prototypes
+        .as_ref()
+        .and_then(|dp| dp.proto("Window"));
+    if let Some(wp) = window_proto {
+        wp.set_prototype(Some(named_proxy));
+        global.set_prototype(Some(wp));
+    } else {
+        global.set_prototype(Some(named_proxy));
+    }
 
     Ok(())
 }
@@ -213,6 +237,11 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
 #[derive(Clone, Copy)]
 enum DomInterfaceKind {
     Window,
+    Navigator,
+    PluginArray,
+    MimeTypeArray,
+    Location,
+    History,
     Node,
     Document,
     DocumentFragment,
@@ -223,7 +252,36 @@ enum DomInterfaceKind {
     Element,
     HtmlElement,
     SvgElement,
+    MediaElement,
     Tag(&'static str),
+}
+
+#[derive(Clone, Trace, Finalize)]
+pub(super) struct CachedIframeWindow {
+    #[unsafe_ignore_trace]
+    pub iframe_id: usize,
+    #[unsafe_ignore_trace]
+    pub sub_id: usize,
+    pub window: JsObject,
+}
+
+#[derive(Clone, Trace, Finalize)]
+pub(super) struct DomPrototypes {
+    pub protos: Vec<JsObject>,
+    pub empty_plugins: JsObject,
+    pub empty_mime_types: JsObject,
+    pub iframe_windows: Vec<CachedIframeWindow>,
+    #[unsafe_ignore_trace]
+    pub initial_window_keys: Vec<String>,
+}
+
+impl DomPrototypes {
+    pub(super) fn proto(&self, name: &str) -> Option<JsObject> {
+        DOM_INTERFACES
+            .iter()
+            .position(|(n, _)| *n == name)
+            .and_then(|i| self.protos.get(i).cloned())
+    }
 }
 
 pub(super) fn is_svg_element(nodes: &[Node], mut id: usize) -> bool {
@@ -284,11 +342,14 @@ fn node_constant(name: &str) -> Option<i32> {
         "ATTRIBUTE_NODE" => Some(2),
         "TEXT_NODE" => Some(3),
         "CDATA_SECTION_NODE" => Some(4),
+        "ENTITY_REFERENCE_NODE" => Some(5),
+        "ENTITY_NODE" => Some(6),
         "PROCESSING_INSTRUCTION_NODE" => Some(7),
         "COMMENT_NODE" => Some(8),
         "DOCUMENT_NODE" => Some(9),
         "DOCUMENT_TYPE_NODE" => Some(10),
         "DOCUMENT_FRAGMENT_NODE" => Some(11),
+        "NOTATION_NODE" => Some(12),
         "DOCUMENT_POSITION_DISCONNECTED" => Some(1),
         "DOCUMENT_POSITION_PRECEDING" => Some(2),
         "DOCUMENT_POSITION_FOLLOWING" => Some(4),
@@ -308,7 +369,28 @@ fn matches_dom_interface(
         return Ok(false);
     };
     if matches!(kind, DomInterfaceKind::Window) {
-        return Ok(obj == context.global_object());
+        if obj == context.global_object() {
+            return Ok(true);
+        }
+        return Ok(state(context)
+            .borrow()
+            .dom_prototypes
+            .as_ref()
+            .is_some_and(|dp| dp.iframe_windows.iter().any(|e| e.window == obj)));
+    }
+    if matches!(kind, DomInterfaceKind::PluginArray) {
+        return Ok(state(context)
+            .borrow()
+            .dom_prototypes
+            .as_ref()
+            .is_some_and(|dp| dp.empty_plugins == obj));
+    }
+    if matches!(kind, DomInterfaceKind::MimeTypeArray) {
+        return Ok(state(context)
+            .borrow()
+            .dom_prototypes
+            .as_ref()
+            .is_some_and(|dp| dp.empty_mime_types == obj));
     }
     if matches!(
         kind,
@@ -324,6 +406,15 @@ fn matches_dom_interface(
     else {
         return Ok(false);
     };
+    if matches!(kind, DomInterfaceKind::Navigator) {
+        return Ok(h_str == "navigator");
+    }
+    if matches!(kind, DomInterfaceKind::Location) {
+        return Ok(h_str == "location");
+    }
+    if matches!(kind, DomInterfaceKind::History) {
+        return Ok(h_str == "history");
+    }
     if h_str == "document" || h_str.starts_with("subdoc:") {
         return Ok(matches!(
             kind,
@@ -350,10 +441,18 @@ fn matches_dom_interface(
         DomInterfaceKind::SvgElement => {
             Ok(!tag.starts_with('#') && is_svg_element(&data.host.document.nodes, id))
         }
+        DomInterfaceKind::MediaElement => {
+            Ok(matches!(tag, "audio" | "video") && !is_svg_element(&data.host.document.nodes, id))
+        }
         DomInterfaceKind::Tag(expected) => {
             Ok(tag == expected && !is_svg_element(&data.host.document.nodes, id))
         }
         DomInterfaceKind::Window
+        | DomInterfaceKind::Navigator
+        | DomInterfaceKind::PluginArray
+        | DomInterfaceKind::MimeTypeArray
+        | DomInterfaceKind::Location
+        | DomInterfaceKind::History
         | DomInterfaceKind::Document
         | DomInterfaceKind::ShadowRoot
         | DomInterfaceKind::Comment => Ok(false),
@@ -362,6 +461,11 @@ fn matches_dom_interface(
 
 const DOM_INTERFACES: &[(&str, DomInterfaceKind)] = &[
     ("Window", DomInterfaceKind::Window),
+    ("Navigator", DomInterfaceKind::Navigator),
+    ("PluginArray", DomInterfaceKind::PluginArray),
+    ("MimeTypeArray", DomInterfaceKind::MimeTypeArray),
+    ("Location", DomInterfaceKind::Location),
+    ("History", DomInterfaceKind::History),
     ("Node", DomInterfaceKind::Node),
     ("Document", DomInterfaceKind::Document),
     ("HTMLDocument", DomInterfaceKind::Document),
@@ -373,6 +477,18 @@ const DOM_INTERFACES: &[(&str, DomInterfaceKind)] = &[
     ("Element", DomInterfaceKind::Element),
     ("HTMLElement", DomInterfaceKind::HtmlElement),
     ("SVGElement", DomInterfaceKind::SvgElement),
+    ("HTMLHtmlElement", DomInterfaceKind::Tag("html")),
+    ("HTMLHeadElement", DomInterfaceKind::Tag("head")),
+    ("HTMLBodyElement", DomInterfaceKind::Tag("body")),
+    ("HTMLDivElement", DomInterfaceKind::Tag("div")),
+    ("HTMLSpanElement", DomInterfaceKind::Tag("span")),
+    ("HTMLScriptElement", DomInterfaceKind::Tag("script")),
+    ("HTMLStyleElement", DomInterfaceKind::Tag("style")),
+    ("HTMLLinkElement", DomInterfaceKind::Tag("link")),
+    ("HTMLMetaElement", DomInterfaceKind::Tag("meta")),
+    ("HTMLMediaElement", DomInterfaceKind::MediaElement),
+    ("HTMLAudioElement", DomInterfaceKind::Tag("audio")),
+    ("HTMLVideoElement", DomInterfaceKind::Tag("video")),
     ("HTMLInputElement", DomInterfaceKind::Tag("input")),
     ("HTMLTextAreaElement", DomInterfaceKind::Tag("textarea")),
     ("HTMLSelectElement", DomInterfaceKind::Tag("select")),
@@ -391,11 +507,89 @@ const DOM_INTERFACES: &[(&str, DomInterfaceKind)] = &[
     ("HTMLCanvasElement", DomInterfaceKind::Tag("canvas")),
 ];
 
+fn iframe_element_id(this: &JsValue, context: &mut Context) -> JsResult<usize> {
+    let Value::Host(handle) = receiver(this, context)? else {
+        return Err(failure("Illegal invocation"));
+    };
+    if !handle.starts_with("node:") {
+        return Err(failure("Illegal invocation"));
+    }
+    let shared = state(context);
+    let data = shared.borrow();
+    let id = data
+        .host
+        .node(&handle)
+        .map_err(|_| failure("Illegal invocation"))?;
+    if id == 0
+        || id >= data.host.document.nodes.len()
+        || data.host.document.nodes[id].tag != "iframe"
+        || is_svg_element(&data.host.document.nodes, id)
+    {
+        return Err(failure("Illegal invocation"));
+    }
+    Ok(id)
+}
+
+pub(super) fn clear_cached_iframe_window(data: &mut State, iframe_id: usize) {
+    if let Some(dp) = data.dom_prototypes.as_mut() {
+        dp.iframe_windows.retain(|e| e.iframe_id != iframe_id);
+    }
+}
+
+pub(super) fn prototype_for_handle(data: &State, handle: &str) -> Option<JsObject> {
+    let dp = data.dom_prototypes.as_ref()?;
+    match handle {
+        "document" => return dp.proto("HTMLDocument"),
+        "navigator" => return dp.proto("Navigator"),
+        "location" => return dp.proto("Location"),
+        "history" => return dp.proto("History"),
+        _ if handle.starts_with("subdoc:") => return dp.proto("HTMLDocument"),
+        _ => {}
+    }
+    let nid = handle.strip_prefix("node:")?.parse::<usize>().ok()?;
+    let tag = data.host.document.nodes.get(nid)?.tag.as_str();
+    match tag {
+        "#document" | "#document-subroot" => dp.proto("HTMLDocument"),
+        "#document-fragment" => dp.proto("DocumentFragment"),
+        "#shadow-root" => dp.proto("ShadowRoot"),
+        "#text" => dp.proto("Text"),
+        "#comment" => dp.proto("Comment"),
+        _ if tag.starts_with('#') => None,
+        _ if is_svg_element(&data.host.document.nodes, nid) => dp.proto("SVGElement"),
+        _ => DOM_INTERFACES
+            .iter()
+            .position(|(_, k)| matches!(k, DomInterfaceKind::Tag(t) if *t == tag))
+            .and_then(|i| dp.protos.get(i).cloned())
+            .or_else(|| dp.proto("HTMLElement")),
+    }
+}
+
 fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<(), String> {
     let has_instance_sym = modern::boa_engine::JsSymbol::has_instance();
+    let to_string_tag_sym = modern::boa_engine::JsSymbol::to_string_tag();
+    let mut created: HashMap<&'static str, (JsObject, JsObject)> =
+        HashMap::with_capacity(DOM_INTERFACES.len());
+    let mut protos: Vec<JsObject> = Vec::with_capacity(DOM_INTERFACES.len());
 
     for (idx, &(iface_name, kind)) in DOM_INTERFACES.iter().enumerate() {
-        let proto = JsObject::with_object_proto(context.intrinsics());
+        let parent_name = match iface_name {
+            "Window" | "Navigator" | "PluginArray" | "MimeTypeArray" | "Location" | "History"
+            | "Node" => None,
+            "Document" | "DocumentFragment" | "CharacterData" | "Element" => Some("Node"),
+            "HTMLDocument" => Some("Document"),
+            "ShadowRoot" => Some("DocumentFragment"),
+            "Text" | "Comment" => Some("CharacterData"),
+            "HTMLElement" | "SVGElement" => Some("Element"),
+            "HTMLAudioElement" | "HTMLVideoElement" => Some("HTMLMediaElement"),
+            _ => Some("HTMLElement"),
+        };
+        let parent_pair = parent_name.and_then(|pname| created.get(pname).cloned());
+        let proto = match &parent_pair {
+            Some((_, parent_proto)) => {
+                JsObject::from_proto_and_data(Some(parent_proto.clone()), ())
+            }
+            None => JsObject::with_object_proto(context.intrinsics()),
+        };
         let ctor_fn = if iface_name == "HTMLElement" {
             NativeFunction::from_fn_ptr(|new_target, _, context| {
                 super::observers_wc::construct_html_element(new_target, context)
@@ -406,11 +600,316 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
                 Err(failure("Illegal constructor"))
             })
         };
-        let ctor = FunctionObjectBuilder::new(context.realm(), ctor_fn)
+        let ctor: JsObject = FunctionObjectBuilder::new(context.realm(), ctor_fn)
             .name(JsString::from(iface_name))
             .length(0)
             .constructor(true)
-            .build();
+            .build()
+            .into();
+        if let Some((parent_ctor, _)) = &parent_pair {
+            ctor.set_prototype(Some(parent_ctor.clone()));
+        }
+        def_prop(
+            &proto,
+            to_string_tag_sym.clone(),
+            JsString::from(iface_name),
+            false,
+            false,
+            true,
+            context,
+        )
+        .map_err(|_| "DOM interface Symbol.toStringTag failed")?;
+
+        if iface_name == "Window" {
+            install_window_prototype_members(&proto, context)?;
+        }
+
+        if iface_name == "PluginArray" || iface_name == "MimeTypeArray" {
+            let is_plugins = iface_name == "PluginArray";
+            let check_pm = |this: &JsValue, is_p: bool, ctx: &mut Context| -> JsResult<()> {
+                modern::check_context(ctx)?;
+                let Some(obj) = this.as_object() else {
+                    return Err(failure("Illegal invocation"));
+                };
+                let ok = state(ctx)
+                    .borrow()
+                    .dom_prototypes
+                    .as_ref()
+                    .is_some_and(|dp| {
+                        if is_p {
+                            dp.empty_plugins == obj
+                        } else {
+                            dp.empty_mime_types == obj
+                        }
+                    });
+                if ok {
+                    Ok(())
+                } else {
+                    Err(failure("Illegal invocation"))
+                }
+            };
+            def_getter_cap(
+                &proto,
+                "length",
+                true,
+                (is_plugins, check_pm),
+                |this, _, &(is_p, chk), ctx| {
+                    chk(this, is_p, ctx)?;
+                    Ok(0.into())
+                },
+                context,
+            )
+            .map_err(|_| "PluginArray/MimeTypeArray length failed")?;
+            for mname in ["item", "namedItem"] {
+                def_cap(
+                    &proto,
+                    mname,
+                    1,
+                    true,
+                    (is_plugins, check_pm),
+                    |this, _, &(is_p, chk), ctx| {
+                        chk(this, is_p, ctx)?;
+                        Ok(JsValue::null())
+                    },
+                    context,
+                )
+                .map_err(|_| "PluginArray/MimeTypeArray method failed")?;
+            }
+            if is_plugins {
+                def_cap(
+                    &proto,
+                    "refresh",
+                    0,
+                    true,
+                    check_pm,
+                    |this, _, &chk, ctx| {
+                        chk(this, true, ctx)?;
+                        Ok(JsValue::undefined())
+                    },
+                    context,
+                )
+                .map_err(|_| "PluginArray.refresh failed")?;
+            }
+            if let Ok(arr_iter) = context
+                .intrinsics()
+                .constructors()
+                .array()
+                .prototype()
+                .get(modern::boa_engine::JsSymbol::iterator(), context)
+            {
+                let _ = def_prop(
+                    &proto,
+                    modern::boa_engine::JsSymbol::iterator(),
+                    arr_iter,
+                    true,
+                    false,
+                    true,
+                    context,
+                );
+            }
+        }
+
+        if iface_name == "Navigator" {
+            for prop in [
+                "webdriver",
+                "plugins",
+                "mimeTypes",
+                "languages",
+                "language",
+                "userAgent",
+                "appVersion",
+                "platform",
+                "vendor",
+                "product",
+                "productSub",
+                "appCodeName",
+                "appName",
+                "hardwareConcurrency",
+                "maxTouchPoints",
+                "cookieEnabled",
+                "onLine",
+                "pdfViewerEnabled",
+            ] {
+                def_getter_cap(
+                    &proto,
+                    prop,
+                    true,
+                    prop,
+                    |this, _, &p, ctx| {
+                        modern::check_context(ctx)?;
+                        if !matches!(receiver(this, ctx)?, Value::Host(ref h) if h == "navigator") {
+                            return Err(failure("Illegal invocation"));
+                        }
+                        match p {
+                            "webdriver" | "pdfViewerEnabled" => Ok(false.into()),
+                            "cookieEnabled" | "onLine" => Ok(true.into()),
+                            "hardwareConcurrency" => Ok(4.into()),
+                            "maxTouchPoints" => Ok(0.into()),
+                            "userAgent" => Ok(JsString::from(crate::USER_AGENT).into()),
+                            "appVersion" => Ok(JsString::from(
+                                crate::USER_AGENT
+                                    .strip_prefix("Mozilla/")
+                                    .unwrap_or(crate::USER_AGENT),
+                            )
+                            .into()),
+                            "language" => Ok(js_string!("en-US").into()),
+                            "languages" => {
+                                Ok(modern::boa_engine::object::builtins::JsArray::from_iter(
+                                    [
+                                        JsValue::from(js_string!("en-US")),
+                                        JsValue::from(js_string!("en")),
+                                    ],
+                                    ctx,
+                                )
+                                .into())
+                            }
+                            "platform" => Ok(js_string!("Linux").into()),
+                            "vendor" => Ok(js_string!("").into()),
+                            "product" => Ok(js_string!("Gecko").into()),
+                            "productSub" => Ok(js_string!("20030107").into()),
+                            "appCodeName" => Ok(js_string!("Mozilla").into()),
+                            "appName" => Ok(js_string!("Netscape").into()),
+                            "plugins" => state(ctx)
+                                .borrow()
+                                .dom_prototypes
+                                .as_ref()
+                                .map(|dp| dp.empty_plugins.clone().into())
+                                .ok_or_else(|| failure("Missing PluginArray")),
+                            "mimeTypes" => state(ctx)
+                                .borrow()
+                                .dom_prototypes
+                                .as_ref()
+                                .map(|dp| dp.empty_mime_types.clone().into())
+                                .ok_or_else(|| failure("Missing MimeTypeArray")),
+                            _ => Ok(JsValue::undefined()),
+                        }
+                    },
+                    context,
+                )
+                .map_err(|_| "Navigator.prototype getter failed")?;
+            }
+            let send_beacon_fn = super::method(super::web_apis::NAVIGATOR_SEND_BEACON, context)
+                .map_err(|_| "Navigator.prototype.sendBeacon failed")?;
+            def_prop(
+                &proto,
+                js_string!("sendBeacon"),
+                send_beacon_fn,
+                true,
+                true,
+                true,
+                context,
+            )
+            .map_err(|_| "Navigator.prototype.sendBeacon define failed")?;
+            def_fn(
+                &proto,
+                "javaEnabled",
+                0,
+                true,
+                |this, _, ctx| {
+                    modern::check_context(ctx)?;
+                    if !matches!(receiver(this, ctx)?, Value::Host(ref h) if h == "navigator") {
+                        return Err(failure("Illegal invocation"));
+                    }
+                    Ok(false.into())
+                },
+                context,
+            )
+            .map_err(|_| "Navigator.prototype.javaEnabled failed")?;
+        }
+
+        if iface_name == "HTMLMediaElement" {
+            def_fn(
+                &proto,
+                "canPlayType",
+                1,
+                true,
+                |this, args, context| {
+                    modern::check_context(context)?;
+                    let Value::Host(handle) = receiver(this, context)? else {
+                        return Err(failure("Illegal invocation"));
+                    };
+                    let ok = {
+                        let shared = state(context);
+                        let data = shared.borrow();
+                        handle.starts_with("node:")
+                            && data.host.node(&handle).ok().is_some_and(|id| {
+                                id != 0
+                                    && id < data.host.document.nodes.len()
+                                    && matches!(
+                                        data.host.document.nodes[id].tag.as_str(),
+                                        "audio" | "video"
+                                    )
+                                    && !is_svg_element(&data.host.document.nodes, id)
+                            })
+                    };
+                    if !ok {
+                        return Err(failure("Illegal invocation"));
+                    }
+                    let Some(arg0) = args.first() else {
+                        return Err(failure("HTMLMediaElement.canPlayType requires 1 argument"));
+                    };
+                    let _ = utf8(arg0, context)?;
+                    modern::check_context(context)?;
+                    Ok(js_string!("").into())
+                },
+                context,
+            )
+            .map_err(|_| "HTMLMediaElement.prototype.canPlayType failed")?;
+        }
+
+        if iface_name == "HTMLIFrameElement" {
+            def_getter_fn(
+                &proto,
+                "contentWindow",
+                true,
+                |this, _, context| {
+                    modern::check_context(context)?;
+                    iframe_content_window(iframe_element_id(this, context)?, context)
+                },
+                context,
+            )
+            .map_err(|_| "HTMLIFrameElement.prototype.contentWindow failed")?;
+            def_getter_fn(
+                &proto,
+                "contentDocument",
+                true,
+                |this, _, context| {
+                    modern::check_context(context)?;
+                    iframe_content_document(iframe_element_id(this, context)?, context)
+                },
+                context,
+            )
+            .map_err(|_| "HTMLIFrameElement.prototype.contentDocument failed")?;
+            def_get_set_fn(
+                &proto,
+                "srcdoc",
+                true,
+                |this, _, context| {
+                    modern::check_context(context)?;
+                    let id = iframe_element_id(this, context)?;
+                    let val = state(context).borrow().host.document.nodes[id]
+                        .attr("srcdoc")
+                        .unwrap_or("")
+                        .to_owned();
+                    Ok(JsString::from(val.as_str()).into())
+                },
+                |this, args, context| {
+                    modern::check_context(context)?;
+                    let id = iframe_element_id(this, context)?;
+                    let Some(val) = args.first() else {
+                        return Err(failure(
+                            "HTMLIFrameElement.srcdoc setter requires 1 argument",
+                        ));
+                    };
+                    let text = utf8(val, context)?;
+                    modern::check_context(context)?;
+                    set_element_attr_observed(id, "srcdoc", text, context)?;
+                    Ok(JsValue::undefined())
+                },
+                context,
+            )
+            .map_err(|_| "HTMLIFrameElement.prototype.srcdoc failed")?;
+        }
 
         let has_inst = FunctionObjectBuilder::new(
             context.realm(),
@@ -433,14 +932,13 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
         .name(js_string!("[Symbol.hasInstance]"))
         .length(1)
         .build();
-
-        ctor.define_property_or_throw(
+        def_prop(
+            &ctor,
             has_instance_sym.clone(),
-            PropertyDescriptor::builder()
-                .value(has_inst)
-                .writable(false)
-                .enumerable(false)
-                .configurable(true),
+            has_inst,
+            false,
+            false,
+            true,
             context,
         )
         .map_err(|_| "DOM interface Symbol.hasInstance failed")?;
@@ -451,11 +949,14 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
                 "ATTRIBUTE_NODE",
                 "TEXT_NODE",
                 "CDATA_SECTION_NODE",
+                "ENTITY_REFERENCE_NODE",
+                "ENTITY_NODE",
                 "PROCESSING_INSTRUCTION_NODE",
                 "COMMENT_NODE",
                 "DOCUMENT_NODE",
                 "DOCUMENT_TYPE_NODE",
                 "DOCUMENT_FRAGMENT_NODE",
+                "NOTATION_NODE",
                 "DOCUMENT_POSITION_DISCONNECTED",
                 "DOCUMENT_POSITION_PRECEDING",
                 "DOCUMENT_POSITION_FOLLOWING",
@@ -465,13 +966,13 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
             ] {
                 let cval = node_constant(cname).unwrap_or(0);
                 for obj in [&ctor, &proto] {
-                    obj.define_property_or_throw(
+                    def_prop(
+                        obj,
                         JsString::from(cname),
-                        PropertyDescriptor::builder()
-                            .value(cval)
-                            .writable(false)
-                            .enumerable(true)
-                            .configurable(false),
+                        cval,
+                        false,
+                        true,
+                        false,
                         context,
                     )
                     .map_err(|_| "Node constant failed")?;
@@ -479,41 +980,10 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
             }
         }
 
-        ctor.define_property_or_throw(
-            js_string!("prototype"),
-            PropertyDescriptor::builder()
-                .value(proto.clone())
-                .writable(false)
-                .enumerable(false)
-                .configurable(false),
-            context,
-        )
-        .map_err(|_| "DOM interface prototype failed")?;
-        proto
-            .define_property_or_throw(
-                js_string!("constructor"),
-                PropertyDescriptor::builder()
-                    .value(ctor.clone())
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "DOM interface constructor prop failed")?;
-        global
-            .define_property_or_throw(
-                JsString::from(iface_name),
-                PropertyDescriptor::builder()
-                    .value(ctor.clone())
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Global DOM interface failed")?;
+        link_ctor_global(global, iface_name, &ctor, &proto, context)?;
 
         if iface_name == "HTMLImageElement" {
-            let image_ctor = FunctionObjectBuilder::new(
+            let image_ctor: JsObject = FunctionObjectBuilder::new(
                 context.realm(),
                 NativeFunction::from_copy_closure(|new_target, args, context| {
                     modern::check_context(context)?;
@@ -554,42 +1024,59 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
             .name(js_string!("Image"))
             .length(0)
             .constructor(true)
-            .build();
-            image_ctor
-                .define_property_or_throw(
-                    js_string!("prototype"),
-                    PropertyDescriptor::builder()
-                        .value(proto.clone())
-                        .writable(false)
-                        .enumerable(false)
-                        .configurable(false),
-                    context,
-                )
-                .map_err(|_| "Image.prototype failed")?;
+            .build()
+            .into();
+            def_prop(
+                &image_ctor,
+                js_string!("prototype"),
+                proto.clone(),
+                false,
+                false,
+                false,
+                context,
+            )
+            .map_err(|_| "Image.prototype failed")?;
             if let Ok(hi) = ctor.get(has_instance_sym.clone(), context) {
-                let _ = image_ctor.define_property_or_throw(
+                let _ = def_prop(
+                    &image_ctor,
                     has_instance_sym.clone(),
-                    PropertyDescriptor::builder()
-                        .value(hi)
-                        .writable(false)
-                        .enumerable(false)
-                        .configurable(true),
+                    hi,
+                    false,
+                    false,
+                    true,
                     context,
                 );
             }
-            global
-                .define_property_or_throw(
-                    js_string!("Image"),
-                    PropertyDescriptor::builder()
-                        .value(image_ctor)
-                        .writable(true)
-                        .enumerable(false)
-                        .configurable(true),
-                    context,
-                )
-                .map_err(|_| "Global Image failed")?;
+            def_prop(
+                global,
+                js_string!("Image"),
+                image_ctor,
+                true,
+                false,
+                true,
+                context,
+            )
+            .map_err(|_| "Global Image failed")?;
         }
+        protos.push(proto.clone());
+        created.insert(iface_name, (ctor, proto));
     }
+
+    let get_proto = |name: &'static str| -> Result<JsObject, &'static str> {
+        created
+            .get(name)
+            .map(|(_, p)| p.clone())
+            .ok_or("Missing DOM interface prototype")
+    };
+    let empty_plugins = JsObject::from_proto_and_data(Some(get_proto("PluginArray")?), ());
+    let empty_mime_types = JsObject::from_proto_and_data(Some(get_proto("MimeTypeArray")?), ());
+    state(context).borrow_mut().dom_prototypes = Some(DomPrototypes {
+        protos,
+        empty_plugins,
+        empty_mime_types,
+        iframe_windows: Vec::new(),
+        initial_window_keys: Vec::new(),
+    });
 
     // Install `NodeFilter`
     let nf = JsObject::with_object_proto(context.intrinsics());
@@ -608,28 +1095,19 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
         ("SHOW_DOCUMENT_TYPE", 0x200 as f64),
         ("SHOW_DOCUMENT_FRAGMENT", 0x400 as f64),
     ] {
-        nf.define_property_or_throw(
-            JsString::from(k),
-            PropertyDescriptor::builder()
-                .value(v)
-                .writable(false)
-                .enumerable(true)
-                .configurable(false),
-            context,
-        )
-        .map_err(|_| "NodeFilter constant failed")?;
+        def_prop(&nf, JsString::from(k), v, false, true, false, context)
+            .map_err(|_| "NodeFilter constant failed")?;
     }
-    global
-        .define_property_or_throw(
-            js_string!("NodeFilter"),
-            PropertyDescriptor::builder()
-                .value(nf)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global NodeFilter failed")?;
+    def_prop(
+        global,
+        js_string!("NodeFilter"),
+        nf,
+        true,
+        false,
+        true,
+        context,
+    )
+    .map_err(|_| "Global NodeFilter failed")?;
 
     Ok(())
 }
@@ -644,6 +1122,13 @@ fn window_named_get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsR
     if target_obj.has_property(prop.clone(), context)? {
         let reflect_get = state(context).borrow().reflect_get.clone();
         return reflect_get.call(&JsValue::undefined(), args, context);
+    }
+    let is_top_window = args
+        .get(2)
+        .and_then(JsValue::as_object)
+        .is_some_and(|r| r == context.global_object());
+    if !is_top_window {
+        return Ok(JsValue::undefined());
     }
     if let PropertyKey::String(s) = &prop {
         let name = s.to_std_string_escaped();
@@ -1265,6 +1750,101 @@ pub(super) fn set_input_checked(
 
 // --- Property Interception (`get`, `set`, `has`) ---
 
+fn common_node_method(name: &str) -> Option<&'static str> {
+    match name {
+        "compareDocumentPosition" => Some(COMPARE_DOCUMENT_POSITION),
+        "getRootNode" => Some(GET_ROOT_NODE),
+        "hasChildNodes" => Some(HAS_CHILD_NODES),
+        "contains" => Some(CONTAINS),
+        "cloneNode" => Some(CLONE_NODE),
+        "isSameNode" => Some(IS_SAME_NODE),
+        "isEqualNode" => Some(IS_EQUAL_NODE),
+        "normalize" => Some(NORMALIZE),
+        "lookupNamespaceURI" => Some(LOOKUP_NAMESPACE_URI),
+        "lookupPrefix" => Some(LOOKUP_PREFIX),
+        "isDefaultNamespace" => Some(IS_DEFAULT_NAMESPACE),
+        _ => None,
+    }
+}
+
+fn parent_node_method(name: &str) -> Option<&'static str> {
+    match name {
+        "insertBefore" => Some(INSERT_BEFORE),
+        "replaceChild" => Some(REPLACE_CHILD),
+        "prepend" => Some(PREPEND),
+        "append" => Some(APPEND),
+        "replaceChildren" => Some(REPLACE_CHILDREN),
+        _ => None,
+    }
+}
+
+fn child_node_method(name: &str) -> Option<&'static str> {
+    match name {
+        "remove" => Some(REMOVE),
+        "before" => Some(BEFORE),
+        "after" => Some(AFTER),
+        "replaceWith" => Some(REPLACE_WITH),
+        _ => None,
+    }
+}
+
+fn doc_shared_method(name: &str) -> Option<&'static str> {
+    match name {
+        "createDocumentFragment" => Some(CREATE_DOCUMENT_FRAGMENT),
+        "createEvent" => Some(super::dom_events::DOC_CREATE_EVENT),
+        "getElementsByTagNameNS" => Some(GET_ELEMENTS_BY_TAG_NAME_NS),
+        "getAnimations" => Some(super::observers_wc::DOC_GET_ANIMATIONS),
+        "write" => Some(DOC_WRITE),
+        "writeln" => Some(DOC_WRITELN),
+        "open" => Some(DOC_OPEN),
+        "close" => Some(DOC_CLOSE),
+        _ => None,
+    }
+}
+
+fn element_only_method(name: &str) -> Option<&'static str> {
+    match name {
+        "matches" => Some(selectors::MATCHES),
+        "webkitMatchesSelector" => Some(selectors::WEBKIT_MATCHES),
+        "closest" => Some(selectors::CLOSEST),
+        "hasAttribute" => Some(HAS_ATTRIBUTE),
+        "hasAttributes" => Some(HAS_ATTRIBUTES),
+        "getAttributeNS" => Some(GET_ATTRIBUTE_NS),
+        "setAttributeNS" => Some(SET_ATTRIBUTE_NS),
+        "removeAttributeNS" => Some(REMOVE_ATTRIBUTE_NS),
+        "hasAttributeNS" => Some(HAS_ATTRIBUTE_NS),
+        "getElementsByTagNameNS" => Some(GET_ELEMENTS_BY_TAG_NAME_NS),
+        "getAttributeNode" => Some(GET_ATTRIBUTE_NODE),
+        "getAttributeNodeNS" => Some(GET_ATTRIBUTE_NODE_NS),
+        "setAttributeNode" => Some(SET_ATTRIBUTE_NODE),
+        "setAttributeNodeNS" => Some(SET_ATTRIBUTE_NODE_NS),
+        "removeAttributeNode" => Some(REMOVE_ATTRIBUTE_NODE),
+        "attachShadow" => Some(ATTACH_SHADOW),
+        "checkVisibility" => Some(CHECK_VISIBILITY),
+        "requestFullscreen" => Some(REQUEST_FULLSCREEN),
+        "scroll" => Some(EL_SCROLL),
+        "scrollTo" => Some(EL_SCROLL_TO),
+        "scrollBy" => Some(EL_SCROLL_BY),
+        "scrollIntoViewIfNeeded" => Some(EL_SCROLL_INTO_VIEW_IF_NEEDED),
+        "toggleAttribute" => Some(TOGGLE_ATTRIBUTE),
+        "getAttributeNames" => Some(GET_ATTRIBUTE_NAMES),
+        "insertAdjacentHTML" => Some(INSERT_ADJACENT_HTML),
+        "insertAdjacentElement" => Some(INSERT_ADJACENT_ELEMENT),
+        "insertAdjacentText" => Some(INSERT_ADJACENT_TEXT),
+        _ => None,
+    }
+}
+
+fn child_element_count(id: usize, context: &mut Context) -> f64 {
+    let shared = state(context);
+    let data = shared.borrow();
+    data.host.document.nodes[id]
+        .children
+        .iter()
+        .filter(|&&c| !data.host.document.nodes[c].tag.starts_with('#'))
+        .count() as f64
+}
+
 pub(super) fn try_get(
     handle: &str,
     name: &str,
@@ -1275,37 +1855,24 @@ pub(super) fn try_get(
         .strip_prefix("subdoc:")
         .and_then(|s| s.parse::<usize>().ok())
     {
-        return subdoc_get(sub_id, name, context).map(Some);
+        return subdoc_get(sub_id, name, context);
     }
 
     if handle == "document" {
         if let Some(cval) = node_constant(name) {
             return Ok(Some(cval.into()));
         }
+        if let Some(m) = doc_shared_method(name)
+            .or_else(|| common_node_method(name))
+            .or_else(|| parent_node_method(name))
+        {
+            return method(m, context).map(|o| Some(o.into()));
+        }
         match name {
-            "createDocumentFragment" => {
-                return method(CREATE_DOCUMENT_FRAGMENT, context).map(|o| Some(o.into()));
-            }
             "createTreeWalker" => {
                 return method(CREATE_TREE_WALKER, context).map(|o| Some(o.into()));
             }
-            "compareDocumentPosition" => {
-                return method(COMPARE_DOCUMENT_POSITION, context).map(|o| Some(o.into()));
-            }
-            "getRootNode" => {
-                return method(GET_ROOT_NODE, context).map(|o| Some(o.into()));
-            }
-            "hasFocus" => {
-                return method(DOC_HAS_FOCUS, context).map(|o| Some(o.into()));
-            }
-            "getAnimations" => {
-                return method(super::observers_wc::DOC_GET_ANIMATIONS, context)
-                    .map(|o| Some(o.into()));
-            }
-            "write" => return method(DOC_WRITE, context).map(|o| Some(o.into())),
-            "writeln" => return method(DOC_WRITELN, context).map(|o| Some(o.into())),
-            "open" => return method(DOC_OPEN, context).map(|o| Some(o.into())),
-            "close" => return method(DOC_CLOSE, context).map(|o| Some(o.into())),
+            "hasFocus" => return method(DOC_HAS_FOCUS, context).map(|o| Some(o.into())),
             "currentScript" => {
                 let cs = state(context).borrow().current_script;
                 return match cs {
@@ -1318,25 +1885,20 @@ pub(super) fn try_get(
                 let target = {
                     let shared = state(context);
                     let data = shared.borrow();
-                    data.host.document.nodes[0]
-                        .children
-                        .iter()
+                    let kids = &data.host.document.nodes[0].children;
+                    kids.iter()
                         .copied()
                         .find(|&c| data.host.document.nodes[c].tag == "html")
                         .or_else(|| {
                             find_in_subtree(&data.host.document.nodes, 0, |n| n.tag == "html")
                         })
                         .or_else(|| {
-                            data.host.document.nodes[0]
-                                .children
-                                .iter()
+                            kids.iter()
                                 .copied()
                                 .find(|&c| data.host.document.nodes[c].tag == "body")
                         })
                         .or_else(|| {
-                            data.host.document.nodes[0]
-                                .children
-                                .iter()
+                            kids.iter()
                                 .copied()
                                 .find(|&c| !data.host.document.nodes[c].tag.starts_with('#'))
                         })
@@ -1385,29 +1947,12 @@ pub(super) fn try_get(
                 };
                 return Ok(Some(JsString::from(d.as_str()).into()));
             }
-            "ownerDocument" | "parentElement" | "parentNode" => return Ok(Some(JsValue::null())),
+            "ownerDocument" | "parentElement" | "parentNode" | "nodeValue" => {
+                return Ok(Some(JsValue::null()));
+            }
             "isConnected" => return Ok(Some(true.into())),
             "nodeName" => return Ok(Some(js_string!("#document").into())),
-            "hasChildNodes" => return method(HAS_CHILD_NODES, context).map(|o| Some(o.into())),
-            "contains" => return method(CONTAINS, context).map(|o| Some(o.into())),
-            "cloneNode" => return method(CLONE_NODE, context).map(|o| Some(o.into())),
-            "insertBefore" => return method(INSERT_BEFORE, context).map(|o| Some(o.into())),
-            "replaceChild" => return method(REPLACE_CHILD, context).map(|o| Some(o.into())),
-            "prepend" => return method(PREPEND, context).map(|o| Some(o.into())),
-            "append" => return method(APPEND, context).map(|o| Some(o.into())),
-            "replaceChildren" => return method(REPLACE_CHILDREN, context).map(|o| Some(o.into())),
-            "childElementCount" => {
-                let count = state(context).borrow().host.document.nodes[0]
-                    .children
-                    .iter()
-                    .filter(|&&c| {
-                        !state(context).borrow().host.document.nodes[c]
-                            .tag
-                            .starts_with('#')
-                    })
-                    .count();
-                return Ok(Some((count as f64).into()));
-            }
+            "childElementCount" => return Ok(Some(child_element_count(0, context).into())),
             _ => {}
         }
     }
@@ -1415,123 +1960,18 @@ pub(super) fn try_get(
     if !handle.starts_with("node:") {
         return Ok(None);
     }
-    let id = {
+    let (id, tag) = {
         let shared = state(context);
         let data = shared.borrow();
-        data.host.node(handle).map_err(failure)?
+        let id = data.host.node(handle).map_err(failure)?;
+        (id, data.host.document.nodes[id].tag.clone())
     };
-    let tag = state(context).borrow().host.document.nodes[id].tag.clone();
 
-    // DocumentFragment node
-    if tag == "#document-fragment" {
-        if let Some(cval) = node_constant(name) {
-            return Ok(Some(cval.into()));
-        }
-        match name {
-            "nodeType" => return Ok(Some(11.into())),
-            "nodeName" => return Ok(Some(js_string!("#document-fragment").into())),
-            "tagName" => return Ok(Some(JsValue::undefined())),
-            "ownerDocument" => {
-                let h = owner_document_handle(&state(context).borrow().host.document.nodes, id)
-                    .unwrap_or_else(|| "document".into());
-                return wrap(&h, context).map(Some);
-            }
-            "parentNode" | "parentElement" => return Ok(Some(JsValue::null())),
-            "isConnected" => return Ok(Some(false.into())),
-            "childElementCount" => {
-                let shared = state(context);
-                let data = shared.borrow();
-                let count = data.host.document.nodes[id]
-                    .children
-                    .iter()
-                    .filter(|&&c| !data.host.document.nodes[c].tag.starts_with('#'))
-                    .count();
-                return Ok(Some((count as f64).into()));
-            }
-            "getElementById" => {
-                return method("host.dom.getElementById", context).map(|o| Some(o.into()));
-            }
-            "compareDocumentPosition" => {
-                return method(COMPARE_DOCUMENT_POSITION, context).map(|o| Some(o.into()));
-            }
-            "getRootNode" => return method(GET_ROOT_NODE, context).map(|o| Some(o.into())),
-            "hasChildNodes" => return method(HAS_CHILD_NODES, context).map(|o| Some(o.into())),
-            "contains" => return method(CONTAINS, context).map(|o| Some(o.into())),
-            "cloneNode" => return method(CLONE_NODE, context).map(|o| Some(o.into())),
-            "insertBefore" => return method(INSERT_BEFORE, context).map(|o| Some(o.into())),
-            "replaceChild" => return method(REPLACE_CHILD, context).map(|o| Some(o.into())),
-            "prepend" => return method(PREPEND, context).map(|o| Some(o.into())),
-            "append" => return method(APPEND, context).map(|o| Some(o.into())),
-            "replaceChildren" => return method(REPLACE_CHILDREN, context).map(|o| Some(o.into())),
-            "setAttribute" | "getAttribute" | "removeAttribute" | "classList" | "style"
-            | "dataset" => return Ok(Some(JsValue::undefined())),
-            _ => return Ok(None),
-        }
-    }
-
-    // Text node specifics
-    if tag == "#text" {
-        if let Some(cval) = node_constant(name) {
-            return Ok(Some(cval.into()));
-        }
-        match name {
-            "nodeName" => return Ok(Some(js_string!("#text").into())),
-            "tagName" => return Ok(Some(JsValue::undefined())),
-            "data" | "nodeValue" => {
-                let t = state(context).borrow().host.document.nodes[id].text.clone();
-                return Ok(Some(JsString::from(t.as_str()).into()));
-            }
-            "length" => {
-                let len = state(context).borrow().host.document.nodes[id]
-                    .text
-                    .encode_utf16()
-                    .count();
-                return Ok(Some((len as f64).into()));
-            }
-            "ownerDocument" => {
-                let h = owner_document_handle(&state(context).borrow().host.document.nodes, id)
-                    .unwrap_or_else(|| "document".into());
-                return wrap(&h, context).map(Some);
-            }
-            "isConnected" => {
-                let c = is_connected_node(&state(context).borrow().host.document.nodes, id);
-                return Ok(Some(c.into()));
-            }
-            "parentElement" => {
-                let shared = state(context);
-                let data = shared.borrow();
-                let p = data.host.document.nodes[id].parent;
-                if p == 0 || p == id || data.host.document.nodes[p].tag.starts_with('#') {
-                    return Ok(Some(JsValue::null()));
-                }
-                drop(data);
-                return wrap(&format!("node:{p}"), context).map(Some);
-            }
-            "parentNode" => {
-                let p = state(context).borrow().host.document.nodes[id].parent;
-                if p == id {
-                    return Ok(Some(JsValue::null()));
-                }
-                return wrap_node_id(p, context).map(Some);
-            }
-            "compareDocumentPosition" => {
-                return method(COMPARE_DOCUMENT_POSITION, context).map(|o| Some(o.into()));
-            }
-            "getRootNode" => return method(GET_ROOT_NODE, context).map(|o| Some(o.into())),
-            "remove" => return method(REMOVE, context).map(|o| Some(o.into())),
-            "before" => return method(BEFORE, context).map(|o| Some(o.into())),
-            "after" => return method(AFTER, context).map(|o| Some(o.into())),
-            "replaceWith" => return method(REPLACE_WITH, context).map(|o| Some(o.into())),
-            "cloneNode" => return method(CLONE_NODE, context).map(|o| Some(o.into())),
-            "contains" => return method(CONTAINS, context).map(|o| Some(o.into())),
-            "hasChildNodes" => return method(HAS_CHILD_NODES, context).map(|o| Some(o.into())),
-            _ => return Ok(None),
-        }
-    }
-
-    // Element nodes (`tag != "#text"` and `id != 0`)
     if let Some(cval) = node_constant(name) {
         return Ok(Some(cval.into()));
+    }
+    if let Some(m) = common_node_method(name) {
+        return method(m, context).map(|o| Some(o.into()));
     }
     match name {
         "ownerDocument" => {
@@ -1539,6 +1979,36 @@ pub(super) fn try_get(
                 .unwrap_or_else(|| "document".into());
             return wrap(&h, context).map(Some);
         }
+        "baseURI" => {
+            let u = state(context).borrow().host.base_url().to_string();
+            return Ok(Some(JsString::from(u.as_str()).into()));
+        }
+        _ => {}
+    }
+
+    // DocumentFragment node
+    if tag == "#document-fragment" {
+        if let Some(m) = parent_node_method(name) {
+            return method(m, context).map(|o| Some(o.into()));
+        }
+        return match name {
+            "nodeType" => Ok(Some(11.into())),
+            "nodeName" => Ok(Some(js_string!("#document-fragment").into())),
+            "tagName" | "setAttribute" | "getAttribute" | "removeAttribute" | "classList"
+            | "style" | "dataset" => Ok(Some(JsValue::undefined())),
+            "parentNode" | "parentElement" | "nodeValue" => Ok(Some(JsValue::null())),
+            "isConnected" => Ok(Some(false.into())),
+            "childElementCount" => Ok(Some(child_element_count(id, context).into())),
+            "getElementById" => method("host.dom.getElementById", context).map(|o| Some(o.into())),
+            _ => Ok(None),
+        };
+    }
+
+    // Shared properties/methods across `#text` and `Element`
+    if let Some(m) = child_node_method(name) {
+        return method(m, context).map(|o| Some(o.into()));
+    }
+    match name {
         "isConnected" => {
             let c = is_connected_node(&state(context).borrow().host.document.nodes, id);
             return Ok(Some(c.into()));
@@ -1560,15 +2030,36 @@ pub(super) fn try_get(
             }
             return wrap_node_id(p, context).map(Some);
         }
+        _ => {}
+    }
+
+    // Text node specifics
+    if tag == "#text" {
+        return match name {
+            "nodeName" => Ok(Some(js_string!("#text").into())),
+            "tagName" => Ok(Some(JsValue::undefined())),
+            "data" | "nodeValue" => {
+                let t = state(context).borrow().host.document.nodes[id].text.clone();
+                Ok(Some(JsString::from(t.as_str()).into()))
+            }
+            "length" => {
+                let len = state(context).borrow().host.document.nodes[id]
+                    .text
+                    .encode_utf16()
+                    .count();
+                Ok(Some((len as f64).into()))
+            }
+            _ => Ok(None),
+        };
+    }
+
+    // Element nodes (`tag != "#text"` and `id != 0`)
+    if let Some(m) = parent_node_method(name).or_else(|| element_only_method(name)) {
+        return method(m, context).map(|o| Some(o.into()));
+    }
+    match name {
         "childElementCount" => {
-            let shared = state(context);
-            let data = shared.borrow();
-            let count = data.host.document.nodes[id]
-                .children
-                .iter()
-                .filter(|&&c| !data.host.document.nodes[c].tag.starts_with('#'))
-                .count();
-            return Ok(Some((count as f64).into()));
+            return Ok(Some(child_element_count(id, context).into()));
         }
         "content" if tag == "template" => {
             let frag_id = {
@@ -1779,7 +2270,105 @@ pub(super) fn try_get(
             let m = state(context).borrow().host.document.nodes[id].has("multiple");
             return Ok(Some(m.into()));
         }
-        "shadowRoot" | "assignedSlot" | "prefix" => return Ok(Some(JsValue::null())),
+        "isMap" if tag == "img" => {
+            let m = state(context).borrow().host.document.nodes[id].has("ismap");
+            return Ok(Some(m.into()));
+        }
+        "naturalWidth" if tag == "img" => {
+            let v = state(context).borrow().host.document.nodes[id]
+                .attr("width")
+                .and_then(parse_non_negative_uint)
+                .unwrap_or(0);
+            return Ok(Some((v as f64).into()));
+        }
+        "naturalHeight" if tag == "img" => {
+            let v = state(context).borrow().host.document.nodes[id]
+                .attr("height")
+                .and_then(parse_non_negative_uint)
+                .unwrap_or(0);
+            return Ok(Some((v as f64).into()));
+        }
+        "complete" if tag == "img" => return Ok(Some(true.into())),
+        "currentSrc" if tag == "img" => {
+            let cs = {
+                let shared = state(context);
+                let data = shared.borrow();
+                data.host.document.nodes[id]
+                    .attr("src")
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| data.host.base_url().join(s).ok())
+                    .map(|u| u.to_string())
+                    .unwrap_or_default()
+            };
+            return Ok(Some(JsString::from(cs.as_str()).into()));
+        }
+        "x" | "y" if tag == "img" => return Ok(Some(0.into())),
+        "decode" if tag == "img" => return method(IMG_DECODE, context).map(|o| Some(o.into())),
+        "shadowRoot" | "assignedSlot" | "prefix" | "nodeValue" => {
+            return Ok(Some(JsValue::null()));
+        }
+        "part" => return build_part_token_list(id, context).map(Some),
+        "outerText" => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if !is_svg {
+                let t = text_content(&state(context).borrow().host.document.nodes, id);
+                return Ok(Some(JsString::from(t.as_str()).into()));
+            }
+            return Ok(None);
+        }
+        "translate" => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if !is_svg {
+                let tr = !matches!(
+                    state(context).borrow().host.document.nodes[id]
+                        .attr("translate")
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .as_deref(),
+                    Some("no")
+                );
+                return Ok(Some(tr.into()));
+            }
+            return Ok(None);
+        }
+        "inert" | "autofocus" => {
+            let b = state(context).borrow().host.document.nodes[id].has(name);
+            return Ok(Some(b.into()));
+        }
+        "draggable" => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if !is_svg {
+                let dr = {
+                    let shared = state(context);
+                    let data = shared.borrow();
+                    let n = &data.host.document.nodes[id];
+                    match n
+                        .attr("draggable")
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .as_deref()
+                    {
+                        Some("true") => true,
+                        Some("false") => false,
+                        _ => tag == "img" || (tag == "a" && n.has("href")),
+                    }
+                };
+                return Ok(Some(dr.into()));
+            }
+            return Ok(None);
+        }
+        "spellcheck" => {
+            let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
+            if !is_svg {
+                let sp = !matches!(
+                    state(context).borrow().host.document.nodes[id]
+                        .attr("spellcheck")
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .as_deref(),
+                    Some("false")
+                );
+                return Ok(Some(sp.into()));
+            }
+            return Ok(None);
+        }
         "slot" => {
             let s = state(context).borrow().host.document.nodes[id]
                 .attr("slot")
@@ -1822,148 +2411,14 @@ pub(super) fn try_get(
         "attributes" => {
             return build_named_node_map(id, context).map(Some);
         }
-        "compareDocumentPosition" => {
-            return method(COMPARE_DOCUMENT_POSITION, context).map(|o| Some(o.into()));
-        }
-        "getRootNode" => return method(GET_ROOT_NODE, context).map(|o| Some(o.into())),
-        // Selector & DOM manipulation methods on Elements
-        "matches" => return method(selectors::MATCHES, context).map(|o| Some(o.into())),
-        "webkitMatchesSelector" => {
-            return method(selectors::WEBKIT_MATCHES, context).map(|o| Some(o.into()));
-        }
-        "closest" => return method(selectors::CLOSEST, context).map(|o| Some(o.into())),
-        "cloneNode" => return method(CLONE_NODE, context).map(|o| Some(o.into())),
-        "insertBefore" => return method(INSERT_BEFORE, context).map(|o| Some(o.into())),
-        "replaceChild" => return method(REPLACE_CHILD, context).map(|o| Some(o.into())),
-        "remove" => return method(REMOVE, context).map(|o| Some(o.into())),
-        "before" => return method(BEFORE, context).map(|o| Some(o.into())),
-        "after" => return method(AFTER, context).map(|o| Some(o.into())),
-        "replaceWith" => return method(REPLACE_WITH, context).map(|o| Some(o.into())),
-        "prepend" => return method(PREPEND, context).map(|o| Some(o.into())),
-        "append" => return method(APPEND, context).map(|o| Some(o.into())),
-        "replaceChildren" => return method(REPLACE_CHILDREN, context).map(|o| Some(o.into())),
-        "contains" => return method(CONTAINS, context).map(|o| Some(o.into())),
-        "hasChildNodes" => return method(HAS_CHILD_NODES, context).map(|o| Some(o.into())),
-        "hasAttribute" => return method(HAS_ATTRIBUTE, context).map(|o| Some(o.into())),
-        "toggleAttribute" => return method(TOGGLE_ATTRIBUTE, context).map(|o| Some(o.into())),
-        "getAttributeNames" => return method(GET_ATTRIBUTE_NAMES, context).map(|o| Some(o.into())),
-        "insertAdjacentHTML" => {
-            return method(INSERT_ADJACENT_HTML, context).map(|o| Some(o.into()));
-        }
-        "insertAdjacentElement" => {
-            return method(INSERT_ADJACENT_ELEMENT, context).map(|o| Some(o.into()));
-        }
-        "insertAdjacentText" => {
-            return method(INSERT_ADJACENT_TEXT, context).map(|o| Some(o.into()));
-        }
-        "contentDocument" if matches!(tag.as_str(), "iframe" | "frame" | "object") => {
+        "contentDocument" if matches!(tag.as_str(), "frame" | "object") => {
             if tag == "object" {
                 return Ok(Some(JsValue::null()));
             }
-            let sub_opt = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                ensure_iframe_document(&mut data, id)
-            }
-            .map_err(|e| into_js_err(e, context))?;
-            return match sub_opt {
-                Some(sub_id) => wrap(&format!("subdoc:{sub_id}"), context).map(Some),
-                None => Ok(Some(JsValue::null())),
-            };
+            return iframe_content_document(id, context).map(Some);
         }
-        "contentWindow" if matches!(tag.as_str(), "iframe" | "frame") => {
-            let sub_opt = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                ensure_iframe_document(&mut data, id)
-            }
-            .map_err(|e| into_js_err(e, context))?;
-            let Some(sub_id) = sub_opt else {
-                return Ok(Some(JsValue::null()));
-            };
-            let subdoc_js = wrap(&format!("subdoc:{sub_id}"), context)?;
-            let cw = JsObject::with_object_proto(context.intrinsics());
-            cw.define_property_or_throw(
-                js_string!("document"),
-                PropertyDescriptor::builder()
-                    .value(subdoc_js)
-                    .writable(false)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )?;
-            let cw_val: JsValue = cw.clone().into();
-            for alias in ["window", "self", "frames"] {
-                cw.define_property_or_throw(
-                    JsString::from(alias),
-                    PropertyDescriptor::builder()
-                        .value(cw_val.clone())
-                        .writable(false)
-                        .enumerable(true)
-                        .configurable(true),
-                    context,
-                )?;
-            }
-            let top_obj = context.global_object();
-            let top_val: JsValue = top_obj.clone().into();
-            for alias in ["parent", "top"] {
-                cw.define_property_or_throw(
-                    JsString::from(alias),
-                    PropertyDescriptor::builder()
-                        .value(top_val.clone())
-                        .writable(false)
-                        .enumerable(true)
-                        .configurable(true),
-                    context,
-                )?;
-            }
-            for global_name in [
-                "Object",
-                "Array",
-                "String",
-                "Number",
-                "Boolean",
-                "Function",
-                "Math",
-                "Date",
-                "RegExp",
-                "Error",
-                "TypeError",
-                "RangeError",
-                "SyntaxError",
-                "Symbol",
-                "Promise",
-                "Map",
-                "Set",
-                "WeakMap",
-                "WeakSet",
-                "Uint8Array",
-                "ArrayBuffer",
-                "DataView",
-                "JSON",
-                "Reflect",
-                "Proxy",
-                "atob",
-                "btoa",
-                "navigator",
-                "performance",
-                "screen",
-            ] {
-                if let Ok(val) = top_obj.get(JsString::from(global_name), context)
-                    && !val.is_undefined()
-                {
-                    cw.define_property_or_throw(
-                        JsString::from(global_name),
-                        PropertyDescriptor::builder()
-                            .value(val)
-                            .writable(true)
-                            .enumerable(false)
-                            .configurable(true),
-                        context,
-                    )?;
-                }
-            }
-            Ok(Some(cw_val))
+        "contentWindow" if tag == "frame" => {
+            return iframe_content_window(id, context).map(Some);
         }
         "getContext" if tag == "canvas" => {
             method(super::canvas::CANVAS_GET_CONTEXT, context).map(|o| Some(o.into()))
@@ -2010,43 +2465,19 @@ pub(super) fn try_set(
     value: &JsValue,
     context: &mut Context,
 ) -> JsResult<Option<()>> {
+    if handle == "document" && name == "nodeValue" {
+        return Ok(Some(()));
+    }
     if handle == "document" && name == "dir" {
         let text = utf8(value, context)?;
         modern::check_context(context)?;
-        let mutated = {
-            let shared = state(context);
-            let mut data = shared.borrow_mut();
-            if let Some(&hid) = data.host.document.nodes[0]
-                .children
-                .iter()
-                .find(|&&c| data.host.document.nodes[c].tag == "html")
-            {
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[hid].attr("dir").map(str::to_owned)
-                } else {
-                    None
-                };
-                data.host.attr(hid, "dir", text.clone()).map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        hid,
-                        "dir",
-                        old,
-                        Some(text),
-                    );
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        };
-        if mutated {
-            super::observers_wc::after_dom_mutation(context)?;
+        let hid_opt = state(context).borrow().host.document.nodes[0]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| state(context).borrow().host.document.nodes[c].tag == "html");
+        if let Some(hid) = hid_opt {
+            set_element_attr_observed(hid, "dir", text, context)?;
         }
         return Ok(Some(()));
     }
@@ -2090,6 +2521,10 @@ pub(super) fn try_set(
         let id = data.host.node(handle).map_err(failure)?;
         (id, data.host.document.nodes[id].tag.clone())
     };
+
+    if tag != "#text" && name == "nodeValue" {
+        return Ok(Some(()));
+    }
 
     if tag == "#text" && matches!(name, "data" | "nodeValue" | "textContent") {
         let text = if value.is_null() && matches!(name, "nodeValue" | "textContent") {
@@ -2299,41 +2734,15 @@ pub(super) fn try_set(
         "open" if tag == "dialog" || tag == "details" => {
             let flag = value.to_boolean();
             let was_open = state(context).borrow().host.document.nodes[id].has("open");
-            let mutated = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[id].attr("open").map(str::to_owned)
-                } else {
-                    None
-                };
+            if was_open != flag {
                 if flag {
-                    data.host.attr(id, "open", String::new()).map_err(failure)?;
+                    set_element_attr_observed(id, "open", String::new(), context)?;
                 } else {
-                    data.host.document.nodes[id]
-                        .attributes
-                        .retain(|(n, _)| n != "open");
+                    remove_element_attr_observed(id, "open", context)?;
                 }
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track && was_open != flag {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        id,
-                        "open",
-                        old,
-                        flag.then(String::new),
-                    );
-                    true
-                } else {
-                    false
+                if tag == "details" {
+                    dom_events::queue_or_fire_simple_event(id, "toggle", false, false, context)?;
                 }
-            };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
-            }
-            if tag == "details" && was_open != flag {
-                dom_events::queue_or_fire_simple_event(id, "toggle", false, false, context)?;
             }
             Ok(Some(()))
         }
@@ -2415,70 +2824,13 @@ pub(super) fn try_set(
         "htmlFor" if tag == "label" => {
             let f = utf8(value, context)?;
             modern::check_context(context)?;
-            let mutated = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[id].attr("for").map(str::to_owned)
-                } else {
-                    None
-                };
-                data.host.attr(id, "for", f.clone()).map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        id,
-                        "for",
-                        old,
-                        Some(f),
-                    );
-                    true
-                } else {
-                    false
-                }
-            };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
-            }
+            set_element_attr_observed(id, "for", f, context)?;
             Ok(Some(()))
         }
         "tabIndex" if !tag.starts_with('#') => {
             let ti = value.to_i32(context)?;
             modern::check_context(context)?;
-            let ti_str = ti.to_string();
-            let mutated = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[id]
-                        .attr("tabindex")
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                data.host
-                    .attr(id, "tabindex", ti_str.clone())
-                    .map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        id,
-                        "tabindex",
-                        old,
-                        Some(ti_str),
-                    );
-                    true
-                } else {
-                    false
-                }
-            };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
-            }
+            set_element_attr_observed(id, "tabindex", ti.to_string(), context)?;
             Ok(Some(()))
         }
         "contentEditable" if !tag.starts_with('#') => {
@@ -2495,77 +2847,89 @@ pub(super) fn try_set(
                     context,
                 )?);
             }
-            let mutated = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[id]
-                        .attr("contenteditable")
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                let new_val = if norm == "inherit" {
-                    data.host.document.nodes[id]
-                        .attributes
-                        .retain(|(n, _)| n != "contenteditable");
-                    None
-                } else {
-                    data.host
-                        .attr(id, "contenteditable", norm.clone())
-                        .map_err(failure)?;
-                    Some(norm)
-                };
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track && (new_val.is_some() || old.is_some()) {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        id,
-                        "contenteditable",
-                        old,
-                        new_val,
-                    );
-                    true
-                } else {
-                    false
-                }
-            };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
+            if norm == "inherit" {
+                remove_element_attr_observed(id, "contenteditable", context)?;
+            } else {
+                set_element_attr_observed(id, "contenteditable", norm, context)?;
+            }
+            Ok(Some(()))
+        }
+        "isMap" if tag == "img" => {
+            let flag = value.to_boolean();
+            modern::check_context(context)?;
+            if flag {
+                set_element_attr_observed(id, "ismap", String::new(), context)?;
+            } else {
+                remove_element_attr_observed(id, "ismap", context)?;
             }
             Ok(Some(()))
         }
         "slot" if !tag.starts_with('#') => {
             let s = utf8(value, context)?;
             modern::check_context(context)?;
-            let mutated = {
+            set_element_attr_observed(id, "slot", s, context)?;
+            Ok(Some(()))
+        }
+        "inert" | "autofocus" if !tag.starts_with('#') => {
+            let flag = value.to_boolean();
+            modern::check_context(context)?;
+            if flag {
+                set_element_attr_observed(id, name, String::new(), context)?;
+            } else {
+                remove_element_attr_observed(id, name, context)?;
+            }
+            Ok(Some(()))
+        }
+        "translate" | "draggable" | "spellcheck" if !tag.starts_with('#') => {
+            if is_svg_element(&state(context).borrow().host.document.nodes, id) {
+                return Ok(None);
+            }
+            let flag = value.to_boolean();
+            let s = if name == "translate" {
+                if flag { "yes" } else { "no" }
+            } else if flag {
+                "true"
+            } else {
+                "false"
+            };
+            set_element_attr_observed(id, name, s.to_owned(), context)?;
+            Ok(Some(()))
+        }
+        "outerText" if !tag.starts_with('#') => {
+            if is_svg_element(&state(context).borrow().host.document.nodes, id) {
+                return Ok(None);
+            }
+            let text = if value.is_null() {
+                String::new()
+            } else {
+                utf8(value, context)?
+            };
+            modern::check_context(context)?;
+            let res: Result<(), DomOpErr> = (|| {
                 let shared = state(context);
                 let mut data = shared.borrow_mut();
-                let track = super::observers_wc::has_any_interest(&data);
-                let old = if track {
-                    data.host.document.nodes[id].attr("slot").map(str::to_owned)
-                } else {
-                    None
-                };
-                data.host.attr(id, "slot", s.clone()).map_err(failure)?;
-                data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                if track {
-                    super::observers_wc::record_attribute_mutation(
-                        &mut data,
-                        id,
-                        "slot",
-                        old,
-                        Some(s),
-                    );
-                    true
-                } else {
-                    false
+                let parent = data.host.document.nodes[id].parent;
+                if parent == id {
+                    return Ok(());
                 }
-            };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
-            }
+                if parent == 0 || data.host.document.nodes[parent].tag == "#document-subroot" {
+                    Err(DomOpErr::Dom(
+                        "NoModificationAllowedError",
+                        "Cannot set outerText on an element whose parent is a Document",
+                    ))
+                } else {
+                    let tid = data
+                        .host
+                        .new_node("#text".into(), text)
+                        .map_err(DomOpErr::Host)?;
+                    insert_node_before(&mut data, parent, tid, Some(id))?;
+                    detach_child_node(&mut data, parent, id);
+                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                    Ok(())
+                }
+            })();
+            res.map_err(|e| into_js_err(e, context))?;
+            super::observers_wc::after_dom_mutation(context)?;
             Ok(Some(()))
         }
         _ if !tag.starts_with('#') => {
@@ -2573,38 +2937,7 @@ pub(super) fn try_set(
             if let Some(attr) = reflected_string_attr(tag.as_str(), name, is_svg) {
                 let text = utf8(value, context)?;
                 modern::check_context(context)?;
-                let mutated = {
-                    let shared = state(context);
-                    let mut data = shared.borrow_mut();
-                    if matches!(tag.as_str(), "iframe" | "frame")
-                        && matches!(attr, "src" | "srcdoc")
-                    {
-                        data.iframe_documents.remove(&id);
-                    }
-                    let track = super::observers_wc::has_any_interest(&data);
-                    let old = if track {
-                        data.host.document.nodes[id].attr(attr).map(str::to_owned)
-                    } else {
-                        None
-                    };
-                    data.host.attr(id, attr, text.clone()).map_err(failure)?;
-                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                    if track {
-                        super::observers_wc::record_attribute_mutation(
-                            &mut data,
-                            id,
-                            attr,
-                            old,
-                            Some(text),
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if mutated {
-                    super::observers_wc::after_dom_mutation(context)?;
-                }
+                set_element_attr_observed(id, attr, text, context)?;
                 return Ok(Some(()));
             }
             if !is_svg
@@ -2613,38 +2946,7 @@ pub(super) fn try_set(
                 let v = value.to_u32(context)?;
                 modern::check_context(context)?;
                 let effective = if non_zero && v == 0 { def_val } else { v };
-                let eff_str = effective.to_string();
-                let mutated = {
-                    let shared = state(context);
-                    let mut data = shared.borrow_mut();
-                    let track = super::observers_wc::has_any_interest(&data);
-                    let old = if track {
-                        data.host.document.nodes[id].attr(attr).map(str::to_owned)
-                    } else {
-                        None
-                    };
-                    data.host.attr(id, attr, eff_str.clone()).map_err(failure)?;
-                    if tag == "canvas" && matches!(attr, "width" | "height") {
-                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
-                            .map_err(failure)?;
-                    }
-                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                    if track {
-                        super::observers_wc::record_attribute_mutation(
-                            &mut data,
-                            id,
-                            attr,
-                            old,
-                            Some(eff_str),
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if mutated {
-                    super::observers_wc::after_dom_mutation(context)?;
-                }
+                set_element_attr_observed(id, attr, effective.to_string(), context)?;
                 return Ok(Some(()));
             }
             Ok(None)
@@ -2676,8 +2978,22 @@ fn reflected_string_attr(tag: &str, prop: &str, is_svg: bool) -> Option<&'static
     if is_svg {
         return None;
     }
+    match prop {
+        "accessKey" => return Some("accesskey"),
+        "autocapitalize" => return Some("autocapitalize"),
+        "enterKeyHint" => return Some("enterkeyhint"),
+        "inputMode" => return Some("inputmode"),
+        "nonce" => return Some("nonce"),
+        _ => {}
+    }
     match (tag, prop) {
         ("img" | "area" | "input", "alt") => Some("alt"),
+        ("img" | "object", "useMap") => Some("usemap"),
+        ("img" | "script" | "link" | "iframe", "fetchPriority") => Some("fetchpriority"),
+        ("img", "lowsrc") => Some("lowsrc"),
+        ("img", "align") => Some("align"),
+        ("img", "longDesc") => Some("longdesc"),
+        ("img" | "table", "border") => Some("border"),
         ("a" | "area" | "form" | "base", "target") => Some("target"),
         ("a" | "area" | "link" | "form", "rel") => Some("rel"),
         ("a" | "area", "download") => Some("download"),
@@ -2697,7 +3013,6 @@ fn reflected_string_attr(tag: &str, prop: &str, is_svg: bool) -> Option<&'static
         }
         ("iframe", "sandbox") => Some("sandbox"),
         ("iframe", "allow") => Some("allow"),
-        ("iframe", "srcdoc") => Some("srcdoc"),
         ("iframe" | "frame", "frameBorder") => Some("frameborder"),
         ("iframe" | "frame", "scrolling") => Some("scrolling"),
         (
@@ -2732,6 +3047,8 @@ fn reflected_uint_attr(tag: &str, prop: &str) -> Option<(&'static str, u32, bool
         ("canvas", "height") => Some(("height", 150, false)),
         ("img" | "video" | "input", "width") => Some(("width", 0, false)),
         ("img" | "video" | "input", "height") => Some(("height", 0, false)),
+        ("img", "hspace") => Some(("hspace", 0, false)),
+        ("img", "vspace") => Some(("vspace", 0, false)),
         ("textarea", "rows") => Some(("rows", 2, true)),
         ("textarea", "cols") => Some(("cols", 20, true)),
         ("input", "size") => Some(("size", 20, true)),
@@ -2741,6 +3058,142 @@ fn reflected_uint_attr(tag: &str, prop: &str) -> Option<(&'static str, u32, bool
         ("td" | "th", "rowSpan") => Some(("rowspan", 1, false)),
         _ => None,
     }
+}
+
+fn iframe_content_document(id: usize, context: &mut Context) -> JsResult<JsValue> {
+    let sub_opt = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        let res = ensure_iframe_document(&mut data, id);
+        if matches!(res, Ok(None)) {
+            clear_cached_iframe_window(&mut data, id);
+        }
+        res
+    }
+    .map_err(|e| into_js_err(e, context))?;
+    match sub_opt {
+        Some(sub_id) => wrap(&format!("subdoc:{sub_id}"), context),
+        None => Ok(JsValue::null()),
+    }
+}
+
+fn iframe_content_window(id: usize, context: &mut Context) -> JsResult<JsValue> {
+    let (sub_opt, cached_cw, window_proto, initial_keys) = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        let sub_opt = ensure_iframe_document(&mut data, id).map_err(|e| into_js_err(e, context))?;
+        let cached = match sub_opt {
+            Some(sub_id) => data.dom_prototypes.as_ref().and_then(|dp| {
+                dp.iframe_windows
+                    .iter()
+                    .find(|e| e.iframe_id == id && e.sub_id == sub_id)
+                    .map(|e| e.window.clone())
+            }),
+            None => {
+                clear_cached_iframe_window(&mut data, id);
+                None
+            }
+        };
+        let (wp, ik) = match data.dom_prototypes.as_ref() {
+            Some(dp) => (dp.proto("Window"), dp.initial_window_keys.clone()),
+            None => (None, Vec::new()),
+        };
+        (sub_opt, cached, wp, ik)
+    };
+    let Some(sub_id) = sub_opt else {
+        return Ok(JsValue::null());
+    };
+    if let Some(cw) = cached_cw {
+        return Ok(cw.into());
+    }
+    let subdoc_js = wrap(&format!("subdoc:{sub_id}"), context)?;
+    let cw = match window_proto {
+        Some(wp) => JsObject::from_proto_and_data(Some(wp), ()),
+        None => JsObject::with_object_proto(context.intrinsics()),
+    };
+    def_prop(
+        &cw,
+        js_string!("document"),
+        subdoc_js,
+        false,
+        true,
+        true,
+        context,
+    )?;
+    let cw_val: JsValue = cw.clone().into();
+    for alias in ["window", "self", "frames"] {
+        def_prop(
+            &cw,
+            JsString::from(alias),
+            cw_val.clone(),
+            false,
+            true,
+            true,
+            context,
+        )?;
+    }
+    let top_obj = context.global_object();
+    let top_val: JsValue = top_obj.clone().into();
+    for alias in ["parent", "top"] {
+        def_prop(
+            &cw,
+            JsString::from(alias),
+            top_val.clone(),
+            false,
+            true,
+            true,
+            context,
+        )?;
+    }
+    for global_name in &initial_keys {
+        if matches!(
+            global_name.as_str(),
+            "window" | "self" | "frames" | "parent" | "top" | "document" | "globalThis"
+        ) {
+            continue;
+        }
+        let pk = PropertyKey::from(JsString::from(global_name.as_str()));
+        if let Some(desc) = top_obj.borrow().properties().get(&pk) {
+            let mut copy_desc = desc.clone();
+            if !copy_desc.configurable().unwrap_or(true) {
+                if let Some(val) = copy_desc.value().cloned() {
+                    copy_desc = PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(copy_desc.writable().unwrap_or(false))
+                        .enumerable(copy_desc.enumerable().unwrap_or(false))
+                        .configurable(true)
+                        .build();
+                } else {
+                    continue;
+                }
+            }
+            let _ = cw.define_property_or_throw(pk, copy_desc, context);
+        }
+    }
+    def_prop(
+        &cw,
+        js_string!("globalThis"),
+        cw_val.clone(),
+        true,
+        false,
+        true,
+        context,
+    )?;
+    {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        if let Some(dp) = data.dom_prototypes.as_mut() {
+            dp.iframe_windows.retain(|e| e.iframe_id != id);
+            if dp.iframe_windows.len() < 64 {
+                dp.iframe_windows.push(CachedIframeWindow {
+                    iframe_id: id,
+                    sub_id,
+                    window: cw.clone(),
+                });
+            }
+        }
+    }
+    Ok(cw_val)
 }
 
 fn ensure_iframe_document(data: &mut State, iframe_id: usize) -> Result<Option<usize>, DomOpErr> {
@@ -2795,13 +3248,29 @@ fn find_in_subtree(
     None
 }
 
-fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsValue> {
+fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<Option<JsValue>> {
+    if let Some(cval) = node_constant(name) {
+        return Ok(Some(cval.into()));
+    }
+    if let Some(m) = doc_shared_method(name)
+        .or_else(|| common_node_method(name))
+        .or_else(|| parent_node_method(name))
+    {
+        return method(m, context).map(|o| Some(o.into()));
+    }
     match name {
-        "nodeType" => Ok(9.into()),
-        "nodeName" => Ok(js_string!("#document").into()),
-        "ownerDocument" | "parentNode" | "parentElement" => Ok(JsValue::null()),
-        "isConnected" => Ok(false.into()),
-        "documentElement" => {
+        "nodeType" => Ok(Some(9.into())),
+        "nodeName" => Ok(Some(js_string!("#document").into())),
+        "ownerDocument" | "parentNode" | "parentElement" | "nodeValue" | "currentScript" => {
+            Ok(Some(JsValue::null()))
+        }
+        "baseURI" => {
+            let u = state(context).borrow().host.base_url().to_string();
+            Ok(Some(JsString::from(u.as_str()).into()))
+        }
+        "isConnected" => Ok(Some(false.into())),
+        "readyState" => Ok(Some(js_string!("complete").into())),
+        "documentElement" | "firstElementChild" => {
             let found = {
                 let shared = state(context);
                 let data = shared.borrow();
@@ -2812,8 +3281,8 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
                     .find(|&c| !data.host.document.nodes[c].tag.starts_with('#'))
             };
             match found {
-                Some(id) => wrap(&format!("node:{id}"), context),
-                None => Ok(JsValue::null()),
+                Some(id) => wrap(&format!("node:{id}"), context).map(Some),
+                None => Ok(Some(JsValue::null())),
             }
         }
         "head" | "body" => {
@@ -2823,8 +3292,8 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
                 find_in_subtree(&data.host.document.nodes, sub_id, |n| n.tag == name)
             };
             match found {
-                Some(id) => wrap(&format!("node:{id}"), context),
-                None => Ok(JsValue::null()),
+                Some(id) => wrap(&format!("node:{id}"), context).map(Some),
+                None => Ok(Some(JsValue::null())),
             }
         }
         "title" => {
@@ -2835,7 +3304,7 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
                     .map(|tid| text_content(&data.host.document.nodes, tid))
                     .unwrap_or_default()
             };
-            Ok(JsString::from(t.as_str()).into())
+            Ok(Some(JsString::from(t.as_str()).into()))
         }
         "children" | "childNodes" => {
             let col = {
@@ -2851,48 +3320,22 @@ fn subdoc_get(sub_id: usize, name: &str, context: &mut Context) -> JsResult<JsVa
                     .collect();
                 data.host.collection(kids).map_err(failure)?
             };
-            from_host(col, context)
+            from_host(col, context).map(Some)
         }
-        "firstElementChild" => {
-            let found = {
-                let shared = state(context);
-                let data = shared.borrow();
-                data.host.document.nodes[sub_id]
-                    .children
-                    .iter()
-                    .copied()
-                    .find(|&c| !data.host.document.nodes[c].tag.starts_with('#'))
-            };
-            match found {
-                Some(id) => wrap(&format!("node:{id}"), context),
-                None => Ok(JsValue::null()),
-            }
+        "querySelector" => method("host.dom.querySelector", context).map(|o| Some(o.into())),
+        "querySelectorAll" => method("host.dom.querySelectorAll", context).map(|o| Some(o.into())),
+        "getElementById" => method("host.dom.getElementById", context).map(|o| Some(o.into())),
+        "getElementsByTagName" => {
+            method("host.dom.getElementsByTagName", context).map(|o| Some(o.into()))
         }
-        "querySelector" => method("host.dom.querySelector", context).map(Into::into),
-        "querySelectorAll" => method("host.dom.querySelectorAll", context).map(Into::into),
-        "getElementById" => method("host.dom.getElementById", context).map(Into::into),
-        "getElementsByTagName" => method("host.dom.getElementsByTagName", context).map(Into::into),
         "getElementsByClassName" => {
-            method("host.dom.getElementsByClassName", context).map(Into::into)
+            method("host.dom.getElementsByClassName", context).map(|o| Some(o.into()))
         }
-        "createElement" => method("host.dom.createElement", context).map(Into::into),
-        "createTextNode" => method("host.dom.createTextNode", context).map(Into::into),
-        "createDocumentFragment" => method(CREATE_DOCUMENT_FRAGMENT, context).map(Into::into),
-        "appendChild" => method("host.dom.appendChild", context).map(Into::into),
-        "removeChild" => method("host.dom.removeChild", context).map(Into::into),
-        "insertBefore" => method(INSERT_BEFORE, context).map(Into::into),
-        "replaceChild" => method(REPLACE_CHILD, context).map(Into::into),
-        "contains" => method(CONTAINS, context).map(Into::into),
-        "hasChildNodes" => method(HAS_CHILD_NODES, context).map(Into::into),
-        "cloneNode" => method(CLONE_NODE, context).map(Into::into),
-        "write" => method(DOC_WRITE, context).map(Into::into),
-        "writeln" => method(DOC_WRITELN, context).map(Into::into),
-        "open" => method(DOC_OPEN, context).map(Into::into),
-        "close" => method(DOC_CLOSE, context).map(Into::into),
-        "getAnimations" => method(super::observers_wc::DOC_GET_ANIMATIONS, context).map(Into::into),
-        "currentScript" => Ok(JsValue::null()),
-        "readyState" => Ok(js_string!("complete").into()),
-        _ => Ok(JsValue::undefined()),
+        "createElement" => method("host.dom.createElement", context).map(|o| Some(o.into())),
+        "createTextNode" => method("host.dom.createTextNode", context).map(|o| Some(o.into())),
+        "appendChild" => method("host.dom.appendChild", context).map(|o| Some(o.into())),
+        "removeChild" => method("host.dom.removeChild", context).map(|o| Some(o.into())),
+        _ => Ok(None),
     }
 }
 
@@ -3407,63 +3850,22 @@ pub(super) fn call(
                     context,
                 )?);
             }
-            let (next, mutated) = {
+            let present = {
                 let shared = state(context);
-                let mut data = shared.borrow_mut();
+                let data = shared.borrow();
                 if id == 0 || data.host.document.nodes[id].tag.starts_with('#') {
                     return Err(failure("toggleAttribute requires an Element receiver"));
                 }
                 if attr == crate::document::INTERNAL_CANVAS_ATTR {
                     return Ok(force.unwrap_or(true).into());
                 }
-                let track = super::observers_wc::has_any_interest(&data);
-                let old_val = if track {
-                    data.host.document.nodes[id].attr(&attr).map(str::to_owned)
-                } else {
-                    None
-                };
-                let present = data.host.document.nodes[id].has(&attr);
-                let next = force.unwrap_or(!present);
-                let mut did_obs = false;
-                if next && !present {
-                    data.host.attr(id, &attr, String::new()).map_err(failure)?;
-                    dom_events::invalidate_inline_handler(&mut data, id, &attr);
-                    if matches!(attr.as_str(), "width" | "height") {
-                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
-                            .map_err(failure)?;
-                    }
-                    if track {
-                        super::observers_wc::record_attribute_mutation(
-                            &mut data,
-                            id,
-                            &attr,
-                            old_val,
-                            Some(String::new()),
-                        );
-                        did_obs = true;
-                    }
-                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                } else if !next && present {
-                    data.host.document.nodes[id]
-                        .attributes
-                        .retain(|(n, _)| n != &attr);
-                    dom_events::invalidate_inline_handler(&mut data, id, &attr);
-                    if matches!(attr.as_str(), "width" | "height") {
-                        super::canvas::on_canvas_dimension_mutated(&mut data, id)
-                            .map_err(failure)?;
-                    }
-                    if track {
-                        super::observers_wc::record_attribute_mutation(
-                            &mut data, id, &attr, old_val, None,
-                        );
-                        did_obs = true;
-                    }
-                    data.dom_epoch = data.dom_epoch.wrapping_add(1);
-                }
-                (next, did_obs)
+                data.host.document.nodes[id].has(&attr)
             };
-            if mutated {
-                super::observers_wc::after_dom_mutation(context)?;
+            let next = force.unwrap_or(!present);
+            if next && !present {
+                set_element_attr_observed(id, &attr, String::new(), context)?;
+            } else if !next && present {
+                remove_element_attr_observed(id, &attr, context)?;
             }
             Ok(next.into())
         }
@@ -3985,8 +4387,1391 @@ pub(super) fn call(
             super::observers_wc::after_dom_mutation(context)?;
             Ok(JsValue::undefined())
         }
+        IS_SAME_NODE => {
+            let id = receiver_node(this, context)?;
+            let Some(first) = args.first() else {
+                return Ok(false.into());
+            };
+            if first.is_null() || first.is_undefined() {
+                return Ok(false.into());
+            }
+            let other = node_arg(first, context)?;
+            Ok((id == other).into())
+        }
+        IS_EQUAL_NODE => {
+            let id = receiver_node(this, context)?;
+            let Some(first) = args.first() else {
+                return Ok(false.into());
+            };
+            if first.is_null() || first.is_undefined() {
+                return Ok(false.into());
+            }
+            let other = node_arg(first, context)?;
+            if id == other {
+                return Ok(true.into());
+            }
+            let eq = {
+                let shared = state(context);
+                let data = shared.borrow();
+                nodes_equal(&data.host.document.nodes, id, other)
+            };
+            Ok(eq.into())
+        }
+        NORMALIZE => {
+            let id = receiver_node(this, context)?;
+            let mutated = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                normalize_subtree(&mut data, id)
+            };
+            if mutated {
+                super::observers_wc::after_dom_mutation(context)?;
+            }
+            Ok(JsValue::undefined())
+        }
+        LOOKUP_NAMESPACE_URI => {
+            let id = receiver_node(this, context)?;
+            let prefix = match args.first() {
+                None => None,
+                Some(v) if v.is_null() || v.is_undefined() => None,
+                Some(v) => {
+                    let s = utf8(v, context)?;
+                    modern::check_context(context)?;
+                    if s.is_empty() { None } else { Some(s) }
+                }
+            };
+            match prefix.as_deref() {
+                Some("xml") => return Ok(js_string!("http://www.w3.org/XML/1998/namespace").into()),
+                Some("xmlns") => return Ok(js_string!("http://www.w3.org/2000/xmlns/").into()),
+                Some(_) => return Ok(JsValue::null()),
+                None => {
+                    let ns = {
+                        let shared = state(context);
+                        let data = shared.borrow();
+                        default_namespace_for_node(&data.host.document.nodes, id)
+                    };
+                    return Ok(match ns {
+                        Some(s) => JsString::from(s).into(),
+                        None => JsValue::null(),
+                    });
+                }
+            }
+        }
+        LOOKUP_PREFIX => {
+            let _id = receiver_node(this, context)?;
+            let ns = match args.first() {
+                None => None,
+                Some(v) if v.is_null() || v.is_undefined() => None,
+                Some(v) => {
+                    let s = utf8(v, context)?;
+                    modern::check_context(context)?;
+                    if s.is_empty() { None } else { Some(s) }
+                }
+            };
+            Ok(match ns.as_deref() {
+                Some("http://www.w3.org/XML/1998/namespace") => js_string!("xml").into(),
+                Some("http://www.w3.org/2000/xmlns/") => js_string!("xmlns").into(),
+                _ => JsValue::null(),
+            })
+        }
+        IS_DEFAULT_NAMESPACE => {
+            let id = receiver_node(this, context)?;
+            let ns = match args.first() {
+                None => None,
+                Some(v) if v.is_null() || v.is_undefined() => None,
+                Some(v) => {
+                    let s = utf8(v, context)?;
+                    modern::check_context(context)?;
+                    if s.is_empty() { None } else { Some(s) }
+                }
+            };
+            let def_ns = {
+                let shared = state(context);
+                let data = shared.borrow();
+                default_namespace_for_node(&data.host.document.nodes, id)
+            };
+            Ok((ns.as_deref() == def_ns).into())
+        }
+        HAS_ATTRIBUTES => {
+            let id = receiver_element_node(this, "hasAttributes", context)?;
+            let has = state(context).borrow().host.document.nodes[id]
+                .attributes
+                .iter()
+                .any(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR);
+            Ok(has.into())
+        }
+        GET_ATTRIBUTE_NS => {
+            let id = receiver_element_node(this, "getAttributeNS", context)?;
+            if args.len() < 2 {
+                return Err(failure("getAttributeNS requires 2 arguments"));
+            }
+            let ns = opt_nullable_str(&args[0], context)?;
+            let local = utf8(&args[1], context)?;
+            modern::check_context(context)?;
+            if ns.is_some() {
+                return Ok(JsValue::null());
+            }
+            let lower = local.to_ascii_lowercase();
+            if lower == crate::document::INTERNAL_CANVAS_ATTR {
+                return Ok(JsValue::null());
+            }
+            let val = state(context).borrow().host.document.nodes[id]
+                .attr(&lower)
+                .map(str::to_owned);
+            Ok(match val {
+                Some(v) => JsString::from(v.as_str()).into(),
+                None => JsValue::null(),
+            })
+        }
+        SET_ATTRIBUTE_NS => {
+            let id = receiver_element_node(this, "setAttributeNS", context)?;
+            if args.len() < 3 {
+                return Err(failure("setAttributeNS requires 3 arguments"));
+            }
+            let _ns = opt_nullable_str(&args[0], context)?;
+            let qname = utf8(&args[1], context)?;
+            let val = utf8(&args[2], context)?;
+            modern::check_context(context)?;
+            let local = qname
+                .rsplit_once(':')
+                .map(|(_, l)| l)
+                .unwrap_or(qname.as_str())
+                .to_ascii_lowercase();
+            if !super::super::valid_name(&local) || local == crate::document::INTERNAL_CANVAS_ATTR {
+                return Err(dom_exception::exception(
+                    "InvalidCharacterError",
+                    "Invalid attribute name",
+                    context,
+                )?);
+            }
+            set_element_attr_observed(id, &local, val, context)?;
+            Ok(JsValue::undefined())
+        }
+        REMOVE_ATTRIBUTE_NS => {
+            let id = receiver_element_node(this, "removeAttributeNS", context)?;
+            if args.len() < 2 {
+                return Err(failure("removeAttributeNS requires 2 arguments"));
+            }
+            let ns = opt_nullable_str(&args[0], context)?;
+            let local = utf8(&args[1], context)?.to_ascii_lowercase();
+            modern::check_context(context)?;
+            if ns.is_none() && local != crate::document::INTERNAL_CANVAS_ATTR {
+                remove_element_attr_observed(id, &local, context)?;
+            }
+            Ok(JsValue::undefined())
+        }
+        HAS_ATTRIBUTE_NS => {
+            let id = receiver_element_node(this, "hasAttributeNS", context)?;
+            if args.len() < 2 {
+                return Err(failure("hasAttributeNS requires 2 arguments"));
+            }
+            let ns = opt_nullable_str(&args[0], context)?;
+            let local = utf8(&args[1], context)?.to_ascii_lowercase();
+            modern::check_context(context)?;
+            if ns.is_some() || local == crate::document::INTERNAL_CANVAS_ATTR {
+                return Ok(false.into());
+            }
+            Ok(state(context).borrow().host.document.nodes[id]
+                .has(&local)
+                .into())
+        }
+        GET_ELEMENTS_BY_TAG_NAME_NS => {
+            let root = receiver_node(this, context)?;
+            if args.len() < 2 {
+                return Err(failure("getElementsByTagNameNS requires 2 arguments"));
+            }
+            let ns = opt_nullable_str(&args[0], context)?;
+            let local = utf8(&args[1], context)?;
+            modern::check_context(context)?;
+            let col = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let nodes = &data.host.document.nodes;
+                if nodes[root].tag == "#text" || nodes[root].tag == "#comment" {
+                    return Err(failure(
+                        "getElementsByTagNameNS requires Document or Element",
+                    ));
+                }
+                let mut items = Vec::new();
+                let mut stack: Vec<usize> = nodes[root].children.iter().rev().copied().collect();
+                for _ in 0..crate::document::MAX_NODES {
+                    let Some(nid) = stack.pop() else { break };
+                    let t = nodes[nid].tag.as_str();
+                    if !t.starts_with('#') {
+                        let el_ns = if is_svg_element(nodes, nid) {
+                            "http://www.w3.org/2000/svg"
+                        } else {
+                            "http://www.w3.org/1999/xhtml"
+                        };
+                        let ns_ok = match ns.as_deref() {
+                            Some("*") => true,
+                            Some(want) => want == el_ns,
+                            None => false,
+                        };
+                        let local_ok = local == "*" || t == local;
+                        if ns_ok && local_ok {
+                            items.push(nid);
+                        }
+                        if t != "template" {
+                            stack.extend(nodes[nid].children.iter().rev().copied());
+                        }
+                    }
+                }
+                data.host.collection(items).map_err(failure)?
+            };
+            from_host(col, context)
+        }
+        GET_ATTRIBUTE_NODE => {
+            let id = receiver_element_node(this, "getAttributeNode", context)?;
+            let name_arg = args
+                .first()
+                .ok_or_else(|| failure("getAttributeNode requires 1 argument"))?;
+            let attr_name = utf8(name_arg, context)?.to_ascii_lowercase();
+            modern::check_context(context)?;
+            if attr_name == crate::document::INTERNAL_CANVAS_ATTR {
+                return Ok(JsValue::null());
+            }
+            let val = state(context).borrow().host.document.nodes[id]
+                .attr(&attr_name)
+                .map(str::to_owned);
+            match val {
+                Some(v) => build_single_attr_object(id, &attr_name, &v, context),
+                None => Ok(JsValue::null()),
+            }
+        }
+        GET_ATTRIBUTE_NODE_NS => {
+            let id = receiver_element_node(this, "getAttributeNodeNS", context)?;
+            if args.len() < 2 {
+                return Err(failure("getAttributeNodeNS requires 2 arguments"));
+            }
+            let ns = opt_nullable_str(&args[0], context)?;
+            let local = utf8(&args[1], context)?.to_ascii_lowercase();
+            modern::check_context(context)?;
+            if ns.is_some() || local == crate::document::INTERNAL_CANVAS_ATTR {
+                return Ok(JsValue::null());
+            }
+            let val = state(context).borrow().host.document.nodes[id]
+                .attr(&local)
+                .map(str::to_owned);
+            match val {
+                Some(v) => build_single_attr_object(id, &local, &v, context),
+                None => Ok(JsValue::null()),
+            }
+        }
+        SET_ATTRIBUTE_NODE | SET_ATTRIBUTE_NODE_NS => {
+            let id = receiver_element_node(this, "setAttributeNode", context)?;
+            let attr_obj = args
+                .first()
+                .and_then(JsValue::as_object)
+                .ok_or_else(|| failure("setAttributeNode requires an Attr object"))?;
+            let raw_name = utf8(&attr_obj.get(js_string!("name"), context)?, context)?;
+            let raw_val = utf8(&attr_obj.get(js_string!("value"), context)?, context)?;
+            modern::check_context(context)?;
+            let lower = raw_name.to_ascii_lowercase();
+            if !super::super::valid_name(&lower) || lower == crate::document::INTERNAL_CANVAS_ATTR {
+                return Err(dom_exception::exception(
+                    "InvalidCharacterError",
+                    "Invalid attribute name",
+                    context,
+                )?);
+            }
+            let prev = state(context).borrow().host.document.nodes[id]
+                .attr(&lower)
+                .map(str::to_owned);
+            set_element_attr_observed(id, &lower, raw_val, context)?;
+            match prev {
+                Some(old_v) => build_single_attr_object(id, &lower, &old_v, context),
+                None => Ok(JsValue::null()),
+            }
+        }
+        REMOVE_ATTRIBUTE_NODE => {
+            let id = receiver_element_node(this, "removeAttributeNode", context)?;
+            let attr_obj = args
+                .first()
+                .and_then(JsValue::as_object)
+                .ok_or_else(|| failure("removeAttributeNode requires an Attr object"))?;
+            let raw_name = utf8(&attr_obj.get(js_string!("name"), context)?, context)?;
+            modern::check_context(context)?;
+            let lower = raw_name.to_ascii_lowercase();
+            let prev = state(context).borrow().host.document.nodes[id]
+                .attr(&lower)
+                .map(str::to_owned);
+            let Some(old_v) = prev else {
+                return Err(dom_exception::exception(
+                    "NotFoundError",
+                    "The node provided is owned by another element or not found",
+                    context,
+                )?);
+            };
+            remove_element_attr_observed(id, &lower, context)?;
+            build_single_attr_object(id, &lower, &old_v, context)
+        }
+        ATTACH_SHADOW => {
+            let _id = receiver_element_node(this, "attachShadow", context)?;
+            let init = args
+                .first()
+                .and_then(JsValue::as_object)
+                .ok_or_else(|| failure("attachShadow requires a ShadowRootInit dictionary"))?;
+            let mode_val = init.get(js_string!("mode"), context)?;
+            let mode = utf8(&mode_val, context)?;
+            modern::check_context(context)?;
+            if !matches!(mode.as_str(), "open" | "closed") {
+                return Err(failure(
+                    "Failed to execute 'attachShadow': invalid ShadowRootMode",
+                ));
+            }
+            Err(dom_exception::exception(
+                "NotSupportedError",
+                "Shadow DOM attachment is not supported for this element",
+                context,
+            )?)
+        }
+        CHECK_VISIBILITY => {
+            let id = receiver_element_node(this, "checkVisibility", context)?;
+            let (mut check_opacity, mut check_vis_css) = (false, false);
+            if let Some(opts) = args.first().and_then(JsValue::as_object) {
+                let op = opts.get(js_string!("checkOpacity"), context)?;
+                let op_alt = opts.get(js_string!("opacityProperty"), context)?;
+                let vc = opts.get(js_string!("checkVisibilityCSS"), context)?;
+                let vc_alt = opts.get(js_string!("visibilityProperty"), context)?;
+                modern::check_context(context)?;
+                check_opacity = op.to_boolean() || op_alt.to_boolean();
+                check_vis_css = vc.to_boolean() || vc_alt.to_boolean();
+            }
+            let visible = {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                if !is_connected_node(&data.host.document.nodes, id) {
+                    false
+                } else {
+                    geometry_style::ensure_layout_cached(&mut data);
+                    let cached = data.cached_layout.as_ref();
+                    let mut cur = id;
+                    let mut ok = true;
+                    for _ in 0..=crate::document::MAX_DEPTH {
+                        if cur == 0 || cur >= data.host.document.nodes.len() {
+                            break;
+                        }
+                        let n = &data.host.document.nodes[cur];
+                        if n.tag.starts_with('#') {
+                            break;
+                        }
+                        if n.has("hidden") {
+                            ok = false;
+                            break;
+                        }
+                        if let Some(st) = cached.and_then(|c| c.styles.get(cur)) {
+                            if st.display == crate::style::Display::None {
+                                ok = false;
+                                break;
+                            }
+                            if check_vis_css && !st.visible {
+                                ok = false;
+                                break;
+                            }
+                            if check_opacity && st.opacity <= 0.0 {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        let p = n.parent;
+                        if p == cur {
+                            break;
+                        }
+                        cur = p;
+                    }
+                    ok
+                }
+            };
+            Ok(visible.into())
+        }
+        REQUEST_FULLSCREEN => {
+            let _id = receiver_element_node(this, "requestFullscreen", context)?;
+            let err = dom_exception::exception(
+                "NotAllowedError",
+                "Fullscreen request denied without active user gesture",
+                context,
+            )?;
+            Ok(JsPromise::reject(err, context)?.into())
+        }
+        EL_SCROLL | EL_SCROLL_TO | EL_SCROLL_BY => {
+            let id = receiver_element_node(this, "scroll", context)?;
+            let is_by = name == EL_SCROLL_BY;
+            let (dx, dy) = if let Some(opts) = args.first().and_then(JsValue::as_object) {
+                let left_v = opts.get(js_string!("left"), context)?;
+                let top_v = opts.get(js_string!("top"), context)?;
+                let lx = if left_v.is_undefined() {
+                    None
+                } else {
+                    Some(left_v.to_number(context)?)
+                };
+                let ty = if top_v.is_undefined() {
+                    None
+                } else {
+                    Some(top_v.to_number(context)?)
+                };
+                modern::check_context(context)?;
+                (lx, ty)
+            } else {
+                let lx = match args.first() {
+                    Some(v) => Some(v.to_number(context)?),
+                    None => Some(0.0),
+                };
+                let ty = match args.get(1) {
+                    Some(v) => Some(v.to_number(context)?),
+                    None => Some(0.0),
+                };
+                modern::check_context(context)?;
+                (lx, ty)
+            };
+            {
+                let shared = state(context);
+                let mut data = shared.borrow_mut();
+                let resolve_axis = |cur: f32, d: Option<f64>| -> f32 {
+                    match d {
+                        Some(v) if v.is_finite() => {
+                            (if is_by { cur as f64 + v } else { v }).max(0.0) as f32
+                        }
+                        _ => cur,
+                    }
+                };
+                if data.host.document.nodes[id].tag == "html" {
+                    let nx = resolve_axis(data.viewport.scroll_x, dx);
+                    let ny = resolve_axis(data.viewport.scroll_y, dy);
+                    data.viewport.scroll_x = nx;
+                    data.viewport.scroll_y = ny;
+                    data.scroll_request =
+                        Some(crate::page_session::platform::ScrollRequest::Absolute {
+                            x: nx,
+                            y: ny,
+                        });
+                } else {
+                    let (cur_x, cur_y) = data
+                        .element_scroll_offsets
+                        .get(&id)
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+                    data.element_scroll_offsets
+                        .insert(id, (resolve_axis(cur_x, dx), resolve_axis(cur_y, dy)));
+                }
+            }
+            Ok(JsValue::undefined())
+        }
+        EL_SCROLL_INTO_VIEW_IF_NEEDED => {
+            let _id = receiver_element_node(this, "scrollIntoViewIfNeeded", context)?;
+            geometry_style::call(geometry_style::EL_SCROLL_INTO_VIEW, this, &[], context)
+        }
+        IMG_DECODE => {
+            let id = receiver_element_node(this, "decode", context)?;
+            let is_img = state(context).borrow().host.document.nodes[id].tag == "img";
+            if !is_img {
+                return Err(failure(
+                    "HTMLImageElement.decode requires an <img> receiver",
+                ));
+            }
+            Ok(JsPromise::resolve(JsValue::undefined(), context)?.into())
+        }
         _ => Err(failure("Unknown DOM operation")),
     }
+}
+
+fn receiver_element_node(this: &JsValue, op: &str, context: &mut Context) -> JsResult<usize> {
+    let id = receiver_node(this, context)?;
+    let is_el = {
+        let shared = state(context);
+        let data = shared.borrow();
+        id != 0 && !data.host.document.nodes[id].tag.starts_with('#')
+    };
+    if !is_el {
+        return Err(failure(format!("{op} requires an Element receiver")));
+    }
+    Ok(id)
+}
+
+fn opt_nullable_str(val: &JsValue, context: &mut Context) -> JsResult<Option<String>> {
+    if val.is_null() || val.is_undefined() {
+        return Ok(None);
+    }
+    let s = utf8(val, context)?;
+    modern::check_context(context)?;
+    if s.is_empty() { Ok(None) } else { Ok(Some(s)) }
+}
+
+fn default_namespace_for_node(nodes: &[Node], mut id: usize) -> Option<&'static str> {
+    if id == 0 || nodes[id].tag == "#document-subroot" {
+        let doc_el = nodes[id]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| !nodes[c].tag.starts_with('#'))?;
+        id = doc_el;
+    }
+    for _ in 0..=crate::document::MAX_DEPTH {
+        if id == 0 || id >= nodes.len() {
+            return None;
+        }
+        if !nodes[id].tag.starts_with('#') {
+            return Some(if is_svg_element(nodes, id) {
+                "http://www.w3.org/2000/svg"
+            } else {
+                "http://www.w3.org/1999/xhtml"
+            });
+        }
+        let p = nodes[id].parent;
+        if p == id {
+            return None;
+        }
+        id = p;
+    }
+    None
+}
+
+fn nodes_equal(nodes: &[Node], a: usize, b: usize) -> bool {
+    let mut stack = vec![(a, b)];
+    let mut steps = 0usize;
+    while let Some((x, y)) = stack.pop() {
+        steps += 1;
+        if steps > crate::document::MAX_NODES {
+            return false;
+        }
+        let (nx, ny) = (&nodes[x], &nodes[y]);
+        let tx = if x == 0 {
+            "#document-subroot"
+        } else {
+            nx.tag.as_str()
+        };
+        let ty = if y == 0 {
+            "#document-subroot"
+        } else {
+            ny.tag.as_str()
+        };
+        if tx != ty {
+            return false;
+        }
+        if matches!(tx, "#text" | "#comment") && nx.text != ny.text {
+            return false;
+        }
+        if !tx.starts_with('#') {
+            let ax: Vec<&(String, String)> = nx
+                .attributes
+                .iter()
+                .filter(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR)
+                .collect();
+            let ay: Vec<&(String, String)> = ny
+                .attributes
+                .iter()
+                .filter(|(k, _)| k != crate::document::INTERNAL_CANVAS_ATTR)
+                .collect();
+            if ax.len() != ay.len() {
+                return false;
+            }
+            for &(k, v) in &ax {
+                if ny.attr(k) != Some(v.as_str()) {
+                    return false;
+                }
+            }
+        }
+        if nx.children.len() != ny.children.len() {
+            return false;
+        }
+        for (&cx, &cy) in nx.children.iter().zip(ny.children.iter()) {
+            stack.push((cx, cy));
+        }
+    }
+    true
+}
+
+fn normalize_subtree(data: &mut State, root: usize) -> bool {
+    let mut postorder = Vec::new();
+    let mut stack = vec![(root, false)];
+    let mut visited = 0usize;
+    while let Some((nid, expanded)) = stack.pop() {
+        visited += 1;
+        if visited > crate::document::MAX_NODES * 2 {
+            break;
+        }
+        if expanded {
+            postorder.push(nid);
+        } else {
+            stack.push((nid, true));
+            for &ch in data.host.document.nodes[nid].children.iter().rev() {
+                if !matches!(
+                    data.host.document.nodes[ch].tag.as_str(),
+                    "#text" | "#comment"
+                ) {
+                    stack.push((ch, false));
+                }
+            }
+        }
+    }
+    let mut mutated = false;
+    for parent in postorder {
+        let old_kids = data.host.document.nodes[parent].children.clone();
+        let mut new_kids: Vec<usize> = Vec::with_capacity(old_kids.len());
+        for ch in old_kids {
+            if data.host.document.nodes[ch].tag == "#text" {
+                let txt = data.host.document.nodes[ch].text.clone();
+                if txt.is_empty() {
+                    data.host.document.nodes[ch].parent = ch;
+                    mutated = true;
+                    continue;
+                }
+                if let Some(&prev) = new_kids.last()
+                    && data.host.document.nodes[prev].tag == "#text"
+                {
+                    data.host.document.nodes[prev].text.push_str(&txt);
+                    data.host.document.nodes[ch].parent = ch;
+                    mutated = true;
+                    continue;
+                }
+            }
+            new_kids.push(ch);
+        }
+        if new_kids != data.host.document.nodes[parent].children {
+            data.host.document.nodes[parent].children = new_kids;
+        }
+    }
+    if mutated {
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+    }
+    mutated
+}
+
+fn set_element_attr_observed(
+    id: usize,
+    attr: &str,
+    val: String,
+    context: &mut Context,
+) -> JsResult<()> {
+    let mutated = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        if matches!(
+            data.host.document.nodes[id].tag.as_str(),
+            "iframe" | "frame"
+        ) && matches!(attr, "src" | "srcdoc")
+        {
+            data.iframe_documents.remove(&id);
+            clear_cached_iframe_window(&mut data, id);
+        }
+        let track = super::observers_wc::has_any_interest(&data);
+        let old = if track {
+            data.host.document.nodes[id].attr(attr).map(str::to_owned)
+        } else {
+            None
+        };
+        data.host.attr(id, attr, val.clone()).map_err(failure)?;
+        super::dom_events::invalidate_inline_handler(&mut data, id, attr);
+        if matches!(attr, "width" | "height") {
+            super::canvas::on_canvas_dimension_mutated(&mut data, id).map_err(failure)?;
+        }
+        data.dom_epoch = data.dom_epoch.wrapping_add(1);
+        if track {
+            super::observers_wc::record_attribute_mutation(&mut data, id, attr, old, Some(val));
+            true
+        } else {
+            false
+        }
+    };
+    if mutated {
+        super::observers_wc::after_dom_mutation(context)?;
+    }
+    Ok(())
+}
+
+fn remove_element_attr_observed(id: usize, attr: &str, context: &mut Context) -> JsResult<()> {
+    let mutated = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        let old = data.host.document.nodes[id].attr(attr).map(str::to_owned);
+        if let Some(old_val) = old {
+            if matches!(
+                data.host.document.nodes[id].tag.as_str(),
+                "iframe" | "frame"
+            ) && matches!(attr, "src" | "srcdoc")
+            {
+                data.iframe_documents.remove(&id);
+                clear_cached_iframe_window(&mut data, id);
+            }
+            data.host.document.nodes[id]
+                .attributes
+                .retain(|(k, _)| k != attr);
+            super::dom_events::invalidate_inline_handler(&mut data, id, attr);
+            if matches!(attr, "width" | "height") {
+                super::canvas::on_canvas_dimension_mutated(&mut data, id).map_err(failure)?;
+            }
+            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+            if super::observers_wc::has_any_interest(&data) {
+                super::observers_wc::record_attribute_mutation(
+                    &mut data,
+                    id,
+                    attr,
+                    Some(old_val),
+                    None,
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if mutated {
+        super::observers_wc::after_dom_mutation(context)?;
+    }
+    Ok(())
+}
+
+fn build_attr_obj(
+    owner_el: JsValue,
+    aname: &str,
+    aval: &str,
+    writable_val: bool,
+    context: &mut Context,
+) -> JsObject {
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+    let vc = if writable_val {
+        ec | Attribute::WRITABLE
+    } else {
+        ec
+    };
+    modern::boa_engine::object::ObjectInitializer::new(context)
+        .property(js_string!("name"), JsString::from(aname), ec)
+        .property(js_string!("localName"), JsString::from(aname), ec)
+        .property(js_string!("value"), JsString::from(aval), vc)
+        .property(js_string!("nodeValue"), JsString::from(aval), vc)
+        .property(js_string!("nodeType"), 2, ec)
+        .property(js_string!("specified"), true, ec)
+        .property(js_string!("ownerElement"), owner_el, ec)
+        .build()
+}
+
+fn build_single_attr_object(
+    owner_id: usize,
+    aname: &str,
+    aval: &str,
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    state(context)
+        .borrow_mut()
+        .host
+        .charge(128)
+        .map_err(failure)?;
+    let owner_el = wrap(&format!("node:{owner_id}"), context)?;
+    Ok(build_attr_obj(owner_el, aname, aval, true, context).into())
+}
+
+fn build_part_token_list(id: usize, context: &mut Context) -> JsResult<JsValue> {
+    let raw = {
+        let shared = state(context);
+        let mut data = shared.borrow_mut();
+        data.host.charge(128).map_err(failure)?;
+        data.host.document.nodes[id]
+            .attr("part")
+            .unwrap_or("")
+            .to_owned()
+    };
+    let mut tokens: Vec<String> = Vec::new();
+    for tok in raw.split_ascii_whitespace() {
+        if !tokens.iter().any(|t| t == tok) {
+            tokens.push(tok.to_owned());
+        }
+    }
+    let obj = JsObject::with_object_proto(context.intrinsics());
+    for (idx, tok) in tokens.iter().enumerate() {
+        def_prop(
+            &obj,
+            idx as u32,
+            JsString::from(tok.as_str()),
+            false,
+            true,
+            true,
+            context,
+        )?;
+    }
+    def_prop(
+        &obj,
+        js_string!("length"),
+        tokens.len() as f64,
+        false,
+        true,
+        true,
+        context,
+    )?;
+    def_prop(
+        &obj,
+        js_string!("value"),
+        JsString::from(raw.as_str()),
+        true,
+        true,
+        true,
+        context,
+    )?;
+    let read_tokens = |nid: usize, ctx: &Context| -> Vec<String> {
+        state(ctx)
+            .borrow()
+            .host
+            .document
+            .nodes
+            .get(nid)
+            .and_then(|n| n.attr("part"))
+            .unwrap_or("")
+            .split_ascii_whitespace()
+            .map(str::to_owned)
+            .collect()
+    };
+    let check_tok = |tok: &str, ctx: &mut Context| -> JsResult<()> {
+        if tok.is_empty() || tok.chars().any(|c| c.is_ascii_whitespace()) {
+            return Err(dom_exception::exception(
+                "InvalidCharacterError",
+                "Invalid DOMTokenList token",
+                ctx,
+            )?);
+        }
+        Ok(())
+    };
+    for (mname, mlen) in [
+        ("contains", 1usize),
+        ("add", 0),
+        ("remove", 0),
+        ("toggle", 1),
+        ("toString", 0),
+    ] {
+        def_cap(
+            &obj,
+            mname,
+            mlen,
+            true,
+            (id, mname, read_tokens, check_tok),
+            |_, args, &(nid, op, rt, ct), ctx| {
+                modern::check_context(ctx)?;
+                match op {
+                    "contains" => {
+                        let want = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+                        modern::check_context(ctx)?;
+                        Ok(rt(nid, ctx).iter().any(|t| t == &want).into())
+                    }
+                    "add" | "remove" => {
+                        let mut cur = rt(nid, ctx);
+                        for a in args {
+                            let tok = utf8(a, ctx)?;
+                            modern::check_context(ctx)?;
+                            ct(&tok, ctx)?;
+                            if op == "add" {
+                                if !cur.iter().any(|t| t == &tok) {
+                                    cur.push(tok);
+                                }
+                            } else {
+                                cur.retain(|t| t != &tok);
+                            }
+                        }
+                        set_element_attr_observed(nid, "part", cur.join(" "), ctx)?;
+                        Ok(JsValue::undefined())
+                    }
+                    "toggle" => {
+                        let tok = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+                        let force = args
+                            .get(1)
+                            .filter(|v| !v.is_undefined())
+                            .map(JsValue::to_boolean);
+                        modern::check_context(ctx)?;
+                        ct(&tok, ctx)?;
+                        let mut cur = rt(nid, ctx);
+                        let had = cur.iter().any(|t| t == &tok);
+                        let next = force.unwrap_or(!had);
+                        if next && !had {
+                            cur.push(tok);
+                        } else if !next {
+                            cur.retain(|t| t != &tok);
+                        }
+                        set_element_attr_observed(nid, "part", cur.join(" "), ctx)?;
+                        Ok(next.into())
+                    }
+                    _ => {
+                        let val = state(ctx)
+                            .borrow()
+                            .host
+                            .document
+                            .nodes
+                            .get(nid)
+                            .and_then(|n| n.attr("part"))
+                            .unwrap_or("")
+                            .to_owned();
+                        Ok(JsString::from(val.as_str()).into())
+                    }
+                }
+            },
+            context,
+        )?;
+    }
+    Ok(obj.into())
+}
+
+#[derive(Clone, Copy)]
+enum WindowReceiver {
+    Top,
+    Iframe(usize),
+}
+
+fn check_window_receiver(
+    this: &JsValue,
+    context: &mut Context,
+) -> JsResult<(WindowReceiver, JsObject)> {
+    if this.is_null() || this.is_undefined() {
+        return Ok((WindowReceiver::Top, context.global_object()));
+    }
+    let Some(obj) = this.as_object() else {
+        return Err(failure("Illegal invocation"));
+    };
+    let global = context.global_object();
+    if obj == global {
+        return Ok((WindowReceiver::Top, global));
+    }
+    let iframe_id = state(context)
+        .borrow()
+        .dom_prototypes
+        .as_ref()
+        .and_then(|dp| {
+            dp.iframe_windows
+                .iter()
+                .find(|e| e.window == obj)
+                .map(|e| e.iframe_id)
+        });
+    if let Some(id) = iframe_id {
+        return Ok((WindowReceiver::Iframe(id), obj));
+    }
+    Err(failure("Illegal invocation"))
+}
+
+fn install_window_prototype_members(proto: &JsObject, context: &mut Context) -> Result<(), String> {
+    for (cname, cval) in [("TEMPORARY", 0), ("PERSISTENT", 1)] {
+        def_prop(
+            proto,
+            JsString::from(cname),
+            cval,
+            false,
+            true,
+            false,
+            context,
+        )
+        .map_err(|_| "Window constant failed")?;
+    }
+
+    for prop in ["name", "status"] {
+        def_get_set_cap(
+            proto,
+            prop,
+            true,
+            prop == "name",
+            |this, _, &is_n, ctx| {
+                modern::check_context(ctx)?;
+                let (kind, _) = check_window_receiver(this, ctx)?;
+                let s = match kind {
+                    WindowReceiver::Top => {
+                        let s = state(ctx);
+                        let d = s.borrow();
+                        if is_n {
+                            d.window_name.clone()
+                        } else {
+                            d.window_status.clone()
+                        }
+                    }
+                    WindowReceiver::Iframe(id) if is_n => state(ctx)
+                        .borrow()
+                        .host
+                        .document
+                        .nodes
+                        .get(id)
+                        .and_then(|n| n.attr("name"))
+                        .unwrap_or("")
+                        .to_owned(),
+                    WindowReceiver::Iframe(_) => String::new(),
+                };
+                Ok(JsString::from(s.as_str()).into())
+            },
+            |this, args, &is_n, ctx| {
+                modern::check_context(ctx)?;
+                let (kind, obj) = check_window_receiver(this, ctx)?;
+                let v = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+                modern::check_context(ctx)?;
+                match kind {
+                    WindowReceiver::Top => {
+                        let shared = state(ctx);
+                        let mut data = shared.borrow_mut();
+                        data.host.charge(v.len()).map_err(failure)?;
+                        if is_n {
+                            data.window_name = v;
+                        } else {
+                            data.window_status = v;
+                        }
+                    }
+                    WindowReceiver::Iframe(_) => {
+                        let pname = if is_n { "name" } else { "status" };
+                        def_prop(
+                            &obj,
+                            JsString::from(pname),
+                            JsString::from(v.as_str()),
+                            true,
+                            true,
+                            true,
+                            ctx,
+                        )?;
+                    }
+                }
+                Ok(JsValue::undefined())
+            },
+            context,
+        )
+        .map_err(|_| "Window string property failed")?;
+    }
+
+    for prop in ["closed", "frameElement", "offscreenBuffering"] {
+        def_getter_cap(
+            proto,
+            prop,
+            true,
+            prop,
+            |this, _, &pname, ctx| {
+                modern::check_context(ctx)?;
+                let (kind, _) = check_window_receiver(this, ctx)?;
+                match pname {
+                    "closed" => Ok(false.into()),
+                    "offscreenBuffering" => Ok(true.into()),
+                    "frameElement" => match kind {
+                        WindowReceiver::Top => Ok(JsValue::null()),
+                        WindowReceiver::Iframe(id) => {
+                            if is_connected_node(&state(ctx).borrow().host.document.nodes, id) {
+                                wrap(&format!("node:{id}"), ctx)
+                            } else {
+                                Ok(JsValue::null())
+                            }
+                        }
+                    },
+                    _ => Ok(JsValue::undefined()),
+                }
+            },
+            context,
+        )
+        .map_err(|_| "Window readonly getter failed")?;
+    }
+
+    for prop in [
+        "frames",
+        "length",
+        "origin",
+        "screenX",
+        "screenY",
+        "screenLeft",
+        "screenTop",
+        "clientInformation",
+        "event",
+        "locationbar",
+        "menubar",
+        "personalbar",
+        "scrollbars",
+        "statusbar",
+        "toolbar",
+        "external",
+    ] {
+        def_get_set_cap(
+            proto,
+            prop,
+            true,
+            prop,
+            |this, _, &pname, ctx| {
+                modern::check_context(ctx)?;
+                let (kind, obj) = check_window_receiver(this, ctx)?;
+                match pname {
+                    "frames" => Ok(obj.into()),
+                    "length" => match kind {
+                        WindowReceiver::Top => {
+                            let s = state(ctx);
+                            let d = s.borrow();
+                            let count = (1..d.host.document.nodes.len())
+                                .filter(|&nid| {
+                                    matches!(
+                                        d.host.document.nodes[nid].tag.as_str(),
+                                        "iframe" | "frame"
+                                    ) && is_connected_node(&d.host.document.nodes, nid)
+                                })
+                                .count();
+                            Ok((count as f64).into())
+                        }
+                        WindowReceiver::Iframe(_) => Ok(0.into()),
+                    },
+                    "origin" => {
+                        let o = state(ctx)
+                            .borrow()
+                            .host
+                            .base_url()
+                            .origin()
+                            .ascii_serialization();
+                        Ok(JsString::from(o.as_str()).into())
+                    }
+                    "screenX" | "screenY" | "screenLeft" | "screenTop" => Ok(0.into()),
+                    "clientInformation" => wrap("navigator", ctx),
+                    "event" => {
+                        let active = state(ctx)
+                            .borrow()
+                            .modern_events
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .find(|(_, ev)| ev.dispatching)
+                            .map(|(i, _)| i);
+                        match active {
+                            Some(i) => wrap(&format!("mevent:{i}"), ctx),
+                            None => Ok(JsValue::undefined()),
+                        }
+                    }
+                    "locationbar" | "menubar" | "personalbar" | "scrollbars" | "statusbar"
+                    | "toolbar" => Ok(modern::boa_engine::object::ObjectInitializer::new(ctx)
+                        .property(
+                            js_string!("visible"),
+                            true,
+                            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+                        )
+                        .build()
+                        .into()),
+                    "external" => {
+                        let ext = JsObject::with_object_proto(ctx.intrinsics());
+                        def_fn(
+                            &ext,
+                            "AddSearchProvider",
+                            0,
+                            true,
+                            |_, _, c| {
+                                modern::check_context(c)?;
+                                Ok(JsValue::undefined())
+                            },
+                            ctx,
+                        )?;
+                        def_fn(
+                            &ext,
+                            "IsSearchProviderInstalled",
+                            0,
+                            true,
+                            |_, _, c| {
+                                modern::check_context(c)?;
+                                Ok(0.into())
+                            },
+                            ctx,
+                        )?;
+                        Ok(ext.into())
+                    }
+                    _ => Ok(JsValue::undefined()),
+                }
+            },
+            |this, args, &pname, ctx| {
+                modern::check_context(ctx)?;
+                let (_, obj) = check_window_receiver(this, ctx)?;
+                let val = args.first().cloned().unwrap_or_default();
+                def_prop(&obj, JsString::from(pname), val, true, true, true, ctx)?;
+                Ok(JsValue::undefined())
+            },
+            context,
+        )
+        .map_err(|_| "Window replaceable property failed")?;
+    }
+
+    for (mname, mlen) in [
+        ("alert", 0usize),
+        ("blur", 0),
+        ("cancelIdleCallback", 1),
+        ("captureEvents", 0),
+        ("close", 0),
+        ("confirm", 0),
+        ("createImageBitmap", 1),
+        ("find", 0),
+        ("focus", 0),
+        ("getSelection", 0),
+        ("moveBy", 2),
+        ("moveTo", 2),
+        ("open", 0),
+        ("print", 0),
+        ("prompt", 0),
+        ("releaseEvents", 0),
+        ("reportError", 1),
+        ("requestIdleCallback", 1),
+        ("resizeBy", 2),
+        ("resizeTo", 2),
+        ("stop", 0),
+    ] {
+        def_cap(
+            proto,
+            mname,
+            mlen,
+            true,
+            mname,
+            |this, args, &op, ctx| {
+                modern::check_context(ctx)?;
+                let (_, win_obj) = check_window_receiver(this, ctx)?;
+                match op {
+                    "alert" | "blur" | "captureEvents" | "close" | "focus" | "moveBy"
+                    | "moveTo" | "print" | "releaseEvents" | "resizeBy" | "resizeTo" | "stop" => {
+                        Ok(JsValue::undefined())
+                    }
+                    "confirm" | "find" => Ok(false.into()),
+                    "open" | "prompt" => Ok(JsValue::null()),
+                    "reportError" => {
+                        if args.is_empty() {
+                            return Err(failure("Window.reportError requires 1 argument"));
+                        }
+                        Ok(JsValue::undefined())
+                    }
+                    "requestIdleCallback" => {
+                        let cb = args
+                            .first()
+                            .filter(|v| v.is_callable())
+                            .cloned()
+                            .ok_or_else(|| {
+                                failure("requestIdleCallback requires a callback function")
+                            })?;
+                        let set_timeout = ctx.global_object().get(js_string!("setTimeout"), ctx)?;
+                        if let Some(st_fn) = set_timeout.as_callable() {
+                            let deadline = modern::boa_engine::object::ObjectInitializer::new(ctx)
+                                .property(
+                                    js_string!("didTimeout"),
+                                    false,
+                                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+                                )
+                                .function(
+                                    NativeFunction::from_fn_ptr(|_, _, c| {
+                                        modern::check_context(c)?;
+                                        Ok(16.0.into())
+                                    }),
+                                    js_string!("timeRemaining"),
+                                    0,
+                                )
+                                .build();
+                            st_fn.call(&win_obj.into(), &[cb, 1.into(), deadline.into()], ctx)
+                        } else {
+                            Ok(0.into())
+                        }
+                    }
+                    "cancelIdleCallback" => {
+                        let id_val = args.first().cloned().unwrap_or_else(|| 0.into());
+                        let clear_timeout =
+                            ctx.global_object().get(js_string!("clearTimeout"), ctx)?;
+                        if let Some(ct_fn) = clear_timeout.as_callable() {
+                            ct_fn.call(&win_obj.into(), &[id_val], ctx)?;
+                        }
+                        Ok(JsValue::undefined())
+                    }
+                    "createImageBitmap" => {
+                        if args.is_empty() {
+                            return Err(failure("createImageBitmap requires 1 argument"));
+                        }
+                        let bmp = modern::boa_engine::object::ObjectInitializer::new(ctx)
+                            .property(
+                                js_string!("width"),
+                                1,
+                                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+                            )
+                            .property(
+                                js_string!("height"),
+                                1,
+                                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+                            )
+                            .function(
+                                NativeFunction::from_fn_ptr(|_, _, c| {
+                                    modern::check_context(c)?;
+                                    Ok(JsValue::undefined())
+                                }),
+                                js_string!("close"),
+                                0,
+                            )
+                            .build();
+                        Ok(JsPromise::resolve(bmp, ctx)?.into())
+                    }
+                    "getSelection" => build_empty_selection(ctx),
+                    _ => Ok(JsValue::undefined()),
+                }
+            },
+            context,
+        )
+        .map_err(|_| "Window method failed")?;
+    }
+
+    Ok(())
+}
+
+fn build_empty_selection(context: &mut Context) -> JsResult<JsValue> {
+    state(context)
+        .borrow_mut()
+        .host
+        .charge(128)
+        .map_err(failure)?;
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+    let sel = modern::boa_engine::object::ObjectInitializer::new(context)
+        .property(js_string!("anchorNode"), JsValue::null(), ec)
+        .property(js_string!("anchorOffset"), 0, ec)
+        .property(js_string!("focusNode"), JsValue::null(), ec)
+        .property(js_string!("focusOffset"), 0, ec)
+        .property(js_string!("isCollapsed"), true, ec)
+        .property(js_string!("rangeCount"), 0, ec)
+        .property(js_string!("type"), js_string!("None"), ec)
+        .property(js_string!("direction"), js_string!("none"), ec)
+        .build();
+    for (n, len) in [
+        ("removeAllRanges", 0usize),
+        ("empty", 0),
+        ("collapse", 1),
+        ("selectAllChildren", 1),
+        ("addRange", 1),
+        ("removeRange", 1),
+    ] {
+        def_fn(
+            &sel,
+            n,
+            len,
+            true,
+            |_, _, c| {
+                modern::check_context(c)?;
+                Ok(JsValue::undefined())
+            },
+            context,
+        )?;
+    }
+    def_fn(
+        &sel,
+        "containsNode",
+        1,
+        true,
+        |_, _, c| {
+            modern::check_context(c)?;
+            Ok(false.into())
+        },
+        context,
+    )?;
+    def_fn(
+        &sel,
+        "getRangeAt",
+        1,
+        true,
+        |_, _, c| {
+            modern::check_context(c)?;
+            Err(dom_exception::exception(
+                "IndexSizeError",
+                "Selection has no ranges",
+                c,
+            )?)
+        },
+        context,
+    )?;
+    def_fn(
+        &sel,
+        "toString",
+        0,
+        true,
+        |_, _, c| {
+            modern::check_context(c)?;
+            Ok(js_string!("").into())
+        },
+        context,
+    )?;
+    Ok(sel.into())
 }
 
 fn is_element_content_editable(nodes: &[Node], mut id: usize) -> bool {
@@ -4039,81 +5824,46 @@ fn build_named_node_map(id: usize, context: &mut Context) -> JsResult<JsValue> {
     };
     let map_obj = JsObject::with_object_proto(context.intrinsics());
     let owner_el = wrap(&format!("node:{id}"), context)?;
-    let mut attr_objs: Vec<JsValue> = Vec::with_capacity(attrs.len());
     for (idx, (aname, aval)) in attrs.iter().enumerate() {
-        let aobj = modern::boa_engine::object::ObjectInitializer::new(context)
-            .property(
-                js_string!("name"),
-                JsString::from(aname.as_str()),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("localName"),
-                JsString::from(aname.as_str()),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("value"),
-                JsString::from(aval.as_str()),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("nodeValue"),
-                JsString::from(aval.as_str()),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("nodeType"),
-                2,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("specified"),
-                true,
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("ownerElement"),
-                owner_el.clone(),
-                Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .build();
-        map_obj.define_property_or_throw(
+        let aobj = build_attr_obj(owner_el.clone(), aname, aval, false, context);
+        def_prop(
+            &map_obj,
             idx as u32,
-            PropertyDescriptor::builder()
-                .value(aobj.clone())
-                .writable(false)
-                .enumerable(true)
-                .configurable(true),
+            aobj.clone(),
+            false,
+            true,
+            true,
             context,
         )?;
         if !matches!(aname.as_str(), "length" | "item" | "getNamedItem")
             && aname.parse::<usize>().is_err()
         {
-            let _ = map_obj.define_property_or_throw(
+            let _ = def_prop(
+                &map_obj,
                 JsString::from(aname.as_str()),
-                PropertyDescriptor::builder()
-                    .value(aobj.clone())
-                    .writable(false)
-                    .enumerable(false)
-                    .configurable(true),
+                aobj,
+                false,
+                false,
+                true,
                 context,
             );
         }
-        attr_objs.push(aobj.into());
     }
-    map_obj.define_property_or_throw(
+    def_prop(
+        &map_obj,
         js_string!("length"),
-        PropertyDescriptor::builder()
-            .value(attr_objs.len() as f64)
-            .writable(false)
-            .enumerable(false)
-            .configurable(true),
+        attrs.len() as f64,
+        false,
+        false,
+        true,
         context,
     )?;
-    let item_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure(|this, args, ctx| {
+    def_fn(
+        &map_obj,
+        "item",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let obj = this
                 .as_object()
@@ -4121,14 +5871,15 @@ fn build_named_node_map(id: usize, context: &mut Context) -> JsResult<JsValue> {
             let idx = args.first().unwrap_or(&JsValue::undefined()).to_u32(ctx)?;
             let v = obj.get(idx, ctx)?;
             Ok(if v.is_undefined() { JsValue::null() } else { v })
-        }),
-    )
-    .name(js_string!("item"))
-    .length(1)
-    .build();
-    let get_named_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure(|this, args, ctx| {
+        },
+        context,
+    )?;
+    def_fn(
+        &map_obj,
+        "getNamedItem",
+        1,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let obj = this
                 .as_object()
@@ -4137,35 +5888,14 @@ fn build_named_node_map(id: usize, context: &mut Context) -> JsResult<JsValue> {
             let len = obj.get(js_string!("length"), ctx)?.to_u32(ctx)?;
             for i in 0..len {
                 let item = obj.get(i, ctx)?;
-                if let Some(io) = item.as_object() {
-                    let n = io.get(js_string!("name"), ctx)?;
-                    if utf8(&n, ctx)? == qname {
-                        return Ok(item);
-                    }
+                if let Some(io) = item.as_object()
+                    && utf8(&io.get(js_string!("name"), ctx)?, ctx)? == qname
+                {
+                    return Ok(item);
                 }
             }
             Ok(JsValue::null())
-        }),
-    )
-    .name(js_string!("getNamedItem"))
-    .length(1)
-    .build();
-    map_obj.define_property_or_throw(
-        js_string!("item"),
-        PropertyDescriptor::builder()
-            .value(item_fn)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
-        context,
-    )?;
-    map_obj.define_property_or_throw(
-        js_string!("getNamedItem"),
-        PropertyDescriptor::builder()
-            .value(get_named_fn)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
+        },
         context,
     )?;
     let arr_iter = context
@@ -4174,13 +5904,13 @@ fn build_named_node_map(id: usize, context: &mut Context) -> JsResult<JsValue> {
         .array()
         .prototype()
         .get(modern::boa_engine::JsSymbol::iterator(), context)?;
-    map_obj.define_property_or_throw(
+    def_prop(
+        &map_obj,
         modern::boa_engine::JsSymbol::iterator(),
-        PropertyDescriptor::builder()
-            .value(arr_iter)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
+        arr_iter,
+        true,
+        false,
+        true,
         context,
     )?;
     Ok(map_obj.into())
@@ -4338,40 +6068,40 @@ fn build_tree_walker(
         .charge(256)
         .map_err(failure)?;
     let tw = JsObject::with_object_proto(context.intrinsics());
-    tw.define_property_or_throw(
+    def_prop(
+        &tw,
         js_string!("root"),
-        PropertyDescriptor::builder()
-            .value(root_js.clone())
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        root_js.clone(),
+        false,
+        true,
+        true,
         context,
     )?;
-    tw.define_property_or_throw(
+    def_prop(
+        &tw,
         js_string!("whatToShow"),
-        PropertyDescriptor::builder()
-            .value(what_to_show as f64)
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        what_to_show as f64,
+        false,
+        true,
+        true,
         context,
     )?;
-    tw.define_property_or_throw(
+    def_prop(
+        &tw,
         js_string!("filter"),
-        PropertyDescriptor::builder()
-            .value(filter_val)
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        filter_val,
+        false,
+        true,
+        true,
         context,
     )?;
-    tw.define_property_or_throw(
+    def_prop(
+        &tw,
         js_string!("currentNode"),
-        PropertyDescriptor::builder()
-            .value(root_js)
-            .writable(true)
-            .enumerable(true)
-            .configurable(true),
+        root_js,
+        true,
+        true,
+        true,
         context,
     )?;
 
@@ -4384,178 +6114,162 @@ fn build_tree_walker(
         ("nextSibling", 5),
         ("previousSibling", 6),
     ] {
-        let fn_obj = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |this, _, &mode, ctx| {
-                    modern::check_context(ctx)?;
-                    let obj = this
-                        .as_object()
-                        .ok_or_else(|| failure("TreeWalker method requires receiver"))?;
-                    let root_v = obj.get(js_string!("root"), ctx)?;
-                    let cur_v = obj.get(js_string!("currentNode"), ctx)?;
-                    let wts = obj.get(js_string!("whatToShow"), ctx)?.to_u32(ctx)?;
-                    let flt = obj.get(js_string!("filter"), ctx)?;
-                    let Value::Host(root_h) = receiver(&root_v, ctx)? else {
-                        return Err(failure("Invalid TreeWalker.root"));
-                    };
-                    let Value::Host(cur_h) = receiver(&cur_v, ctx)? else {
-                        return Err(failure("Invalid TreeWalker.currentNode"));
-                    };
-                    let (root_id, mut cur_id) = {
-                        let shared = state(ctx);
-                        let data = shared.borrow();
-                        (
-                            node_id_from_handle(&root_h, &data).map_err(failure)?,
-                            node_id_from_handle(&cur_h, &data).map_err(failure)?,
-                        )
-                    };
-                    match mode {
-                        0 => {
-                            // nextNode
-                            let mut skip_children = false;
-                            for _ in 0..=crate::document::MAX_NODES {
-                                let next = {
-                                    let shared = state(ctx);
-                                    let data = shared.borrow();
-                                    preorder_next(
-                                        &data.host.document.nodes,
-                                        root_id,
-                                        cur_id,
-                                        skip_children,
-                                    )
-                                };
-                                let Some(nid) = next else {
-                                    return Ok(JsValue::null());
-                                };
-                                cur_id = nid;
-                                let res = tree_walker_accept(cur_id, wts, &flt, ctx)?;
-                                if res == 1 {
-                                    let wrapped = wrap_node_id(cur_id, ctx)?;
-                                    obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
-                                    return Ok(wrapped);
-                                }
-                                skip_children = res == 2;
-                            }
-                            Ok(JsValue::null())
-                        }
-                        1 => {
-                            // previousNode
-                            for _ in 0..=crate::document::MAX_NODES {
-                                let prev = {
-                                    let shared = state(ctx);
-                                    let data = shared.borrow();
-                                    preorder_prev(&data.host.document.nodes, root_id, cur_id)
-                                };
-                                let Some(pid) = prev else {
-                                    return Ok(JsValue::null());
-                                };
-                                cur_id = pid;
-                                if cur_id == root_id {
-                                    return Ok(JsValue::null());
-                                }
-                                if tree_walker_accept(cur_id, wts, &flt, ctx)? == 1 {
-                                    let wrapped = wrap_node_id(cur_id, ctx)?;
-                                    obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
-                                    return Ok(wrapped);
-                                }
-                            }
-                            Ok(JsValue::null())
-                        }
-                        2 => {
-                            // parentNode
-                            while cur_id != root_id {
-                                let p = {
-                                    let shared = state(ctx);
-                                    let data = shared.borrow();
-                                    let p = data.host.document.nodes[cur_id].parent;
-                                    if p == cur_id { None } else { Some(p) }
-                                };
-                                let Some(pid) = p else {
-                                    break;
-                                };
-                                cur_id = pid;
-                                if cur_id == root_id {
-                                    break;
-                                }
-                                if tree_walker_accept(cur_id, wts, &flt, ctx)? == 1 {
-                                    let wrapped = wrap_node_id(cur_id, ctx)?;
-                                    obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
-                                    return Ok(wrapped);
-                                }
-                            }
-                            Ok(JsValue::null())
-                        }
-                        3 | 4 => {
-                            // firstChild / lastChild
-                            let kids: Vec<usize> = {
-                                let shared = state(ctx);
-                                let data = shared.borrow();
-                                let mut k = data.host.document.nodes[cur_id].children.clone();
-                                if mode == 4 {
-                                    k.reverse();
-                                }
-                                k
+        def_cap(
+            &tw,
+            mname,
+            0,
+            false,
+            mode,
+            |this, _, &mode, ctx| {
+                modern::check_context(ctx)?;
+                let obj = this
+                    .as_object()
+                    .ok_or_else(|| failure("TreeWalker method requires receiver"))?;
+                let root_v = obj.get(js_string!("root"), ctx)?;
+                let cur_v = obj.get(js_string!("currentNode"), ctx)?;
+                let wts = obj.get(js_string!("whatToShow"), ctx)?.to_u32(ctx)?;
+                let flt = obj.get(js_string!("filter"), ctx)?;
+                let Value::Host(root_h) = receiver(&root_v, ctx)? else {
+                    return Err(failure("Invalid TreeWalker.root"));
+                };
+                let Value::Host(cur_h) = receiver(&cur_v, ctx)? else {
+                    return Err(failure("Invalid TreeWalker.currentNode"));
+                };
+                let (root_id, mut cur_id) = {
+                    let shared = state(ctx);
+                    let data = shared.borrow();
+                    (
+                        node_id_from_handle(&root_h, &data).map_err(failure)?,
+                        node_id_from_handle(&cur_h, &data).map_err(failure)?,
+                    )
+                };
+                match mode {
+                    0 => {
+                        let mut skip_children = false;
+                        for _ in 0..=crate::document::MAX_NODES {
+                            let next = {
+                                let s = state(ctx);
+                                let d = s.borrow();
+                                preorder_next(
+                                    &d.host.document.nodes,
+                                    root_id,
+                                    cur_id,
+                                    skip_children,
+                                )
                             };
-                            for kid in kids {
-                                let res = tree_walker_accept(kid, wts, &flt, ctx)?;
-                                if res == 1 {
-                                    let wrapped = wrap_node_id(kid, ctx)?;
-                                    obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
-                                    return Ok(wrapped);
-                                }
+                            let Some(nid) = next else {
+                                return Ok(JsValue::null());
+                            };
+                            cur_id = nid;
+                            let res = tree_walker_accept(cur_id, wts, &flt, ctx)?;
+                            if res == 1 {
+                                let wrapped = wrap_node_id(cur_id, ctx)?;
+                                obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
+                                return Ok(wrapped);
                             }
-                            Ok(JsValue::null())
+                            skip_children = res == 2;
                         }
-                        5 | 6 => {
-                            // nextSibling / previousSibling
+                        Ok(JsValue::null())
+                    }
+                    1 => {
+                        for _ in 0..=crate::document::MAX_NODES {
+                            let prev = {
+                                let s = state(ctx);
+                                let d = s.borrow();
+                                preorder_prev(&d.host.document.nodes, root_id, cur_id)
+                            };
+                            let Some(pid) = prev else {
+                                return Ok(JsValue::null());
+                            };
+                            cur_id = pid;
                             if cur_id == root_id {
                                 return Ok(JsValue::null());
                             }
-                            let sibs: Vec<usize> = {
-                                let shared = state(ctx);
-                                let data = shared.borrow();
-                                let p = data.host.document.nodes[cur_id].parent;
-                                if p == cur_id {
-                                    Vec::new()
-                                } else {
-                                    let kids = &data.host.document.nodes[p].children;
-                                    match kids.iter().position(|&c| c == cur_id) {
-                                        Some(pos) if mode == 5 => kids[pos + 1..].to_vec(),
-                                        Some(pos) => {
-                                            let mut v = kids[..pos].to_vec();
-                                            v.reverse();
-                                            v
-                                        }
-                                        None => Vec::new(),
-                                    }
-                                }
+                            if tree_walker_accept(cur_id, wts, &flt, ctx)? == 1 {
+                                let wrapped = wrap_node_id(cur_id, ctx)?;
+                                obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
+                                return Ok(wrapped);
+                            }
+                        }
+                        Ok(JsValue::null())
+                    }
+                    2 => {
+                        while cur_id != root_id {
+                            let p = {
+                                let s = state(ctx);
+                                let d = s.borrow();
+                                let p = d.host.document.nodes[cur_id].parent;
+                                if p == cur_id { None } else { Some(p) }
                             };
-                            for sib in sibs {
-                                if tree_walker_accept(sib, wts, &flt, ctx)? == 1 {
-                                    let wrapped = wrap_node_id(sib, ctx)?;
-                                    obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
-                                    return Ok(wrapped);
+                            let Some(pid) = p else {
+                                break;
+                            };
+                            cur_id = pid;
+                            if cur_id == root_id {
+                                break;
+                            }
+                            if tree_walker_accept(cur_id, wts, &flt, ctx)? == 1 {
+                                let wrapped = wrap_node_id(cur_id, ctx)?;
+                                obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
+                                return Ok(wrapped);
+                            }
+                        }
+                        Ok(JsValue::null())
+                    }
+                    3 | 4 => {
+                        let kids: Vec<usize> = {
+                            let s = state(ctx);
+                            let d = s.borrow();
+                            let mut k = d.host.document.nodes[cur_id].children.clone();
+                            if mode == 4 {
+                                k.reverse();
+                            }
+                            k
+                        };
+                        for kid in kids {
+                            if tree_walker_accept(kid, wts, &flt, ctx)? == 1 {
+                                let wrapped = wrap_node_id(kid, ctx)?;
+                                obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
+                                return Ok(wrapped);
+                            }
+                        }
+                        Ok(JsValue::null())
+                    }
+                    5 | 6 => {
+                        if cur_id == root_id {
+                            return Ok(JsValue::null());
+                        }
+                        let sibs: Vec<usize> = {
+                            let s = state(ctx);
+                            let d = s.borrow();
+                            let p = d.host.document.nodes[cur_id].parent;
+                            if p == cur_id {
+                                Vec::new()
+                            } else {
+                                let kids = &d.host.document.nodes[p].children;
+                                match kids.iter().position(|&c| c == cur_id) {
+                                    Some(pos) if mode == 5 => kids[pos + 1..].to_vec(),
+                                    Some(pos) => {
+                                        let mut v = kids[..pos].to_vec();
+                                        v.reverse();
+                                        v
+                                    }
+                                    None => Vec::new(),
                                 }
                             }
-                            Ok(JsValue::null())
+                        };
+                        for sib in sibs {
+                            if tree_walker_accept(sib, wts, &flt, ctx)? == 1 {
+                                let wrapped = wrap_node_id(sib, ctx)?;
+                                obj.set(js_string!("currentNode"), wrapped.clone(), true, ctx)?;
+                                return Ok(wrapped);
+                            }
                         }
-                        _ => Ok(JsValue::null()),
+                        Ok(JsValue::null())
                     }
-                },
-                mode,
-            ),
-        )
-        .name(JsString::from(mname))
-        .length(0)
-        .build();
-        tw.define_property_or_throw(
-            JsString::from(mname),
-            PropertyDescriptor::builder()
-                .value(fn_obj)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
+                    _ => Ok(JsValue::null()),
+                }
+            },
             context,
         )?;
     }

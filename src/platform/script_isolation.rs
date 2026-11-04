@@ -3,6 +3,8 @@
 use std::io;
 
 const MEMORY_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
+#[allow(dead_code)]
+const INTERACTIVE_MEMORY_LIMIT: libc::rlim_t = 768 * 1024 * 1024;
 
 fn set_limit(resource: u32, value: libc::rlim_t) -> Result<(), String> {
     let limit = libc::rlimit {
@@ -19,14 +21,26 @@ fn set_limit(resource: u32, value: libc::rlim_t) -> Result<(), String> {
     Ok(())
 }
 pub(super) fn install_isolation() -> Result<(), String> {
+    install_isolation_with_limits(MEMORY_LIMIT, 1)
+}
+
+#[allow(dead_code)]
+pub(super) fn install_interactive_isolation() -> Result<(), String> {
+    install_isolation_with_limits(INTERACTIVE_MEMORY_LIMIT, 5)
+}
+
+fn install_isolation_with_limits(
+    memory_limit: libc::rlim_t,
+    cpu_seconds: libc::rlim_t,
+) -> Result<(), String> {
     // close_range is required, not approximated by a guessed fd ceiling.
     // SAFETY: this entrypoint is a fresh, single-threaded child; descriptors
     // 0/1/2 are retained as the only intended communication endpoints.
     if unsafe { libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) } != 0 {
         return Err(format!("close_range: {}", io::Error::last_os_error()));
     }
-    set_limit(libc::RLIMIT_AS as _, MEMORY_LIMIT)?;
-    set_limit(libc::RLIMIT_CPU as _, 1)?;
+    set_limit(libc::RLIMIT_AS as _, memory_limit)?;
+    set_limit(libc::RLIMIT_CPU as _, cpu_seconds)?;
     set_limit(libc::RLIMIT_FSIZE as _, 0)?;
     set_limit(libc::RLIMIT_CORE as _, 0)?;
     set_limit(libc::RLIMIT_NOFILE as _, 3)?;

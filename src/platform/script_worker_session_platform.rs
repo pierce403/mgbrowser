@@ -1,5 +1,6 @@
 use super::super::linux::{
-    INPUT_LIMIT, OUTPUT_LIMIT, OwnedChild, WALL_LIMIT, encode, install_isolation, nonblocking,
+    INPUT_LIMIT, INTERACTIVE_WALL_LIMIT, OUTPUT_LIMIT, OwnedChild, WALL_LIMIT, encode,
+    install_interactive_isolation, install_isolation, nonblocking,
 };
 use super::{ChildPool, Permit, Request, SessionInput, SessionReply, SessionUpdate, TaskPump};
 use mg_butane::runtime::AllocationReport;
@@ -547,15 +548,36 @@ struct Ledger {
     used: Duration,
     failure: Option<String>,
 }
-#[derive(Default)]
 struct Shared {
     cancel: AtomicBool,
     closed: AtomicBool,
     ledger: Mutex<Ledger>,
     spawned: Mutex<Option<Instant>>,
     pid: AtomicU32,
+    wall_limit: Duration,
+}
+impl Default for Shared {
+    fn default() -> Self {
+        Self::with_wall_limit(WALL_LIMIT)
+    }
 }
 impl Shared {
+    fn with_wall_limit(wall_limit: Duration) -> Self {
+        Self {
+            cancel: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            ledger: Mutex::new(Ledger::default()),
+            spawned: Mutex::new(None),
+            pid: AtomicU32::new(0),
+            wall_limit,
+        }
+    }
+    fn budget_message(&self) -> String {
+        format!(
+            "Script session exhausted its total {}-second active wall budget",
+            self.wall_limit.as_secs()
+        )
+    }
     fn remaining(&self) -> Result<Duration, String> {
         let ledger = self
             .ledger
@@ -564,10 +586,10 @@ impl Shared {
         if let Some(error) = &ledger.failure {
             return Err(error.clone());
         }
-        WALL_LIMIT
+        self.wall_limit
             .checked_sub(ledger.used)
             .filter(|left| !left.is_zero())
-            .ok_or_else(|| "Script session exhausted its total 2-second active wall budget".into())
+            .ok_or_else(|| self.budget_message())
     }
     fn charge(&self, duration: Duration) -> Result<(), String> {
         self.check_lifetime()?;
@@ -579,9 +601,8 @@ impl Shared {
             return Err(error.clone());
         }
         ledger.used = ledger.used.saturating_add(duration);
-        if ledger.used >= WALL_LIMIT {
-            let message =
-                "Script session exhausted its total 2-second active wall budget".to_owned();
+        if ledger.used >= self.wall_limit {
+            let message = self.budget_message();
             ledger.failure = Some(message.clone());
             return Err(message);
         }
@@ -707,22 +728,39 @@ impl Session {
         observer: ObserverInit,
         platform: PlatformInit,
     ) -> Result<(Self, SessionReply), String> {
+        Self::start_with_platform_and_profile(request, generation, pool, observer, platform, false)
+    }
+    pub fn start_with_platform_and_profile(
+        request: Request,
+        generation: u64,
+        pool: ChildPool,
+        observer: ObserverInit,
+        platform: PlatformInit,
+        interactive: bool,
+    ) -> Result<(Self, SessionReply), String> {
         let started = Instant::now();
         observer.validate().map_err(|error| error.to_string())?;
         platform.validate()?;
         if super::super::legacy_test_mode()
-            && (!matches!(observer, ObserverInit::Disabled) || !platform.is_default())
+            && (!matches!(observer, ObserverInit::Disabled)
+                || !platform.is_default()
+                || interactive)
         {
             return Err("Legacy v1 cannot enable observation".into());
         }
-        if !matches!(observer, ObserverInit::Disabled) && !platform.is_default() {
+        if !matches!(observer, ObserverInit::Disabled) && (!platform.is_default() || interactive) {
             return Err("Observed WindowHarness session forbids platform init metadata".into());
         }
         pool.current(generation)?;
         let id = NEXT_SESSION
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
             .map_err(|_| "Script-session identity exhausted")?;
-        let shared = Arc::new(Shared::default());
+        let wall_limit = if interactive {
+            INTERACTIVE_WALL_LIMIT
+        } else {
+            WALL_LIMIT
+        };
+        let shared = Arc::new(Shared::with_wall_limit(wall_limit));
         let (tx, commands) = mpsc::sync_channel(1);
         let (updates, rx) = mpsc::sync_channel(1);
         let manager_shared = shared.clone();
@@ -742,6 +780,7 @@ impl Session {
                     observer,
                     platform,
                     crypto_seed,
+                    interactive,
                     generation,
                     id,
                     manager_pool,
@@ -771,7 +810,7 @@ impl Session {
             pending_console: Vec::new(),
             last_console_result: None,
         };
-        let left = WALL_LIMIT.saturating_sub(started.elapsed());
+        let left = wall_limit.saturating_sub(started.elapsed());
         let update = session.rx.recv_timeout(left).map_err(|_| {
             "Script session initialization did not finish within its active wall budget".to_owned()
         })?;
@@ -1032,6 +1071,7 @@ struct Worker {
     last_wake_token: u64,
     last_lifecycle: Option<LifecycleProgress>,
     legacy: bool,
+    interactive: bool,
     observer: ObserverInit,
     init_platform: Option<(PlatformInit, [u8; 32])>,
 }
@@ -1042,12 +1082,15 @@ impl Worker {
         observer: ObserverInit,
         platform: PlatformInit,
         crypto_seed: [u8; 32],
+        interactive: bool,
     ) -> Result<Self, String> {
         // Keep this process and its workers on the same build across an update.
         let mut command = Command::new("/proc/self/exe");
         command
             .arg(if super::super::legacy_test_mode() {
                 "--legacy-script-session"
+            } else if interactive {
+                "--script-session-interactive"
             } else {
                 "--script-session"
             })
@@ -1110,6 +1153,7 @@ impl Worker {
             last_wake_token: 0,
             last_lifecycle: None,
             legacy: super::super::legacy_test_mode(),
+            interactive,
             observer,
             init_platform: Some((platform, crypto_seed)),
         })
@@ -1123,7 +1167,7 @@ impl Worker {
             return Err("Script session exceeded its 300-second absolute lifetime".into());
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err("Script session exhausted its total 2-second active wall budget".into());
+            return Err(shared.budget_message());
         }
         Ok(())
     }
@@ -1291,7 +1335,17 @@ impl Worker {
                     }
                 }
                 validate_cumulative(self.last_report, frame.reply.allocations)?;
-                validate_engine_profile(&frame.reply, self.legacy, self.last_boa.as_ref())?;
+                let expected_profile = if self.interactive {
+                    mg_butane::modern::ResourceProfile::InteractivePageV1
+                } else {
+                    mg_butane::modern::ResourceProfile::PageProcessV1
+                };
+                validate_engine_profile_for(
+                    &frame.reply,
+                    self.legacy,
+                    self.last_boa.as_ref(),
+                    expected_profile,
+                )?;
                 self.check(shared, Some(deadline))?;
                 // A complete response is one frame, not the prefix of an
                 // unsolicited stream. Check coalesced trailing bytes before
@@ -1368,6 +1422,7 @@ fn manage(
     observer: ObserverInit,
     platform: PlatformInit,
     crypto_seed: [u8; 32],
+    interactive: bool,
     generation: u64,
     id: u64,
     pool: ChildPool,
@@ -1376,7 +1431,14 @@ fn manage(
     updates: SyncSender<SessionUpdate>,
     started: Instant,
 ) {
-    let mut worker = match Worker::start(pool, generation, observer, platform, crypto_seed) {
+    let mut worker = match Worker::start(
+        pool,
+        generation,
+        observer,
+        platform,
+        crypto_seed,
+        interactive,
+    ) {
         Ok(worker) => worker,
         Err(error) => {
             let error = shared.close(error);
@@ -1762,16 +1824,36 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_engine_profile(
     reply: &SessionReply,
     legacy: bool,
     previous: Option<&mg_butane::modern::Report>,
+) -> Result<(), String> {
+    validate_engine_profile_for(
+        reply,
+        legacy,
+        previous,
+        mg_butane::modern::ResourceProfile::PageProcessV1,
+    )
+}
+
+fn validate_engine_profile_for(
+    reply: &SessionReply,
+    legacy: bool,
+    previous: Option<&mg_butane::modern::Report>,
+    expected_profile: mg_butane::modern::ResourceProfile,
 ) -> Result<(), String> {
     // A rejected initial document may have no realm or report. Once a realm
     // exists its parent-selected engine cannot change, even on terminal replies.
     let rejected_initial = previous.is_none() && reply.is_rejected_initial();
     if !rejected_initial && (reply.boa.is_some() == legacy) {
         return Err("Script session returned the wrong engine profile".into());
+    }
+    if let Some(report) = &reply.boa {
+        report
+            .validate_for_profile(expected_profile)
+            .map_err(str::to_owned)?;
     }
     if let Some(previous) = previous {
         reply
@@ -1915,23 +1997,45 @@ fn write_frame(
 
 /// Early executable entrypoint, before fonts/display/network are initialized.
 pub fn session_entry() -> ! {
-    session_entry_for(false)
+    session_entry_for(false, false)
+}
+pub fn interactive_session_entry() -> ! {
+    session_entry_for(false, true)
 }
 #[cfg(feature = "legacy-test-engine")]
 pub fn legacy_session_entry() -> ! {
-    session_entry_for(true)
+    session_entry_for(true, false)
 }
-fn session_entry_for(legacy: bool) -> ! {
-    if install_isolation().is_err() {
+fn session_entry_for(legacy: bool, interactive: bool) -> ! {
+    let isolated = if interactive {
+        install_interactive_isolation()
+    } else {
+        install_isolation()
+    };
+    if isolated.is_err() {
         std::process::exit(73);
     }
     if std::env::args().len() != 2 {
         std::process::exit(74);
     }
     if !legacy {
-        crate::platform::worker_memory::activate();
+        if interactive {
+            crate::platform::worker_memory::activate_interactive();
+        } else {
+            crate::platform::worker_memory::activate();
+        }
     }
-    let result = child_loop_for(&mut io::stdin().lock(), &mut io::stdout().lock(), legacy);
+    let profile = if interactive {
+        mg_butane::modern::ResourceProfile::InteractivePageV1
+    } else {
+        mg_butane::modern::ResourceProfile::PageProcessV1
+    };
+    let result = child_loop_for_profile(
+        &mut io::stdin().lock(),
+        &mut io::stdout().lock(),
+        legacy,
+        profile,
+    );
     std::process::exit(if result.is_ok() { 0 } else { 74 })
 }
 enum PageEngine {
@@ -1946,6 +2050,7 @@ impl PageEngine {
         observer: ObserverInit,
         platform: PlatformInit,
         crypto_seed: [u8; 32],
+        profile: mg_butane::modern::ResourceProfile,
     ) -> (Option<Self>, SessionReply) {
         #[cfg(feature = "legacy-test-engine")]
         if legacy {
@@ -1953,7 +2058,10 @@ impl PageEngine {
             return (realm.map(Self::Legacy), reply);
         }
         let _ = legacy;
-        let (realm, reply) = if crypto_seed == [0u8; 32] && platform.is_default() {
+        let (realm, reply) = if crypto_seed == [0u8; 32]
+            && platform.is_default()
+            && profile == mg_butane::modern::ResourceProfile::PageProcessV1
+        {
             mg_sparkle::js_browser::boa::BoaPageRealm::start_with_observer(request, observer)
         } else {
             let seed = if crypto_seed == [0u8; 32] {
@@ -1963,8 +2071,8 @@ impl PageEngine {
             } else {
                 crypto_seed
             };
-            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_platform(
-                request, observer, platform, seed,
+            mg_sparkle::js_browser::boa::BoaPageRealm::start_with_platform_and_profile(
+                request, observer, platform, seed, profile,
             )
         };
         (realm.map(Self::Boa), reply)
@@ -2023,10 +2131,25 @@ fn attach_memory(reply: &mut SessionReply) {
         report.worker_memory = Some(crate::platform::worker_memory::report());
     }
 }
+#[cfg(test)]
 fn child_loop_for(
     reader: &mut impl Read,
     writer: &mut impl Write,
     legacy: bool,
+) -> Result<(), String> {
+    child_loop_for_profile(
+        reader,
+        writer,
+        legacy,
+        mg_butane::modern::ResourceProfile::PageProcessV1,
+    )
+}
+
+fn child_loop_for_profile(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    legacy: bool,
+    profile: mg_butane::modern::ResourceProfile,
 ) -> Result<(), String> {
     let version = if legacy { 1 } else { VERSION };
     let mut wire = 0;
@@ -2046,7 +2169,7 @@ fn child_loop_for(
     };
     let automation_enabled = !legacy && matches!(observer, ObserverInit::Disabled);
     let (mut realm, mut reply) =
-        PageEngine::start(initial, legacy, observer, platform, crypto_seed);
+        PageEngine::start(initial, legacy, observer, platform, crypto_seed, profile);
     let initial_console = if !legacy && matches!(observer, ObserverInit::Disabled) {
         realm
             .as_mut()
@@ -3866,6 +3989,85 @@ mod tests {
         assert!(validate_engine_profile(&frame.reply, false, Some(&previous)).is_err());
         frame.reply.allocations = Some(report(10));
         assert!(validate_engine_profile(&frame.reply, false, None).is_err());
+    }
+    #[test]
+    fn interactive_boa_profile_rejects_mismatched_profile_name_or_worker_limits() {
+        use mg_butane::modern::{
+            INTERACTIVE_PROFILE, INTERACTIVE_WORKER_CUMULATIVE_LIMIT,
+            INTERACTIVE_WORKER_OUTSTANDING_LIMIT, ResourceProfile, WORKER_CUMULATIVE_LIMIT,
+            WORKER_OUTSTANDING_LIMIT, WorkerMemory,
+        };
+        let mut request = request(0);
+        request.version = VERSION;
+        let mut frame = modern_response(&request);
+        let boa = frame.reply.boa.as_mut().unwrap();
+        boa.profile = INTERACTIVE_PROFILE.into();
+        boa.worker_memory = Some(WorkerMemory {
+            outstanding_bytes: 1024,
+            peak_bytes: 2048,
+            cumulative_bytes: 4096,
+            allocations: 8,
+            outstanding_limit_bytes: INTERACTIVE_WORKER_OUTSTANDING_LIMIT,
+            cumulative_limit_bytes: INTERACTIVE_WORKER_CUMULATIVE_LIMIT,
+        });
+        validate_engine_profile_for(
+            &frame.reply,
+            false,
+            None,
+            ResourceProfile::InteractivePageV1,
+        )
+        .unwrap();
+        // Default boa-page-process-v1 validator must reject interactive profile reports.
+        assert!(
+            validate_engine_profile_for(&frame.reply, false, None, ResourceProfile::PageProcessV1)
+                .is_err()
+        );
+        // Interactive validator must reject mismatched allocator ceilings.
+        frame
+            .reply
+            .boa
+            .as_mut()
+            .unwrap()
+            .worker_memory
+            .as_mut()
+            .unwrap()
+            .outstanding_limit_bytes = WORKER_OUTSTANDING_LIMIT;
+        assert!(
+            validate_engine_profile_for(
+                &frame.reply,
+                false,
+                None,
+                ResourceProfile::InteractivePageV1,
+            )
+            .is_err()
+        );
+        frame
+            .reply
+            .boa
+            .as_mut()
+            .unwrap()
+            .worker_memory
+            .as_mut()
+            .unwrap()
+            .outstanding_limit_bytes = INTERACTIVE_WORKER_OUTSTANDING_LIMIT;
+        frame
+            .reply
+            .boa
+            .as_mut()
+            .unwrap()
+            .worker_memory
+            .as_mut()
+            .unwrap()
+            .cumulative_limit_bytes = WORKER_CUMULATIVE_LIMIT;
+        assert!(
+            validate_engine_profile_for(
+                &frame.reply,
+                false,
+                None,
+                ResourceProfile::InteractivePageV1,
+            )
+            .is_err()
+        );
     }
     #[test]
     fn active_accounting_and_lifetime_are_nonrenewable_but_terminal_projection_can_be_charged() {

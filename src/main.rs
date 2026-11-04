@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Some("--script-worker") => script_worker::worker_entry(),
         Some("--script-session") => script_worker::session_entry(),
+        Some("--script-session-interactive") => script_worker::interactive_session_entry(),
         #[cfg(all(
             feature = "legacy-test-engine",
             target_os = "linux",
@@ -67,14 +68,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => {}
     }
     let session = mg_chassis::net::Session::new();
-    let mut app = App::new_with_session(
-        platform::load_fonts()?,
-        std::sync::Arc::new(platform::LinuxScripts::default()),
-        session.clone(),
-    );
-    app.set_scripts_enabled(true);
+    let mut scripts_enabled = true;
     let mut journey = JourneyOptions::default();
-    app.set_build_info(env!("CARGO_PKG_VERSION"), COMPILED, REVISION);
     let executable = std::env::current_exe()?;
     let mut auto_update = updater::automatic_enabled(&executable);
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -92,6 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut initial = "https://example.com/".to_string();
     let mut has_initial_url = false;
     let mut restart_scripts = true;
+    let mut interactive_script_flag = false;
     let mut restore_tabs = Vec::new();
     let mut restore_session = false;
     let mut user_data_dir: Option<std::path::PathBuf> = None;
@@ -106,6 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--no-auto-update" => auto_update = false,
             "--restore-session" => restore_session = true,
             "--remote-debugging-pipe" => remote_debugging_pipe = true,
+            "--interactive-script-profile" => interactive_script_flag = true,
             "--headless" => headless = true,
             value if value.starts_with("--headless=") => {
                 headless = value != "--headless=false" && value != "--headless=0";
@@ -150,13 +147,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 restore_tabs.push(url.clone());
             }
             "--enable-scripts" => {
-                app.set_scripts_enabled(true);
+                scripts_enabled = true;
                 restart_scripts = true;
             }
             #[cfg(feature = "legacy-test-engine")]
             "--legacy-page-tests" => script_worker::use_legacy_for_tests(),
             "--disable-scripts" => {
-                app.set_scripts_enabled(false);
+                scripts_enabled = false;
                 restart_scripts = false;
             }
             "--remote-debugging-port" => {
@@ -207,6 +204,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         i += 1;
     }
+    let use_interactive_scripts = interactive_script_flag
+        || (!automation_mode
+            && debug_port.is_none()
+            && !remote_debugging_pipe
+            && journey.query.is_none()
+            && !journey.events
+            && !journey.exit_after);
+    let script_runtime = if use_interactive_scripts {
+        platform::LinuxScripts::interactive()
+    } else {
+        platform::LinuxScripts::default()
+    };
+    let mut app = App::new_with_session(
+        platform::load_fonts()?,
+        std::sync::Arc::new(script_runtime),
+        session.clone(),
+    );
+    app.set_scripts_enabled(scripts_enabled);
+    app.set_build_info(env!("CARGO_PKG_VERSION"), COMPILED, REVISION);
     if profile_mode {
         app.navigate(initial, None, true);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);

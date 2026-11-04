@@ -109,7 +109,12 @@ mod platform;
 ))]
 pub use platform::legacy_session_entry;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use platform::{Session, session_entry, session_selftest};
+pub use platform::{Session, interactive_session_entry, session_entry, session_selftest};
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub fn interactive_session_entry() -> ! {
+    std::process::exit(78)
+}
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 pub struct Session;
@@ -129,6 +134,16 @@ impl Session {
         _: ChildPool,
         _: mg_sparkle::page_session::observer::ObserverInit,
         _: mg_sparkle::page_session::platform::PlatformInit,
+    ) -> Result<(Self, SessionReply), String> {
+        Err("Script-worker isolation is only implemented for Linux x86_64".into())
+    }
+    pub fn start_with_platform_and_profile(
+        _: Request,
+        _: u64,
+        _: ChildPool,
+        _: mg_sparkle::page_session::observer::ObserverInit,
+        _: mg_sparkle::page_session::platform::PlatformInit,
+        _: bool,
     ) -> Result<(Self, SessionReply), String> {
         Err("Script-worker isolation is only implemented for Linux x86_64".into())
     }

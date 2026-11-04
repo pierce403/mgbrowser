@@ -1186,7 +1186,16 @@ impl BrowserHost {
         Ok(Value::Host(format!("collection:{id}")))
     }
     fn attr(&mut self, id: usize, name: &str, value: String) -> Result<(), String> {
-        if !valid_name(name) || value.len() > 16_384 {
+        let max_len = if crate::document::is_allowed_data_image_attr(
+            &self.document.nodes[id].tag,
+            name,
+            &value,
+        ) {
+            crate::document::MAX_DATA_IMAGE_ATTRIBUTE
+        } else {
+            16_384
+        };
+        if !valid_name(name) || value.len() > max_len {
             return Err("Invalid or oversized attribute".into());
         }
         self.charge(name.len() + value.len())?;

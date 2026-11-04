@@ -1044,87 +1044,98 @@ fn parse_hsl_args(inner: &str) -> Option<[u8; 4]> {
 }
 
 fn named_css_color(name: &str) -> Option<[u8; 4]> {
-    let rgb: [u8; 3] = match name {
-        "transparent" => return Some([0, 0, 0, 0]),
-        "black" => [0, 0, 0],
-        "white" => [255, 255, 255],
-        "red" => [255, 0, 0],
-        "lime" => [0, 255, 0],
-        "green" => [0, 128, 0],
-        "blue" => [0, 0, 255],
-        "yellow" => [255, 255, 0],
-        "cyan" | "aqua" => [0, 255, 255],
-        "magenta" | "fuchsia" => [255, 0, 255],
-        "silver" => [192, 192, 192],
-        "gray" | "grey" => [128, 128, 128],
-        "darkgray" | "darkgrey" => [169, 169, 169],
-        "lightgray" | "lightgrey" => [211, 211, 211],
-        "dimgray" | "dimgrey" => [105, 105, 105],
-        "slategray" | "slategrey" => [112, 128, 144],
-        "darkslategray" | "darkslategrey" => [47, 79, 79],
-        "lightslategray" | "lightslategrey" => [119, 136, 153],
-        "whitesmoke" => [245, 245, 245],
-        "gainsboro" => [220, 220, 220],
-        "maroon" => [128, 0, 0],
-        "darkred" => [139, 0, 0],
-        "firebrick" => [178, 34, 34],
-        "crimson" => [220, 20, 60],
-        "tomato" => [255, 99, 71],
-        "coral" => [255, 127, 80],
-        "salmon" => [250, 128, 114],
-        "orangered" => [255, 69, 0],
-        "darkorange" => [255, 140, 0],
-        "orange" => [255, 165, 0],
-        "gold" => [255, 215, 0],
-        "goldenrod" => [218, 165, 32],
-        "khaki" => [240, 230, 140],
-        "olive" => [128, 128, 0],
-        "yellowgreen" => [154, 205, 50],
-        "limegreen" => [50, 205, 50],
-        "forestgreen" => [34, 139, 34],
-        "darkgreen" => [0, 100, 0],
-        "seagreen" => [46, 139, 87],
-        "mediumseagreen" => [60, 179, 113],
-        "springgreen" => [0, 255, 127],
-        "aquamarine" => [127, 255, 212],
-        "turquoise" => [64, 224, 208],
-        "teal" => [0, 128, 128],
-        "darkcyan" => [0, 139, 139],
-        "skyblue" => [135, 206, 235],
-        "deepskyblue" => [0, 191, 255],
-        "dodgerblue" => [30, 144, 255],
-        "cornflowerblue" => [100, 149, 237],
-        "steelblue" => [70, 130, 180],
-        "royalblue" => [65, 105, 225],
-        "navy" => [0, 0, 128],
-        "darkblue" => [0, 0, 139],
-        "midnightblue" => [25, 25, 112],
-        "indigo" => [75, 0, 130],
-        "purple" => [128, 0, 128],
-        "rebeccapurple" => [102, 51, 153],
-        "blueviolet" => [138, 43, 226],
-        "darkmagenta" => [139, 0, 139],
-        "violet" => [238, 130, 238],
-        "plum" => [221, 160, 221],
-        "orchid" => [218, 112, 214],
-        "deeppink" => [255, 20, 147],
-        "hotpink" => [255, 105, 180],
-        "pink" => [255, 192, 203],
-        "brown" => [165, 42, 42],
-        "saddlebrown" => [139, 69, 19],
-        "sienna" => [160, 82, 45],
-        "chocolate" => [210, 105, 30],
-        "peru" => [205, 133, 63],
-        "tan" => [210, 180, 140],
-        "wheat" => [245, 222, 179],
-        "beige" => [245, 245, 220],
-        "ivory" => [255, 255, 240],
-        "snow" => [255, 250, 250],
-        "aliceblue" => [240, 248, 255],
-        "lavender" => [230, 230, 250],
-        _ => return None,
-    };
-    Some([rgb[0], rgb[1], rgb[2], 255])
+    if name == "transparent" {
+        return Some([0, 0, 0, 0]);
+    }
+    const COLORS: &[(&str, u32)] = &[
+        ("black", 0x000000),
+        ("white", 0xffffff),
+        ("red", 0xff0000),
+        ("lime", 0x00ff00),
+        ("green", 0x008000),
+        ("blue", 0x0000ff),
+        ("yellow", 0xffff00),
+        ("cyan", 0x00ffff),
+        ("aqua", 0x00ffff),
+        ("magenta", 0xff00ff),
+        ("fuchsia", 0xff00ff),
+        ("silver", 0xc0c0c0),
+        ("gray", 0x808080),
+        ("grey", 0x808080),
+        ("darkgray", 0xa9a9a9),
+        ("darkgrey", 0xa9a9a9),
+        ("lightgray", 0xd3d3d3),
+        ("lightgrey", 0xd3d3d3),
+        ("dimgray", 0x696969),
+        ("dimgrey", 0x696969),
+        ("slategray", 0x708090),
+        ("slategrey", 0x708090),
+        ("darkslategray", 0x2f4f4f),
+        ("darkslategrey", 0x2f4f4f),
+        ("lightslategray", 0x778899),
+        ("lightslategrey", 0x778899),
+        ("whitesmoke", 0xf5f5f5),
+        ("gainsboro", 0xdcdcdc),
+        ("maroon", 0x800000),
+        ("darkred", 0x8b0000),
+        ("firebrick", 0xb22222),
+        ("crimson", 0xdc143c),
+        ("tomato", 0xff6347),
+        ("coral", 0xff7f50),
+        ("salmon", 0xfa8072),
+        ("orangered", 0xff4500),
+        ("darkorange", 0xff8c00),
+        ("orange", 0xffa500),
+        ("gold", 0xffd700),
+        ("goldenrod", 0xdaa520),
+        ("khaki", 0xf0e68c),
+        ("olive", 0x808000),
+        ("yellowgreen", 0x9acd32),
+        ("limegreen", 0x32cd32),
+        ("forestgreen", 0x228b22),
+        ("darkgreen", 0x006400),
+        ("seagreen", 0x2e8b57),
+        ("mediumseagreen", 0x3cb371),
+        ("springgreen", 0x00ff7f),
+        ("aquamarine", 0x7fffd4),
+        ("turquoise", 0x40e0d0),
+        ("teal", 0x008080),
+        ("darkcyan", 0x008b8b),
+        ("skyblue", 0x87ceeb),
+        ("deepskyblue", 0x00bfff),
+        ("dodgerblue", 0x1e90ff),
+        ("cornflowerblue", 0x6495ed),
+        ("steelblue", 0x4682b4),
+        ("royalblue", 0x4169e1),
+        ("navy", 0x000080),
+        ("darkblue", 0x00008b),
+        ("midnightblue", 0x191970),
+        ("indigo", 0x4b0082),
+        ("purple", 0x800080),
+        ("rebeccapurple", 0x663399),
+        ("blueviolet", 0x8a2be2),
+        ("darkmagenta", 0x8b008b),
+        ("violet", 0xee82ee),
+        ("plum", 0xdda0dd),
+        ("orchid", 0xda70d6),
+        ("deeppink", 0xff1493),
+        ("hotpink", 0xff69b4),
+        ("pink", 0xffc0cb),
+        ("brown", 0xa52a2a),
+        ("saddlebrown", 0x8b4513),
+        ("sienna", 0xa0522d),
+        ("chocolate", 0xd2691e),
+        ("peru", 0xcd853f),
+        ("tan", 0xd2b48c),
+        ("wheat", 0xf5deb3),
+        ("beige", 0xf5f5dc),
+        ("ivory", 0xfffff0),
+        ("snow", 0xfffafa),
+        ("aliceblue", 0xf0f8ff),
+        ("lavender", 0xe6e6fa),
+    ];
+    let hex = COLORS.iter().find(|&&(k, _)| k == name)?.1;
+    Some([(hex >> 16) as u8, (hex >> 8) as u8, hex as u8, 255])
 }
 
 // --- Built-in Compact 8x8 ASCII Bitmap Font (0x20..=0x7E, MSB = left column) ---
@@ -2251,7 +2262,7 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
     for ctor_name in ["CanvasRenderingContext2D", "CanvasGradient", "ImageData"] {
         let proto = JsObject::with_object_proto(context.intrinsics());
         let is_image_data = ctor_name == "ImageData";
-        let ctor = FunctionObjectBuilder::new(
+        let ctor: JsObject = FunctionObjectBuilder::new(
             context.realm(),
             NativeFunction::from_copy_closure_with_captures(
                 |new_target, args, &is_img, ctx| {
@@ -2267,39 +2278,9 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
         .name(JsString::from(ctor_name))
         .length(if is_image_data { 2 } else { 0 })
         .constructor(true)
-        .build();
-        ctor.define_property_or_throw(
-            js_string!("prototype"),
-            PropertyDescriptor::builder()
-                .value(proto.clone())
-                .writable(false)
-                .enumerable(false)
-                .configurable(false),
-            context,
-        )
-        .map_err(|_| "Canvas global ctor prototype failed")?;
-        proto
-            .define_property_or_throw(
-                js_string!("constructor"),
-                PropertyDescriptor::builder()
-                    .value(ctor.clone())
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Canvas global proto constructor failed")?;
-        global
-            .define_property_or_throw(
-                JsString::from(ctor_name),
-                PropertyDescriptor::builder()
-                    .value(ctor)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Canvas global constructor install failed")?;
+        .build()
+        .into();
+        link_ctor_global(&global, ctor_name, &ctor, &proto, context)?;
     }
     Ok(())
 }
@@ -2551,18 +2532,21 @@ fn build_gradient_object(grad_id: usize, context: &mut Context) -> JsResult<JsOb
         .and_then(|p| p.as_object())
         .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
     let gobj = JsObject::from_proto_and_data(proto, ());
-    gobj.define_property_or_throw(
+    def_prop(
+        &gobj,
         js_string!("__mg_grad_id"),
-        PropertyDescriptor::builder()
-            .value(grad_id as f64)
-            .writable(false)
-            .enumerable(false)
-            .configurable(false),
+        grad_id as f64,
+        false,
+        false,
+        false,
         context,
     )?;
-    let add_stop = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure(|this, args, ctx| {
+    def_fn(
+        &gobj,
+        "addColorStop",
+        2,
+        false,
+        |this, args, ctx| {
             modern::check_context(ctx)?;
             let Some(obj) = this.as_object() else {
                 return Err(failure("CanvasGradient.addColorStop requires receiver"));
@@ -2601,18 +2585,7 @@ fn build_gradient_object(grad_id: usize, context: &mut Context) -> JsResult<JsOb
                 grad.stops.insert(pos, (offset, rgba));
             }
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("addColorStop"))
-    .length(2)
-    .build();
-    gobj.define_property_or_throw(
-        js_string!("addColorStop"),
-        PropertyDescriptor::builder()
-            .value(add_stop)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
+        },
         context,
     )?;
     state(context)
@@ -2687,40 +2660,40 @@ fn construct_image_data(
         .and_then(|p| p.as_object())
         .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
     let img_obj = JsObject::from_proto_and_data(proto, ());
-    img_obj.define_property_or_throw(
+    def_prop(
+        &img_obj,
         js_string!("width"),
-        PropertyDescriptor::builder()
-            .value(width as f64)
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        width as f64,
+        false,
+        true,
+        true,
         context,
     )?;
-    img_obj.define_property_or_throw(
+    def_prop(
+        &img_obj,
         js_string!("height"),
-        PropertyDescriptor::builder()
-            .value(height as f64)
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        height as f64,
+        false,
+        true,
+        true,
         context,
     )?;
-    img_obj.define_property_or_throw(
+    def_prop(
+        &img_obj,
         js_string!("data"),
-        PropertyDescriptor::builder()
-            .value(clamped_obj)
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        clamped_obj,
+        false,
+        true,
+        true,
         context,
     )?;
-    img_obj.define_property_or_throw(
+    def_prop(
+        &img_obj,
         js_string!("colorSpace"),
-        PropertyDescriptor::builder()
-            .value(js_string!("srgb"))
-            .writable(false)
-            .enumerable(true)
-            .configurable(true),
+        js_string!("srgb"),
+        false,
+        true,
+        true,
         context,
     )?;
     Ok(img_obj.into())
@@ -2808,445 +2781,148 @@ fn parse_paint_style_arg(val: &JsValue, context: &mut Context) -> JsResult<Optio
     Ok(None)
 }
 
-type CanvasNativeFn = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
-
-fn def_ctx_accessor(
-    obj: &JsObject,
-    name: &'static str,
-    getter: CanvasNativeFn,
-    setter: Option<CanvasNativeFn>,
-    context: &mut Context,
-) -> JsResult<()> {
-    let get_fn = FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(getter))
-        .name(JsString::from(format!("get {name}").as_str()))
-        .length(0)
-        .build();
-    let set_fn = setter.map(|s| {
-        FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(s))
-            .name(JsString::from(format!("set {name}").as_str()))
-            .length(1)
-            .build()
-    });
-    obj.define_property_or_throw(
-        JsString::from(name),
-        PropertyDescriptor::builder()
-            .get(get_fn)
-            .maybe_set(set_fn)
-            .enumerable(true)
-            .configurable(true),
-        context,
-    )?;
-    Ok(())
-}
-
-fn def_ctx_method(
-    obj: &JsObject,
-    name: &'static str,
-    length: usize,
-    func: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
-    context: &mut Context,
-) -> JsResult<()> {
-    let f = FunctionObjectBuilder::new(context.realm(), NativeFunction::from_fn_ptr(func))
-        .name(JsString::from(name))
-        .length(length)
-        .build();
-    obj.define_property_or_throw(
-        JsString::from(name),
-        PropertyDescriptor::builder()
-            .value(f)
-            .writable(true)
-            .enumerable(false)
-            .configurable(true),
-        context,
-    )?;
-    Ok(())
-}
-
-fn ctx_get_canvas(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn ctx_prop_get(this: &JsValue, prop: &str, ctx: &mut Context) -> JsResult<JsValue> {
     modern::check_context(ctx)?;
     let nid = ctx_node_id(this, ctx)?;
-    dom_ops::wrap_node_id(nid, ctx)
-}
-
-fn ctx_get_fill_style(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let style = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .fill_style
-        .clone();
-    read_paint_style(&style, ctx)
-}
-
-fn ctx_set_fill_style(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(val) = args.first()
-        && let Some(parsed) = parse_paint_style_arg(val, ctx)?
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.fill_style = parsed;
+    match prop {
+        "fillStyle" => {
+            let s = state(ctx).borrow().canvas.surfaces[&nid]
+                .state
+                .fill_style
+                .clone();
+            read_paint_style(&s, ctx)
+        }
+        "strokeStyle" => {
+            let s = state(ctx).borrow().canvas.surfaces[&nid]
+                .state
+                .stroke_style
+                .clone();
+            read_paint_style(&s, ctx)
+        }
+        _ => {
+            let s = state(ctx);
+            let d = s.borrow();
+            let st = &d.canvas.surfaces[&nid].state;
+            Ok(match prop {
+                "lineWidth" => st.line_width.into(),
+                "lineCap" => JsString::from(match st.line_cap {
+                    LineCap::Butt => "butt",
+                    LineCap::Round => "round",
+                    LineCap::Square => "square",
+                })
+                .into(),
+                "lineJoin" => JsString::from(match st.line_join {
+                    LineJoin::Miter => "miter",
+                    LineJoin::Round => "round",
+                    LineJoin::Bevel => "bevel",
+                })
+                .into(),
+                "miterLimit" => st.miter_limit.into(),
+                "lineDashOffset" => st.line_dash_offset.into(),
+                "globalAlpha" => st.global_alpha.into(),
+                "globalCompositeOperation" => JsString::from(st.composite_op.as_str()).into(),
+                "font" => JsString::from(st.font_raw.as_str()).into(),
+                "textAlign" => JsString::from(st.text_align.as_str()).into(),
+                "textBaseline" => JsString::from(st.text_baseline.as_str()).into(),
+                "shadowColor" => {
+                    JsString::from(serialize_canvas_color(st.shadow_color).as_str()).into()
+                }
+                "shadowBlur" => st.shadow_blur.into(),
+                "shadowOffsetX" => st.shadow_offset_x.into(),
+                "shadowOffsetY" => st.shadow_offset_y.into(),
+                _ => JsValue::undefined(),
+            })
+        }
     }
-    Ok(JsValue::undefined())
 }
 
-fn ctx_get_stroke_style(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let style = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .stroke_style
-        .clone();
-    read_paint_style(&style, ctx)
-}
-
-fn ctx_set_stroke_style(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(val) = args.first()
-        && let Some(parsed) = parse_paint_style_arg(val, ctx)?
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.stroke_style = parsed;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_line_width(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .line_width
-        .into())
-}
-
-fn ctx_set_line_width(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && v > 0.0
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.line_width = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_line_cap(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = match state(ctx).borrow().canvas.surfaces[&nid].state.line_cap {
-        LineCap::Butt => "butt",
-        LineCap::Round => "round",
-        LineCap::Square => "square",
-    };
-    Ok(JsString::from(s).into())
-}
-
-fn ctx_set_line_cap(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    let cap = match raw.as_str() {
-        "butt" => Some(LineCap::Butt),
-        "round" => Some(LineCap::Round),
-        "square" => Some(LineCap::Square),
-        _ => None,
-    };
-    if let Some(c) = cap
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.line_cap = c;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_line_join(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = match state(ctx).borrow().canvas.surfaces[&nid].state.line_join {
-        LineJoin::Miter => "miter",
-        LineJoin::Round => "round",
-        LineJoin::Bevel => "bevel",
-    };
-    Ok(JsString::from(s).into())
-}
-
-fn ctx_set_line_join(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    let join = match raw.as_str() {
-        "miter" => Some(LineJoin::Miter),
-        "round" => Some(LineJoin::Round),
-        "bevel" => Some(LineJoin::Bevel),
-        _ => None,
-    };
-    if let Some(j) = join
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.line_join = j;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_miter_limit(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .miter_limit
-        .into())
-}
-
-fn ctx_set_miter_limit(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && v > 0.0
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.miter_limit = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_line_dash_offset(
-    this: &JsValue,
-    _args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .line_dash_offset
-        .into())
-}
-
-fn ctx_set_line_dash_offset(
+fn ctx_prop_set(
     this: &JsValue,
     args: &[JsValue],
+    prop: &str,
     ctx: &mut Context,
 ) -> JsResult<JsValue> {
     modern::check_context(ctx)?;
     let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.line_dash_offset = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_global_alpha(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .global_alpha
-        .into())
-}
-
-fn ctx_set_global_alpha(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && (0.0..=1.0).contains(&v)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.global_alpha = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_composite_op(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .composite_op
-        .as_str();
-    Ok(JsString::from(s).into())
-}
-
-fn ctx_set_composite_op(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    if let Some(op) = CompositeOp::parse(&raw)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.composite_op = op;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_font(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .font_raw
-        .clone();
-    Ok(JsString::from(s.as_str()).into())
-}
-
-fn ctx_set_font(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    if let Some((px, bold, normalized)) = parse_css_font_spec(&raw)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.font_px = px;
-        surf.state.font_bold = bold;
-        surf.state.font_raw = normalized;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_text_align(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .text_align
-        .as_str();
-    Ok(JsString::from(s).into())
-}
-
-fn ctx_set_text_align(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    if let Some(ta) = TextAlign::parse(&raw)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.text_align = ta;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_text_baseline(
-    this: &JsValue,
-    _args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let s = state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .text_baseline
-        .as_str();
-    Ok(JsString::from(s).into())
-}
-
-fn ctx_set_text_baseline(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    if let Some(tb) = TextBaseline::parse(&raw)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.text_baseline = tb;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_shadow_color(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let c = state(ctx).borrow().canvas.surfaces[&nid].state.shadow_color;
-    Ok(JsString::from(serialize_canvas_color(c).as_str()).into())
-}
-
-fn ctx_set_shadow_color(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
-    if let Some(c) = parse_canvas_color(&raw)
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.shadow_color = c;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_shadow_blur(this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .shadow_blur
-        .into())
-}
-
-fn ctx_set_shadow_blur(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && v >= 0.0
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.shadow_blur = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_shadow_offset_x(
-    this: &JsValue,
-    _args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .shadow_offset_x
-        .into())
-}
-
-fn ctx_set_shadow_offset_x(
-    this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.shadow_offset_x = v;
-    }
-    Ok(JsValue::undefined())
-}
-
-fn ctx_get_shadow_offset_y(
-    this: &JsValue,
-    _args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    Ok(state(ctx).borrow().canvas.surfaces[&nid]
-        .state
-        .shadow_offset_y
-        .into())
-}
-
-fn ctx_set_shadow_offset_y(
-    this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
-    modern::check_context(ctx)?;
-    let nid = ctx_node_id(this, ctx)?;
-    if let Some(v) = finite_arg(args, 0, ctx)?
-        && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
-    {
-        surf.state.shadow_offset_y = v;
+    match prop {
+        "fillStyle" | "strokeStyle" => {
+            if let Some(val) = args.first()
+                && let Some(parsed) = parse_paint_style_arg(val, ctx)?
+                && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
+            {
+                if prop == "fillStyle" {
+                    surf.state.fill_style = parsed;
+                } else {
+                    surf.state.stroke_style = parsed;
+                }
+            }
+        }
+        "lineWidth" | "miterLimit" | "lineDashOffset" | "globalAlpha" | "shadowBlur"
+        | "shadowOffsetX" | "shadowOffsetY" => {
+            if let Some(v) = finite_arg(args, 0, ctx)?
+                && let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid)
+            {
+                let st = &mut surf.state;
+                match prop {
+                    "lineWidth" if v > 0.0 => st.line_width = v,
+                    "miterLimit" if v > 0.0 => st.miter_limit = v,
+                    "lineDashOffset" => st.line_dash_offset = v,
+                    "globalAlpha" if (0.0..=1.0).contains(&v) => st.global_alpha = v,
+                    "shadowBlur" if v >= 0.0 => st.shadow_blur = v,
+                    "shadowOffsetX" => st.shadow_offset_x = v,
+                    "shadowOffsetY" => st.shadow_offset_y = v,
+                    _ => {}
+                }
+            }
+        }
+        _ => {
+            let raw = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+            if let Some(surf) = state(ctx).borrow_mut().canvas.surfaces.get_mut(&nid) {
+                let st = &mut surf.state;
+                match prop {
+                    "lineCap" => match raw.as_str() {
+                        "butt" => st.line_cap = LineCap::Butt,
+                        "round" => st.line_cap = LineCap::Round,
+                        "square" => st.line_cap = LineCap::Square,
+                        _ => {}
+                    },
+                    "lineJoin" => match raw.as_str() {
+                        "miter" => st.line_join = LineJoin::Miter,
+                        "round" => st.line_join = LineJoin::Round,
+                        "bevel" => st.line_join = LineJoin::Bevel,
+                        _ => {}
+                    },
+                    "globalCompositeOperation" => {
+                        if let Some(op) = CompositeOp::parse(&raw) {
+                            st.composite_op = op;
+                        }
+                    }
+                    "font" => {
+                        if let Some((px, bold, norm)) = parse_css_font_spec(&raw) {
+                            st.font_px = px;
+                            st.font_bold = bold;
+                            st.font_raw = norm;
+                        }
+                    }
+                    "textAlign" => {
+                        if let Some(ta) = TextAlign::parse(&raw) {
+                            st.text_align = ta;
+                        }
+                    }
+                    "textBaseline" => {
+                        if let Some(tb) = TextBaseline::parse(&raw) {
+                            st.text_baseline = tb;
+                        }
+                    }
+                    "shadowColor" => {
+                        if let Some(c) = parse_canvas_color(&raw) {
+                            st.shadow_color = c;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
     Ok(JsValue::undefined())
 }
@@ -4730,178 +4406,99 @@ fn build_context_2d_object(node_id: usize, context: &mut Context) -> JsResult<Js
         .and_then(|p| p.as_object())
         .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
     let obj = JsObject::from_proto_and_data(proto, ());
-    obj.define_property_or_throw(
+    def_prop(
+        &obj,
         js_string!("__mg_canvas_id"),
-        PropertyDescriptor::builder()
-            .value(node_id as f64)
-            .writable(false)
-            .enumerable(false)
-            .configurable(false),
+        node_id as f64,
+        false,
+        false,
+        false,
         context,
     )?;
-
-    def_ctx_accessor(&obj, "canvas", ctx_get_canvas, None, context)?;
-    def_ctx_accessor(
+    def_getter_fn(
         &obj,
+        "canvas",
+        true,
+        |this, _, ctx| {
+            modern::check_context(ctx)?;
+            dom_ops::wrap_node_id(ctx_node_id(this, ctx)?, ctx)
+        },
+        context,
+    )?;
+    for prop in [
         "fillStyle",
-        ctx_get_fill_style,
-        Some(ctx_set_fill_style),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "strokeStyle",
-        ctx_get_stroke_style,
-        Some(ctx_set_stroke_style),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "lineWidth",
-        ctx_get_line_width,
-        Some(ctx_set_line_width),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "lineCap",
-        ctx_get_line_cap,
-        Some(ctx_set_line_cap),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "lineJoin",
-        ctx_get_line_join,
-        Some(ctx_set_line_join),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "miterLimit",
-        ctx_get_miter_limit,
-        Some(ctx_set_miter_limit),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "lineDashOffset",
-        ctx_get_line_dash_offset,
-        Some(ctx_set_line_dash_offset),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "globalAlpha",
-        ctx_get_global_alpha,
-        Some(ctx_set_global_alpha),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "globalCompositeOperation",
-        ctx_get_composite_op,
-        Some(ctx_set_composite_op),
-        context,
-    )?;
-    def_ctx_accessor(&obj, "font", ctx_get_font, Some(ctx_set_font), context)?;
-    def_ctx_accessor(
-        &obj,
+        "font",
         "textAlign",
-        ctx_get_text_align,
-        Some(ctx_set_text_align),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "textBaseline",
-        ctx_get_text_baseline,
-        Some(ctx_set_text_baseline),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "shadowColor",
-        ctx_get_shadow_color,
-        Some(ctx_set_shadow_color),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "shadowBlur",
-        ctx_get_shadow_blur,
-        Some(ctx_set_shadow_blur),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "shadowOffsetX",
-        ctx_get_shadow_offset_x,
-        Some(ctx_set_shadow_offset_x),
-        context,
-    )?;
-    def_ctx_accessor(
-        &obj,
         "shadowOffsetY",
-        ctx_get_shadow_offset_y,
-        Some(ctx_set_shadow_offset_y),
-        context,
-    )?;
-
-    def_ctx_method(&obj, "save", 0, ctx_save, context)?;
-    def_ctx_method(&obj, "restore", 0, ctx_restore, context)?;
-    def_ctx_method(&obj, "scale", 2, ctx_scale, context)?;
-    def_ctx_method(&obj, "rotate", 1, ctx_rotate, context)?;
-    def_ctx_method(&obj, "translate", 2, ctx_translate, context)?;
-    def_ctx_method(&obj, "transform", 6, ctx_transform, context)?;
-    def_ctx_method(&obj, "setTransform", 6, ctx_set_transform, context)?;
-    def_ctx_method(&obj, "resetTransform", 0, ctx_reset_transform, context)?;
-    def_ctx_method(&obj, "getTransform", 0, ctx_get_transform, context)?;
-
-    def_ctx_method(&obj, "clearRect", 4, ctx_clear_rect, context)?;
-    def_ctx_method(&obj, "fillRect", 4, ctx_fill_rect, context)?;
-    def_ctx_method(&obj, "strokeRect", 4, ctx_stroke_rect, context)?;
-
-    def_ctx_method(&obj, "beginPath", 0, ctx_begin_path, context)?;
-    def_ctx_method(&obj, "closePath", 0, ctx_close_path, context)?;
-    def_ctx_method(&obj, "moveTo", 2, ctx_move_to, context)?;
-    def_ctx_method(&obj, "lineTo", 2, ctx_line_to, context)?;
-    def_ctx_method(&obj, "rect", 4, ctx_rect, context)?;
-    def_ctx_method(&obj, "roundRect", 4, ctx_round_rect, context)?;
-    def_ctx_method(&obj, "arc", 5, ctx_arc, context)?;
-    def_ctx_method(&obj, "arcTo", 5, ctx_arc_to, context)?;
-    def_ctx_method(&obj, "ellipse", 7, ctx_ellipse, context)?;
-    def_ctx_method(&obj, "quadraticCurveTo", 4, ctx_quadratic_curve_to, context)?;
-    def_ctx_method(&obj, "bezierCurveTo", 6, ctx_bezier_curve_to, context)?;
-    def_ctx_method(&obj, "fill", 0, ctx_fill, context)?;
-    def_ctx_method(&obj, "stroke", 0, ctx_stroke, context)?;
-    def_ctx_method(&obj, "clip", 0, ctx_clip, context)?;
-    def_ctx_method(&obj, "isPointInPath", 2, ctx_is_point_in_path, context)?;
-    def_ctx_method(&obj, "setLineDash", 1, ctx_set_line_dash, context)?;
-    def_ctx_method(&obj, "getLineDash", 0, ctx_get_line_dash, context)?;
-
-    def_ctx_method(&obj, "fillText", 3, ctx_fill_text, context)?;
-    def_ctx_method(&obj, "strokeText", 3, ctx_stroke_text, context)?;
-    def_ctx_method(&obj, "measureText", 1, ctx_measure_text, context)?;
-
-    def_ctx_method(
-        &obj,
-        "createLinearGradient",
-        4,
-        ctx_create_linear_gradient,
-        context,
-    )?;
-    def_ctx_method(
-        &obj,
-        "createRadialGradient",
-        6,
-        ctx_create_radial_gradient,
-        context,
-    )?;
-    def_ctx_method(&obj, "createImageData", 2, ctx_create_image_data, context)?;
-    def_ctx_method(&obj, "getImageData", 4, ctx_get_image_data, context)?;
-    def_ctx_method(&obj, "putImageData", 3, ctx_put_image_data, context)?;
-    def_ctx_method(&obj, "drawImage", 3, ctx_draw_image, context)?;
-
+    ] {
+        def_get_set_cap(
+            &obj,
+            prop,
+            true,
+            prop,
+            |this, _, &p, ctx| ctx_prop_get(this, p, ctx),
+            |this, args, &p, ctx| ctx_prop_set(this, args, p, ctx),
+            context,
+        )?;
+    }
+    let methods: &[(
+        &str,
+        usize,
+        fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    )] = &[
+        ("save", 0, ctx_save),
+        ("restore", 0, ctx_restore),
+        ("scale", 2, ctx_scale),
+        ("rotate", 1, ctx_rotate),
+        ("translate", 2, ctx_translate),
+        ("transform", 6, ctx_transform),
+        ("setTransform", 6, ctx_set_transform),
+        ("resetTransform", 0, ctx_reset_transform),
+        ("getTransform", 0, ctx_get_transform),
+        ("clearRect", 4, ctx_clear_rect),
+        ("fillRect", 4, ctx_fill_rect),
+        ("strokeRect", 4, ctx_stroke_rect),
+        ("beginPath", 0, ctx_begin_path),
+        ("closePath", 0, ctx_close_path),
+        ("moveTo", 2, ctx_move_to),
+        ("lineTo", 2, ctx_line_to),
+        ("rect", 4, ctx_rect),
+        ("roundRect", 4, ctx_round_rect),
+        ("arc", 5, ctx_arc),
+        ("arcTo", 5, ctx_arc_to),
+        ("ellipse", 7, ctx_ellipse),
+        ("quadraticCurveTo", 4, ctx_quadratic_curve_to),
+        ("bezierCurveTo", 6, ctx_bezier_curve_to),
+        ("fill", 0, ctx_fill),
+        ("stroke", 0, ctx_stroke),
+        ("clip", 0, ctx_clip),
+        ("isPointInPath", 2, ctx_is_point_in_path),
+        ("setLineDash", 1, ctx_set_line_dash),
+        ("getLineDash", 0, ctx_get_line_dash),
+        ("fillText", 3, ctx_fill_text),
+        ("strokeText", 3, ctx_stroke_text),
+        ("measureText", 1, ctx_measure_text),
+        ("createLinearGradient", 4, ctx_create_linear_gradient),
+        ("createRadialGradient", 6, ctx_create_radial_gradient),
+        ("createImageData", 2, ctx_create_image_data),
+        ("getImageData", 4, ctx_get_image_data),
+        ("putImageData", 3, ctx_put_image_data),
+        ("drawImage", 3, ctx_draw_image),
+    ];
+    for &(mname, mlen, mfn) in methods {
+        def_fn(&obj, mname, mlen, false, mfn, context)?;
+    }
     Ok(obj)
 }

@@ -2,18 +2,31 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Latest verified release: v0.9.31
+## Latest verified release: v0.9.32
+
+v0.9.32 delivers end-to-end live Google Search compatibility (`https://www.google.com/`
+-> search query -> SearchGuard `knitsail` challenge & `SG_SS` cookie -> `HTTP 200`
+SERP with inline `data:image/` maps/thumbnails -> click first organic result ->
+destination with `0` console diagnostics), strict `<noscript>` suppression
+whenever `scripts_enabled == true` (preventing false "Turn on JavaScript to keep
+searching" redirects), sloppy direct-`eval` dynamic-binding slot isolation in
+`boa_engine 0.22.0`, complete branded `Window`/`Navigator`/`HTMLIFrameElement`/
+`HTMLMediaElement`/`HTMLImageElement`/`MouseEvent` WebIDL prototypes and methods,
+`256 KiB` inline `data:image/` materialization, styled `Display::Inline`
+descendant geometry & `2,000,000`-step worker `compute_boxes` layout parity, and
+the `boa-interactive-page-v1` interactive desktop script profile while
+preserving `boa-page-process-v1`, `558 PASS / 391 FAIL / 62 UNSUPPORTED of 1,011`
+on WPT static reftests, and `16/16` files (`79/79` subtests) on the Window lane.
+[Release notes](docs/RELEASE-v0.9.32.md).
+
+## Previous release: v0.9.31
 
 v0.9.31 delivers W3C Beacon (`navigator.sendBeacon`), WebIDL host method-override
 and expando assignment semantics across `navigator`/`console`/`history`/DOM
 wrappers, Navigation Timing (`performance.timing` & `performance.navigation`),
 ECMA-262 Annex B string/date compatibility (`String.prototype.substr`,
-`trimLeft`/`trimRight`, `Date.prototype.toGMTString`), same-origin
-`iframe.contentWindow` intrinsic constructors, and `<noscript>` fallback
-projection when initial page scripts hit cooperative `EngineLimit` with zero
-rendered items — resolving all JavaScript console errors and blank-screen traps
-on Google Search (`https://www.google.com/` -> `/search?...` ->
-`/httpservice/retry/enablejs` with `0` diagnostics) while preserving `558 PASS /
+`trimLeft`/`trimRight`, `Date.prototype.toGMTString`), and same-origin
+`iframe.contentWindow` intrinsic constructors while preserving `558 PASS /
 391 FAIL / 62 UNSUPPORTED of 1,011` on WPT static reftests and `16/16` files
 (`79/79` subtests) on the Window lane. [Release notes](docs/RELEASE-v0.9.31.md).
 

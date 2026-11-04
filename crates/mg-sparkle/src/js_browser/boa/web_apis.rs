@@ -9,8 +9,9 @@
 //! - `window.matchMedia(query)`
 //! - `window.localStorage`, `window.sessionStorage`, `document.cookie`, `window.history`
 use super::{
-    State, dom_exception, failure, key, message_clone, modern, property_name, receiver, state,
-    utf8, wrap,
+    State, def_cap, def_fn, def_get_set_cap, def_getter_cap, def_getter_fn, def_prop,
+    dom_exception, failure, key, link_ctor_global, message_clone, modern, property_name, receiver,
+    state, utf8, wrap,
 };
 use crate::page_session::platform::{
     HistoryOp, MAX_COOKIE_WRITE_BYTES, MAX_COOKIE_WRITES_PER_TX, MAX_HISTORY_OPS_PER_TX,
@@ -26,7 +27,7 @@ use modern::boa_engine::{
         FunctionObjectBuilder, JsObject, ObjectInitializer,
         builtins::{JsArray, JsArrayBuffer, JsDataView, JsTypedArray, JsUint8Array},
     },
-    property::{Attribute, PropertyDescriptor, PropertyKey},
+    property::{Attribute, PropertyKey},
 };
 use modern::boa_gc::{Finalize, GcRefCell, Trace};
 use std::{cell::RefCell, rc::Rc};
@@ -359,57 +360,39 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
 }
 
 fn register_annex_b_compat(context: &mut Context) -> Result<(), String> {
-    let substr_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(string_proto_substr),
-    )
-    .name(js_string!("substr"))
-    .length(2)
-    .build();
     let str_proto = context.intrinsics().constructors().string().prototype();
-    str_proto
-        .define_property_or_throw(
-            js_string!("substr"),
-            PropertyDescriptor::builder()
-                .value(substr_fn)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
+    def_fn(&str_proto, "substr", 2, false, string_proto_substr, context)
         .map_err(|_| "String.prototype.substr bind failed")?;
     for (alias, canonical) in [("trimLeft", "trimStart"), ("trimRight", "trimEnd")] {
         if let Ok(fn_val) = str_proto.get(JsString::from(canonical), context)
             && fn_val.is_callable()
         {
-            str_proto
-                .define_property_or_throw(
-                    JsString::from(alias),
-                    PropertyDescriptor::builder()
-                        .value(fn_val)
-                        .writable(true)
-                        .enumerable(false)
-                        .configurable(true),
-                    context,
-                )
-                .map_err(|_| "String.prototype trim alias bind failed")?;
+            def_prop(
+                &str_proto,
+                JsString::from(alias),
+                fn_val,
+                true,
+                false,
+                true,
+                context,
+            )
+            .map_err(|_| "String.prototype trim alias bind failed")?;
         }
     }
     let date_proto = context.intrinsics().constructors().date().prototype();
     if let Ok(utc_fn) = date_proto.get(js_string!("toUTCString"), context)
         && utc_fn.is_callable()
     {
-        date_proto
-            .define_property_or_throw(
-                js_string!("toGMTString"),
-                PropertyDescriptor::builder()
-                    .value(utc_fn)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Date.prototype.toGMTString bind failed")?;
+        def_prop(
+            &date_proto,
+            js_string!("toGMTString"),
+            utc_fn,
+            true,
+            false,
+            true,
+            context,
+        )
+        .map_err(|_| "Date.prototype.toGMTString bind failed")?;
     }
     Ok(())
 }
@@ -482,17 +465,16 @@ fn register_window_globals(context: &mut Context) -> Result<(), String> {
     ] {
         let fn_obj = super::method(&format!("host.window.{name}"), context)
             .map_err(|_| "Window Web API method failed")?;
-        global
-            .define_property_or_throw(
-                JsString::from(name),
-                PropertyDescriptor::builder()
-                    .value(fn_obj)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Global Web API property failed")?;
+        def_prop(
+            &global,
+            JsString::from(name),
+            fn_obj,
+            true,
+            true,
+            true,
+            context,
+        )
+        .map_err(|_| "Global Web API property failed")?;
     }
     Ok(())
 }
@@ -503,44 +485,32 @@ fn register_storage_and_history(context: &mut Context) -> Result<(), String> {
         ("localStorage", "storage:local"),
         ("sessionStorage", "storage:session"),
     ] {
-        let getter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |_, _, handle, context| {
-                    modern::check_context(context)?;
-                    ensure_tuple_origin(context)?;
-                    wrap(handle, context)
-                },
-                handle,
-            ),
+        def_getter_cap(
+            &global,
+            prop,
+            true,
+            handle,
+            |_, _, handle, ctx| {
+                modern::check_context(ctx)?;
+                ensure_tuple_origin(ctx)?;
+                wrap(handle, ctx)
+            },
+            context,
         )
-        .name(JsString::from(format!("get {prop}")))
-        .build();
-        global
-            .define_property_or_throw(
-                JsString::from(prop),
-                PropertyDescriptor::builder()
-                    .get(getter)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Storage accessor failed")?;
+        .map_err(|_| "Storage accessor failed")?;
     }
 
     let history_obj = wrap("history", context).map_err(|_| "History wrap failed")?;
-    global
-        .define_property_or_throw(
-            js_string!("history"),
-            PropertyDescriptor::builder()
-                .value(history_obj)
-                .writable(false)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global history failed")?;
-    Ok(())
+    def_prop(
+        &global,
+        js_string!("history"),
+        history_obj,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "Global history failed".to_owned())
 }
 
 pub(super) fn ensure_tuple_origin(context: &mut Context) -> JsResult<()> {
@@ -562,45 +532,35 @@ pub(super) fn ensure_tuple_origin(context: &mut Context) -> JsResult<()> {
 // --- `crypto` (`getRandomValues`, `randomUUID`) ---
 
 fn register_crypto(context: &mut Context) -> Result<(), String> {
-    let get_random_values = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(crypto_get_random_values),
+    let crypto_obj = JsObject::with_object_proto(context.intrinsics());
+    def_fn(
+        &crypto_obj,
+        "getRandomValues",
+        1,
+        false,
+        crypto_get_random_values,
+        context,
     )
-    .name(js_string!("getRandomValues"))
-    .length(1)
-    .build();
-    let random_uuid = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(crypto_random_uuid),
+    .map_err(|_| "crypto.getRandomValues failed")?;
+    def_fn(
+        &crypto_obj,
+        "randomUUID",
+        0,
+        false,
+        crypto_random_uuid,
+        context,
     )
-    .name(js_string!("randomUUID"))
-    .length(0)
-    .build();
-    let crypto_obj = ObjectInitializer::new(context)
-        .property(
-            js_string!("getRandomValues"),
-            get_random_values,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("randomUUID"),
-            random_uuid,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
-    context
-        .global_object()
-        .define_property_or_throw(
-            js_string!("crypto"),
-            PropertyDescriptor::builder()
-                .value(crypto_obj)
-                .writable(false)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global crypto failed")?;
-    Ok(())
+    .map_err(|_| "crypto.randomUUID failed")?;
+    def_prop(
+        &context.global_object(),
+        js_string!("crypto"),
+        crypto_obj,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "Global crypto failed".to_owned())
 }
 
 fn crypto_get_random_values(
@@ -727,294 +687,314 @@ struct PerfEntry {
 #[derive(Clone, Trace, Finalize)]
 struct PerfStore(#[unsafe_ignore_trace] Rc<RefCell<Vec<PerfEntry>>>);
 
+fn navigation_entry_to_js(context: &mut Context) -> JsObject {
+    let (url, complete_ms) = {
+        let shared = state(context);
+        let data = shared.borrow();
+        let ms = if data.host.ready == "complete" {
+            super::dom_events::elapsed_ms(&data)
+        } else {
+            0.0
+        };
+        (data.host.url.as_str().to_owned(), ms)
+    };
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+    let mut init = ObjectInitializer::new(context);
+    for (k, v) in [
+        ("name", url.as_str()),
+        ("entryType", "navigation"),
+        ("initiatorType", "navigation"),
+        ("nextHopProtocol", "h2"),
+        ("type", "navigate"),
+    ] {
+        init.property(JsString::from(k), JsString::from(v), ec);
+    }
+    init.property(js_string!("redirectCount"), 0, ec);
+    for zprop in [
+        "startTime",
+        "redirectStart",
+        "redirectEnd",
+        "unloadEventStart",
+        "unloadEventEnd",
+        "workerStart",
+        "fetchStart",
+        "domainLookupStart",
+        "domainLookupEnd",
+        "connectStart",
+        "connectEnd",
+        "secureConnectionStart",
+        "requestStart",
+        "responseStart",
+        "responseEnd",
+        "domInteractive",
+        "domContentLoadedEventStart",
+        "domContentLoadedEventEnd",
+        "transferSize",
+        "encodedBodySize",
+        "decodedBodySize",
+    ] {
+        init.property(JsString::from(zprop), 0.0, ec);
+    }
+    for cprop in ["duration", "domComplete", "loadEventStart", "loadEventEnd"] {
+        init.property(JsString::from(cprop), complete_ms, ec);
+    }
+    init.build()
+}
+
 fn perf_entry_to_js(entry: &PerfEntry, context: &mut Context) -> JsObject {
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
     ObjectInitializer::new(context)
-        .property(
-            js_string!("name"),
-            JsString::from(entry.name.as_str()),
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
+        .property(js_string!("name"), JsString::from(entry.name.as_str()), ec)
         .property(
             js_string!("entryType"),
             JsString::from(entry.entry_type),
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+            ec,
         )
-        .property(
-            js_string!("startTime"),
-            entry.start_time,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("duration"),
-            entry.duration,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
+        .property(js_string!("startTime"), entry.start_time, ec)
+        .property(js_string!("duration"), entry.duration, ec)
         .build()
 }
 
 fn register_performance(context: &mut Context) -> Result<(), String> {
     let entries = PerfStore(Rc::new(RefCell::new(Vec::new())));
-
-    let now_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, _, context| {
-            modern::check_context(context)?;
-            let ms = super::dom_events::elapsed_ms(&state(context).borrow());
-            Ok(ms.into())
-        }),
+    let perf = JsObject::with_object_proto(context.intrinsics());
+    def_fn(
+        &perf,
+        "now",
+        0,
+        false,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(super::dom_events::elapsed_ms(&state(ctx).borrow()).into())
+        },
+        context,
     )
-    .name(js_string!("now"))
-    .length(0)
-    .build();
-
-    let mark_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let Some(first) = args.first() else {
-                    return Err(JsNativeError::typ()
-                        .with_message("performance.mark requires 1 argument")
-                        .into());
-                };
-                let name = utf8(first, context)?;
-                let start_time = super::dom_events::elapsed_ms(&state(context).borrow());
-                let entry = PerfEntry {
-                    name,
-                    entry_type: "mark",
-                    start_time,
-                    duration: 0.0,
-                };
-                let obj = perf_entry_to_js(&entry, context);
-                let mut list = entries.0.borrow_mut();
-                if list.len() >= 512 {
-                    list.remove(0);
-                }
-                list.push(entry);
-                Ok(obj.into())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("mark"))
-    .length(1)
-    .build();
-
-    let measure_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let Some(first) = args.first() else {
-                    return Err(JsNativeError::typ()
-                        .with_message("performance.measure requires 1 argument")
-                        .into());
-                };
-                let name = utf8(first, context)?;
-                let now_ms = super::dom_events::elapsed_ms(&state(context).borrow());
-                let start_name = match args.get(1) {
-                    Some(v) if v.is_string() => Some(utf8(v, context)?),
-                    _ => None,
-                };
-                let end_name = match args.get(2) {
-                    Some(v) if v.is_string() => Some(utf8(v, context)?),
-                    _ => None,
-                };
-                let start_time = start_name
-                    .as_deref()
-                    .and_then(|sn| {
-                        entries
-                            .0
-                            .borrow()
-                            .iter()
-                            .rev()
-                            .find(|e| e.entry_type == "mark" && e.name == sn)
-                            .map(|e| e.start_time)
-                    })
-                    .unwrap_or(0.0);
-                let end_time = end_name
-                    .as_deref()
-                    .and_then(|en| {
-                        entries
-                            .0
-                            .borrow()
-                            .iter()
-                            .rev()
-                            .find(|e| e.entry_type == "mark" && e.name == en)
-                            .map(|e| e.start_time)
-                    })
-                    .unwrap_or(now_ms);
-                let entry = PerfEntry {
-                    name,
-                    entry_type: "measure",
-                    start_time,
-                    duration: (end_time - start_time).max(0.0),
-                };
-                let obj = perf_entry_to_js(&entry, context);
-                let mut list = entries.0.borrow_mut();
-                if list.len() >= 512 {
-                    list.remove(0);
-                }
-                list.push(entry);
-                Ok(obj.into())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("measure"))
-    .length(1)
-    .build();
-
-    let clear_marks_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let filter = match args.first() {
-                    Some(v) if !v.is_undefined() => Some(utf8(v, context)?),
-                    _ => None,
-                };
-                entries.0.borrow_mut().retain(|e| {
-                    e.entry_type != "mark" || filter.as_deref().is_some_and(|n| e.name != n)
-                });
-                Ok(JsValue::undefined())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("clearMarks"))
-    .length(0)
-    .build();
-
-    let clear_measures_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let filter = match args.first() {
-                    Some(v) if !v.is_undefined() => Some(utf8(v, context)?),
-                    _ => None,
-                };
-                entries.0.borrow_mut().retain(|e| {
-                    e.entry_type != "measure" || filter.as_deref().is_some_and(|n| e.name != n)
-                });
-                Ok(JsValue::undefined())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("clearMeasures"))
-    .length(0)
-    .build();
-
-    let get_entries_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, _, entries, context| {
-                modern::check_context(context)?;
-                let snapshot: Vec<PerfEntry> = entries.0.borrow().clone();
-                let arr = JsArray::new(context)?;
-                for e in &snapshot {
-                    arr.push(perf_entry_to_js(e, context), context)?;
-                }
-                Ok(arr.into())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("getEntries"))
-    .length(0)
-    .build();
-
-    let get_by_type_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let ty = utf8(args.first().unwrap_or(&JsValue::undefined()), context)?;
-                let snapshot: Vec<PerfEntry> = entries
-                    .0
-                    .borrow()
-                    .iter()
-                    .filter(|e| e.entry_type == ty)
-                    .cloned()
-                    .collect();
-                let arr = JsArray::new(context)?;
-                for e in &snapshot {
-                    arr.push(perf_entry_to_js(e, context), context)?;
-                }
-                Ok(arr.into())
-            },
-            entries.clone(),
-        ),
-    )
-    .name(js_string!("getEntriesByType"))
-    .length(1)
-    .build();
-
-    let get_by_name_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, args, entries, context| {
-                modern::check_context(context)?;
-                let name = utf8(args.first().unwrap_or(&JsValue::undefined()), context)?;
-                let ty = match args.get(1) {
-                    Some(v) if !v.is_undefined() => Some(utf8(v, context)?),
-                    _ => None,
-                };
-                let snapshot: Vec<PerfEntry> = entries
-                    .0
-                    .borrow()
-                    .iter()
-                    .filter(|e| e.name == name && ty.as_deref().is_none_or(|t| e.entry_type == t))
-                    .cloned()
-                    .collect();
-                let arr = JsArray::new(context)?;
-                for e in &snapshot {
-                    arr.push(perf_entry_to_js(e, context), context)?;
-                }
-                Ok(arr.into())
-            },
-            entries,
-        ),
-    )
-    .name(js_string!("getEntriesByName"))
-    .length(1)
-    .build();
-
-    let time_origin = state(context).borrow().time_origin_ms;
-    let to_json_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, _, context| {
-            modern::check_context(context)?;
-            let to = state(context).borrow().time_origin_ms;
-            let obj = ObjectInitializer::new(context)
+    .map_err(|_| "performance.now failed")?;
+    def_fn(
+        &perf,
+        "toJSON",
+        0,
+        false,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            let to = state(ctx).borrow().time_origin_ms;
+            Ok(ObjectInitializer::new(ctx)
                 .property(
                     js_string!("timeOrigin"),
                     to,
                     Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
                 )
-                .build();
-            Ok(obj.into())
-        }),
+                .build()
+                .into())
+        },
+        context,
     )
-    .name(js_string!("toJSON"))
-    .length(0)
-    .build();
+    .map_err(|_| "performance.toJSON failed")?;
 
+    let add_store_fn = |name: &'static str,
+                        len: usize,
+                        f: fn(&[JsValue], &PerfStore, &mut Context) -> JsResult<JsValue>,
+                        ctx: &mut Context|
+     -> Result<(), String> {
+        let fobj = FunctionObjectBuilder::new(
+            ctx.realm(),
+            NativeFunction::from_copy_closure_with_captures(
+                move |_, args, entries: &PerfStore, ctx| {
+                    modern::check_context(ctx)?;
+                    f(args, entries, ctx)
+                },
+                entries.clone(),
+            ),
+        )
+        .name(JsString::from(name))
+        .length(len)
+        .build();
+        def_prop(&perf, JsString::from(name), fobj, true, false, true, ctx)
+            .map_err(|_| format!("performance.{name} failed"))
+    };
+
+    add_store_fn(
+        "mark",
+        1,
+        |args, entries, ctx| {
+            let Some(first) = args.first() else {
+                return Err(JsNativeError::typ()
+                    .with_message("performance.mark requires 1 argument")
+                    .into());
+            };
+            let entry = PerfEntry {
+                name: utf8(first, ctx)?,
+                entry_type: "mark",
+                start_time: super::dom_events::elapsed_ms(&state(ctx).borrow()),
+                duration: 0.0,
+            };
+            let obj = perf_entry_to_js(&entry, ctx);
+            let mut list = entries.0.borrow_mut();
+            if list.len() >= 512 {
+                list.remove(0);
+            }
+            list.push(entry);
+            Ok(obj.into())
+        },
+        context,
+    )?;
+
+    add_store_fn(
+        "measure",
+        1,
+        |args, entries, ctx| {
+            let Some(first) = args.first() else {
+                return Err(JsNativeError::typ()
+                    .with_message("performance.measure requires 1 argument")
+                    .into());
+            };
+            let name = utf8(first, ctx)?;
+            let now_ms = super::dom_events::elapsed_ms(&state(ctx).borrow());
+            let find_mark = |arg: Option<&JsValue>, ctx: &mut Context| -> JsResult<Option<f64>> {
+                let Some(v) = arg.filter(|v| v.is_string()) else {
+                    return Ok(None);
+                };
+                let mn = utf8(v, ctx)?;
+                Ok(entries
+                    .0
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find(|e| e.entry_type == "mark" && e.name == mn)
+                    .map(|e| e.start_time))
+            };
+            let start_time = find_mark(args.get(1), ctx)?.unwrap_or(0.0);
+            let end_time = find_mark(args.get(2), ctx)?.unwrap_or(now_ms);
+            let entry = PerfEntry {
+                name,
+                entry_type: "measure",
+                start_time,
+                duration: (end_time - start_time).max(0.0),
+            };
+            let obj = perf_entry_to_js(&entry, ctx);
+            let mut list = entries.0.borrow_mut();
+            if list.len() >= 512 {
+                list.remove(0);
+            }
+            list.push(entry);
+            Ok(obj.into())
+        },
+        context,
+    )?;
+
+    for (fn_name, etype) in [("clearMarks", "mark"), ("clearMeasures", "measure")] {
+        let fobj = FunctionObjectBuilder::new(
+            context.realm(),
+            NativeFunction::from_copy_closure_with_captures(
+                move |_, args, (entries, etype): &(PerfStore, &'static str), ctx| {
+                    modern::check_context(ctx)?;
+                    let filter = match args.first() {
+                        Some(v) if !v.is_undefined() => Some(utf8(v, ctx)?),
+                        _ => None,
+                    };
+                    entries.0.borrow_mut().retain(|e| {
+                        e.entry_type != *etype || filter.as_deref().is_some_and(|n| e.name != n)
+                    });
+                    Ok(JsValue::undefined())
+                },
+                (entries.clone(), etype),
+            ),
+        )
+        .name(JsString::from(fn_name))
+        .length(0)
+        .build();
+        def_prop(
+            &perf,
+            JsString::from(fn_name),
+            fobj,
+            true,
+            false,
+            true,
+            context,
+        )
+        .map_err(|_| "performance.clear failed")?;
+    }
+
+    add_store_fn(
+        "getEntries",
+        0,
+        |_, entries, ctx| {
+            let snapshot: Vec<PerfEntry> = entries.0.borrow().clone();
+            let arr = JsArray::new(ctx)?;
+            arr.push(navigation_entry_to_js(ctx), ctx)?;
+            for e in &snapshot {
+                arr.push(perf_entry_to_js(e, ctx), ctx)?;
+            }
+            Ok(arr.into())
+        },
+        context,
+    )?;
+
+    add_store_fn(
+        "getEntriesByType",
+        1,
+        |args, entries, ctx| {
+            let ty = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+            let arr = JsArray::new(ctx)?;
+            if ty == "navigation" {
+                arr.push(navigation_entry_to_js(ctx), ctx)?;
+                return Ok(arr.into());
+            }
+            let snapshot: Vec<PerfEntry> = entries
+                .0
+                .borrow()
+                .iter()
+                .filter(|e| e.entry_type == ty)
+                .cloned()
+                .collect();
+            for e in &snapshot {
+                arr.push(perf_entry_to_js(e, ctx), ctx)?;
+            }
+            Ok(arr.into())
+        },
+        context,
+    )?;
+
+    add_store_fn(
+        "getEntriesByName",
+        1,
+        |args, entries, ctx| {
+            let name = utf8(args.first().unwrap_or(&JsValue::undefined()), ctx)?;
+            let ty = match args.get(1) {
+                Some(v) if !v.is_undefined() => Some(utf8(v, ctx)?),
+                _ => None,
+            };
+            let doc_url = state(ctx).borrow().host.url.as_str().to_owned();
+            let arr = JsArray::new(ctx)?;
+            if name == doc_url && ty.as_deref().is_none_or(|t| t == "navigation") {
+                arr.push(navigation_entry_to_js(ctx), ctx)?;
+            }
+            let snapshot: Vec<PerfEntry> = entries
+                .0
+                .borrow()
+                .iter()
+                .filter(|e| e.name == name && ty.as_deref().is_none_or(|t| e.entry_type == t))
+                .cloned()
+                .collect();
+            for e in &snapshot {
+                arr.push(perf_entry_to_js(e, ctx), ctx)?;
+            }
+            Ok(arr.into())
+        },
+        context,
+    )?;
+
+    let time_origin = state(context).borrow().time_origin_ms;
     let nav_start = time_origin.floor().max(0.0);
+    let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
     let mut timing_init = ObjectInitializer::new(context);
-    for zero_prop in [
+    for zprop in [
         "redirectStart",
         "redirectEnd",
         "unloadEventStart",
         "unloadEventEnd",
     ] {
-        timing_init.property(
-            JsString::from(zero_prop),
-            0.0,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        );
+        timing_init.property(JsString::from(zprop), 0.0, ec);
     }
     for ts_prop in [
         "navigationStart",
@@ -1035,142 +1015,87 @@ fn register_performance(context: &mut Context) -> Result<(), String> {
         "loadEventStart",
         "loadEventEnd",
     ] {
-        timing_init.property(
-            JsString::from(ts_prop),
-            nav_start,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        );
+        timing_init.property(JsString::from(ts_prop), nav_start, ec);
     }
     let timing_obj = timing_init.build();
     let nav_obj = ObjectInitializer::new(context)
-        .property(
-            js_string!("type"),
-            0,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("redirectCount"),
-            0,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
+        .property(js_string!("type"), 0, ec)
+        .property(js_string!("redirectCount"), 0, ec)
         .property(js_string!("TYPE_NAVIGATE"), 0, Attribute::ENUMERABLE)
         .property(js_string!("TYPE_RELOAD"), 1, Attribute::ENUMERABLE)
         .property(js_string!("TYPE_BACK_FORWARD"), 2, Attribute::ENUMERABLE)
         .property(js_string!("TYPE_RESERVED"), 255, Attribute::ENUMERABLE)
         .build();
 
-    let perf = ObjectInitializer::new(context)
-        .property(
-            js_string!("now"),
-            now_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("mark"),
-            mark_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("measure"),
-            measure_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("clearMarks"),
-            clear_marks_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("clearMeasures"),
-            clear_measures_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("getEntries"),
-            get_entries_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("getEntriesByType"),
-            get_by_type_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("getEntriesByName"),
-            get_by_name_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("toJSON"),
-            to_json_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("timeOrigin"),
-            time_origin,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("timing"),
-            timing_obj,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("navigation"),
-            nav_obj,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
-    context
-        .global_object()
-        .define_property_or_throw(
-            js_string!("performance"),
-            PropertyDescriptor::builder()
-                .value(perf)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global performance failed")?;
-    Ok(())
+    def_prop(
+        &perf,
+        js_string!("timeOrigin"),
+        time_origin,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "performance.timeOrigin failed")?;
+    def_prop(
+        &perf,
+        js_string!("timing"),
+        timing_obj,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "performance.timing failed")?;
+    def_prop(
+        &perf,
+        js_string!("navigation"),
+        nav_obj,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "performance.navigation failed")?;
+    def_prop(
+        &context.global_object(),
+        js_string!("performance"),
+        perf,
+        true,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "Global performance failed".to_owned())
 }
 
 // --- `TextEncoder` & `TextDecoder` ---
 
 fn register_text_encoding(context: &mut Context) -> Result<(), String> {
+    let global = context.global_object();
     // TextEncoder
-    let enc_encode = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(text_encoder_encode),
+    let enc_proto = JsObject::with_object_proto(context.intrinsics());
+    def_prop(
+        &enc_proto,
+        js_string!("encoding"),
+        js_string!("utf-8"),
+        false,
+        true,
+        true,
+        context,
     )
-    .name(js_string!("encode"))
-    .length(0)
-    .build();
-    let enc_into = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(text_encoder_encode_into),
+    .map_err(|_| "TextEncoder.encoding failed")?;
+    def_fn(&enc_proto, "encode", 0, false, text_encoder_encode, context)
+        .map_err(|_| "TextEncoder.encode failed")?;
+    def_fn(
+        &enc_proto,
+        "encodeInto",
+        2,
+        false,
+        text_encoder_encode_into,
+        context,
     )
-    .name(js_string!("encodeInto"))
-    .length(2)
-    .build();
-    let enc_proto = ObjectInitializer::new(context)
-        .property(
-            js_string!("encoding"),
-            js_string!("utf-8"),
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("encode"),
-            enc_encode,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("encodeInto"),
-            enc_into,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
+    .map_err(|_| "TextEncoder.encodeInto failed")?;
     let enc_ctor = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
@@ -1190,83 +1115,42 @@ fn register_text_encoding(context: &mut Context) -> Result<(), String> {
     .length(0)
     .constructor(true)
     .build();
-    bind_ctor_proto("TextEncoder", enc_ctor.into(), enc_proto, context)?;
+    link_ctor_global(
+        &global,
+        "TextEncoder",
+        &enc_ctor.into(),
+        &enc_proto,
+        context,
+    )?;
 
     // TextDecoder
-    let dec_decode = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(text_decoder_decode),
-    )
-    .name(js_string!("decode"))
-    .length(0)
-    .build();
-    let dec_encoding_get = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = this
-                .as_object()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            let data = obj
-                .downcast_ref::<TextDecoderData>()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            Ok(JsString::from(data.encoding.name()).into())
-        }),
-    )
-    .build();
-    let dec_fatal_get = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = this
-                .as_object()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            let data = obj
-                .downcast_ref::<TextDecoderData>()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            Ok(data.fatal.into())
-        }),
-    )
-    .build();
-    let dec_bom_get = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = this
-                .as_object()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            let data = obj
-                .downcast_ref::<TextDecoderData>()
-                .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
-            Ok(data.ignore_bom.into())
-        }),
-    )
-    .build();
-    let dec_proto = ObjectInitializer::new(context)
-        .property(
-            js_string!("decode"),
-            dec_decode,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
+    let dec_proto = JsObject::with_object_proto(context.intrinsics());
+    def_fn(&dec_proto, "decode", 0, false, text_decoder_decode, context)
+        .map_err(|_| "TextDecoder.decode failed")?;
+    for prop in ["encoding", "fatal", "ignoreBOM"] {
+        def_getter_cap(
+            &dec_proto,
+            prop,
+            true,
+            prop,
+            |this, _, prop, ctx| {
+                modern::check_context(ctx)?;
+                let obj = this
+                    .as_object()
+                    .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
+                let data = obj
+                    .downcast_ref::<TextDecoderData>()
+                    .ok_or_else(|| failure("Invalid TextDecoder receiver"))?;
+                Ok(match *prop {
+                    "encoding" => JsString::from(data.encoding.name()).into(),
+                    "fatal" => data.fatal.into(),
+                    _ => data.ignore_bom.into(),
+                })
+            },
+            context,
         )
-        .accessor(
-            js_string!("encoding"),
-            Some(dec_encoding_get),
-            None,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .accessor(
-            js_string!("fatal"),
-            Some(dec_fatal_get),
-            None,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .accessor(
-            js_string!("ignoreBOM"),
-            Some(dec_bom_get),
-            None,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
+        .map_err(|_| "TextDecoder getter failed")?;
+    }
     let dec_ctor = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
@@ -1324,8 +1208,13 @@ fn register_text_encoding(context: &mut Context) -> Result<(), String> {
     .length(0)
     .constructor(true)
     .build();
-    bind_ctor_proto("TextDecoder", dec_ctor.into(), dec_proto, context)?;
-    Ok(())
+    link_ctor_global(
+        &global,
+        "TextDecoder",
+        &dec_ctor.into(),
+        &dec_proto,
+        context,
+    )
 }
 
 fn text_encoder_encode(
@@ -1443,53 +1332,45 @@ pub(super) fn extract_buffer_source_bytes(
     val: &JsValue,
     context: &mut Context,
 ) -> JsResult<Vec<u8>> {
+    let slice_ab = |ab: JsArrayBuffer, off: usize, len: Option<usize>| -> JsResult<Vec<u8>> {
+        let guard = ab.data();
+        let Some(slice) = guard.as_deref() else {
+            return Err(JsNativeError::typ()
+                .with_message("BufferSource is detached")
+                .into());
+        };
+        Ok(match len {
+            Some(l) => slice[off..off + l].to_vec(),
+            None => slice.to_vec(),
+        })
+    };
     let Some(obj) = val.as_object() else {
         return Err(JsNativeError::typ()
             .with_message("Expected BufferSource (ArrayBuffer, TypedArray, or DataView)")
             .into());
     };
     if let Ok(ab) = JsArrayBuffer::from_object(obj.clone()) {
-        let guard = ab.data();
-        let Some(slice) = guard.as_deref() else {
-            return Err(JsNativeError::typ()
-                .with_message("BufferSource is detached")
-                .into());
-        };
-        return Ok(slice.to_vec());
+        return slice_ab(ab, 0, None);
     }
     if let Ok(ta) = JsTypedArray::from_object(obj.clone()) {
-        let buf_val = ta.buffer(context)?;
         let ab = JsArrayBuffer::from_object(
-            buf_val
+            ta.buffer(context)?
                 .as_object()
                 .ok_or_else(|| failure("Invalid TypedArray buffer"))?,
         )?;
-        let off = ta.byte_offset(context)?;
-        let len = ta.byte_length(context)?;
-        let guard = ab.data();
-        let Some(slice) = guard.as_deref() else {
-            return Err(JsNativeError::typ()
-                .with_message("BufferSource is detached")
-                .into());
-        };
-        return Ok(slice[off..off + len].to_vec());
+        return slice_ab(ab, ta.byte_offset(context)?, Some(ta.byte_length(context)?));
     }
     if let Ok(dv) = JsDataView::from_object(obj) {
-        let buf_val = dv.buffer(context)?;
         let ab = JsArrayBuffer::from_object(
-            buf_val
+            dv.buffer(context)?
                 .as_object()
                 .ok_or_else(|| failure("Invalid DataView buffer"))?,
         )?;
-        let off = dv.byte_offset(context)? as usize;
-        let len = dv.byte_length(context)? as usize;
-        let guard = ab.data();
-        let Some(slice) = guard.as_deref() else {
-            return Err(JsNativeError::typ()
-                .with_message("BufferSource is detached")
-                .into());
-        };
-        return Ok(slice[off..off + len].to_vec());
+        return slice_ab(
+            ab,
+            dv.byte_offset(context)? as usize,
+            Some(dv.byte_length(context)? as usize),
+        );
     }
     Err(JsNativeError::typ()
         .with_message("Expected BufferSource (ArrayBuffer, TypedArray, or DataView)")
@@ -1498,63 +1379,31 @@ pub(super) fn extract_buffer_source_bytes(
 
 // --- `URL` & `URLSearchParams` ---
 
-fn bind_ctor_proto(
-    name: &'static str,
-    ctor: JsObject,
-    proto: JsObject,
+fn parse_url_args(
+    args: &[JsValue],
+    err_msg: &'static str,
     context: &mut Context,
-) -> Result<(), String> {
-    ctor.define_property_or_throw(
-        js_string!("prototype"),
-        PropertyDescriptor::builder()
-            .value(proto.clone())
-            .writable(false)
-            .enumerable(false)
-            .configurable(false),
-        context,
-    )
-    .map_err(|_| "Prototype bind failed")?;
-    proto
-        .define_property_or_throw(
-            js_string!("constructor"),
-            PropertyDescriptor::builder()
-                .value(ctor.clone())
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Constructor backlink failed")?;
-    context
-        .global_object()
-        .define_property_or_throw(
-            JsString::from(name),
-            PropertyDescriptor::builder()
-                .value(ctor)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global constructor bind failed")?;
-    Ok(())
-}
-
-fn parse_url_with_optional_base(
-    url_str: &str,
-    base_str: Option<&str>,
-) -> Result<url::Url, url::ParseError> {
-    if let Some(base) = base_str {
-        let parsed_base = url::Url::parse(base)?;
-        parsed_base.join(url_str)
+) -> JsResult<Result<url::Url, url::ParseError>> {
+    let Some(first) = args.first() else {
+        return Err(JsNativeError::typ().with_message(err_msg).into());
+    };
+    let url_str = utf8(first, context)?;
+    let base_str = match args.get(1) {
+        None => None,
+        Some(b) if b.is_undefined() => None,
+        Some(b) => Some(utf8(b, context)?),
+    };
+    Ok(if let Some(base) = base_str.as_deref() {
+        url::Url::parse(base).and_then(|b| b.join(&url_str))
     } else {
-        url::Url::parse(url_str)
-    }
+        url::Url::parse(&url_str)
+    })
 }
 
 fn register_url_and_params(context: &mut Context) -> Result<(), String> {
-    let sp_proto = build_search_params_proto(context);
-    let sp_ctor = FunctionObjectBuilder::new(
+    let global = context.global_object();
+    let sp_proto = build_search_params_proto(context)?;
+    let sp_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
             |new_target, args, sp_proto, context| {
@@ -1566,11 +1415,12 @@ fn register_url_and_params(context: &mut Context) -> Result<(), String> {
     .name(js_string!("URLSearchParams"))
     .length(0)
     .constructor(true)
-    .build();
-    bind_ctor_proto("URLSearchParams", sp_ctor.into(), sp_proto.clone(), context)?;
+    .build()
+    .into();
+    link_ctor_global(&global, "URLSearchParams", &sp_ctor, &sp_proto, context)?;
 
-    let url_proto = build_url_proto(sp_proto.clone(), context);
-    let url_ctor = FunctionObjectBuilder::new(
+    let url_proto = build_url_proto(sp_proto, context)?;
+    let url_ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure_with_captures(
             |new_target, args, url_proto, context| {
@@ -1580,19 +1430,12 @@ fn register_url_and_params(context: &mut Context) -> Result<(), String> {
                         .with_message("Failed to construct 'URL': Please use the 'new' operator")
                         .into());
                 }
-                let Some(first) = args.first() else {
-                    return Err(JsNativeError::typ()
-                        .with_message("URL constructor requires at least 1 argument")
-                        .into());
-                };
-                let url_str = utf8(first, context)?;
-                let base_str = match args.get(1) {
-                    None => None,
-                    Some(b) if b.is_undefined() => None,
-                    Some(b) => Some(utf8(b, context)?),
-                };
-                let parsed = parse_url_with_optional_base(&url_str, base_str.as_deref())
-                    .map_err(|e| JsNativeError::typ().with_message(format!("Invalid URL: {e}")))?;
+                let parsed = parse_url_args(
+                    args,
+                    "URL constructor requires at least 1 argument",
+                    context,
+                )?
+                .map_err(|e| JsNativeError::typ().with_message(format!("Invalid URL: {e}")))?;
                 Ok(JsObject::from_proto_and_data(
                     Some(url_proto.clone()),
                     SharedUrlData {
@@ -1608,96 +1451,61 @@ fn register_url_and_params(context: &mut Context) -> Result<(), String> {
     .name(js_string!("URL"))
     .length(1)
     .constructor(true)
-    .build();
+    .build()
+    .into();
 
-    let can_parse = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|_, args, context| {
-            modern::check_context(context)?;
-            let Some(first) = args.first() else {
-                return Err(JsNativeError::typ()
-                    .with_message("URL.canParse requires 1 argument")
-                    .into());
-            };
-            let url_str = utf8(first, context)?;
-            let base_str = match args.get(1) {
-                None => None,
-                Some(b) if b.is_undefined() => None,
-                Some(b) => Some(utf8(b, context)?),
-            };
-            Ok(parse_url_with_optional_base(&url_str, base_str.as_deref())
-                .is_ok()
-                .into())
-        }),
+    def_fn(
+        &url_ctor,
+        "canParse",
+        1,
+        true,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            Ok(
+                parse_url_args(args, "URL.canParse requires 1 argument", ctx)?
+                    .is_ok()
+                    .into(),
+            )
+        },
+        context,
     )
-    .name(js_string!("canParse"))
+    .map_err(|_| "URL.canParse failed")?;
+    let parse_fn = FunctionObjectBuilder::new(
+        context.realm(),
+        NativeFunction::from_copy_closure_with_captures(
+            |_, args, url_proto, context| {
+                modern::check_context(context)?;
+                Ok(
+                    match parse_url_args(args, "URL.parse requires 1 argument", context)? {
+                        Ok(parsed) => JsObject::from_proto_and_data(
+                            Some(url_proto.clone()),
+                            SharedUrlData {
+                                inner: Rc::new(RefCell::new(parsed)),
+                                params_obj: GcRefCell::new(None),
+                            },
+                        )
+                        .into(),
+                        Err(_) => JsValue::null(),
+                    },
+                )
+            },
+            url_proto.clone(),
+        ),
+    )
+    .name(js_string!("parse"))
     .length(1)
     .build();
-    url_ctor
-        .define_property_or_throw(
-            js_string!("canParse"),
-            PropertyDescriptor::builder()
-                .value(can_parse)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "URL.canParse failed")?;
-    url_ctor
-        .define_property_or_throw(
-            js_string!("parse"),
-            PropertyDescriptor::builder()
-                .value(
-                    FunctionObjectBuilder::new(
-                        context.realm(),
-                        NativeFunction::from_copy_closure_with_captures(
-                            |_, args, url_proto, context| {
-                                modern::check_context(context)?;
-                                let Some(first) = args.first() else {
-                                    return Err(JsNativeError::typ()
-                                        .with_message("URL.parse requires 1 argument")
-                                        .into());
-                                };
-                                let url_str = utf8(first, context)?;
-                                let base_str = match args.get(1) {
-                                    None => None,
-                                    Some(b) if b.is_undefined() => None,
-                                    Some(b) => Some(utf8(b, context)?),
-                                };
-                                Ok(
-                                    match parse_url_with_optional_base(
-                                        &url_str,
-                                        base_str.as_deref(),
-                                    ) {
-                                        Ok(parsed) => JsObject::from_proto_and_data(
-                                            Some(url_proto.clone()),
-                                            SharedUrlData {
-                                                inner: Rc::new(RefCell::new(parsed)),
-                                                params_obj: GcRefCell::new(None),
-                                            },
-                                        )
-                                        .into(),
-                                        Err(_) => JsValue::null(),
-                                    },
-                                )
-                            },
-                            url_proto.clone(),
-                        ),
-                    )
-                    .name(js_string!("parse"))
-                    .length(1)
-                    .build(),
-                )
-                .writable(true)
-                .enumerable(true)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "URL.parse failed")?;
-
-    bind_ctor_proto("URL", url_ctor.into(), url_proto, context)?;
-    Ok(())
+    def_prop(
+        &url_ctor,
+        js_string!("parse"),
+        parse_fn,
+        true,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "URL.parse failed")?;
+    link_ctor_global(&global, "URL", &url_ctor, &url_proto, context)
 }
 
 fn url_data(this: &JsValue) -> JsResult<Rc<RefCell<url::Url>>> {
@@ -1710,151 +1518,134 @@ fn url_data(this: &JsValue) -> JsResult<Rc<RefCell<url::Url>>> {
     Ok(data.inner.clone())
 }
 
-fn build_url_proto(sp_proto: JsObject, context: &mut Context) -> JsObject {
-    let mut init = ObjectInitializer::new(context);
+fn url_prop_get(this: &JsValue, prop: &str, context: &mut Context) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let shared = url_data(this)?;
+    let u = shared.borrow();
+    let s: String = match prop {
+        "href" => u.as_str().to_owned(),
+        "origin" => u.origin().ascii_serialization(),
+        "protocol" => format!("{}:", u.scheme()),
+        "username" => u.username().to_owned(),
+        "password" => u.password().unwrap_or("").to_owned(),
+        "host" => match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_owned(),
+            _ => String::new(),
+        },
+        "hostname" => u.host_str().unwrap_or("").to_owned(),
+        "port" => u.port().map(|p| p.to_string()).unwrap_or_default(),
+        "pathname" => u.path().to_owned(),
+        "search" => match u.query() {
+            Some("") | None => String::new(),
+            Some(q) => format!("?{q}"),
+        },
+        "hash" => match u.fragment() {
+            Some("") | None => String::new(),
+            Some(f) => format!("#{f}"),
+        },
+        _ => String::new(),
+    };
+    Ok(JsString::from(s).into())
+}
+
+fn url_prop_set(
+    this: &JsValue,
+    args: &[JsValue],
+    prop: &str,
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let shared = url_data(this)?;
+    let val = utf8(args.first().unwrap_or(&JsValue::undefined()), context)?;
+    {
+        let mut u = shared.borrow_mut();
+        match prop {
+            "href" => {
+                *u = url::Url::parse(&val)
+                    .map_err(|e| JsNativeError::typ().with_message(format!("Invalid URL: {e}")))?;
+            }
+            "protocol" => {
+                let _ = u.set_scheme(val.trim_end_matches(':'));
+            }
+            "username" => {
+                let _ = u.set_username(&val);
+            }
+            "password" => {
+                let _ = u.set_password((!val.is_empty()).then_some(&val));
+            }
+            "host" => {
+                if let Some((h, p)) = val.rsplit_once(':')
+                    && let Ok(port_num) = p.parse::<u16>()
+                {
+                    let _ = u.set_host(Some(h));
+                    let _ = u.set_port(Some(port_num));
+                } else {
+                    let _ = u.set_host(Some(&val));
+                }
+            }
+            "hostname" => {
+                let _ = u.set_host(Some(&val));
+            }
+            "port" => {
+                if val.is_empty() {
+                    let _ = u.set_port(None);
+                } else if let Ok(p) = val.parse::<u16>() {
+                    let _ = u.set_port(Some(p));
+                }
+            }
+            "pathname" => u.set_path(&val),
+            "search" => {
+                let q = val.strip_prefix('?').unwrap_or(&val);
+                u.set_query((!q.is_empty()).then_some(q));
+            }
+            "hash" => {
+                let f = val.strip_prefix('#').unwrap_or(&val);
+                u.set_fragment((!f.is_empty()).then_some(f));
+            }
+            _ => {}
+        }
+    }
+    // Sync attached URLSearchParams if already instantiated
+    if let Some(obj) = this.as_object()
+        && let Some(ud) = obj.downcast_ref::<SharedUrlData>()
+        && let Some(sp_obj) = ud.params_obj.borrow().as_ref()
+        && let Some(spd) = sp_obj.downcast_ref::<SearchParamsData>()
+    {
+        spd.sync_from_url();
+    }
+    Ok(JsValue::undefined())
+}
+
+fn build_url_proto(sp_proto: JsObject, context: &mut Context) -> Result<JsObject, String> {
+    let proto = JsObject::with_object_proto(context.intrinsics());
+    def_getter_cap(
+        &proto,
+        "origin",
+        true,
+        "origin",
+        |this, _, p, ctx| url_prop_get(this, p, ctx),
+        context,
+    )
+    .map_err(|_| "URL.origin failed")?;
     for prop in [
-        "href", "origin", "protocol", "username", "password", "host", "hostname", "port",
-        "pathname", "search", "hash",
+        "href", "protocol", "username", "password", "host", "hostname", "port", "pathname",
+        "search", "hash",
     ] {
-        let getter = FunctionObjectBuilder::new(
-            init.context().realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |this, _, prop, context| {
-                    modern::check_context(context)?;
-                    let shared = url_data(this)?;
-                    let u = shared.borrow();
-                    let s: String = match *prop {
-                        "href" => u.as_str().to_owned(),
-                        "origin" => u.origin().ascii_serialization(),
-                        "protocol" => format!("{}:", u.scheme()),
-                        "username" => u.username().to_owned(),
-                        "password" => u.password().unwrap_or("").to_owned(),
-                        "host" => match (u.host_str(), u.port()) {
-                            (Some(h), Some(p)) => format!("{h}:{p}"),
-                            (Some(h), None) => h.to_owned(),
-                            _ => String::new(),
-                        },
-                        "hostname" => u.host_str().unwrap_or("").to_owned(),
-                        "port" => u.port().map(|p| p.to_string()).unwrap_or_default(),
-                        "pathname" => u.path().to_owned(),
-                        "search" => match u.query() {
-                            Some("") | None => String::new(),
-                            Some(q) => format!("?{q}"),
-                        },
-                        "hash" => match u.fragment() {
-                            Some("") | None => String::new(),
-                            Some(f) => format!("#{f}"),
-                        },
-                        _ => String::new(),
-                    };
-                    Ok(JsString::from(s).into())
-                },
-                prop,
-            ),
+        def_get_set_cap(
+            &proto,
+            prop,
+            true,
+            prop,
+            |this, _, p, ctx| url_prop_get(this, p, ctx),
+            |this, args, p, ctx| url_prop_set(this, args, p, ctx),
+            context,
         )
-        .build();
-        let setter = if prop == "origin" {
-            None
-        } else {
-            Some(
-                FunctionObjectBuilder::new(
-                    init.context().realm(),
-                    NativeFunction::from_copy_closure_with_captures(
-                        |this, args, prop, context| {
-                            modern::check_context(context)?;
-                            let shared = url_data(this)?;
-                            let val = utf8(args.first().unwrap_or(&JsValue::undefined()), context)?;
-                            let mut u = shared.borrow_mut();
-                            match *prop {
-                                "href" => {
-                                    let next = url::Url::parse(&val).map_err(|e| {
-                                        JsNativeError::typ()
-                                            .with_message(format!("Invalid URL: {e}"))
-                                    })?;
-                                    *u = next;
-                                }
-                                "protocol" => {
-                                    let clean = val.trim_end_matches(':');
-                                    let _ = u.set_scheme(clean);
-                                }
-                                "username" => {
-                                    let _ = u.set_username(&val);
-                                }
-                                "password" => {
-                                    let _ = u.set_password(if val.is_empty() {
-                                        None
-                                    } else {
-                                        Some(&val)
-                                    });
-                                }
-                                "host" => {
-                                    if let Some((h, p)) = val.rsplit_once(':')
-                                        && let Ok(port_num) = p.parse::<u16>()
-                                    {
-                                        let _ = u.set_host(Some(h));
-                                        let _ = u.set_port(Some(port_num));
-                                    } else {
-                                        let _ = u.set_host(Some(&val));
-                                    }
-                                }
-                                "hostname" => {
-                                    let _ = u.set_host(Some(&val));
-                                }
-                                "port" => {
-                                    if val.is_empty() {
-                                        let _ = u.set_port(None);
-                                    } else if let Ok(p) = val.parse::<u16>() {
-                                        let _ = u.set_port(Some(p));
-                                    }
-                                }
-                                "pathname" => {
-                                    u.set_path(&val);
-                                }
-                                "search" => {
-                                    let q = val.strip_prefix('?').unwrap_or(&val);
-                                    if q.is_empty() {
-                                        u.set_query(None);
-                                    } else {
-                                        u.set_query(Some(q));
-                                    }
-                                }
-                                "hash" => {
-                                    let f = val.strip_prefix('#').unwrap_or(&val);
-                                    if f.is_empty() {
-                                        u.set_fragment(None);
-                                    } else {
-                                        u.set_fragment(Some(f));
-                                    }
-                                }
-                                _ => {}
-                            }
-                            drop(u);
-                            // Sync attached URLSearchParams if already instantiated
-                            if let Some(obj) = this.as_object()
-                                && let Some(ud) = obj.downcast_ref::<SharedUrlData>()
-                                && let Some(sp_obj) = ud.params_obj.borrow().as_ref()
-                                && let Some(spd) = sp_obj.downcast_ref::<SearchParamsData>()
-                            {
-                                spd.sync_from_url();
-                            }
-                            Ok(JsValue::undefined())
-                        },
-                        prop,
-                    ),
-                )
-                .build(),
-            )
-        };
-        init.accessor(
-            JsString::from(prop),
-            Some(getter),
-            setter,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        );
+        .map_err(|_| "URL accessor failed")?;
     }
 
     let sp_getter = FunctionObjectBuilder::new(
-        init.context().realm(),
+        context.realm(),
         NativeFunction::from_copy_closure_with_captures(
             |this, _, sp_proto, context| {
                 modern::check_context(context)?;
@@ -1890,37 +1681,42 @@ fn build_url_proto(sp_proto: JsObject, context: &mut Context) -> JsObject {
             sp_proto,
         ),
     )
+    .name(js_string!("get searchParams"))
     .build();
-    init.accessor(
-        js_string!("searchParams"),
-        Some(sp_getter),
-        None,
-        Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-    );
+    proto
+        .define_property_or_throw(
+            js_string!("searchParams"),
+            modern::boa_engine::property::PropertyDescriptor::builder()
+                .get(sp_getter)
+                .enumerable(true)
+                .configurable(true),
+            context,
+        )
+        .map_err(|_| "URL.searchParams failed")?;
 
-    let to_str = FunctionObjectBuilder::new(
-        init.context().realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let shared = url_data(this)?;
-            let s = shared.borrow().as_str().to_owned();
-            Ok(JsString::from(s).into())
-        }),
+    def_fn(
+        &proto,
+        "toString",
+        0,
+        false,
+        |this, _, ctx| url_prop_get(this, "href", ctx),
+        context,
     )
-    .name(js_string!("toString"))
-    .length(0)
-    .build();
-    init.property(
-        js_string!("toString"),
-        to_str.clone(),
-        Attribute::WRITABLE | Attribute::CONFIGURABLE,
-    );
-    init.property(
+    .map_err(|_| "URL.toString failed")?;
+    let to_str = proto
+        .get(js_string!("toString"), context)
+        .map_err(|_| "URL.toString get failed")?;
+    def_prop(
+        &proto,
         js_string!("toJSON"),
         to_str,
-        Attribute::WRITABLE | Attribute::CONFIGURABLE,
-    );
-    init.build()
+        true,
+        false,
+        true,
+        context,
+    )
+    .map_err(|_| "URL.toJSON failed")?;
+    Ok(proto)
 }
 
 fn construct_search_params(
@@ -2040,93 +1836,55 @@ fn sp_receiver(this: &JsValue) -> JsResult<JsObject> {
     Ok(obj)
 }
 
-fn build_search_params_proto(context: &mut Context) -> JsObject {
-    let append_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+fn sp_call(op: &str, this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let obj = sp_receiver(this)?;
+    match op {
+        "append" => {
             if args.len() < 2 {
                 return Err(failure("URLSearchParams.append requires 2 arguments"));
             }
-            let k = utf8(&args[0], context)?;
-            let v = utf8(&args[1], context)?;
+            let (k, v) = (utf8(&args[0], context)?, utf8(&args[1], context)?);
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
             spd.pairs.borrow_mut().push((k, v));
             spd.sync_to_url();
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("append"))
-    .length(2)
-    .build();
-
-    let delete_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        "delete" => {
             let Some(first) = args.first() else {
                 return Err(failure("URLSearchParams.delete requires 1 argument"));
             };
             let k = utf8(first, context)?;
-            let val_filter = match args.get(1) {
-                None => None,
-                Some(v) if v.is_undefined() => None,
-                Some(v) => Some(utf8(v, context)?),
+            let vf = match args.get(1) {
+                Some(v) if !v.is_undefined() => Some(utf8(v, context)?),
+                _ => None,
             };
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
-            spd.pairs.borrow_mut().retain(|(ek, ev)| {
-                if ek != &k {
-                    true
-                } else if let Some(vf) = &val_filter {
-                    ev != vf
-                } else {
-                    false
-                }
-            });
+            spd.pairs
+                .borrow_mut()
+                .retain(|(ek, ev)| ek != &k || vf.as_ref().is_some_and(|f| ev != f));
             spd.sync_to_url();
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("delete"))
-    .length(1)
-    .build();
-
-    let get_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        "get" => {
             let Some(first) = args.first() else {
                 return Err(failure("URLSearchParams.get requires 1 argument"));
             };
             let k = utf8(first, context)?;
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
-            let found = spd
+            Ok(spd
                 .pairs
                 .borrow()
                 .iter()
                 .find(|(ek, _)| ek == &k)
-                .map(|(_, ev)| ev.clone());
-            Ok(match found {
-                Some(v) => JsString::from(v).into(),
-                None => JsValue::null(),
-            })
-        }),
-    )
-    .name(js_string!("get"))
-    .length(1)
-    .build();
-
-    let get_all_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+                .map_or(JsValue::null(), |(_, ev)| {
+                    JsString::from(ev.as_str()).into()
+                }))
+        }
+        "getAll" => {
             let Some(first) = args.first() else {
                 return Err(failure("URLSearchParams.getAll requires 1 argument"));
             };
@@ -2141,66 +1899,44 @@ fn build_search_params_proto(context: &mut Context) -> JsObject {
                 .map(|(_, ev)| JsString::from(ev.as_str()).into())
                 .collect();
             Ok(JsArray::from_iter(vals, context).into())
-        }),
-    )
-    .name(js_string!("getAll"))
-    .length(1)
-    .build();
-
-    let has_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        "has" => {
             let Some(first) = args.first() else {
                 return Err(failure("URLSearchParams.has requires 1 argument"));
             };
             let k = utf8(first, context)?;
-            let val_filter = match args.get(1) {
-                None => None,
-                Some(v) if v.is_undefined() => None,
-                Some(v) => Some(utf8(v, context)?),
+            let vf = match args.get(1) {
+                Some(v) if !v.is_undefined() => Some(utf8(v, context)?),
+                _ => None,
             };
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
-            let found = spd
+            Ok(spd
                 .pairs
                 .borrow()
                 .iter()
-                .any(|(ek, ev)| ek == &k && val_filter.as_ref().is_none_or(|vf| ev == vf));
-            Ok(found.into())
-        }),
-    )
-    .name(js_string!("has"))
-    .length(1)
-    .build();
-
-    let set_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+                .any(|(ek, ev)| ek == &k && vf.as_ref().is_none_or(|f| ev == f))
+                .into())
+        }
+        "set" => {
             if args.len() < 2 {
                 return Err(failure("URLSearchParams.set requires 2 arguments"));
             }
-            let k = utf8(&args[0], context)?;
-            let v = utf8(&args[1], context)?;
+            let (k, v) = (utf8(&args[0], context)?, utf8(&args[1], context)?);
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
             {
                 let mut pairs = spd.pairs.borrow_mut();
                 let mut replaced = false;
                 pairs.retain_mut(|(ek, ev)| {
-                    if ek == &k {
-                        if !replaced {
-                            *ev = v.clone();
-                            replaced = true;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
+                    if ek != &k {
                         true
+                    } else if !replaced {
+                        *ev = v.clone();
+                        replaced = true;
+                        true
+                    } else {
+                        false
                     }
                 });
                 if !replaced {
@@ -2209,17 +1945,8 @@ fn build_search_params_proto(context: &mut Context) -> JsObject {
             }
             spd.sync_to_url();
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("set"))
-    .length(2)
-    .build();
-
-    let sort_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        "sort" => {
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
             spd.pairs
@@ -2227,32 +1954,13 @@ fn build_search_params_proto(context: &mut Context) -> JsObject {
                 .sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
             spd.sync_to_url();
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("sort"))
-    .length(0)
-    .build();
-
-    let to_str_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        "toString" => {
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
-            let s = serialize_query_pairs(&spd.pairs.borrow());
-            Ok(JsString::from(s).into())
-        }),
-    )
-    .name(js_string!("toString"))
-    .length(0)
-    .build();
-
-    let entries_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+            Ok(JsString::from(serialize_query_pairs(&spd.pairs.borrow())).into())
+        }
+        "entries" | "keys" | "values" => {
             let snapshot = {
                 let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
                 spd.sync_from_url();
@@ -2260,69 +1968,19 @@ fn build_search_params_proto(context: &mut Context) -> JsObject {
             };
             let items: Vec<JsValue> = snapshot
                 .into_iter()
-                .map(|(k, v)| {
-                    JsArray::from_iter(
+                .map(|(k, v)| match op {
+                    "keys" => JsString::from(k).into(),
+                    "values" => JsString::from(v).into(),
+                    _ => JsArray::from_iter(
                         [JsString::from(k).into(), JsString::from(v).into()],
                         context,
                     )
-                    .into()
+                    .into(),
                 })
                 .collect();
-            let arr = JsArray::from_iter(items, context);
-            arr.values(context)
-        }),
-    )
-    .name(js_string!("entries"))
-    .length(0)
-    .build();
-
-    let keys_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
-            let snapshot = {
-                let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
-                spd.sync_from_url();
-                spd.pairs.borrow().clone()
-            };
-            let items: Vec<JsValue> = snapshot
-                .into_iter()
-                .map(|(k, _)| JsString::from(k).into())
-                .collect();
             JsArray::from_iter(items, context).values(context)
-        }),
-    )
-    .name(js_string!("keys"))
-    .length(0)
-    .build();
-
-    let values_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
-            let snapshot = {
-                let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
-                spd.sync_from_url();
-                spd.pairs.borrow().clone()
-            };
-            let items: Vec<JsValue> = snapshot
-                .into_iter()
-                .map(|(_, v)| JsString::from(v).into())
-                .collect();
-            JsArray::from_iter(items, context).values(context)
-        }),
-    )
-    .name(js_string!("values"))
-    .length(0)
-    .build();
-
-    let foreach_fn = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, args, context| {
-            modern::check_context(context)?;
-            let obj = sp_receiver(this)?;
+        }
+        _ => {
             let cb = args
                 .first()
                 .and_then(JsValue::as_callable)
@@ -2345,99 +2003,65 @@ fn build_search_params_proto(context: &mut Context) -> JsObject {
                 )?;
             }
             Ok(JsValue::undefined())
-        }),
-    )
-    .name(js_string!("forEach"))
-    .length(1)
-    .build();
+        }
+    }
+}
 
-    let size_getter = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_fn_ptr(|this, _, context| {
-            modern::check_context(context)?;
+fn build_search_params_proto(context: &mut Context) -> Result<JsObject, String> {
+    let proto = JsObject::with_object_proto(context.intrinsics());
+    for (mname, len) in [
+        ("append", 2),
+        ("delete", 1),
+        ("get", 1),
+        ("getAll", 1),
+        ("has", 1),
+        ("set", 2),
+        ("sort", 0),
+        ("toString", 0),
+        ("entries", 0),
+        ("keys", 0),
+        ("values", 0),
+        ("forEach", 1),
+    ] {
+        def_cap(
+            &proto,
+            mname,
+            len,
+            true,
+            mname,
+            |this, args, op, ctx| sp_call(op, this, args, ctx),
+            context,
+        )
+        .map_err(|_| "URLSearchParams method failed")?;
+    }
+    let entries_fn = proto
+        .get(js_string!("entries"), context)
+        .map_err(|_| "URLSearchParams.entries get failed")?;
+    def_prop(
+        &proto,
+        JsSymbol::iterator(),
+        entries_fn,
+        true,
+        false,
+        true,
+        context,
+    )
+    .map_err(|_| "URLSearchParams iterator failed")?;
+    def_getter_fn(
+        &proto,
+        "size",
+        true,
+        |this, _, ctx| {
+            modern::check_context(ctx)?;
             let obj = sp_receiver(this)?;
             let spd = obj.downcast_ref::<SearchParamsData>().unwrap();
             spd.sync_from_url();
-            let len = spd.pairs.borrow().len();
-            Ok((len as f64).into())
-        }),
+            Ok((spd.pairs.borrow().len() as f64).into())
+        },
+        context,
     )
-    .build();
-
-    let proto = ObjectInitializer::new(context)
-        .property(
-            js_string!("append"),
-            append_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("delete"),
-            delete_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("get"),
-            get_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("getAll"),
-            get_all_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("has"),
-            has_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("set"),
-            set_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("sort"),
-            sort_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("toString"),
-            to_str_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("entries"),
-            entries_fn.clone(),
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("keys"),
-            keys_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("values"),
-            values_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("forEach"),
-            foreach_fn,
-            Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            JsSymbol::iterator(),
-            entries_fn,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .accessor(
-            js_string!("size"),
-            Some(size_getter),
-            None,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .build();
-    proto
+    .map_err(|_| "URLSearchParams.size failed")?;
+    Ok(proto)
 }
 
 // --- Method Calls (`atob`, `btoa`, `queueMicrotask`, `structuredClone`, `matchMedia`, Storage, History) ---
@@ -2570,49 +2194,26 @@ pub(super) fn call(
                 NativeFunction::from_fn_ptr(|_, _, _| Ok(true.into())),
             )
             .build();
-            let mql = ObjectInitializer::new(context)
-                .property(
-                    js_string!("media"),
-                    JsString::from(serialized_media),
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("matches"),
-                    matches,
-                    Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-                )
+            let ec = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+            let wc = Attribute::WRITABLE | Attribute::CONFIGURABLE;
+            let mut mql = ObjectInitializer::new(context);
+            mql.property(js_string!("media"), JsString::from(serialized_media), ec)
+                .property(js_string!("matches"), matches, ec)
                 .property(
                     js_string!("onchange"),
                     JsValue::null(),
-                    Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
+                    wc | Attribute::ENUMERABLE,
                 )
-                .property(
-                    js_string!("addEventListener"),
-                    noop.clone(),
-                    Attribute::WRITABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("removeEventListener"),
-                    noop.clone(),
-                    Attribute::WRITABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("addListener"),
-                    noop.clone(),
-                    Attribute::WRITABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("removeListener"),
-                    noop,
-                    Attribute::WRITABLE | Attribute::CONFIGURABLE,
-                )
-                .property(
-                    js_string!("dispatchEvent"),
-                    dispatch_stub,
-                    Attribute::WRITABLE | Attribute::CONFIGURABLE,
-                )
-                .build();
-            Ok(mql.into())
+                .property(js_string!("dispatchEvent"), dispatch_stub, wc);
+            for m in [
+                "addEventListener",
+                "removeEventListener",
+                "addListener",
+                "removeListener",
+            ] {
+                mql.property(JsString::from(m), noop.clone(), wc);
+            }
+            Ok(mql.build().into())
         }
         STORAGE_GET_ITEM => {
             let is_local = storage_receiver(this, context)?;
@@ -2781,22 +2382,22 @@ fn storage_get_value(is_local: bool, k: &str, data: &State) -> Option<String> {
     map.iter().find(|(ek, _)| ek == k).map(|(_, ev)| ev.clone())
 }
 
+fn storage_pair_mut(
+    data: &mut State,
+    is_local: bool,
+) -> (&mut Vec<(String, String)>, &mut Vec<StorageOp>) {
+    if is_local {
+        (&mut data.local_storage_map, &mut data.local_storage_ops)
+    } else {
+        (&mut data.session_storage_map, &mut data.session_storage_ops)
+    }
+}
+
 fn storage_set_value(is_local: bool, k: String, v: String, context: &mut Context) -> JsResult<()> {
     ensure_tuple_origin(context)?;
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    let State {
-        local_storage_map,
-        local_storage_ops,
-        session_storage_map,
-        session_storage_ops,
-        ..
-    } = &mut *data;
-    let (map, ops) = if is_local {
-        (local_storage_map, local_storage_ops)
-    } else {
-        (session_storage_map, session_storage_ops)
-    };
+    let (map, ops) = storage_pair_mut(&mut data, is_local);
     let existing_idx = map.iter().position(|(ek, _)| ek == &k);
     let current_bytes: usize = map
         .iter()
@@ -2852,18 +2453,7 @@ fn storage_remove_value(is_local: bool, k: &str, context: &mut Context) -> JsRes
     ensure_tuple_origin(context)?;
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    let State {
-        local_storage_map,
-        local_storage_ops,
-        session_storage_map,
-        session_storage_ops,
-        ..
-    } = &mut *data;
-    let (map, ops) = if is_local {
-        (local_storage_map, local_storage_ops)
-    } else {
-        (session_storage_map, session_storage_ops)
-    };
+    let (map, ops) = storage_pair_mut(&mut data, is_local);
     if let Some(idx) = map.iter().position(|(ek, _)| ek == k) {
         if ops.len() >= MAX_STORAGE_OPS_PER_TX {
             drop(data);
@@ -2883,18 +2473,7 @@ fn storage_clear_all(is_local: bool, context: &mut Context) -> JsResult<()> {
     ensure_tuple_origin(context)?;
     let shared = state(context);
     let mut data = shared.borrow_mut();
-    let State {
-        local_storage_map,
-        local_storage_ops,
-        session_storage_map,
-        session_storage_ops,
-        ..
-    } = &mut *data;
-    let (map, ops) = if is_local {
-        (local_storage_map, local_storage_ops)
-    } else {
-        (session_storage_map, session_storage_ops)
-    };
+    let (map, ops) = storage_pair_mut(&mut data, is_local);
     map.clear();
     ops.clear();
     ops.push(StorageOp::Clear);
@@ -3185,31 +2764,6 @@ pub(super) fn try_get(
     if handle == "document" && name == "cookie" {
         return document_cookie_get(context).map(Some);
     }
-    if handle == "navigator" {
-        return match name {
-            "sendBeacon" => super::method(NAVIGATOR_SEND_BEACON, context).map(|o| Some(o.into())),
-            "cookieEnabled" | "onLine" => Ok(Some(true.into())),
-            "webdriver" | "pdfViewerEnabled" => Ok(Some(false.into())),
-            "vendor" => Ok(Some(js_string!("").into())),
-            "productSub" => Ok(Some(js_string!("20030107").into())),
-            "appCodeName" => Ok(Some(js_string!("Mozilla").into())),
-            "appName" => Ok(Some(js_string!("Netscape").into())),
-            "product" => Ok(Some(js_string!("Gecko").into())),
-            "maxTouchPoints" => Ok(Some(0.into())),
-            "hardwareConcurrency" => Ok(Some(4.into())),
-            "languages" => {
-                let arr = JsArray::from_iter(
-                    [
-                        JsValue::from(js_string!("en-US")),
-                        JsValue::from(js_string!("en")),
-                    ],
-                    context,
-                );
-                Ok(Some(arr.into()))
-            }
-            _ => Ok(None),
-        };
-    }
     if handle == "history" {
         return match name {
             "length" => Ok(Some((state(context).borrow().history_length as f64).into())),
@@ -3264,26 +2818,6 @@ pub(super) fn try_set(
 
 pub(super) fn try_has(handle: &str, name: &str) -> Option<bool> {
     if handle == "document" && name == "cookie" {
-        return Some(true);
-    }
-    if handle == "navigator"
-        && matches!(
-            name,
-            "sendBeacon"
-                | "cookieEnabled"
-                | "onLine"
-                | "webdriver"
-                | "pdfViewerEnabled"
-                | "vendor"
-                | "productSub"
-                | "appCodeName"
-                | "appName"
-                | "product"
-                | "maxTouchPoints"
-                | "hardwareConcurrency"
-                | "languages"
-        )
-    {
         return Some(true);
     }
     if handle == "history"

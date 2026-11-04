@@ -42,10 +42,14 @@ after their checkpoints. This is not a streaming parser or dynamic-resource
 load barrier; see [the lifecycle contract](DOCUMENT_LIFECYCLE.md).
 
 Module loading, string timers/intervals, fetch/XHR, script cookie access,
-synthetic dispatch and a general browser task loop are not implemented. An idle
-module loader cannot acquire filesystem/network access. Passing the separate
-Vue reactivity experiment does not establish a Vue DOM or React browser app.
-Google search to first result remains unfinished and deferred.
+synthetic dispatch and a general browser task loop were absent in the original
+v0.4.0 slice; later increments added bounded browser-hosted `<script type="module">`,
+`setInterval`, parent-brokered same-origin `fetch()`/`XMLHttpRequest`, and
+`HttpOnly`-isolated `document.cookie` (see `FEATURES.md`). In `v0.9.32`,
+interactive desktop sessions use `boa-interactive-page-v1`, enabling live Google
+homepage -> search -> SearchGuard (`SG_SS`) -> SERP -> first organic result ->
+destination navigation, while automated/WPT/worker-selftest lanes retain
+`boa-page-process-v1` unchanged.
 
 ## Bounded Window errors: v0.9.8 increment
 
@@ -232,6 +236,23 @@ measure different things and must not be presented as equivalent budgets.
 | Parent active time / absolute lifetime | Two seconds total / 300 seconds |
 | Session transactions / aggregate wire | 64 including initialization / 32 MiB |
 
+### Interactive desktop profile (`boa-interactive-page-v1`, v0.9.32)
+
+Normal interactive desktop launches (`mgbrowser` without headless/CDP/WPT/smoke
+automation flags, or with explicit `--interactive-script-profile`) select
+`ResourceProfile::InteractivePageV1` (`boa-interactive-page-v1`) while keeping
+`boa-page-process-v1` unchanged for all library defaults, `--script-worker` /
+`--script-session` selftests, WPT runners, and CI gates:
+
+| Resource | `boa-page-process-v1` (default/CI/WPT) | `boa-interactive-page-v1` (interactive desktop) |
+| --- | --- | --- |
+| VM opcode work | 1,000,000 instructions | 32,000,000 instructions |
+| Source admission | 1 MiB per source, 4 MiB cumulative | 1 MiB per source, 16 MiB cumulative |
+| Requested System allocation | 32 MiB outstanding, 64 MiB cumulative | 64 MiB outstanding, 512 MiB cumulative |
+| OS CPU / address space | 1 CPU second / 256 MiB | 5 CPU seconds / 768 MiB |
+| Parent active time / lifetime | 2 seconds total / 300 seconds | 10 seconds total / 300 seconds |
+| Seccomp / `RLIMIT_NOFILE` / `RLIMIT_FSIZE` | Enforced (`NOFILE = 3`, `FSIZE = 0`) | Identical (`NOFILE = 3`, `FSIZE = 0`) |
+
 Static source admission counts UTF-8 bytes; dynamic compilation conservatively
 counts UTF-16 storage plus parameter separators. Empty admissions cost at least
 one byte. Counters and first fatal failures are never renewed by later input.
@@ -306,9 +327,12 @@ Unicode input, retained proof and a changed link destination. See
 
 Boa core crates are pinned to 0.22.0, default features disabled; the engine's
 `fuzz` feature exposes its instruction counter, without selecting a fuzzer or
-native backend. No upstream patch is carried. Project code remains Apache-2.0;
-Boa uses its MIT license option. See [dependency policy](DEPENDENCIES.md), the
-locked license inventory and the preserved [initial research results](jsplan/RESULTS.md).
+native backend. `vendor/boa_engine-0.22.0/` carries a narrow pure-Rust fix for
+sloppy direct-`eval` dynamic `var` binding slot indexing across repeated function
+calls (`FunctionEnvironment`, `find_runtime_binding`, and `GetNameOrUndefined`).
+Project code remains Apache-2.0; Boa uses its MIT license option. See
+[dependency policy](DEPENDENCIES.md), the locked license inventory and the
+preserved [initial research results](jsplan/RESULTS.md).
 The selected Test262 profile is not a full-suite or security certification.
 
 The restricted worker is not a sandbox for the browser as a whole. Do not use

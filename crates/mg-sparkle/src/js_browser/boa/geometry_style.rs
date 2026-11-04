@@ -2,7 +2,8 @@
 //! (`getBoundingClientRect`, `getClientRects`, `offset*`, `client*`, `scroll*`),
 //! and viewport/scroll synchronization (`innerWidth`, `scrollY`, `scrollTo`, `scrollIntoView`).
 use super::{
-    State, dom_exception, dom_ops, failure, key, modern, property_name, receiver, state, utf8, wrap,
+    State, def_fn, def_getter_cap, def_getter_fn, def_prop, dom_exception, dom_ops, failure, key,
+    modern, property_name, receiver, state, utf8, wrap,
 };
 use crate::document::StylesheetSource;
 use crate::page_session::platform::ScrollRequest;
@@ -13,9 +14,9 @@ use crate::style::{
 };
 use mg_butane::runtime::Value;
 use modern::boa_engine::{
-    Context, JsNativeError, JsResult, JsString, JsSymbol, JsValue, NativeFunction, js_string,
-    object::{FunctionObjectBuilder, JsObject, ObjectInitializer, builtins::JsArray},
-    property::{Attribute, PropertyDescriptor},
+    Context, JsNativeError, JsResult, JsString, JsSymbol, JsValue, js_string,
+    object::{JsObject, ObjectInitializer, builtins::JsArray},
+    property::Attribute,
 };
 use std::sync::Arc;
 
@@ -141,17 +142,16 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
         ("scrollBy", WINDOW_SCROLL_BY),
     ] {
         let fn_obj = super::method(internal, context).map_err(|_| "Geometry method bind failed")?;
-        global
-            .define_property_or_throw(
-                JsString::from(prop),
-                PropertyDescriptor::builder()
-                    .value(fn_obj)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Global geometry method failed")?;
+        def_prop(
+            &global,
+            JsString::from(prop),
+            fn_obj,
+            true,
+            true,
+            true,
+            context,
+        )
+        .map_err(|_| "Global geometry method failed")?;
     }
 
     for prop in [
@@ -165,70 +165,150 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
         "pageYOffset",
         "devicePixelRatio",
     ] {
-        let getter = FunctionObjectBuilder::new(
-            context.realm(),
-            NativeFunction::from_copy_closure_with_captures(
-                |_, _, prop, context| {
-                    modern::check_context(context)?;
-                    let vp = state(context).borrow().viewport;
-                    let val: f64 = match *prop {
-                        "innerWidth" | "outerWidth" => vp.inner_width as f64,
-                        "innerHeight" | "outerHeight" => vp.inner_height as f64,
-                        "scrollX" | "pageXOffset" => vp.scroll_x as f64,
-                        "scrollY" | "pageYOffset" => vp.scroll_y as f64,
-                        "devicePixelRatio" => vp.device_pixel_ratio as f64,
-                        _ => 0.0,
-                    };
-                    Ok(val.into())
-                },
-                prop,
-            ),
+        def_getter_cap(
+            &global,
+            prop,
+            true,
+            prop,
+            |_, _, &prop, context| {
+                modern::check_context(context)?;
+                let vp = state(context).borrow().viewport;
+                let val: f64 = match prop {
+                    "innerWidth" | "outerWidth" => vp.inner_width as f64,
+                    "innerHeight" | "outerHeight" => vp.inner_height as f64,
+                    "scrollX" | "pageXOffset" => vp.scroll_x as f64,
+                    "scrollY" | "pageYOffset" => vp.scroll_y as f64,
+                    "devicePixelRatio" => vp.device_pixel_ratio as f64,
+                    _ => 0.0,
+                };
+                Ok(val.into())
+            },
+            context,
         )
-        .name(JsString::from(format!("get {prop}")))
-        .build();
-        global
-            .define_property_or_throw(
-                JsString::from(prop),
-                PropertyDescriptor::builder()
-                    .get(getter)
-                    .enumerable(true)
-                    .configurable(true),
-                context,
-            )
-            .map_err(|_| "Viewport getter failed")?;
+        .map_err(|_| "Viewport getter failed")?;
     }
-    Ok(())
+
+    def_getter_fn(
+        &global,
+        "isSecureContext",
+        true,
+        |_, _, context| {
+            modern::check_context(context)?;
+            let shared = state(context);
+            let data = shared.borrow();
+            let u = &data.host.url;
+            let secure = matches!(u.scheme(), "https" | "wss")
+                || u.as_str() == "about:blank"
+                || u.host_str().is_some_and(|h| {
+                    matches!(h, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+                        || h.ends_with(".localhost")
+                });
+            Ok(secure.into())
+        },
+        context,
+    )
+    .map_err(|_| "isSecureContext getter failed")?;
+
+    let ro_enum = Attribute::ENUMERABLE | Attribute::CONFIGURABLE;
+    let orientation_obj = ObjectInitializer::new(context)
+        .property(js_string!("type"), js_string!("landscape-primary"), ro_enum)
+        .property(js_string!("angle"), 0, ro_enum)
+        .property(js_string!("onchange"), JsValue::null(), Attribute::all())
+        .build();
+    let screen_obj = ObjectInitializer::new(context)
+        .property(js_string!("availLeft"), 0, ro_enum)
+        .property(js_string!("availTop"), 0, ro_enum)
+        .property(js_string!("colorDepth"), 24, ro_enum)
+        .property(js_string!("pixelDepth"), 24, ro_enum)
+        .property(js_string!("isExtended"), false, ro_enum)
+        .property(js_string!("orientation"), orientation_obj, ro_enum)
+        .build();
+    for sprop in ["width", "height", "availWidth", "availHeight"] {
+        def_getter_cap(
+            &screen_obj,
+            sprop,
+            true,
+            sprop,
+            |_, _, &prop, context| {
+                modern::check_context(context)?;
+                let vp = state(context).borrow().viewport;
+                let w = if vp.inner_width > 0 {
+                    vp.inner_width as f64
+                } else {
+                    1024.0
+                };
+                let h = if vp.inner_height > 0 {
+                    vp.inner_height as f64
+                } else {
+                    768.0
+                };
+                Ok((if matches!(prop, "width" | "availWidth") {
+                    w
+                } else {
+                    h
+                })
+                .into())
+            },
+            context,
+        )
+        .map_err(|_| "Screen getter failed")?;
+    }
+    def_prop(
+        &global,
+        js_string!("screen"),
+        screen_obj,
+        false,
+        true,
+        true,
+        context,
+    )
+    .map_err(|_| "Window screen binding failed".to_owned())
 }
 
 // --- Style & Layout Cache ---
 
 fn collect_live_stylesheets(data: &State) -> Vec<StylesheetSource> {
+    const MAX_LIVE_SHEETS: usize = 64;
+    const MAX_LIVE_SHEET_BYTES: usize = 2 * 1024 * 1024;
+
     let mut sheets = data.host.document.stylesheets.clone();
     let base_url = if data.host.document.base_url.is_empty() {
         data.host.url.as_str().to_owned()
     } else {
         data.host.document.base_url.clone()
     };
+    let scripting_enabled = data.host.document.scripting_enabled();
     // Collect connected <style> elements in document order.
     let nodes = &data.host.document.nodes;
     let mut inline_sheets = Vec::new();
     let mut stack: Vec<usize> = nodes[0].children.iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
-        if nodes[id].tag == "style" {
+        let node = &nodes[id];
+        if node.tag == "template" || (scripting_enabled && node.tag == "noscript") {
+            continue;
+        }
+        if node.tag == "style" {
+            if node.has("disabled")
+                || node.attr("type").is_some_and(|kind| {
+                    !kind.trim().is_empty() && !kind.trim().eq_ignore_ascii_case("text/css")
+                })
+            {
+                continue;
+            }
             let css = super::text_content(nodes, id);
             if !css.trim().is_empty() {
-                let media = nodes[id].attr("media").unwrap_or("").to_owned();
+                let media = node.attr("media").unwrap_or("").to_owned();
                 inline_sheets.push(StylesheetSource {
                     css,
                     base_url: base_url.clone(),
                     media,
                 });
             }
-        } else if nodes[id].tag != "template" && !nodes[id].tag.starts_with('#') {
-            stack.extend(nodes[id].children.iter().rev().copied());
+        } else if !node.tag.starts_with('#') {
+            stack.extend(node.children.iter().rev().copied());
         }
     }
-    if sheets.is_empty() {
+    let candidates = if sheets.is_empty() {
         inline_sheets
     } else {
         // Keep external stylesheets + any new inline <style> blocks not already present
@@ -236,16 +316,35 @@ fn collect_live_stylesheets(data: &State) -> Vec<StylesheetSource> {
             if !sheets
                 .iter()
                 .any(|s| s.css == inl.css && s.media == inl.media)
-                && sheets.len() < 64
+                && sheets.len() < MAX_LIVE_SHEETS
             {
                 sheets.push(inl);
             }
         }
         sheets
+    };
+    let mut bounded = Vec::with_capacity(candidates.len().min(MAX_LIVE_SHEETS));
+    let mut used_bytes = 0usize;
+    for sheet in candidates {
+        if bounded.len() >= MAX_LIVE_SHEETS {
+            break;
+        }
+        let Some(next_bytes) = used_bytes
+            .checked_add(sheet.css.len())
+            .and_then(|n| n.checked_add(sheet.media.len()))
+        else {
+            break;
+        };
+        if next_bytes > MAX_LIVE_SHEET_BYTES {
+            break;
+        }
+        used_bytes = next_bytes;
+        bounded.push(sheet);
     }
+    bounded
 }
 
-fn ensure_layout_cached(data: &mut State) {
+pub(super) fn ensure_layout_cached(data: &mut State) {
     let epoch = data.dom_epoch;
     let w = data.viewport.inner_width.max(1);
     let h = data.viewport.inner_height.max(1);
@@ -266,37 +365,39 @@ fn ensure_layout_cached(data: &mut State) {
             .document
             .nodes
             .iter()
-            .any(|node| node.has("style") || node.tag == "svg");
-    let styles_vec =
-        crate::style::compute_styles(&data.host.document, &sheets, (w as f32, h as f32))
-            .unwrap_or_else(|_| {
-                data.host
-                    .document
-                    .nodes
-                    .iter()
-                    .map(|_| ComputedStyle::default())
-                    .collect()
-            });
-    let styles: Arc<[ComputedStyle]> = styles_vec.into();
+            .any(|node| node.has("style") || matches!(node.tag.as_str(), "svg" | "canvas"));
     let mut fonts = crate::paint::Fonts::fallback_metrics();
-    let (unstyled, boxes, borders, scroll_height) = if styled {
+    let (unstyled, styles, boxes, borders, scroll_height) = if styled
+        && let Ok(styles_vec) =
+            crate::style::compute_styles(&data.host.document, &sheets, (w as f32, h as f32))
+    {
+        let styles: Arc<[ComputedStyle]> = styles_vec.into();
         let vp = Viewport {
             width: w,
             height: h,
             scroll: data.viewport.scroll_y.round() as i32,
         };
-        let (boxes, borders, scroll_height) = crate::styled_layout::compute_boxes(
-            &data.host.document,
-            &mut fonts,
-            vp,
-            styles.clone(),
-        )
-        .unwrap_or_else(|| (Vec::new(), Vec::new(), h as f32));
-        (false, boxes, borders, scroll_height)
+        if let Some((boxes, borders, scroll_height)) =
+            crate::styled_layout::compute_boxes(&data.host.document, &mut fonts, vp, styles.clone())
+        {
+            (false, styles, boxes, borders, scroll_height)
+        } else {
+            let (boxes, scroll_height) =
+                crate::render::compute_unstyled_boxes(&data.host.document, &mut fonts, w);
+            (true, styles, boxes, Vec::new(), scroll_height)
+        }
     } else {
+        let default_styles: Arc<[ComputedStyle]> = data
+            .host
+            .document
+            .nodes
+            .iter()
+            .map(|_| ComputedStyle::default())
+            .collect::<Vec<_>>()
+            .into();
         let (boxes, scroll_height) =
             crate::render::compute_unstyled_boxes(&data.host.document, &mut fonts, w);
-        (true, boxes, Vec::new(), scroll_height)
+        (true, default_styles, boxes, Vec::new(), scroll_height)
     };
 
     data.cached_layout = Some(CachedLayout {
@@ -317,7 +418,8 @@ fn node_rect(data: &mut State, id: usize) -> Option<(f32, f32, f32, f32)> {
     }
     ensure_layout_cached(data);
     let cached = data.cached_layout.as_ref()?;
-    if cached.styles.get(id).map(|s| s.display) == Some(Display::None) {
+    let disp = cached.styles.get(id).map(|s| s.display);
+    if matches!(disp, Some(Display::None | Display::Contents)) {
         return None;
     }
     if let Some((_, rect)) = cached.borders.iter().rev().find(|(nid, _)| *nid == id) {
@@ -326,32 +428,52 @@ fn node_rect(data: &mut State, id: usize) -> Option<(f32, f32, f32, f32)> {
     if let Some(b) = cached.boxes.iter().rev().find(|b| b.node == id) {
         return Some((b.x as f32, b.y as f32, b.width as f32, b.height as f32));
     }
-    if cached.unstyled {
+    if cached.unstyled || disp == Some(Display::Inline) {
         let nodes = &data.host.document.nodes;
-        let mut union_bounds: Option<(i32, i32, i32, i32)> = None;
-        for b in &cached.boxes {
-            let mut src = b.node;
+        let is_descendant = |mut src: usize| -> bool {
             for _ in 0..=crate::document::MAX_DEPTH {
                 if src == id {
-                    let (x0, y0, x1, y1) = (b.x, b.y, b.x + b.width as i32, b.y + b.height as i32);
-                    union_bounds = Some(match union_bounds {
-                        None => (x0, y0, x1, y1),
-                        Some((a0, b0, a1, b1)) => (a0.min(x0), b0.min(y0), a1.max(x1), b1.max(y1)),
-                    });
-                    break;
+                    return true;
                 }
                 if src == 0 || src >= nodes.len() {
-                    break;
+                    return false;
+                }
+                if !cached.unstyled
+                    && cached.styles.get(src).map(|s| s.display) == Some(Display::None)
+                {
+                    return false;
                 }
                 let p = nodes[src].parent;
                 if p == src {
-                    break;
+                    return false;
                 }
                 src = p;
             }
+            false
+        };
+        let mut union_bounds: Option<(f32, f32, f32, f32)> = None;
+        let mut merge = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            if x1 <= x0 && y1 <= y0 {
+                return;
+            }
+            union_bounds = Some(match union_bounds {
+                None => (x0, y0, x1, y1),
+                Some((a0, b0, a1, b1)) => (a0.min(x0), b0.min(y0), a1.max(x1), b1.max(y1)),
+            });
+        };
+        for &(nid, (rx, ry, rw, rh)) in &cached.borders {
+            if is_descendant(nid) {
+                merge(rx, ry, rx + rw, ry + rh);
+            }
+        }
+        for b in &cached.boxes {
+            if is_descendant(b.node) {
+                let (rx, ry) = (b.x as f32, b.y as f32);
+                merge(rx, ry, rx + b.width as f32, ry + b.height as f32);
+            }
         }
         if let Some((x0, y0, x1, y1)) = union_bounds {
-            return Some((x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32));
+            return Some((x0, y0, x1 - x0, y1 - y0));
         }
     }
     None
@@ -719,80 +841,50 @@ pub(super) fn build_dom_rect(
     height: f64,
     context: &mut Context,
 ) -> JsObject {
-    let top = y.min(y + height);
-    let bottom = y.max(y + height);
-    let left = x.min(x + width);
-    let right = x.max(x + width);
-    let to_json = FunctionObjectBuilder::new(
-        context.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_, _, &(x, y, width, height, top, right, bottom, left), ctx| {
-                Ok(ObjectInitializer::new(ctx)
-                    .property(js_string!("x"), x, Attribute::all())
-                    .property(js_string!("y"), y, Attribute::all())
-                    .property(js_string!("width"), width, Attribute::all())
-                    .property(js_string!("height"), height, Attribute::all())
-                    .property(js_string!("top"), top, Attribute::all())
-                    .property(js_string!("right"), right, Attribute::all())
-                    .property(js_string!("bottom"), bottom, Attribute::all())
-                    .property(js_string!("left"), left, Attribute::all())
-                    .build()
-                    .into())
-            },
-            (x, y, width, height, top, right, bottom, left),
-        ),
-    )
-    .name(js_string!("toJSON"))
-    .length(0)
-    .build();
-
-    ObjectInitializer::new(context)
-        .property(
-            js_string!("x"),
-            x,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("y"),
-            y,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("width"),
-            width,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("height"),
-            height,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("top"),
-            top,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("right"),
-            right,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("bottom"),
-            bottom,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("left"),
-            left,
-            Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-        )
-        .property(
-            js_string!("toJSON"),
-            to_json,
-            Attribute::WRITABLE | Attribute::CONFIGURABLE,
-        )
-        .build()
+    let (top, bottom, left, right) = (
+        y.min(y + height),
+        y.max(y + height),
+        x.min(x + width),
+        x.max(x + width),
+    );
+    let obj = ObjectInitializer::new(context).build();
+    for (k, v) in [
+        ("x", x),
+        ("y", y),
+        ("width", width),
+        ("height", height),
+        ("top", top),
+        ("right", right),
+        ("bottom", bottom),
+        ("left", left),
+    ] {
+        let _ = def_prop(&obj, JsString::from(k), v, false, true, true, context);
+    }
+    let _ = super::def_cap(
+        &obj,
+        "toJSON",
+        0,
+        false,
+        (x, y, width, height, top, right, bottom, left),
+        |_, _, &(x, y, w, h, t, r, b, l), ctx| {
+            let out = ObjectInitializer::new(ctx).build();
+            for (k, v) in [
+                ("x", x),
+                ("y", y),
+                ("width", w),
+                ("height", h),
+                ("top", t),
+                ("right", r),
+                ("bottom", b),
+                ("left", l),
+            ] {
+                let _ = def_prop(&out, JsString::from(k), v, true, true, true, ctx);
+            }
+            Ok(out.into())
+        },
+        context,
+    );
+    obj
 }
 
 // --- Element Geometry Interception (`try_get`, `try_set`, `try_has`) ---
@@ -1640,31 +1732,22 @@ pub(super) fn computedstyle_own_descriptor(
         && let Ok(idx) = name.parse::<usize>()
         && let Some(&pname) = COMPUTED_PROP_NAMES.get(idx)
     {
-        let desc = ObjectInitializer::new(context)
-            .property(
-                js_string!("value"),
-                JsString::from(pname),
-                Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("writable"),
-                false,
-                Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("enumerable"),
-                true,
-                Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .property(
-                js_string!("configurable"),
-                true,
-                Attribute::WRITABLE | Attribute::ENUMERABLE | Attribute::CONFIGURABLE,
-            )
-            .build();
-        return Ok(desc.into());
+        return Ok(ObjectInitializer::new(context)
+            .property(js_string!("value"), JsString::from(pname), Attribute::all())
+            .property(js_string!("writable"), false, Attribute::all())
+            .property(js_string!("enumerable"), true, Attribute::all())
+            .property(js_string!("configurable"), true, Attribute::all())
+            .build()
+            .into());
     }
     Ok(JsValue::undefined())
+}
+
+fn cs_receiver(this: &JsValue, context: &mut Context) -> JsResult<(usize, bool)> {
+    let Value::Host(handle) = receiver(this, context)? else {
+        return Err(failure("Invalid CSSStyleDeclaration receiver"));
+    };
+    parse_cs_handle(&handle).ok_or_else(|| failure("Invalid CSSStyleDeclaration receiver"))
 }
 
 // --- Method Calls ---
@@ -1705,10 +1788,7 @@ pub(super) fn call(
             let is_pseudo = match args.get(1) {
                 None => false,
                 Some(v) if v.is_undefined() || v.is_null() => false,
-                Some(v) => {
-                    let s = utf8(v, context)?;
-                    !s.trim().is_empty()
-                }
+                Some(v) => !utf8(v, context)?.trim().is_empty(),
             };
             let cs_handle = if is_pseudo {
                 format!("computedstyle:pseudo:{id}")
@@ -1718,48 +1798,35 @@ pub(super) fn call(
             wrap(&cs_handle, context)
         }
         CS_GET_PROPERTY_VALUE => {
-            let Value::Host(handle) = receiver(this, context)? else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            let Some((id, is_pseudo)) = parse_cs_handle(&handle) else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            let Some(first) = args.first() else {
-                return Err(failure("getPropertyValue requires 1 argument"));
-            };
+            let (id, is_pseudo) = cs_receiver(this, context)?;
+            let first = args
+                .first()
+                .ok_or_else(|| failure("getPropertyValue requires 1 argument"))?;
             let raw = utf8(first, context)?;
             let prop_name = if raw.starts_with("--") {
                 raw
             } else {
                 raw.to_ascii_lowercase()
             };
-            let val = {
-                let shared = state(context);
-                let mut data = shared.borrow_mut();
-                computed_property_value(&mut data, id, is_pseudo, &prop_name).unwrap_or_default()
-            };
+            let val = computed_property_value(
+                &mut state(context).borrow_mut(),
+                id,
+                is_pseudo,
+                &prop_name,
+            )
+            .unwrap_or_default();
             Ok(JsString::from(val).into())
         }
         CS_GET_PROPERTY_PRIORITY => {
-            let Value::Host(handle) = receiver(this, context)? else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            if parse_cs_handle(&handle).is_none() {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            let Some(first) = args.first() else {
-                return Err(failure("getPropertyPriority requires 1 argument"));
-            };
+            let _ = cs_receiver(this, context)?;
+            let first = args
+                .first()
+                .ok_or_else(|| failure("getPropertyPriority requires 1 argument"))?;
             let _ = utf8(first, context)?;
             Ok(js_string!("").into())
         }
         CS_SET_PROPERTY | CS_REMOVE_PROPERTY => {
-            let Value::Host(handle) = receiver(this, context)? else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            if parse_cs_handle(&handle).is_none() {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
+            let _ = cs_receiver(this, context)?;
             Err(dom_exception::throw(
                 "NoModificationAllowedError",
                 "Computed style declarations are read-only.",
@@ -1767,12 +1834,7 @@ pub(super) fn call(
             ))
         }
         CS_ITEM => {
-            let Value::Host(handle) = receiver(this, context)? else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
-            let Some((_, is_pseudo)) = parse_cs_handle(&handle) else {
-                return Err(failure("Invalid CSSStyleDeclaration receiver"));
-            };
+            let (_, is_pseudo) = cs_receiver(this, context)?;
             let idx = args
                 .first()
                 .unwrap_or(&JsValue::undefined())
@@ -1850,27 +1912,19 @@ pub(super) fn call(
                 .map(|(x, y, w, h)| build_dom_rect(x, y, w, h, context).into())
                 .collect();
             let arr = JsArray::from_iter(js_rects, context);
-            let item_fn = FunctionObjectBuilder::new(
-                context.realm(),
-                NativeFunction::from_fn_ptr(|this, args, ctx| {
+            def_fn(
+                &arr,
+                "item",
+                1,
+                false,
+                |this, args, ctx| {
                     let obj = this
                         .as_object()
                         .ok_or_else(|| failure("Invalid DOMRectList receiver"))?;
                     let idx = args.first().unwrap_or(&JsValue::undefined()).to_u32(ctx)?;
                     let v = obj.get(idx, ctx)?;
                     Ok(if v.is_undefined() { JsValue::null() } else { v })
-                }),
-            )
-            .name(js_string!("item"))
-            .length(1)
-            .build();
-            arr.define_property_or_throw(
-                js_string!("item"),
-                PropertyDescriptor::builder()
-                    .value(item_fn)
-                    .writable(true)
-                    .enumerable(false)
-                    .configurable(true),
+                },
                 context,
             )?;
             Ok(arr.into())

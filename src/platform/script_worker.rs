@@ -32,7 +32,9 @@ pub(super) fn legacy_test_mode() -> bool {
     false
 }
 #[allow(unused_imports)] // Retained public integration types and legacy API.
-pub use retained::{ChildPool, Session, SessionUpdate, session_entry, session_selftest};
+pub use retained::{
+    ChildPool, Session, SessionUpdate, interactive_session_entry, session_entry, session_selftest,
+};
 
 #[cfg(all(
     feature = "legacy-test-engine",
@@ -75,9 +77,10 @@ mod linux {
     pub(super) const INPUT_LIMIT: usize = 2 * 1024 * 1024;
     pub(super) const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
     pub(super) const WALL_LIMIT: Duration = Duration::from_secs(2);
+    pub(super) const INTERACTIVE_WALL_LIMIT: Duration = Duration::from_secs(5);
     #[cfg(test)]
     use super::isolation::filter;
-    pub(super) use super::isolation::install_isolation;
+    pub(super) use super::isolation::{install_interactive_isolation, install_isolation};
     const SETUP_EXIT: i32 = 73;
     const REQUEST_EXIT: i32 = 74;
 

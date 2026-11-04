@@ -207,6 +207,7 @@ struct IsolatedWorld {
     weak_constructor: JsObject,
     weak_deref: JsObject,
     reflect_get: JsObject,
+    dom_prototypes: Option<dom_ops::DomPrototypes>,
     event_prototypes: Option<dom_events::EventPrototypes>,
     fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
 }
@@ -290,6 +291,7 @@ struct State {
     initial_values: HashMap<usize, Option<String>>,
     #[unsafe_ignore_trace]
     initial_checked: HashMap<usize, bool>,
+    dom_prototypes: Option<dom_ops::DomPrototypes>,
     event_prototypes: Option<dom_events::EventPrototypes>,
     fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
     modern_events: Vec<dom_events::ModernEvent>,
@@ -354,6 +356,10 @@ struct State {
     #[unsafe_ignore_trace]
     current_script: Option<usize>,
     #[unsafe_ignore_trace]
+    window_name: String,
+    #[unsafe_ignore_trace]
+    window_status: String,
+    #[unsafe_ignore_trace]
     iframe_documents: HashMap<usize, usize>,
     #[unsafe_ignore_trace]
     automation_only: bool,
@@ -365,6 +371,7 @@ struct State {
     main_weak_constructor: JsObject,
     main_weak_deref: JsObject,
     main_reflect_get: JsObject,
+    main_dom_prototypes: Option<dom_ops::DomPrototypes>,
     main_event_prototypes: Option<dom_events::EventPrototypes>,
     main_fetch_xhr_prototypes: Option<fetch_xhr::FetchXhrPrototypes>,
     isolated_worlds: Vec<IsolatedWorld>,
@@ -406,6 +413,8 @@ impl State {
         self.pending_xhr_delivery = None;
         self.esm.clear();
         self.observers_wc.clear();
+        self.dom_prototypes = None;
+        self.main_dom_prototypes = None;
         (
             std::mem::take(&mut self.timers),
             std::mem::take(&mut self.rejections),
@@ -733,29 +742,33 @@ fn enter_world_with_shared(shared: &Shared, target_world: u32, context: &mut Con
         let out_wc = data.weak_constructor.clone();
         let out_wd = data.weak_deref.clone();
         let out_rg = data.reflect_get.clone();
+        let out_dp = data.dom_prototypes.clone();
         let out_ep = data.event_prototypes.clone();
         let out_fp = data.fetch_xhr_prototypes.clone();
         if prev == 0 {
             data.main_weak_constructor = out_wc;
             data.main_weak_deref = out_wd;
             data.main_reflect_get = out_rg;
+            data.main_dom_prototypes = out_dp;
             data.main_event_prototypes = out_ep;
             data.main_fetch_xhr_prototypes = out_fp;
         } else if let Some(w) = data.isolated_worlds.iter_mut().find(|w| w.id == prev) {
             w.weak_constructor = out_wc;
             w.weak_deref = out_wd;
             w.reflect_get = out_rg;
+            w.dom_prototypes = out_dp;
             w.event_prototypes = out_ep;
             w.fetch_xhr_prototypes = out_fp;
         }
         // Load incoming world's intrinsics/prototypes
-        let (eff_world, realm, wc, wd, rg, ep, fp) = if target_world == 0 {
+        let (eff_world, realm, wc, wd, rg, dp, ep, fp) = if target_world == 0 {
             (
                 0,
                 data.main_realm.clone(),
                 data.main_weak_constructor.clone(),
                 data.main_weak_deref.clone(),
                 data.main_reflect_get.clone(),
+                data.main_dom_prototypes.clone(),
                 data.main_event_prototypes.clone(),
                 data.main_fetch_xhr_prototypes.clone(),
             )
@@ -766,6 +779,7 @@ fn enter_world_with_shared(shared: &Shared, target_world: u32, context: &mut Con
                 w.weak_constructor.clone(),
                 w.weak_deref.clone(),
                 w.reflect_get.clone(),
+                w.dom_prototypes.clone(),
                 w.event_prototypes.clone(),
                 w.fetch_xhr_prototypes.clone(),
             )
@@ -776,6 +790,7 @@ fn enter_world_with_shared(shared: &Shared, target_world: u32, context: &mut Con
                 data.main_weak_constructor.clone(),
                 data.main_weak_deref.clone(),
                 data.main_reflect_get.clone(),
+                data.main_dom_prototypes.clone(),
                 data.main_event_prototypes.clone(),
                 data.main_fetch_xhr_prototypes.clone(),
             )
@@ -784,6 +799,7 @@ fn enter_world_with_shared(shared: &Shared, target_world: u32, context: &mut Con
         data.weak_constructor = wc;
         data.weak_deref = wd;
         data.reflect_get = rg;
+        data.dom_prototypes = dp;
         data.event_prototypes = ep;
         data.fetch_xhr_prototypes = fp;
         (prev, realm)
@@ -846,31 +862,32 @@ fn wrap_all_payloads(
             return Ok(object);
         }
     }
-    let (realm, finalized, constructor, brands, ce_proto) = {
+    let (realm, finalized, constructor, brands, wrapper_proto) = {
         let mut data = shared.borrow_mut();
         data.host
             .charge(256 + handle.len() + std::mem::size_of::<Option<MessagePayload>>())
             .map_err(failure)?;
         data.wrappers_created += 1;
-        let ce_proto = if active_world == 0
+        let wrapper_proto = if active_world == 0
             && let Some(nid) = handle
                 .strip_prefix("node:")
                 .and_then(|s| s.parse::<usize>().ok())
+            && let Some(upgraded) = observers_wc::upgraded_prototype(&data, nid)
         {
-            observers_wc::upgraded_prototype(&data, nid)
+            Some(upgraded)
         } else {
-            None
+            dom_ops::prototype_for_handle(&data, handle)
         };
         (
             data.realm,
             data.finalized.clone(),
             data.weak_constructor.clone(),
             data.brands.clone(),
-            ce_proto,
+            wrapper_proto,
         )
     };
     let target = JsObject::from_proto_and_data(
-        ce_proto.unwrap_or_else(|| context.intrinsics().constructors().object().prototype()),
+        wrapper_proto.unwrap_or_else(|| context.intrinsics().constructors().object().prototype()),
         Brand {
             handle: handle.into(),
             realm,
@@ -1014,6 +1031,16 @@ fn property_set(
     }
     Ok(())
 }
+fn supports_event_handler_properties(handle: &str) -> bool {
+    matches!(handle, "window" | "document") || handle.starts_with("node:")
+}
+fn is_modern_only_handle(handle: &str) -> bool {
+    matches!(handle, "navigator" | "history")
+        || handle.starts_with("mevent:")
+        || handle.starts_with("subdoc:")
+        || handle.starts_with("abortsignal:")
+        || handle.starts_with("xhr:")
+}
 fn property_target(handle: &str, context: &Context) -> JsResult<Target> {
     if handle == "window" {
         return Ok(Target::Window);
@@ -1088,7 +1115,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     if let Some(val) = fetch_xhr::try_get(&handle, &name, context)? {
         return Ok(val);
     }
-    if dom_events::is_event_handler_property(&name).is_some() {
+    if supports_event_handler_properties(&handle)
+        && dom_events::is_event_handler_property(&name).is_some()
+    {
         let target = property_target(&handle, context)?;
         return Ok(property_callback(target, &name, context)
             .map(Into::into)
@@ -1136,6 +1165,9 @@ fn get(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     if let Some(val) = geometry_style::try_get(&handle, &name, context)? {
         return Ok(val);
     }
+    if is_modern_only_handle(&handle) {
+        return fallback_get(args, context);
+    }
     let value = state(context)
         .borrow_mut()
         .host
@@ -1171,7 +1203,9 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
     if let Some(done) = fetch_xhr::try_set(&handle, &name, &args[2], context)? {
         return Ok(done.into());
     }
-    if dom_events::is_event_handler_property(&name).is_some() {
+    if supports_event_handler_properties(&handle)
+        && dom_events::is_event_handler_property(&name).is_some()
+    {
         property_set(property_target(&handle, context)?, &name, &args[2], context)?;
         return Ok(true.into());
     }
@@ -1249,10 +1283,11 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                     || is_non_callable(dom_ops::try_get(&handle, &name, context)?)
                     || is_non_callable(web_apis::try_get(&handle, &name, context)?)
                     || is_non_callable(geometry_style::try_get(&handle, &name, context)?)
-                    || matches!(
-                        state(context).borrow_mut().host.get(&handle, &name),
-                        Ok(val) if !matches!(val, Value::Undefined | Value::Native(_))
-                    );
+                    || (!is_modern_only_handle(&handle)
+                        && matches!(
+                            state(context).borrow_mut().host.get(&handle, &name),
+                            Ok(val) if !matches!(val, Value::Undefined | Value::Native(_))
+                        ));
                 if is_readonly_idl {
                     return Ok(false.into());
                 }
@@ -1406,6 +1441,17 @@ fn set(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
             } else {
                 PreObs::None
             };
+            if name == "src"
+                && let Ok(nid) = data.host.node(&handle)
+                && nid != 0
+                && matches!(
+                    data.host.document.nodes[nid].tag.as_str(),
+                    "iframe" | "frame"
+                )
+            {
+                data.iframe_documents.remove(&nid);
+                dom_ops::clear_cached_iframe_window(&mut data, nid);
+            }
             data.host
                 .set(&handle, &name, Value::text(&text))
                 .map_err(failure)?;
@@ -1486,19 +1532,23 @@ fn has(_: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue
                     .map_err(failure);
             }
         }
-        if dom_events::is_event_handler_property(&name).is_some() {
+        if supports_event_handler_properties(&handle)
+            && dom_events::is_event_handler_property(&name).is_some()
+        {
             return Ok(true.into());
         }
         if dom_ops::try_get(&handle, &name, context)?.is_some() {
             return Ok(true.into());
         }
-        let value = state(context)
-            .borrow_mut()
-            .host
-            .get(&handle, &name)
-            .map_err(failure)?;
-        if !matches!(value, Value::Undefined) {
-            return Ok(true.into());
+        if !is_modern_only_handle(&handle) {
+            let value = state(context)
+                .borrow_mut()
+                .host
+                .get(&handle, &name)
+                .map_err(failure)?;
+            if !matches!(value, Value::Undefined) {
+                return Ok(true.into());
+            }
         }
     }
     args[0]
@@ -2245,6 +2295,7 @@ impl BoaPageRealm {
             fallback_crypto_seed(),
             true,
             false,
+            modern::ResourceProfile::PageProcessV1,
         )
     }
     pub fn start_with_platform(
@@ -2252,6 +2303,21 @@ impl BoaPageRealm {
         observer_init: page_session::observer::ObserverInit,
         platform_init: page_session::platform::PlatformInit,
         crypto_seed: [u8; 32],
+    ) -> (Option<Self>, SessionReply) {
+        Self::start_with_platform_and_profile(
+            request,
+            observer_init,
+            platform_init,
+            crypto_seed,
+            modern::ResourceProfile::PageProcessV1,
+        )
+    }
+    pub fn start_with_platform_and_profile(
+        request: Request,
+        observer_init: page_session::observer::ObserverInit,
+        platform_init: page_session::platform::PlatformInit,
+        crypto_seed: [u8; 32],
+        resource_profile: modern::ResourceProfile,
     ) -> (Option<Self>, SessionReply) {
         let modules_enabled = matches!(
             observer_init,
@@ -2264,6 +2330,7 @@ impl BoaPageRealm {
             crypto_seed,
             true,
             modules_enabled,
+            resource_profile,
         )
     }
     fn start_internal(
@@ -2273,6 +2340,7 @@ impl BoaPageRealm {
         crypto_seed: [u8; 32],
         enable_network: bool,
         modules_enabled: bool,
+        resource_profile: modern::ResourceProfile,
     ) -> (Option<Self>, SessionReply) {
         let mut reply = Self::empty_reply();
         reply.observer = Some(page_session::observer::ObserverReply::rejected_init(
@@ -2536,6 +2604,7 @@ impl BoaPageRealm {
             platform_init,
             crypto_seed,
             enable_network,
+            resource_profile,
         ) {
             Ok(realm) => realm,
             Err(error) => {
@@ -2647,6 +2716,7 @@ impl BoaPageRealm {
             page_session::platform::PlatformInit::default(),
             [0u8; 32],
             false,
+            modern::ResourceProfile::PageProcessV1,
         )
     }
 
@@ -2656,8 +2726,9 @@ impl BoaPageRealm {
         platform_init: page_session::platform::PlatformInit,
         crypto_seed: [u8; 32],
         enable_network: bool,
+        resource_profile: modern::ResourceProfile,
     ) -> Result<Self, String> {
-        let mut engine = Engine::new().map_err(|e| e.to_string())?;
+        let mut engine = Engine::with_profile(resource_profile).map_err(|e| e.to_string())?;
         let main_realm = engine.realm();
         let context = engine.context_mut();
         let constructor = context.intrinsics().constructors().weak_ref().constructor();
@@ -2729,6 +2800,7 @@ impl BoaPageRealm {
             unselected_selects: HashSet::new(),
             initial_values: HashMap::new(),
             initial_checked: HashMap::new(),
+            dom_prototypes: None,
             event_prototypes: None,
             fetch_xhr_prototypes: None,
             modern_events: Vec::new(),
@@ -2764,6 +2836,8 @@ impl BoaPageRealm {
             xhr_instances: Vec::new(),
             pending_xhr_delivery: None,
             current_script: None,
+            window_name: String::new(),
+            window_status: String::new(),
             iframe_documents: HashMap::new(),
             automation_only: platform_init.automation_only,
             enable_network,
@@ -2772,6 +2846,7 @@ impl BoaPageRealm {
             main_weak_constructor: constructor,
             main_weak_deref: deref,
             main_reflect_get: reflect_get,
+            main_dom_prototypes: None,
             main_event_prototypes: None,
             main_fetch_xhr_prototypes: None,
             isolated_worlds: Vec::new(),
@@ -2788,6 +2863,7 @@ impl BoaPageRealm {
         Self::install_world_bindings(context, enable_network, false)?;
         {
             let mut data = shared.borrow_mut();
+            data.main_dom_prototypes = data.dom_prototypes.clone();
             data.main_event_prototypes = data.event_prototypes.clone();
             data.main_fetch_xhr_prototypes = data.fetch_xhr_prototypes.clone();
         }
@@ -2850,6 +2926,8 @@ impl BoaPageRealm {
         context
             .register_global_property(js_string!("opener"), JsValue::null(), Attribute::all())
             .map_err(|_| "Window opener binding failed")?;
+        dom_events::register(context)?;
+        dom_ops::install_globals(context)?;
         for name in ["document", "navigator", "console"] {
             let object = wrap(name, context).map_err(|_| "DOM binding failed")?;
             context
@@ -2924,13 +3002,23 @@ impl BoaPageRealm {
                 )
                 .map_err(|_| "Global accessor failed")?;
         }
-        dom_events::register(context)?;
-        dom_ops::install_globals(context)?;
         canvas::install_globals(context)?;
         observers_wc::register(context, is_extra_realm)?;
         web_apis::register(context)?;
         geometry_style::register(context)?;
         fetch_xhr::register(context, enable_network)?;
+        if let Ok(raw_keys) = global.own_property_keys(context) {
+            let names: Vec<String> = raw_keys
+                .into_iter()
+                .filter_map(|pk| match pk {
+                    PropertyKey::String(s) => Some(s.to_std_string_escaped()),
+                    _ => None,
+                })
+                .collect();
+            if let Some(dp) = state(context).borrow_mut().dom_prototypes.as_mut() {
+                dp.initial_window_keys = names;
+            }
+        }
         Ok(())
     }
 
@@ -2985,6 +3073,7 @@ impl BoaPageRealm {
                 data.weak_constructor = constructor.clone();
                 data.weak_deref = deref.clone();
                 data.reflect_get = reflect_get.clone();
+                data.dom_prototypes = None;
                 data.event_prototypes = None;
                 data.fetch_xhr_prototypes = None;
                 data.isolated_worlds.push(IsolatedWorld {
@@ -2994,6 +3083,7 @@ impl BoaPageRealm {
                     weak_constructor: constructor,
                     weak_deref: deref,
                     reflect_get,
+                    dom_prototypes: None,
                     event_prototypes: None,
                     fetch_xhr_prototypes: None,
                 });
@@ -3001,9 +3091,11 @@ impl BoaPageRealm {
             Self::install_world_bindings(self.engine.context_mut(), enable_network, true)?;
             {
                 let mut data = self.state.borrow_mut();
+                let dp = data.dom_prototypes.clone();
                 let ep = data.event_prototypes.clone();
                 let fp = data.fetch_xhr_prototypes.clone();
                 if let Some(w) = data.isolated_worlds.iter_mut().find(|w| w.id == new_id) {
+                    w.dom_prototypes = dp;
                     w.event_prototypes = ep;
                     w.fetch_xhr_prototypes = fp;
                 }
@@ -4872,6 +4964,7 @@ pub fn execute(request: Request) -> super::Reply {
         fallback_crypto_seed(),
         false,
         false,
+        modern::ResourceProfile::PageProcessV1,
     );
     let html = realm
         .as_ref()
@@ -4885,6 +4978,293 @@ pub fn execute(request: Request) -> super::Reply {
         allocations: None,
         boa: reply.boa,
     }
+}
+
+#[derive(Clone, Trace, Finalize)]
+struct Cap<T: Copy + 'static>(#[unsafe_ignore_trace] T);
+
+fn def_prop<K: Into<PropertyKey>, V: Into<JsValue>>(
+    obj: &JsObject,
+    key: K,
+    val: V,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+    ctx: &mut Context,
+) -> JsResult<()> {
+    obj.define_property_or_throw(
+        key,
+        PropertyDescriptor::builder()
+            .value(val)
+            .writable(writable)
+            .enumerable(enumerable)
+            .configurable(configurable),
+        ctx,
+    )
+    .map(|_| ())
+}
+
+fn def_fn(
+    obj: &JsObject,
+    name: &str,
+    len: usize,
+    enumerable: bool,
+    f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    ctx: &mut Context,
+) -> JsResult<()> {
+    let fobj = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f))
+        .name(JsString::from(name))
+        .length(len)
+        .build();
+    def_prop(obj, JsString::from(name), fobj, true, enumerable, true, ctx)
+}
+
+fn def_cap<T, F>(
+    obj: &JsObject,
+    name: &str,
+    len: usize,
+    enumerable: bool,
+    cap: T,
+    f: F,
+    ctx: &mut Context,
+) -> JsResult<()>
+where
+    T: Copy + 'static,
+    F: Fn(&JsValue, &[JsValue], &T, &mut Context) -> JsResult<JsValue> + Copy + 'static,
+{
+    let fobj = FunctionObjectBuilder::new(
+        ctx.realm(),
+        NativeFunction::from_copy_closure_with_captures(
+            move |this, args, c: &Cap<T>, ctx| f(this, args, &c.0, ctx),
+            Cap(cap),
+        ),
+    )
+    .name(JsString::from(name))
+    .length(len)
+    .build();
+    def_prop(obj, JsString::from(name), fobj, true, enumerable, true, ctx)
+}
+
+fn def_getter_fn(
+    obj: &JsObject,
+    name: &str,
+    enumerable: bool,
+    f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    ctx: &mut Context,
+) -> JsResult<()> {
+    let g = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f))
+        .name(JsString::from(format!("get {name}")))
+        .length(0)
+        .build();
+    obj.define_property_or_throw(
+        JsString::from(name),
+        PropertyDescriptor::builder()
+            .get(g)
+            .enumerable(enumerable)
+            .configurable(true),
+        ctx,
+    )
+    .map(|_| ())
+}
+
+fn def_get_set_fn(
+    obj: &JsObject,
+    name: &str,
+    enumerable: bool,
+    getter: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    setter: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    ctx: &mut Context,
+) -> JsResult<()> {
+    let g = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(getter))
+        .name(JsString::from(format!("get {name}")))
+        .length(0)
+        .build();
+    let s = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(setter))
+        .name(JsString::from(format!("set {name}")))
+        .length(1)
+        .build();
+    obj.define_property_or_throw(
+        JsString::from(name),
+        PropertyDescriptor::builder()
+            .get(g)
+            .set(s)
+            .enumerable(enumerable)
+            .configurable(true),
+        ctx,
+    )
+    .map(|_| ())
+}
+
+fn def_getter_cap<T, F>(
+    obj: &JsObject,
+    name: &str,
+    enumerable: bool,
+    cap: T,
+    f: F,
+    ctx: &mut Context,
+) -> JsResult<()>
+where
+    T: Copy + 'static,
+    F: Fn(&JsValue, &[JsValue], &T, &mut Context) -> JsResult<JsValue> + Copy + 'static,
+{
+    let g = FunctionObjectBuilder::new(
+        ctx.realm(),
+        NativeFunction::from_copy_closure_with_captures(
+            move |this, args, c: &Cap<T>, ctx| f(this, args, &c.0, ctx),
+            Cap(cap),
+        ),
+    )
+    .name(JsString::from(format!("get {name}")))
+    .length(0)
+    .build();
+    obj.define_property_or_throw(
+        JsString::from(name),
+        PropertyDescriptor::builder()
+            .get(g)
+            .enumerable(enumerable)
+            .configurable(true),
+        ctx,
+    )
+    .map(|_| ())
+}
+
+fn def_get_set_cap<T, G, S>(
+    obj: &JsObject,
+    name: &str,
+    enumerable: bool,
+    cap: T,
+    getter: G,
+    setter: S,
+    ctx: &mut Context,
+) -> JsResult<()>
+where
+    T: Copy + 'static,
+    G: Fn(&JsValue, &[JsValue], &T, &mut Context) -> JsResult<JsValue> + Copy + 'static,
+    S: Fn(&JsValue, &[JsValue], &T, &mut Context) -> JsResult<JsValue> + Copy + 'static,
+{
+    let g = FunctionObjectBuilder::new(
+        ctx.realm(),
+        NativeFunction::from_copy_closure_with_captures(
+            move |this, args, c: &Cap<T>, ctx| getter(this, args, &c.0, ctx),
+            Cap(cap),
+        ),
+    )
+    .name(JsString::from(format!("get {name}")))
+    .length(0)
+    .build();
+    let s = FunctionObjectBuilder::new(
+        ctx.realm(),
+        NativeFunction::from_copy_closure_with_captures(
+            move |this, args, c: &Cap<T>, ctx| setter(this, args, &c.0, ctx),
+            Cap(cap),
+        ),
+    )
+    .name(JsString::from(format!("set {name}")))
+    .length(1)
+    .build();
+    obj.define_property_or_throw(
+        JsString::from(name),
+        PropertyDescriptor::builder()
+            .get(g)
+            .set(s)
+            .enumerable(enumerable)
+            .configurable(true),
+        ctx,
+    )
+    .map(|_| ())
+}
+
+fn link_ctor_global(
+    global: &JsObject,
+    name: &str,
+    ctor: &JsObject,
+    proto: &JsObject,
+    ctx: &mut Context,
+) -> Result<(), String> {
+    def_prop(
+        ctor,
+        js_string!("prototype"),
+        proto.clone(),
+        false,
+        false,
+        false,
+        ctx,
+    )
+    .map_err(|_| format!("{name}.prototype failed"))?;
+    def_prop(
+        proto,
+        js_string!("constructor"),
+        ctor.clone(),
+        true,
+        false,
+        true,
+        ctx,
+    )
+    .map_err(|_| format!("{name}.prototype.constructor failed"))?;
+    def_prop(
+        global,
+        JsString::from(name),
+        ctor.clone(),
+        true,
+        false,
+        true,
+        ctx,
+    )
+    .map_err(|_| format!("Global {name} failed"))
+}
+
+fn wrap_with_proto(handle: String, proto: JsObject, context: &mut Context) -> JsResult<JsValue> {
+    modern::check_context(context)?;
+    let shared = state(context);
+    let (cache_key, old, deref) = {
+        let data = shared.borrow();
+        let ck = world_cache_key(data.active_world, &handle).into_owned();
+        (
+            ck.clone(),
+            data.wrappers.get(&ck).cloned(),
+            data.weak_deref.clone(),
+        )
+    };
+    if let Some(old) = old {
+        let object = deref.call(&old.into(), &[], context)?;
+        if object.is_object() {
+            return Ok(object);
+        }
+    }
+    let (realm, finalized, constructor, brands) = {
+        let mut data = shared.borrow_mut();
+        data.host.charge(256 + handle.len()).map_err(failure)?;
+        data.wrappers_created += 1;
+        (
+            data.realm,
+            data.finalized.clone(),
+            data.weak_constructor.clone(),
+            data.brands.clone(),
+        )
+    };
+    let target = JsObject::from_proto_and_data(
+        Some(proto),
+        Brand {
+            handle: handle.clone(),
+            realm,
+            error: None,
+            rejection: None,
+            message: None,
+            finalized,
+        },
+    );
+    let object: JsObject = JsProxy::builder(target)
+        .get(get)
+        .set(set)
+        .has(has)
+        .define_property(define_property)
+        .delete_property(delete_property)
+        .build(context)?
+        .into();
+    brands.set(&object, JsString::from(handle.as_str()).into(), context)?;
+    let weak = constructor.construct(&[object.clone().into()], None, context)?;
+    shared.borrow_mut().wrappers.insert(cache_key, weak);
+    Ok(object.into())
 }
 
 #[cfg(test)]

@@ -4,15 +4,15 @@
 //! `el.click()`, `el.focus()`, `el.blur()`, `document.activeElement`,
 //! and rich interactive control activation.
 use super::{
-    BoaPageRealm, Brand, Listener, State, Target, dom_exception, dom_ops, event_target, failure,
-    from_host, modern, receiver, state, utf8, wrap,
+    BoaPageRealm, Listener, State, Target, def_prop, dom_exception, dom_ops, event_target, failure,
+    from_host, link_ctor_global, modern, receiver, state, utf8, wrap, wrap_with_proto,
 };
 use crate::document::Node;
 use mg_butane::runtime::Value;
 use modern::boa_engine::{
     Context, JsNativeError, JsResult, JsString, JsValue, NativeFunction, js_string,
-    object::{FunctionObjectBuilder, JsObject, ObjectInitializer, builtins::JsProxy},
-    property::{Attribute, PropertyDescriptor},
+    object::{FunctionObjectBuilder, JsObject, ObjectInitializer},
+    property::Attribute,
 };
 use modern::boa_gc::{Finalize, Trace};
 
@@ -28,10 +28,16 @@ pub(super) const ELEMENT_SELECT: &str = "host.m2.select";
 pub(super) const ELEMENT_FORM_SUBMIT: &str = "host.m2.form.submit";
 pub(super) const ELEMENT_FORM_RESET: &str = "host.m2.form.reset";
 pub(super) const ELEMENT_FORM_REQUEST_SUBMIT: &str = "host.m2.form.requestSubmit";
+pub(super) const DOC_CREATE_EVENT: &str = "host.m2.createEvent";
 pub(super) const MEVENT_PREVENT_DEFAULT: &str = "host.m2.mevent.preventDefault";
 pub(super) const MEVENT_STOP_PROPAGATION: &str = "host.m2.mevent.stopPropagation";
 pub(super) const MEVENT_STOP_IMMEDIATE: &str = "host.m2.mevent.stopImmediatePropagation";
 pub(super) const MEVENT_COMPOSED_PATH: &str = "host.m2.mevent.composedPath";
+pub(super) const MEVENT_INIT_EVENT: &str = "host.m2.mevent.initEvent";
+pub(super) const MEVENT_INIT_UI_EVENT: &str = "host.m2.mevent.initUIEvent";
+pub(super) const MEVENT_INIT_MOUSE_EVENT: &str = "host.m2.mevent.initMouseEvent";
+pub(super) const MEVENT_INIT_CUSTOM_EVENT: &str = "host.m2.mevent.initCustomEvent";
+pub(super) const MEVENT_GET_MODIFIER_STATE: &str = "host.m2.mevent.getModifierState";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum EventFlavor {
@@ -123,6 +129,11 @@ pub(super) struct ModernEvent {
     pub page_x: f64,
     #[unsafe_ignore_trace]
     pub page_y: f64,
+    #[unsafe_ignore_trace]
+    pub screen_x: f64,
+    #[unsafe_ignore_trace]
+    pub screen_y: f64,
+    pub view_val: Option<JsObject>,
 }
 
 impl ModernEvent {
@@ -167,6 +178,9 @@ impl ModernEvent {
             client_y: 0.0,
             page_x: 0.0,
             page_y: 0.0,
+            screen_x: 0.0,
+            screen_y: 0.0,
+            view_val: None,
         }
     }
 }
@@ -242,6 +256,12 @@ pub(super) fn method_metadata(name: &str) -> Option<(&'static str, usize)> {
         MEVENT_STOP_PROPAGATION => Some(("stopPropagation", 0)),
         MEVENT_STOP_IMMEDIATE => Some(("stopImmediatePropagation", 0)),
         MEVENT_COMPOSED_PATH => Some(("composedPath", 0)),
+        DOC_CREATE_EVENT => Some(("createEvent", 1)),
+        MEVENT_INIT_EVENT => Some(("initEvent", 1)),
+        MEVENT_INIT_UI_EVENT => Some(("initUIEvent", 1)),
+        MEVENT_INIT_MOUSE_EVENT => Some(("initMouseEvent", 1)),
+        MEVENT_INIT_CUSTOM_EVENT => Some(("initCustomEvent", 1)),
+        MEVENT_GET_MODIFIER_STATE => Some(("getModifierState", 1)),
         _ => None,
     }
 }
@@ -273,50 +293,33 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
     };
     state(context).borrow_mut().event_prototypes = Some(protos);
 
-    install_event_ctor("Event", EventFlavor::Event, event_proto, true, context)?;
-    install_event_ctor(
-        "CustomEvent",
-        EventFlavor::CustomEvent,
-        custom_proto,
-        false,
-        context,
-    )?;
-    install_event_ctor("UIEvent", EventFlavor::UIEvent, ui_proto, false, context)?;
-    install_event_ctor(
-        "MouseEvent",
-        EventFlavor::MouseEvent,
-        mouse_proto,
-        false,
-        context,
-    )?;
-    install_event_ctor(
-        "KeyboardEvent",
-        EventFlavor::KeyboardEvent,
-        keyboard_proto,
-        false,
-        context,
-    )?;
-    install_event_ctor(
-        "FocusEvent",
-        EventFlavor::FocusEvent,
-        focus_proto,
-        false,
-        context,
-    )?;
-    install_event_ctor(
-        "PopStateEvent",
-        EventFlavor::PopStateEvent,
-        popstate_proto,
-        false,
-        context,
-    )?;
-    install_event_ctor(
-        "HashChangeEvent",
-        EventFlavor::HashChangeEvent,
-        hashchange_proto,
-        false,
-        context,
-    )?;
+    for (name, flavor, proto, add_consts) in [
+        ("Event", EventFlavor::Event, event_proto, true),
+        ("CustomEvent", EventFlavor::CustomEvent, custom_proto, false),
+        ("UIEvent", EventFlavor::UIEvent, ui_proto, false),
+        ("MouseEvent", EventFlavor::MouseEvent, mouse_proto, false),
+        (
+            "KeyboardEvent",
+            EventFlavor::KeyboardEvent,
+            keyboard_proto,
+            false,
+        ),
+        ("FocusEvent", EventFlavor::FocusEvent, focus_proto, false),
+        (
+            "PopStateEvent",
+            EventFlavor::PopStateEvent,
+            popstate_proto,
+            false,
+        ),
+        (
+            "HashChangeEvent",
+            EventFlavor::HashChangeEvent,
+            hashchange_proto,
+            false,
+        ),
+    ] {
+        install_event_ctor(name, flavor, proto, add_consts, context)?;
+    }
 
     let dispatch_fn = super::method("host.window.dispatchEvent", context)
         .map_err(|_| "Window dispatchEvent binding failed")?;
@@ -333,7 +336,7 @@ fn install_event_ctor(
     add_phase_constants: bool,
     context: &mut Context,
 ) -> Result<(), String> {
-    let ctor = FunctionObjectBuilder::new(
+    let ctor: JsObject = FunctionObjectBuilder::new(
         context.realm(),
         NativeFunction::from_copy_closure(move |new_target, args, context| {
             construct_event(flavor, new_target, args, context)
@@ -342,29 +345,8 @@ fn install_event_ctor(
     .name(JsString::from(name))
     .length(1)
     .constructor(true)
-    .build();
-
-    ctor.define_property_or_throw(
-        js_string!("prototype"),
-        PropertyDescriptor::builder()
-            .value(proto.clone())
-            .writable(false)
-            .enumerable(false)
-            .configurable(false),
-        context,
-    )
-    .map_err(|_| "Event prototype bind failed")?;
-    proto
-        .define_property_or_throw(
-            js_string!("constructor"),
-            PropertyDescriptor::builder()
-                .value(ctor.clone())
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Event constructor backlink failed")?;
+    .build()
+    .into();
 
     if add_phase_constants {
         for (const_name, val) in [
@@ -373,32 +355,19 @@ fn install_event_ctor(
             ("AT_TARGET", 2),
             ("BUBBLING_PHASE", 3),
         ] {
-            ctor.define_property_or_throw(
+            def_prop(
+                &ctor,
                 JsString::from(const_name),
-                PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(false)
-                    .enumerable(true)
-                    .configurable(false),
+                val,
+                false,
+                true,
+                false,
                 context,
             )
             .map_err(|_| "Event phase constant failed")?;
         }
     }
-
-    context
-        .global_object()
-        .define_property_or_throw(
-            JsString::from(name),
-            PropertyDescriptor::builder()
-                .value(ctor)
-                .writable(true)
-                .enumerable(false)
-                .configurable(true),
-            context,
-        )
-        .map_err(|_| "Global Event constructor failed")?;
-    Ok(())
+    link_ctor_global(&context.global_object(), name, &ctor, &proto, context)
 }
 
 fn construct_event(
@@ -421,33 +390,17 @@ fn construct_event(
     let event_type = utf8(first, context)?;
     let init = args.get(1).cloned().unwrap_or_default();
 
-    let mut bubbles = false;
-    let mut cancelable = false;
-    let mut composed = false;
-    let mut detail = match flavor {
+    let mut record = ModernEvent::simple(&event_type, false, false, false, 0.0);
+    record.flavor = flavor;
+    if matches!(
+        flavor,
         EventFlavor::UIEvent
-        | EventFlavor::MouseEvent
-        | EventFlavor::KeyboardEvent
-        | EventFlavor::FocusEvent => JsValue::from(0),
-        _ => JsValue::null(),
-    };
-    let mut state_val = JsValue::null();
-    let mut old_url = String::new();
-    let mut new_url = String::new();
-    let mut key = String::new();
-    let mut code = String::new();
-    let mut ctrl_key = false;
-    let mut shift_key = false;
-    let mut alt_key = false;
-    let mut meta_key = false;
-    let mut repeat = false;
-    let mut button: i16 = 0;
-    let mut buttons: u16 = 0;
-    let mut client_x = 0.0;
-    let mut client_y = 0.0;
-    let mut page_x = 0.0;
-    let mut page_y = 0.0;
-    let mut related_target = None;
+            | EventFlavor::MouseEvent
+            | EventFlavor::KeyboardEvent
+            | EventFlavor::FocusEvent
+    ) {
+        record.detail = 0.into();
+    }
 
     if !init.is_undefined() && !init.is_null() {
         let Some(dict) = init.as_object() else {
@@ -455,23 +408,36 @@ fn construct_event(
                 .with_message("EventInit dictionary must be an object")
                 .into());
         };
-        let b = dict.get(js_string!("bubbles"), context)?;
-        if !b.is_undefined() {
-            bubbles = b.to_boolean();
-        }
-        let c = dict.get(js_string!("cancelable"), context)?;
-        if !c.is_undefined() {
-            cancelable = c.to_boolean();
-        }
-        let comp = dict.get(js_string!("composed"), context)?;
-        if !comp.is_undefined() {
-            composed = comp.to_boolean();
-        }
+        let b_opt = |k: &str, ctx: &mut Context| -> JsResult<bool> {
+            let v = dict.get(JsString::from(k), ctx)?;
+            Ok(!v.is_undefined() && v.to_boolean())
+        };
+        let num_opt = |k: &str, ctx: &mut Context| -> JsResult<f64> {
+            let v = dict.get(JsString::from(k), ctx)?;
+            if v.is_undefined() {
+                Ok(0.0)
+            } else {
+                let n = v.to_number(ctx)?;
+                Ok(if n.is_finite() { n } else { 0.0 })
+            }
+        };
+        let str_opt = |k: &str, ctx: &mut Context| -> JsResult<String> {
+            let v = dict.get(JsString::from(k), ctx)?;
+            if v.is_undefined() {
+                Ok(String::new())
+            } else {
+                utf8(&v, ctx)
+            }
+        };
+
+        record.bubbles = b_opt("bubbles", context)?;
+        record.cancelable = b_opt("cancelable", context)?;
+        record.composed = b_opt("composed", context)?;
         match flavor {
             EventFlavor::CustomEvent => {
                 let d = dict.get(js_string!("detail"), context)?;
                 if !d.is_undefined() {
-                    detail = d;
+                    record.detail = d;
                 }
             }
             EventFlavor::UIEvent
@@ -480,129 +446,73 @@ fn construct_event(
             | EventFlavor::FocusEvent => {
                 let d = dict.get(js_string!("detail"), context)?;
                 if !d.is_undefined() {
-                    detail = d.to_i32(context)?.into();
+                    record.detail = d.to_i32(context)?.into();
+                }
+                let vw = dict.get(js_string!("view"), context)?;
+                if !vw.is_undefined() && !vw.is_null() {
+                    let wobj = vw
+                        .as_object()
+                        .ok_or_else(|| failure("UIEventInit.view must be a Window or null"))?;
+                    let is_win = wobj == context.global_object()
+                        || state(context)
+                            .borrow()
+                            .dom_prototypes
+                            .as_ref()
+                            .is_some_and(|dp| dp.iframe_windows.iter().any(|e| e.window == wobj));
+                    if !is_win {
+                        return Err(failure("UIEventInit.view must be a Window or null"));
+                    }
+                    record.view_val = Some(wobj);
                 }
             }
             _ => {}
         }
         if matches!(flavor, EventFlavor::MouseEvent | EventFlavor::KeyboardEvent) {
-            let v = dict.get(js_string!("ctrlKey"), context)?;
-            if !v.is_undefined() {
-                ctrl_key = v.to_boolean();
-            }
-            let v = dict.get(js_string!("shiftKey"), context)?;
-            if !v.is_undefined() {
-                shift_key = v.to_boolean();
-            }
-            let v = dict.get(js_string!("altKey"), context)?;
-            if !v.is_undefined() {
-                alt_key = v.to_boolean();
-            }
-            let v = dict.get(js_string!("metaKey"), context)?;
-            if !v.is_undefined() {
-                meta_key = v.to_boolean();
-            }
+            record.ctrl_key = b_opt("ctrlKey", context)?;
+            record.shift_key = b_opt("shiftKey", context)?;
+            record.alt_key = b_opt("altKey", context)?;
+            record.meta_key = b_opt("metaKey", context)?;
         }
         if flavor == EventFlavor::MouseEvent {
             let v = dict.get(js_string!("button"), context)?;
             if !v.is_undefined() {
-                button = v.to_i32(context)? as i16;
+                record.button = v.to_i32(context)? as i16;
             }
             let v = dict.get(js_string!("buttons"), context)?;
             if !v.is_undefined() {
-                buttons = v.to_u32(context)? as u16;
+                record.buttons = v.to_u32(context)? as u16;
             }
-            let v = dict.get(js_string!("clientX"), context)?;
-            if !v.is_undefined() {
-                client_x = v.to_number(context)?;
-                if !client_x.is_finite() {
-                    client_x = 0.0;
-                }
-            }
-            let v = dict.get(js_string!("clientY"), context)?;
-            if !v.is_undefined() {
-                client_y = v.to_number(context)?;
-                if !client_y.is_finite() {
-                    client_y = 0.0;
-                }
-            }
-            page_x = client_x;
-            page_y = client_y;
+            record.client_x = num_opt("clientX", context)?;
+            record.client_y = num_opt("clientY", context)?;
+            record.page_x = record.client_x;
+            record.page_y = record.client_y;
+            record.screen_x = num_opt("screenX", context)?;
+            record.screen_y = num_opt("screenY", context)?;
         }
         if flavor == EventFlavor::KeyboardEvent {
-            let v = dict.get(js_string!("key"), context)?;
-            if !v.is_undefined() {
-                key = utf8(&v, context)?;
-            }
-            let v = dict.get(js_string!("code"), context)?;
-            if !v.is_undefined() {
-                code = utf8(&v, context)?;
-            }
-            let v = dict.get(js_string!("repeat"), context)?;
-            if !v.is_undefined() {
-                repeat = v.to_boolean();
-            }
+            record.key = str_opt("key", context)?;
+            record.code = str_opt("code", context)?;
+            record.repeat = b_opt("repeat", context)?;
         }
         if matches!(flavor, EventFlavor::MouseEvent | EventFlavor::FocusEvent) {
             let v = dict.get(js_string!("relatedTarget"), context)?;
             if !v.is_undefined() && !v.is_null() {
-                related_target = Some(event_target(&v, context)?);
+                record.related_target = Some(event_target(&v, context)?);
             }
         }
         if flavor == EventFlavor::PopStateEvent {
             let v = dict.get(js_string!("state"), context)?;
             if !v.is_undefined() {
-                state_val = v;
+                record.state_val = v;
             }
         }
         if flavor == EventFlavor::HashChangeEvent {
-            let v = dict.get(js_string!("oldURL"), context)?;
-            if !v.is_undefined() {
-                old_url = utf8(&v, context)?;
-            }
-            let v = dict.get(js_string!("newURL"), context)?;
-            if !v.is_undefined() {
-                new_url = utf8(&v, context)?;
-            }
+            record.old_url = str_opt("oldURL", context)?;
+            record.new_url = str_opt("newURL", context)?;
         }
     }
 
-    let time_stamp = elapsed_ms(&state(context).borrow());
-    let record = ModernEvent {
-        flavor,
-        event_type,
-        bubbles,
-        cancelable,
-        composed,
-        canceled: false,
-        stopped: false,
-        immediate: false,
-        dispatching: false,
-        is_trusted: false,
-        phase: 0,
-        target: None,
-        current: None,
-        related_target,
-        submitter: None,
-        time_stamp,
-        detail,
-        state_val,
-        old_url,
-        new_url,
-        key,
-        code,
-        ctrl_key,
-        shift_key,
-        alt_key,
-        meta_key,
-        repeat,
-        button,
-        buttons,
-        client_x,
-        client_y,
-        page_x,
-        page_y,
-    };
+    record.time_stamp = elapsed_ms(&state(context).borrow());
     let id = alloc_modern_event(record, context)?;
     wrap_modern_event(id, flavor, context)
 }
@@ -653,62 +563,9 @@ pub(super) fn wrap_modern_event(
     context: &mut Context,
 ) -> JsResult<JsValue> {
     modern::check_context(context)?;
-    let handle = format!("mevent:{id}");
-    let shared = state(context);
-    let cache_key = {
-        let data = shared.borrow();
-        super::world_cache_key(data.active_world, &handle).into_owned()
-    };
-    let (old, deref) = {
-        let data = shared.borrow();
-        (
-            data.wrappers.get(&cache_key).cloned(),
-            data.weak_deref.clone(),
-        )
-    };
-    if let Some(old) = old {
-        let object = deref.call(&old.into(), &[], context)?;
-        if object.is_object() {
-            return Ok(object);
-        }
-    }
-    let (realm, finalized, constructor, brands, proto) = {
-        let mut data = shared.borrow_mut();
-        data.host.charge(256 + handle.len()).map_err(failure)?;
-        data.wrappers_created += 1;
-        let proto = proto_for_flavor(&data, flavor)
-            .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
-        (
-            data.realm,
-            data.finalized.clone(),
-            data.weak_constructor.clone(),
-            data.brands.clone(),
-            proto,
-        )
-    };
-    let target = JsObject::from_proto_and_data(
-        Some(proto),
-        Brand {
-            handle: handle.clone(),
-            realm,
-            error: None,
-            rejection: None,
-            message: None,
-            finalized,
-        },
-    );
-    let object: JsObject = JsProxy::builder(target)
-        .get(super::get)
-        .set(super::set)
-        .has(super::has)
-        .define_property(super::define_property)
-        .delete_property(super::delete_property)
-        .build(context)?
-        .into();
-    brands.set(&object, JsString::from(handle.as_str()).into(), context)?;
-    let weak = constructor.construct(&[object.clone().into()], None, context)?;
-    shared.borrow_mut().wrappers.insert(cache_key, weak);
-    Ok(object.into())
+    let proto = proto_for_flavor(&state(context).borrow(), flavor)
+        .unwrap_or_else(|| context.intrinsics().constructors().object().prototype());
+    wrap_with_proto(format!("mevent:{id}"), proto, context)
 }
 
 // --- Listener Registration with Options Object (`{ capture, once, passive, signal }`) ---
@@ -874,6 +731,36 @@ pub(super) fn listener_call(
 
 // --- Property Interception (`try_get`, `try_set`, `try_has`) ---
 
+fn node_event_method(
+    handle: &str,
+    name: &str,
+    context: &mut Context,
+) -> JsResult<Option<&'static str>> {
+    if name == "dispatchEvent" {
+        return Ok(Some(DISPATCH_EVENT));
+    }
+    if !matches!(
+        name,
+        "click" | "focus" | "blur" | "submit" | "reset" | "requestSubmit" | "select"
+    ) {
+        return Ok(None);
+    }
+    let shared = state(context);
+    let data = shared.borrow();
+    let id = data.host.node(handle).map_err(failure)?;
+    let tag = data.host.document.nodes[id].tag.as_str();
+    Ok(match name {
+        "click" if !tag.starts_with('#') => Some(ELEMENT_CLICK),
+        "focus" if !tag.starts_with('#') => Some(ELEMENT_FOCUS),
+        "blur" if !tag.starts_with('#') => Some(ELEMENT_BLUR),
+        "submit" if tag == "form" => Some(ELEMENT_FORM_SUBMIT),
+        "reset" if tag == "form" => Some(ELEMENT_FORM_RESET),
+        "requestSubmit" if tag == "form" => Some(ELEMENT_FORM_REQUEST_SUBMIT),
+        "select" if matches!(tag, "input" | "textarea") => Some(ELEMENT_SELECT),
+        _ => None,
+    })
+}
+
 pub(super) fn try_get(
     handle: &str,
     name: &str,
@@ -889,11 +776,7 @@ pub(super) fn try_get(
     if handle == "document" {
         match name {
             "activeElement" => {
-                let target_id = {
-                    let shared = state(context);
-                    let data = shared.borrow();
-                    resolve_active_element(&data)
-                };
+                let target_id = resolve_active_element(&state(context).borrow());
                 return match target_id {
                     Some(id) => wrap(&format!("node:{id}"), context).map(Some),
                     None => Ok(Some(JsValue::null())),
@@ -906,11 +789,7 @@ pub(super) fn try_get(
         }
     }
 
-    if let Some(sub_id) = handle
-        .strip_prefix("subdoc:")
-        .and_then(|s| s.parse::<usize>().ok())
-    {
-        let _ = sub_id;
+    if handle.starts_with("subdoc:") {
         if name == "dispatchEvent" {
             return super::method(DISPATCH_EVENT, context).map(|o| Some(o.into()));
         }
@@ -919,59 +798,10 @@ pub(super) fn try_get(
         }
     }
 
-    if handle.starts_with("node:") {
-        match name {
-            "dispatchEvent" => {
-                return super::method(DISPATCH_EVENT, context).map(|o| Some(o.into()));
-            }
-            "click" | "focus" | "blur" => {
-                let is_el = {
-                    let shared = state(context);
-                    let data = shared.borrow();
-                    let id = data.host.node(handle).map_err(failure)?;
-                    !data.host.document.nodes[id].tag.starts_with('#')
-                };
-                if is_el {
-                    let m = match name {
-                        "click" => ELEMENT_CLICK,
-                        "focus" => ELEMENT_FOCUS,
-                        _ => ELEMENT_BLUR,
-                    };
-                    return super::method(m, context).map(|o| Some(o.into()));
-                }
-            }
-            "submit" | "reset" | "requestSubmit" => {
-                let is_form = {
-                    let shared = state(context);
-                    let data = shared.borrow();
-                    let id = data.host.node(handle).map_err(failure)?;
-                    data.host.document.nodes[id].tag == "form"
-                };
-                if is_form {
-                    let m = match name {
-                        "submit" => ELEMENT_FORM_SUBMIT,
-                        "reset" => ELEMENT_FORM_RESET,
-                        _ => ELEMENT_FORM_REQUEST_SUBMIT,
-                    };
-                    return super::method(m, context).map(|o| Some(o.into()));
-                }
-            }
-            "select" => {
-                let is_text_ctrl = {
-                    let shared = state(context);
-                    let data = shared.borrow();
-                    let id = data.host.node(handle).map_err(failure)?;
-                    matches!(
-                        data.host.document.nodes[id].tag.as_str(),
-                        "input" | "textarea"
-                    )
-                };
-                if is_text_ctrl {
-                    return super::method(ELEMENT_SELECT, context).map(|o| Some(o.into()));
-                }
-            }
-            _ => {}
-        }
+    if handle.starts_with("node:")
+        && let Some(m) = node_event_method(handle, name, context)?
+    {
+        return super::method(m, context).map(|o| Some(o.into()));
     }
 
     Ok(None)
@@ -1003,28 +833,36 @@ pub(super) fn event_extra_property(
         "returnValue" => Ok(Some((!canceled).into())),
         "srcElement" => from_host(target.value(), context).map(Some),
         "composedPath" => super::method(MEVENT_COMPOSED_PATH, context).map(|o| Some(o.into())),
-        "button" | "buttons" if is_click => Ok(Some(0.into())),
-        "clientX" | "clientY" | "pageX" | "pageY" if is_click => {
-            let coords = match target {
+        "button" | "buttons" | "screenX" | "screenY" | "movementX" | "movementY" if is_click => {
+            Ok(Some(0.into()))
+        }
+        "detail" | "which" if is_click => Ok(Some(1.into())),
+        "clientX" | "clientY" | "pageX" | "pageY" | "x" | "y" | "offsetX" | "offsetY"
+        | "layerX" | "layerY"
+            if is_click =>
+        {
+            let (cx, cy, px, py) = match target {
                 super::Target::Node(nid) => {
-                    let mut data = shared.borrow_mut();
-                    super::geometry_style::node_center_coords(&mut data, nid)
+                    super::geometry_style::node_center_coords(&mut shared.borrow_mut(), nid)
+                        .unwrap_or((0.0, 0.0, 0.0, 0.0))
                 }
-                _ => None,
+                _ => (0.0, 0.0, 0.0, 0.0),
             };
-            let (cx, cy, px, py) = coords.unwrap_or((0.0, 0.0, 0.0, 0.0));
             let val = match name {
-                "clientX" => cx,
-                "clientY" => cy,
+                "clientX" | "x" | "offsetX" | "layerX" => cx,
+                "clientY" | "y" | "offsetY" | "layerY" => cy,
                 "pageX" => px,
-                "pageY" => py,
-                _ => 0.0,
+                _ => py,
             };
             Ok(Some(val.into()))
         }
-        "detail" if is_click => Ok(Some(1.into())),
         "ctrlKey" | "shiftKey" | "altKey" | "metaKey" if is_click => Ok(Some(false.into())),
-        "relatedTarget" if is_click => Ok(Some(JsValue::null())),
+        "relatedTarget" | "view" | "fromElement" | "toElement" if is_click => {
+            Ok(Some(JsValue::null()))
+        }
+        "getModifierState" if is_click => {
+            super::method(MEVENT_GET_MODIFIER_STATE, context).map(|o| Some(o.into()))
+        }
         _ => Ok(None),
     }
 }
@@ -1130,10 +968,59 @@ fn mevent_get(id: usize, name: &str, context: &mut Context) -> JsResult<Option<J
         }
         "button" if ev.flavor == EventFlavor::MouseEvent => Ok(Some((ev.button as i32).into())),
         "buttons" if ev.flavor == EventFlavor::MouseEvent => Ok(Some((ev.buttons as i32).into())),
-        "clientX" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.client_x.into())),
-        "clientY" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.client_y.into())),
+        "clientX" | "x" | "offsetX" | "layerX" if ev.flavor == EventFlavor::MouseEvent => {
+            Ok(Some(ev.client_x.into()))
+        }
+        "clientY" | "y" | "offsetY" | "layerY" if ev.flavor == EventFlavor::MouseEvent => {
+            Ok(Some(ev.client_y.into()))
+        }
         "pageX" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.page_x.into())),
         "pageY" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.page_y.into())),
+        "screenX" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.screen_x.into())),
+        "screenY" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(ev.screen_y.into())),
+        "movementX" | "movementY" if ev.flavor == EventFlavor::MouseEvent => Ok(Some(0.into())),
+        "fromElement" | "toElement" if ev.flavor == EventFlavor::MouseEvent => {
+            Ok(Some(JsValue::null()))
+        }
+        "view"
+            if matches!(
+                ev.flavor,
+                EventFlavor::UIEvent
+                    | EventFlavor::MouseEvent
+                    | EventFlavor::KeyboardEvent
+                    | EventFlavor::FocusEvent
+            ) =>
+        {
+            Ok(Some(
+                ev.view_val.clone().map_or_else(JsValue::null, Into::into),
+            ))
+        }
+        "which"
+            if matches!(
+                ev.flavor,
+                EventFlavor::UIEvent
+                    | EventFlavor::MouseEvent
+                    | EventFlavor::KeyboardEvent
+                    | EventFlavor::FocusEvent
+            ) =>
+        {
+            let w = if ev.flavor == EventFlavor::MouseEvent
+                && (!ev.event_type.is_empty() || ev.button != 0 || ev.buttons != 0)
+            {
+                (ev.button as i32) + 1
+            } else {
+                0
+            };
+            Ok(Some(w.into()))
+        }
+        "getModifierState"
+            if matches!(
+                ev.flavor,
+                EventFlavor::MouseEvent | EventFlavor::KeyboardEvent
+            ) =>
+        {
+            super::method(MEVENT_GET_MODIFIER_STATE, context).map(|o| Some(o.into()))
+        }
         "preventDefault" => super::method(MEVENT_PREVENT_DEFAULT, context).map(|o| Some(o.into())),
         "stopPropagation" => {
             super::method(MEVENT_STOP_PROPAGATION, context).map(|o| Some(o.into()))
@@ -1142,6 +1029,24 @@ fn mevent_get(id: usize, name: &str, context: &mut Context) -> JsResult<Option<J
             super::method(MEVENT_STOP_IMMEDIATE, context).map(|o| Some(o.into()))
         }
         "composedPath" => super::method(MEVENT_COMPOSED_PATH, context).map(|o| Some(o.into())),
+        "initEvent" => super::method(MEVENT_INIT_EVENT, context).map(|o| Some(o.into())),
+        "initUIEvent"
+            if matches!(
+                ev.flavor,
+                EventFlavor::UIEvent
+                    | EventFlavor::MouseEvent
+                    | EventFlavor::KeyboardEvent
+                    | EventFlavor::FocusEvent
+            ) =>
+        {
+            super::method(MEVENT_INIT_UI_EVENT, context).map(|o| Some(o.into()))
+        }
+        "initMouseEvent" if ev.flavor == EventFlavor::MouseEvent => {
+            super::method(MEVENT_INIT_MOUSE_EVENT, context).map(|o| Some(o.into()))
+        }
+        "initCustomEvent" if ev.flavor == EventFlavor::CustomEvent => {
+            super::method(MEVENT_INIT_CUSTOM_EVENT, context).map(|o| Some(o.into()))
+        }
         _ => Ok(None),
     }
 }
@@ -1189,46 +1094,15 @@ pub(super) fn try_set(
 
 pub(super) fn try_has(handle: &str, name: &str, context: &mut Context) -> JsResult<Option<bool>> {
     if handle.starts_with("mevent:") {
-        let found = try_get(handle, name, context)?.is_some();
-        return Ok(if found { Some(true) } else { None });
+        return Ok(try_get(handle, name, context)?.map(|_| true));
     }
-    if handle == "document" && matches!(name, "activeElement" | "dispatchEvent") {
+    if (handle == "document" || handle.starts_with("subdoc:"))
+        && matches!(name, "activeElement" | "dispatchEvent" | "createEvent")
+    {
         return Ok(Some(true));
     }
-    if handle.starts_with("subdoc:") && matches!(name, "activeElement" | "dispatchEvent") {
+    if handle.starts_with("node:") && node_event_method(handle, name, context)?.is_some() {
         return Ok(Some(true));
-    }
-    if handle.starts_with("node:") {
-        if name == "dispatchEvent" {
-            return Ok(Some(true));
-        }
-        if matches!(name, "click" | "focus" | "blur") {
-            let shared = state(context);
-            let data = shared.borrow();
-            let id = data.host.node(handle).map_err(failure)?;
-            if !data.host.document.nodes[id].tag.starts_with('#') {
-                return Ok(Some(true));
-            }
-        }
-        if matches!(name, "submit" | "reset" | "requestSubmit") {
-            let shared = state(context);
-            let data = shared.borrow();
-            let id = data.host.node(handle).map_err(failure)?;
-            if data.host.document.nodes[id].tag == "form" {
-                return Ok(Some(true));
-            }
-        }
-        if name == "select" {
-            let shared = state(context);
-            let data = shared.borrow();
-            let id = data.host.node(handle).map_err(failure)?;
-            if matches!(
-                data.host.document.nodes[id].tag.as_str(),
-                "input" | "textarea"
-            ) {
-                return Ok(Some(true));
-            }
-        }
     }
     Ok(None)
 }
@@ -1278,6 +1152,190 @@ pub(super) fn call(
         MEVENT_COMPOSED_PATH => {
             let arr = modern::boa_engine::object::builtins::JsArray::new(context)?;
             Ok(arr.into())
+        }
+        DOC_CREATE_EVENT => {
+            match receiver(this, context)? {
+                Value::Host(ref h) if h == "document" || h.starts_with("subdoc:") => {}
+                _ => return Err(failure("Invalid Document receiver for createEvent")),
+            }
+            let Some(first) = args.first() else {
+                return Err(JsNativeError::typ()
+                    .with_message("Document.createEvent requires 1 argument")
+                    .into());
+            };
+            let interface = utf8(first, context)?.to_ascii_lowercase();
+            let flavor = match interface.as_str() {
+                "customevent" => EventFlavor::CustomEvent,
+                "event" | "events" | "htmlevents" | "svgevents" => EventFlavor::Event,
+                "uievent" | "uievents" => EventFlavor::UIEvent,
+                "mouseevent" | "mouseevents" => EventFlavor::MouseEvent,
+                "keyboardevent" => EventFlavor::KeyboardEvent,
+                "focusevent" => EventFlavor::FocusEvent,
+                "popstateevent" => EventFlavor::PopStateEvent,
+                "hashchangeevent" => EventFlavor::HashChangeEvent,
+                _ => {
+                    return Err(dom_exception::throw(
+                        "NotSupportedError",
+                        "The provided event type is not supported.",
+                        context,
+                    ));
+                }
+            };
+            let time_stamp = elapsed_ms(&state(context).borrow());
+            let detail = match flavor {
+                EventFlavor::UIEvent
+                | EventFlavor::MouseEvent
+                | EventFlavor::KeyboardEvent
+                | EventFlavor::FocusEvent => JsValue::from(0),
+                _ => JsValue::null(),
+            };
+            let mut record = ModernEvent::simple("", false, false, false, time_stamp);
+            record.flavor = flavor;
+            record.detail = detail;
+            let id = alloc_modern_event(record, context)?;
+            wrap_modern_event(id, flavor, context)
+        }
+        MEVENT_GET_MODIFIER_STATE => {
+            let key_arg = args.first().ok_or_else(|| {
+                JsNativeError::typ().with_message("getModifierState requires 1 argument")
+            })?;
+            match receiver(this, context)? {
+                Value::Host(ref h) if h.starts_with("event:") => {
+                    let _ = utf8(key_arg, context)?;
+                    modern::check_context(context)?;
+                    Ok(false.into())
+                }
+                _ => {
+                    let id = mevent_receiver(this, context)?;
+                    let k = utf8(key_arg, context)?;
+                    modern::check_context(context)?;
+                    let shared = state(context);
+                    let data = shared.borrow();
+                    let ev = data
+                        .modern_events
+                        .get(id)
+                        .ok_or_else(|| failure("Stale event handle"))?;
+                    let active = match k.as_str() {
+                        "Control" => ev.ctrl_key,
+                        "Shift" => ev.shift_key,
+                        "Alt" => ev.alt_key,
+                        "Meta" => ev.meta_key,
+                        _ => false,
+                    };
+                    Ok(active.into())
+                }
+            }
+        }
+        MEVENT_INIT_EVENT
+        | MEVENT_INIT_UI_EVENT
+        | MEVENT_INIT_MOUSE_EVENT
+        | MEVENT_INIT_CUSTOM_EVENT => {
+            let id = mevent_receiver(this, context)?;
+            let Some(first) = args.first() else {
+                return Err(JsNativeError::typ()
+                    .with_message("initEvent requires at least 1 argument")
+                    .into());
+            };
+            let event_type = utf8(first, context)?;
+            let bubbles = args.get(1).is_some_and(JsValue::to_boolean);
+            let cancelable = args.get(2).is_some_and(JsValue::to_boolean);
+            let (ui_detail, ui_view) =
+                if matches!(name, MEVENT_INIT_UI_EVENT | MEVENT_INIT_MOUSE_EVENT) {
+                    let vw = match args.get(3) {
+                        Some(v) if !v.is_undefined() && !v.is_null() => {
+                            v.as_object().filter(|wobj| {
+                                *wobj == context.global_object()
+                                    || state(context).borrow().dom_prototypes.as_ref().is_some_and(
+                                        |dp| dp.iframe_windows.iter().any(|e| &e.window == wobj),
+                                    )
+                            })
+                        }
+                        _ => None,
+                    };
+                    let det = args
+                        .get(4)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0);
+                    (det, vw)
+                } else {
+                    (0, None)
+                };
+            let custom_detail = if name == MEVENT_INIT_CUSTOM_EVENT {
+                args.get(3).cloned().unwrap_or_else(JsValue::null)
+            } else {
+                JsValue::null()
+            };
+            let (sx, sy, cx, cy, ctrl, alt, shift, meta, button) =
+                if name == MEVENT_INIT_MOUSE_EVENT {
+                    let sx = args
+                        .get(5)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0) as f64;
+                    let sy = args
+                        .get(6)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0) as f64;
+                    let cx = args
+                        .get(7)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0) as f64;
+                    let cy = args
+                        .get(8)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0) as f64;
+                    let ctrl = args.get(9).is_some_and(JsValue::to_boolean);
+                    let alt = args.get(10).is_some_and(JsValue::to_boolean);
+                    let shift = args.get(11).is_some_and(JsValue::to_boolean);
+                    let meta = args.get(12).is_some_and(JsValue::to_boolean);
+                    let btn = args
+                        .get(13)
+                        .map(|v| v.to_i32(context))
+                        .transpose()?
+                        .unwrap_or(0) as i16;
+                    (sx, sy, cx, cy, ctrl, alt, shift, meta, btn)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0, false, false, false, false, 0)
+                };
+            modern::check_context(context)?;
+            let shared = state(context);
+            let mut data = shared.borrow_mut();
+            if let Some(ev) = data.modern_events.get_mut(id)
+                && !ev.dispatching
+            {
+                ev.stopped = false;
+                ev.immediate = false;
+                ev.canceled = false;
+                ev.is_trusted = false;
+                ev.target = None;
+                ev.event_type = event_type;
+                ev.bubbles = bubbles;
+                ev.cancelable = cancelable;
+                if matches!(name, MEVENT_INIT_UI_EVENT | MEVENT_INIT_MOUSE_EVENT) {
+                    ev.detail = ui_detail.into();
+                    ev.view_val = ui_view;
+                } else if name == MEVENT_INIT_CUSTOM_EVENT {
+                    ev.detail = custom_detail;
+                }
+                if name == MEVENT_INIT_MOUSE_EVENT {
+                    ev.screen_x = sx;
+                    ev.screen_y = sy;
+                    ev.client_x = cx;
+                    ev.client_y = cy;
+                    ev.page_x = cx;
+                    ev.page_y = cy;
+                    ev.ctrl_key = ctrl;
+                    ev.alt_key = alt;
+                    ev.shift_key = shift;
+                    ev.meta_key = meta;
+                    ev.button = button;
+                }
+            }
+            Ok(JsValue::undefined())
         }
         DISPATCH_EVENT | "host.window.dispatchEvent" => {
             let target = match receiver(this, context)? {
@@ -1562,6 +1620,14 @@ pub(super) fn dispatch_modern_event(
             return Err(dom_exception::throw(
                 "InvalidStateError",
                 "The event is already being dispatched.",
+                context,
+            ));
+        }
+        if ev.event_type.is_empty() {
+            drop(data);
+            return Err(dom_exception::throw(
+                "InvalidStateError",
+                "The event's type is not specified.",
                 context,
             ));
         }
