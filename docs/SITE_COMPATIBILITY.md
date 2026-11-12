@@ -48,3 +48,22 @@ without their separate review. A blocked live request remains a reported blocker
 Account actions, personalization, Reddit posting/voting and full interactive
 Google News remain later work. Reading success does not complete full web
 compatibility, Playwright, JavaScript, WPT or the formal MVP.
+
+## v0.9.34 desktop reading and Top-10 live status
+
+v0.9.34 adds pure-Rust WebP image decoding (`image-webp` 0.2.4, including
+`RIFF....WEBP` header sniffing on Google News `application/binary` /
+`application/octet-stream` CDN responses), interactive-mode subresource and
+cross-origin HTTPS ES module/CORS `fetch` budgets, CSS `mask-image` /
+`-webkit-mask` alpha tinting, and WebIDL `DocumentType` / `Intl` globals under
+`boa-interactive-page-v1` while keeping `boa-page-process-v1` unchanged:
+
+- Live signed-out `https://news.google.com/` renders its header, briefing,
+  weather card, publisher favicons, and real WebP story thumbnails (`14/14`
+  images decoded, `0` console errors) and navigates topic tabs cleanly.
+- Live signed-out `https://www.reddit.com/` and `https://www.amazon.com/` serve
+  anti-bot gates (reCAPTCHA "Verify you are human" and AWS WAF proof-of-work
+  challenges respectively) to automated clients in both Chrome and `mgbrowser`;
+  per project policy these challenges are never solved or bypassed, so live
+  Reddit/Amazon acceptance remains explicitly open while local Shreddit and
+  Amazon storefront fixtures verify layout and script behavior.

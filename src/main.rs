@@ -332,6 +332,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             previous_session,
             executable,
             scripts: restart_scripts,
+            interactive_scripts: use_interactive_scripts,
             auto_update,
             debug_port,
             remote_debugging_pipe,

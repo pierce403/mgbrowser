@@ -14,13 +14,20 @@ use crate::page_session::{
 use events::{EventRecord, Listener, Target};
 
 pub const MAX_SOURCE: usize = 1024 * 1024;
+pub const MAX_HTML_INTERACTIVE: usize = 8 * 1024 * 1024;
+pub const MAX_SOURCE_INTERACTIVE: usize = 32 * 1024 * 1024;
 pub const MAX_EXTERNAL_SOURCE: usize = 256 * 1024;
+pub const MAX_EXTERNAL_SOURCE_INTERACTIVE: usize = 16 * 1024 * 1024;
 pub const MAX_EXTERNAL_SCRIPTS: usize = 16;
+pub const MAX_EXTERNAL_SCRIPTS_INTERACTIVE: usize = 96;
 pub const MAX_SCRIPTS: usize = 32;
+pub const MAX_SCRIPTS_INTERACTIVE: usize = 256;
 // Leave room for the existing versioned session envelope within its 2 MiB cap.
 pub const MAX_TYPED_REQUEST_BYTES: usize = 2 * 1024 * 1024 - 1024;
+pub const MAX_TYPED_REQUEST_BYTES_INTERACTIVE: usize = 48 * 1024 * 1024 - 1024;
 pub const MAX_CLASSIC_SOURCE_URL_BYTES: usize = 16_384;
 const MAX_DOM_BYTES: usize = 4 * 1024 * 1024;
+const MAX_DOM_BYTES_INTERACTIVE: usize = 48 * 1024 * 1024;
 const MAX_NODES: usize = 50_000;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -152,6 +159,16 @@ pub fn classic_script_type(kind: &str) -> bool {
 }
 
 pub fn unsupported_external_attribute(node: &Node) -> Option<&'static str> {
+    unsupported_external_attribute_for(node, false)
+}
+
+pub fn unsupported_external_attribute_for(node: &Node, interactive: bool) -> Option<&'static str> {
+    if interactive {
+        return node
+            .attr("crossorigin")
+            .is_some_and(|c| c.trim().eq_ignore_ascii_case("use-credentials"))
+            .then_some("crossorigin=use-credentials");
+    }
     if node
         .attr("integrity")
         .is_some_and(|value| !value.trim().is_empty())
@@ -166,14 +183,23 @@ pub fn unsupported_external_attribute(node: &Node) -> Option<&'static str> {
 }
 
 pub fn unsupported_module_external_attribute(node: &Node) -> Option<&'static str> {
-    if node
-        .attr("integrity")
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return Some("integrity");
-    }
-    if node.attr("async").is_some() {
-        return Some("async");
+    unsupported_module_external_attribute_for(node, false)
+}
+
+pub fn unsupported_module_external_attribute_for(
+    node: &Node,
+    interactive: bool,
+) -> Option<&'static str> {
+    if !interactive {
+        if node
+            .attr("integrity")
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Some("integrity");
+        }
+        if node.attr("async").is_some() {
+            return Some("async");
+        }
     }
     if let Some(cors) = node.attr("crossorigin")
         && cors.trim().eq_ignore_ascii_case("use-credentials")
@@ -186,6 +212,10 @@ pub fn unsupported_module_external_attribute(node: &Node) -> Option<&'static str
 /// Extract static `import ... from "..."`, `import "..."`, and `export ... from "..."`
 /// module specifiers from JavaScript module source text without executing JS.
 pub fn extract_static_module_specifiers(source: &str) -> Vec<String> {
+    #[cfg(feature = "modern")]
+    if let Some(deps) = crate::js_browser::boa::esm::extract_module_dependencies(source) {
+        return deps;
+    }
     let bytes = source.as_bytes();
     let len = bytes.len();
     let mut i = 0usize;
@@ -550,17 +580,48 @@ impl Request {
         &self,
         document: &Document,
         modules_enabled: bool,
+        interactive: bool,
     ) -> Result<usize, String> {
-        if !modules_enabled {
+        if !modules_enabled && !interactive {
             return self.validate_modern_external_sources(document);
         }
+        let max_wire = if interactive {
+            MAX_TYPED_REQUEST_BYTES_INTERACTIVE
+        } else {
+            MAX_TYPED_REQUEST_BYTES
+        };
+        let max_dom = if interactive {
+            MAX_DOM_BYTES_INTERACTIVE
+        } else {
+            MAX_DOM_BYTES
+        };
+        let max_total_src = if interactive {
+            MAX_SOURCE_INTERACTIVE
+        } else {
+            MAX_SOURCE
+        };
+        let max_ext_src = if interactive {
+            MAX_EXTERNAL_SOURCE_INTERACTIVE
+        } else {
+            MAX_EXTERNAL_SOURCE
+        };
+        let max_ext_count = if interactive {
+            MAX_EXTERNAL_SCRIPTS_INTERACTIVE
+        } else {
+            MAX_EXTERNAL_SCRIPTS
+        };
+        let max_script_count = if interactive {
+            MAX_SCRIPTS_INTERACTIVE
+        } else {
+            MAX_SCRIPTS
+        };
         let Some(sources) = &self.external_scripts else {
-            if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+            if json_bytes(self)? > max_wire {
                 return Err("Script request exceeds the existing 2 MiB wire limit".into());
             }
             return Ok(self.html.len());
         };
-        if sources.len() > MAX_EXTERNAL_SCRIPTS {
+        if sources.len() > max_ext_count {
             return Err("External script count limit reached (16)".into());
         }
         let eligible: Vec<(usize, bool)> = document
@@ -570,25 +631,35 @@ impl Request {
             .filter(|(index, node)| node.tag == "script" && !inert(&document.nodes, *index))
             .filter(|(_, node)| {
                 let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
-                kind == "module" || classic_script_type(&kind)
+                (modules_enabled && kind == "module") || classic_script_type(&kind)
             })
-            .take(MAX_SCRIPTS)
+            .take(max_script_count)
             .filter_map(|(index, node)| {
                 node.attr("src")?;
                 let kind = node.attr("type").unwrap_or("").trim().to_ascii_lowercase();
                 if kind == "module" {
-                    unsupported_module_external_attribute(node)
-                        .is_none()
-                        .then_some((index, true))
+                    let ok = if interactive {
+                        !node
+                            .attr("crossorigin")
+                            .is_some_and(|c| c.trim().eq_ignore_ascii_case("use-credentials"))
+                    } else {
+                        unsupported_module_external_attribute(node).is_none()
+                    };
+                    ok.then_some((index, true))
                 } else if classic_script_type(&kind) {
-                    unsupported_external_attribute(node)
-                        .is_none()
-                        .then_some((index, false))
+                    let ok = if interactive {
+                        !node
+                            .attr("crossorigin")
+                            .is_some_and(|c| c.trim().eq_ignore_ascii_case("use-credentials"))
+                    } else {
+                        unsupported_external_attribute(node).is_none()
+                    };
+                    ok.then_some((index, false))
                 } else {
                     None
                 }
             })
-            .take(MAX_EXTERNAL_SCRIPTS)
+            .take(max_ext_count)
             .collect();
         let mut seen_nodes = std::collections::HashSet::new();
         let mut seen_submodules = std::collections::HashSet::new();
@@ -619,7 +690,7 @@ impl Request {
                 }
                 is_module_source = is_mod;
             }
-            if source.source.len() > MAX_EXTERNAL_SOURCE {
+            if source.source.len() > max_ext_src {
                 return Err("External script exceeds the 256 KiB source limit".into());
             }
             if let Some(provenance) = &source.provenance {
@@ -648,11 +719,13 @@ impl Request {
                     || raw_userinfo
                     || (provenance.error_visibility == ClassicErrorVisibility::SameOrigin
                         && response.origin() != document_url.origin())
-                    || (is_module_source && response.origin() != document_url.origin())
+                    || (!interactive
+                        && is_module_source
+                        && response.origin() != document_url.origin())
                 {
                     return Err("Invalid or contradictory classic source provenance".into());
                 }
-            } else if is_module_source {
+            } else if is_module_source && !interactive {
                 // Allow same-origin relative `<script type="module" src="...">` in direct tests.
                 let node = &document.nodes[source.node];
                 if let Some(src_attr) = node.attr("src")
@@ -666,28 +739,28 @@ impl Request {
             }
             bytes = bytes
                 .checked_add(source.source.len())
-                .filter(|bytes| *bytes <= MAX_SOURCE)
+                .filter(|bytes| *bytes <= max_total_src)
                 .ok_or("Script document and external sources exceed the 1 MiB source limit")?;
         }
-        if json_bytes(self)? > MAX_TYPED_REQUEST_BYTES {
+        if json_bytes(self)? > max_wire {
             return Err("Script request exceeds the existing 2 MiB wire limit".into());
         }
         let mut metadata_bytes = sources
             .capacity()
             .checked_mul(std::mem::size_of::<ExternalScriptSource>())
-            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .filter(|bytes| *bytes <= max_dom)
             .ok_or("External source records exceed the existing host-storage limit")?;
         for source in sources {
             if let Some(provenance) = &source.provenance {
                 metadata_bytes = metadata_bytes
                     .checked_add(provenance.response_url.capacity())
-                    .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+                    .filter(|bytes| *bytes <= max_dom)
                     .ok_or("External provenance exceeds the existing host-storage limit")?;
             }
         }
         bytes
             .checked_add(metadata_bytes)
-            .filter(|bytes| *bytes <= MAX_DOM_BYTES)
+            .filter(|bytes| *bytes <= max_dom)
             .ok_or_else(|| {
                 "External sources and metadata exceed the existing host-storage limit".into()
             })
@@ -728,6 +801,7 @@ struct BrowserHost {
     url: url::Url,
     navigation: Option<String>,
     allocated: usize,
+    interactive: bool,
     collections: Vec<Vec<usize>>,
     listeners: Vec<Listener>,
     events: Vec<EventRecord>,
@@ -843,6 +917,7 @@ fn initialize(request: Request) -> (Option<PageRealm>, Reply) {
         url,
         navigation: None,
         allocated,
+        interactive: false,
         collections: Vec::new(),
         listeners: Vec::new(),
         events: Vec::new(),
@@ -1127,9 +1202,23 @@ fn void(tag: &str) -> bool {
 }
 
 impl BrowserHost {
+    pub(crate) fn max_dom_bytes(&self) -> usize {
+        if self.interactive {
+            MAX_DOM_BYTES_INTERACTIVE
+        } else {
+            MAX_DOM_BYTES
+        }
+    }
+    pub(crate) fn max_source_bytes(&self) -> usize {
+        if self.interactive {
+            MAX_EXTERNAL_SOURCE_INTERACTIVE
+        } else {
+            MAX_SOURCE
+        }
+    }
     fn charge(&mut self, bytes: usize) -> Result<(), String> {
         self.allocated = self.allocated.saturating_add(bytes);
-        if self.allocated > MAX_DOM_BYTES {
+        if self.allocated > self.max_dom_bytes() {
             Err("DOM allocation limit exceeded".into())
         } else {
             Ok(())
@@ -1302,7 +1391,7 @@ impl BrowserHost {
         {
             return Err("Unsupported innerHTML target".into());
         }
-        if source.len() > MAX_SOURCE {
+        if source.len() > self.max_source_bytes() {
             return Err("innerHTML source limit exceeded".into());
         }
         let fragment = document::parse_with_scripting(&source, self.url.as_str(), true);
@@ -1407,7 +1496,7 @@ impl BrowserHost {
                 }
                 pending.extend(node.children.iter().rev().map(|&i| (i, false, depth + 1)));
             }
-            if out_len > MAX_SOURCE * 2 {
+            if out_len > self.max_source_bytes() * 2 {
                 return Err("Serialized DOM byte limit exceeded".into());
             }
         }
@@ -1466,7 +1555,7 @@ impl BrowserHost {
                 }
                 pending.extend(node.children.iter().rev().map(|i| (*i, false, depth + 1)));
             }
-            if output.len() > MAX_SOURCE * 2 {
+            if output.len() > self.max_source_bytes() * 2 {
                 return Err("Serialized DOM byte limit exceeded".into());
             }
         }

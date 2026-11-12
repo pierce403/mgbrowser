@@ -754,6 +754,7 @@ pub struct ComputedStyle {
     pub border_spacing: [f32; 2],
     /// URL layers in CSS front-to-back order. Paint in reverse order.
     pub background_images: Vec<BackgroundImage>,
+    pub mask_image: Option<Box<BackgroundImage>>,
     pub before: Option<Box<PseudoStyle>>,
     pub after: Option<Box<PseudoStyle>>,
 }
@@ -806,6 +807,7 @@ impl Default for ComputedStyle {
             border_collapse: false,
             border_spacing: [2.0; 2],
             background_images: Vec::new(),
+            mask_image: None,
             before: None,
             after: None,
         }
@@ -859,6 +861,7 @@ impl ComputedStyle {
             border_collapse: self.border_collapse,
             border_spacing: self.border_spacing,
             background_images: self.background_images.clone(),
+            mask_image: self.mask_image.clone(),
             before: self.before.clone(),
             after: self.after.clone(),
         }
@@ -912,6 +915,7 @@ impl ComputedStyle {
             border_collapse: self.border_collapse,
             border_spacing: self.border_spacing,
             background_images: self.background_images.clone(),
+            mask_image: None,
             before: None,
             after: None,
         }
@@ -1011,6 +1015,9 @@ pub(crate) fn snapshot_heap_bytes(value: &ComputedStyle) -> usize {
         + gradient_heap_bytes(&value.background_gradient)
         + transform_heap_bytes(&value.transform)
         + value.box_shadows.capacity() * std::mem::size_of::<BoxShadow>()
+        + value.mask_image.as_ref().map_or(0, |m| {
+            std::mem::size_of::<BackgroundImage>() + m.url.capacity()
+        })
         + inherited_heap_bytes(value)
 }
 
@@ -1860,6 +1867,51 @@ fn css_mentions_text_overflow(css: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case(b"text-overflow"))
 }
 
+fn css_mentions_mask(css: &str) -> bool {
+    css.as_bytes()
+        .windows(4)
+        .any(|w| w.eq_ignore_ascii_case(b"mask"))
+}
+
+fn scan_decl_value_end(raw: &[u8], val_start: usize) -> usize {
+    let mut vj = val_start;
+    let mut paren_depth = 0usize;
+    while vj < raw.len() {
+        if raw[vj..].starts_with(b"/*") {
+            vj = raw[vj + 2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(raw.len(), |p| vj + 2 + p + 2);
+            continue;
+        }
+        let vb = raw[vj];
+        if vb == b'\'' || vb == b'"' {
+            let q = vb;
+            vj += 1;
+            while vj < raw.len() {
+                let c = raw[vj];
+                vj += 1;
+                if c == q {
+                    break;
+                }
+                if c == b'\\' && vj < raw.len() {
+                    vj += 1;
+                }
+            }
+            continue;
+        }
+        if vb == b'(' {
+            paren_depth += 1;
+        } else if vb == b')' {
+            paren_depth = paren_depth.saturating_sub(1);
+        } else if paren_depth == 0 && (vb == b';' || vb == b'}') {
+            break;
+        }
+        vj += 1;
+    }
+    vj
+}
+
 /// Alias legacy vendor-prefixed declaration property names dropped by modern
 /// Stylo (`-moz-border-radius*`, `-moz-box-sizing`, `-webkit-box-sizing`,
 /// `-moz-opacity`, `-moz-box-shadow`) and Stylo-disabled `text-overflow`
@@ -1874,7 +1926,8 @@ fn normalize_css_declarations(css: &str, in_declaration_list: bool) -> std::borr
     let has_candidate = raw
         .windows(5)
         .any(|w| w.eq_ignore_ascii_case(b"-moz-") || w.eq_ignore_ascii_case(b"-webk"))
-        || css_mentions_text_overflow(css);
+        || css_mentions_text_overflow(css)
+        || css_mentions_mask(css);
     if !has_candidate {
         return std::borrow::Cow::Borrowed(css);
     }
@@ -1973,49 +2026,38 @@ fn normalize_css_declarations(css: &str, in_declaration_list: bool) -> std::borr
                 } else if name.eq_ignore_ascii_case("text-overflow")
                     || name.eq_ignore_ascii_case("-o-text-overflow")
                 {
-                    // Scan value up to `;` or `}` outside quotes/parens/comments.
                     let val_start = probe + 1;
-                    let mut vj = val_start;
-                    let mut paren_depth = 0usize;
-                    while vj < raw.len() {
-                        if raw[vj..].starts_with(b"/*") {
-                            vj = raw[vj + 2..]
-                                .windows(2)
-                                .position(|w| w == b"*/")
-                                .map_or(raw.len(), |p| vj + 2 + p + 2);
-                            continue;
-                        }
-                        let vb = raw[vj];
-                        if vb == b'\'' || vb == b'"' {
-                            let q = vb;
-                            vj += 1;
-                            while vj < raw.len() {
-                                let c = raw[vj];
-                                vj += 1;
-                                if c == q {
-                                    break;
-                                }
-                                if c == b'\\' && vj < raw.len() {
-                                    vj += 1;
-                                }
-                            }
-                            continue;
-                        }
-                        if vb == b'(' {
-                            paren_depth += 1;
-                        } else if vb == b')' {
-                            paren_depth = paren_depth.saturating_sub(1);
-                        } else if paren_depth == 0 && (vb == b';' || vb == b'}') {
-                            break;
-                        }
-                        vj += 1;
-                    }
+                    let vj = scan_decl_value_end(raw, val_start);
                     if is_supported_text_overflow_decl_value(&css[val_start..vj]) {
                         if name.len() == 16 {
-                            Some(b"   --mg-txt-ovfl")
+                            Some(b"   --mg-txt-ovfl".as_slice())
                         } else {
-                            Some(b"--mg-txt-ovfl")
+                            Some(b"--mg-txt-ovfl".as_slice())
                         }
+                    } else {
+                        None
+                    }
+                } else if matches!(name.len(), 4 | 9 | 10 | 12 | 13 | 17 | 18 | 21) {
+                    let val_start = probe + 1;
+                    let vj = scan_decl_value_end(raw, val_start);
+                    if css[val_start..vj].trim().is_empty() {
+                        None
+                    } else if name.eq_ignore_ascii_case("mask-image") {
+                        Some(b"--mg-mskim".as_slice())
+                    } else if name.eq_ignore_ascii_case("-webkit-mask-image") {
+                        Some(b"        --mg-mskim".as_slice())
+                    } else if name.eq_ignore_ascii_case("mask") {
+                        Some(b"--mg".as_slice())
+                    } else if name.eq_ignore_ascii_case("-webkit-mask") {
+                        Some(b"        --mg".as_slice())
+                    } else if name.eq_ignore_ascii_case("mask-size") {
+                        Some(b"--mg-msks".as_slice())
+                    } else if name.eq_ignore_ascii_case("-webkit-mask-size") {
+                        Some(b"        --mg-msks".as_slice())
+                    } else if name.eq_ignore_ascii_case("mask-position") {
+                        Some(b"--mg-mskposit".as_slice())
+                    } else if name.eq_ignore_ascii_case("-webkit-mask-position") {
+                        Some(b"        --mg-mskposit".as_slice())
                     } else {
                         None
                     }
@@ -2077,7 +2119,12 @@ pub fn compute_styles_with_diagnostics(
             .checked_add(sheet.css.len())?
             .checked_add(sheet.media.len())
     });
-    if sheets.len() > 64 || sheet_bytes.is_none_or(|bytes| bytes > 2 * 1024 * 1024) {
+    let max_sheet_bytes = if document.interactive_style_budget() {
+        8 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    };
+    if sheets.len() > 64 || sheet_bytes.is_none_or(|bytes| bytes > max_sheet_bytes) {
         return Err("stylesheet input bound exceeded".into());
     }
     if document
@@ -2222,10 +2269,21 @@ pub fn compute_styles_with_diagnostics(
             .nodes
             .iter()
             .any(|n| n.attr("style").is_some_and(css_mentions_text_overflow));
-    let ua_with_text_overflow;
-    let ua_css = if uses_text_overflow {
-        ua_with_text_overflow = format!("{USER_AGENT_CSS}\n*{{--mg-txt-ovfl:clip}}");
-        ua_with_text_overflow.as_str()
+    let uses_mask = sheets.iter().any(|s| css_mentions_mask(&s.css))
+        || document
+            .nodes
+            .iter()
+            .any(|n| n.attr("style").is_some_and(css_mentions_mask));
+    let mut ua_buf = String::new();
+    let ua_css = if uses_text_overflow || uses_mask {
+        ua_buf.push_str(USER_AGENT_CSS);
+        if uses_text_overflow {
+            ua_buf.push_str("\n*{--mg-txt-ovfl:clip}");
+        }
+        if uses_mask {
+            ua_buf.push_str("\n*{--mg:none;--mg-mskim:none;--mg-msks:auto;--mg-mskposit:0% 0%}");
+        }
+        ua_buf.as_str()
     } else {
         USER_AGENT_CSS
     };
@@ -2337,6 +2395,7 @@ pub fn compute_styles_with_diagnostics(
             &mut tree_caches,
         );
         let mut snapshot = renderer_style(&computed)?;
+        resolve_sheet_mask_url(&mut snapshot.mask_image, document, sheets);
         snapshot.own_opacity = if svg_contexts[id] {
             1.0
         } else {
@@ -2456,6 +2515,7 @@ pub fn compute_styles_with_diagnostics(
                     continue;
                 };
                 let mut pseudo_snapshot = renderer_style(&pseudo_computed)?;
+                resolve_sheet_mask_url(&mut pseudo_snapshot.mask_image, document, sheets);
                 if pseudo_snapshot.display == Display::None {
                     continue;
                 }
@@ -5325,7 +5385,280 @@ fn renderer_style(values: &ComputedValues) -> Result<ComputedStyle, String> {
             table.border_spacing.0.height.0.px(),
         ],
         background_images,
+        mask_image: renderer_mask_image(values, font_size),
         before: None,
         after: None,
     })
+}
+
+fn parse_mask_url(raw: &str) -> Option<String> {
+    let lower = raw.to_ascii_lowercase();
+    let idx = lower.find("url(")?;
+    let rest = &raw[idx + 4..];
+    let trimmed = rest.trim_start();
+    let content = if let Some(q) = trimmed.chars().next().filter(|&c| c == '"' || c == '\'') {
+        let inner = &trimmed[1..];
+        let end = inner.find(q)?;
+        &inner[..end]
+    } else {
+        let end = trimmed.find(')')?;
+        trimmed[..end].trim()
+    };
+    if content.is_empty() || content.len() > MAX_STYLE_URL_BYTES {
+        return None;
+    }
+    Some(content.to_owned())
+}
+
+fn parse_mask_len_token(raw: &str, font_size: f32) -> Option<Length> {
+    let t = raw.trim().trim_end_matches('!').trim();
+    if t.eq_ignore_ascii_case("auto") {
+        return Some(Length::Auto);
+    }
+    if t.eq_ignore_ascii_case("contain") || t.eq_ignore_ascii_case("cover") {
+        return Some(Length::Percent(1.0));
+    }
+    let lower = t.to_ascii_lowercase();
+    if let Some(inner) = lower
+        .strip_prefix("calc(")
+        .and_then(|_| t[5..].strip_suffix(')'))
+    {
+        return parse_mask_len_token(inner, font_size);
+    }
+    if let Some(is_max) = lower
+        .strip_prefix("max(")
+        .map(|_| true)
+        .or_else(|| lower.strip_prefix("min(").map(|_| false))
+        && let Some(inner) = t[4..].strip_suffix(')')
+    {
+        let mut vals = Vec::new();
+        for part in inner.split(',') {
+            if let Some(Length::Px(px)) = parse_mask_len_token(part, font_size) {
+                vals.push(px);
+            }
+        }
+        if !vals.is_empty() {
+            let v = if is_max {
+                vals.into_iter().fold(f32::NEG_INFINITY, f32::max)
+            } else {
+                vals.into_iter().fold(f32::INFINITY, f32::min)
+            };
+            return Some(Length::Px(v));
+        }
+    }
+    if let Some(n) = lower.strip_suffix("rem") {
+        return n.trim().parse::<f32>().ok().map(|v| Length::Px(v * 16.0));
+    }
+    if let Some(n) = lower.strip_suffix("em") {
+        return n
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| Length::Px(v * font_size));
+    }
+    if let Some(n) = lower.strip_suffix("px") {
+        return n.trim().parse::<f32>().ok().map(Length::Px);
+    }
+    if let Some(n) = lower.strip_suffix('%') {
+        return n
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| Length::Percent(v / 100.0));
+    }
+    if t == "0" {
+        return Some(Length::Px(0.0));
+    }
+    None
+}
+
+fn parse_mask_pos_pair(raw: &str, font_size: f32) -> (Length, Length) {
+    let mut parts = raw.split_whitespace();
+    let map_kw = |s: &str, horiz: bool| -> Option<Length> {
+        if s.eq_ignore_ascii_case("center") {
+            Some(Length::Percent(0.5))
+        } else if (horiz && s.eq_ignore_ascii_case("left"))
+            || (!horiz && s.eq_ignore_ascii_case("top"))
+        {
+            Some(Length::Px(0.0))
+        } else if (horiz && s.eq_ignore_ascii_case("right"))
+            || (!horiz && s.eq_ignore_ascii_case("bottom"))
+        {
+            Some(Length::Percent(1.0))
+        } else {
+            parse_mask_len_token(s, font_size)
+        }
+    };
+    let Some(a) = parts.next() else {
+        return (Length::Px(0.0), Length::Px(0.0));
+    };
+    if let Some(b) = parts.next() {
+        let x = map_kw(a, true).unwrap_or(Length::Px(0.0));
+        let y = map_kw(b, false).unwrap_or(Length::Px(0.0));
+        (x, y)
+    } else if a.eq_ignore_ascii_case("center") {
+        (Length::Percent(0.5), Length::Percent(0.5))
+    } else if a.eq_ignore_ascii_case("top") {
+        (Length::Percent(0.5), Length::Px(0.0))
+    } else if a.eq_ignore_ascii_case("bottom") {
+        (Length::Percent(0.5), Length::Percent(1.0))
+    } else {
+        (
+            map_kw(a, true).unwrap_or(Length::Px(0.0)),
+            Length::Percent(0.5),
+        )
+    }
+}
+
+fn split_top_level_tokens(raw: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let start = i;
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'\'' || b == b'"' {
+                let q = b;
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            } else if b == b'(' {
+                depth += 1;
+            } else if b == b')' {
+                depth = depth.saturating_sub(1);
+            } else if depth == 0 && b.is_ascii_whitespace() {
+                break;
+            }
+            i += 1;
+        }
+        out.push(&raw[start..i]);
+    }
+    out
+}
+
+fn parse_mask_size_pair(raw: &str, font_size: f32) -> (Length, Length) {
+    let toks = split_top_level_tokens(raw);
+    let Some(&first) = toks.first() else {
+        return (Length::Auto, Length::Auto);
+    };
+    if first.eq_ignore_ascii_case("contain") || first.eq_ignore_ascii_case("cover") {
+        return (Length::Percent(1.0), Length::Percent(1.0));
+    }
+    let w = parse_mask_len_token(first, font_size).unwrap_or(Length::Auto);
+    let h = toks
+        .get(1)
+        .and_then(|s| parse_mask_len_token(s, font_size))
+        .unwrap_or(w);
+    (w, h)
+}
+
+fn renderer_mask_image(values: &ComputedValues, font_size: f32) -> Option<Box<BackgroundImage>> {
+    use style_traits::ToCss;
+    let cp = &values.custom_properties().inherited;
+    let short_val = cp.get(&style::Atom::from("mg")).map(|v| v.to_css_string());
+    let img_val = cp
+        .get(&style::Atom::from("mg-mskim"))
+        .map(|v| v.to_css_string());
+    let mut url = None;
+    let mut width = Length::Auto;
+    let mut height = Length::Auto;
+    let mut pos_x = Length::Px(0.0);
+    let mut pos_y = Length::Px(0.0);
+    if let Some(s) = short_val.as_deref() {
+        let st = s.trim();
+        if !st.eq_ignore_ascii_case("none") {
+            url = parse_mask_url(st);
+            if let Some(after_url) = st.find(')').map(|p| &st[p + 1..]) {
+                let (before_slash, after_slash) = after_url
+                    .split_once('/')
+                    .map_or((after_url, None), |(a, b)| (a, Some(b)));
+                if before_slash
+                    .split_whitespace()
+                    .any(|w| w.eq_ignore_ascii_case("center"))
+                {
+                    pos_x = Length::Percent(0.5);
+                    pos_y = Length::Percent(0.5);
+                }
+                if let Some(sz) = after_slash {
+                    (width, height) = parse_mask_size_pair(sz, font_size);
+                }
+            }
+        }
+    }
+    if let Some(im) = img_val.as_deref() {
+        let imt = im.trim();
+        if imt.eq_ignore_ascii_case("none") {
+            if short_val
+                .as_deref()
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("none"))
+            {
+                return None;
+            }
+        } else if let Some(u) = parse_mask_url(imt) {
+            url = Some(u);
+        }
+    }
+    let url = url?;
+    if let Some(sz) = cp.get(&style::Atom::from("mg-msks")) {
+        let szt = sz.to_css_string();
+        if !szt.trim().eq_ignore_ascii_case("auto") {
+            (width, height) = parse_mask_size_pair(szt.trim(), font_size);
+        }
+    }
+    if let Some(ps) = cp.get(&style::Atom::from("mg-mskposit")) {
+        let pst = ps.to_css_string();
+        if pst.trim() != "0% 0%" {
+            (pos_x, pos_y) = parse_mask_pos_pair(pst.trim(), font_size);
+        }
+    }
+    Some(Box::new(BackgroundImage {
+        url,
+        width,
+        height,
+        pos_x,
+        pos_y,
+    }))
+}
+
+fn resolve_sheet_mask_url(
+    mask: &mut Option<Box<BackgroundImage>>,
+    document: &Document,
+    sheets: &[StylesheetSource],
+) {
+    let Some(m) = mask.as_deref_mut() else {
+        return;
+    };
+    if document.resources.is_empty()
+        || (m.url.len() >= 5 && m.url.as_bytes()[..5].eq_ignore_ascii_case(b"data:"))
+    {
+        return;
+    }
+    if let Ok(base) = url::Url::parse(&document.base_url)
+        && let Ok(u) = base.join(&m.url)
+        && document.resources.contains_key(u.as_str())
+    {
+        m.url = u.into();
+        return;
+    }
+    for sh in sheets.iter().rev() {
+        if let Ok(base) = url::Url::parse(&sh.base_url)
+            && let Ok(u) = base.join(&m.url)
+            && document.resources.contains_key(u.as_str())
+        {
+            m.url = u.into();
+            return;
+        }
+    }
 }

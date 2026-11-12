@@ -116,7 +116,7 @@ impl Server {
     /// Bind a `\0`-delimited UTF-8 JSON pipe transport (e.g. FDs 3 and 4).
     pub fn bind_pipe(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (send, commands) = mpsc::sync_channel(512);
-        let (out_tx, out_rx) = mpsc::sync_channel::<String>(256);
+        let (out_tx, out_rx) = mpsc::sync_channel::<String>(4096);
         let queued_bytes = Arc::new(AtomicU64::new(0));
         let mut initial_clients = HashMap::new();
         initial_clients.insert(
@@ -400,7 +400,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                     continue;
                 };
                 let client = shared.next_client.fetch_add(1, Ordering::Relaxed);
-                let (send, receive) = mpsc::sync_channel(256);
+                let (send, receive) = mpsc::sync_channel(4096);
                 let queued_bytes = Arc::new(AtomicU64::new(0));
                 clients.insert(
                     client,

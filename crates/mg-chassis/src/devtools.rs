@@ -2822,7 +2822,7 @@ impl Browser {
             }
         };
         if !detached {
-            match Self::project_reply(&mut reply, &url, None) {
+            match Self::project_reply(&mut reply, &url, None, self.child_pool.is_interactive()) {
                 Ok(projected) => {
                     let old_doc = self.document.clone();
                     self.devtools.remap_nodes_between_documents(

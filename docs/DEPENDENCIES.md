@@ -33,7 +33,7 @@ This browser is a testing and research project, not a production browser. The us
 | Text shaping | rustybuzz 0.20 with std and defaults disabled | Rust shaping implementation, no HarfBuzz C bindings. |
 | CSS computation | stylo 0.21.0, defaults disabled, servo feature only; imported as style | Rust selector/cascade/computed-value engine, with Mg DOM adapter. No Gecko, SpiderMonkey or Servo browser embedding. Python 3 is build-time code generation only. |
 | Flex/grid geometry | taffy 0.14.0, defaults disabled, std/flexbox/grid only | v0.9.0 Mg adapter borrows computed styles and document identities. No Taffy tree/parser, native layout backend or replacement browser engine. |
-| Images | image 0.25.10, defaults disabled, png/gif/jpeg only; resvg 0.45.1 defaults disabled; roxmltree 0.20.0 | Rust PNG/GIF/JPEG and bounded SVG paths; JPEG added in v0.9.0. No default codec bundle, native fallback, SVG text/system fonts, embedded raster images or file resolver. |
+| Images | image 0.25.10, defaults disabled, png/gif/jpeg/webp only; resvg 0.45.1 defaults disabled; roxmltree 0.20.0 | Rust PNG/GIF/JPEG/WebP and bounded SVG paths; JPEG added in v0.9.0, pure-Rust WebP (`image-webp` 0.2.4) in v0.9.34. No default codec bundle, `libwebp` or native fallback, SVG text/system fonts, embedded raster images or file resolver. |
 | HTTP and URLs | Own HTTP/1.1 transport, std sockets, url 2; webpki-roots 1 for public trust anchors | No external fetch process or native TLS client. Certificate and hostname verification remain enabled. |
 | HTTP compression | flate2 1, defaults disabled, rust_backend only | Rust gzip/deflate decoding with a separate decoded-body limit. |
 | Session cookies | Own memory-only jar; psl 2 and httpdate 1 | Public-suffix and expiry parsing use Rust crates. No persistent or imported browser cookies. |
@@ -46,6 +46,19 @@ This browser is a testing and research project, not a production browser. The us
 The manifest sets allowed features; Cargo.lock pins the resolved versions. The Git revision intentionally uses maintained upstream source rather than the old crates.io alpha. This is not a claim that the provider is audited, production-ready, or bug-free. Primary references: [provider manifest](https://github.com/RustCrypto/rustls-rustcrypto/blob/70f76c039e587192688af18a80d5d6435dedaf22/Cargo.toml), [release discussion](https://github.com/RustCrypto/rustls-rustcrypto/issues/107), [fontdue](https://github.com/mooman219/fontdue), [rustybuzz](https://github.com/harfbuzz/rustybuzz), [image](https://github.com/image-rs/image).
 
 ## Integration status
+
+### Pure-Rust WebP image decoding: v0.9.34
+
+`mg-sparkle` enables the `webp` feature on `image = 0.25.10` (`default-features =
+false`), resolving pure-Rust `image-webp = 0.2.4` (`MIT OR Apache-2.0`),
+`byteorder-lite = 0.1.0` (`Unlicense OR MIT`), and `quick-error = 2.0.1`
+(`MIT/Apache-2.0`). None of these crates introduces a build script, C/C++
+`libwebp` binding, FFI codec, or `libc` edge. `mg-sparkle::images` recognizes
+`image/webp` plus `RIFF....WEBP` magic bytes on generic `application/binary` and
+`application/octet-stream` CDN responses (such as Google News thumbnails), and in
+interactive desktop mode proportionally downscales decoded images exceeding
+`2048` px per side or `1,048,576` pixels while preserving non-interactive
+rejection and existing PNG/GIF/JPEG/SVG limits unchanged.
 
 ### Pure-Rust WOFF1/WOFF2 web font decoding: v0.9.23
 

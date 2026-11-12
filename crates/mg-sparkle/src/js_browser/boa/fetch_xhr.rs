@@ -1844,9 +1844,16 @@ fn invoke_window_fetch(
         }
     }
 
-    // Strict same-origin HTTP(S) enforcement
-    let page_url = state(context).borrow().host.url.clone();
-    if !is_same_http_origin(&page_url, &resolved_url) {
+    // Strict same-origin HTTP(S) enforcement in default profile; interactive allows HTTPS/HTTP CORS
+    let (page_url, interactive) = {
+        let shared = state(context);
+        let data = shared.borrow();
+        (data.host.url.clone(), data.host.interactive)
+    };
+    let cors_allowed = interactive
+        && matches!(resolved_url.scheme(), "http" | "https")
+        && matches!(page_url.scheme(), "http" | "https");
+    if !is_same_http_origin(&page_url, &resolved_url) && !cors_allowed {
         return settle_rejected(
             JsNativeError::typ()
                 .with_message("Failed to fetch: cross-origin requests are not permitted")
@@ -2602,8 +2609,15 @@ pub(super) fn call(
             let resolved = resolve_against_document(&raw_url, context).map_err(|_| {
                 dom_exception::throw("SyntaxError", "Invalid XMLHttpRequest URL.", context)
             })?;
-            let page_url = state(context).borrow().host.url.clone();
-            let same_origin = is_same_http_origin(&page_url, &resolved);
+            let (page_url, interactive) = {
+                let shared = state(context);
+                let data = shared.borrow();
+                (data.host.url.clone(), data.host.interactive)
+            };
+            let same_origin = is_same_http_origin(&page_url, &resolved)
+                || (interactive
+                    && matches!(resolved.scheme(), "http" | "https")
+                    && matches!(page_url.scheme(), "http" | "https"));
             let prev_rs = {
                 let shared = state(context);
                 let mut data = shared.borrow_mut();

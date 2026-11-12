@@ -7,13 +7,17 @@ use crate::net::{ResourceKind, Response, Session};
 use mg_sparkle::document::{Document, Node, ResourceData, StylesheetRequest, StylesheetSource};
 use mg_sparkle::js_browser::{
     ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource,
-    MAX_CLASSIC_SOURCE_URL_BYTES, MAX_EXTERNAL_SCRIPTS, MAX_EXTERNAL_SOURCE, MAX_SCRIPTS,
-    MAX_SOURCE, MAX_TYPED_REQUEST_BYTES, SourceWireMode, classic_script_type,
+    MAX_CLASSIC_SOURCE_URL_BYTES, MAX_EXTERNAL_SCRIPTS, MAX_EXTERNAL_SCRIPTS_INTERACTIVE,
+    MAX_EXTERNAL_SOURCE, MAX_EXTERNAL_SOURCE_INTERACTIVE, MAX_HTML_INTERACTIVE, MAX_SCRIPTS,
+    MAX_SCRIPTS_INTERACTIVE, MAX_SOURCE, MAX_SOURCE_INTERACTIVE, MAX_TYPED_REQUEST_BYTES,
+    MAX_TYPED_REQUEST_BYTES_INTERACTIVE, SourceWireMode, classic_script_type,
     external_request_json_bytes, external_source_json_bytes_with_provenance,
-    extract_static_module_specifiers, unsupported_external_attribute,
-    unsupported_module_external_attribute,
+    extract_static_module_specifiers, unsupported_external_attribute_for,
+    unsupported_module_external_attribute_for,
 };
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -27,6 +31,46 @@ const MAX_CSS: usize = MAX_TOTAL;
 const MAX_WARNINGS: usize = 32;
 const MAX_WARNING_BYTES: usize = 1024;
 const RESOURCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy)]
+struct Policy {
+    max_sheets: usize,
+    max_requests: usize,
+    max_image: usize,
+    max_font: usize,
+    max_css: usize,
+    max_total: usize,
+    timeout: Duration,
+    interactive: bool,
+}
+
+impl Policy {
+    fn for_mode(interactive: bool) -> Self {
+        if interactive {
+            Self {
+                max_sheets: 64,
+                max_requests: 192,
+                max_image: 4 * 1024 * 1024,
+                max_font: 4 * 1024 * 1024,
+                max_css: 8 * 1024 * 1024,
+                max_total: 48 * 1024 * 1024,
+                timeout: Duration::from_secs(20),
+                interactive: true,
+            }
+        } else {
+            Self {
+                max_sheets: MAX_SHEETS,
+                max_requests: MAX_REQUESTS,
+                max_image: MAX_IMAGE,
+                max_font: MAX_IMAGE,
+                max_css: MAX_CSS,
+                max_total: MAX_TOTAL,
+                timeout: RESOURCE_TIMEOUT,
+                interactive: false,
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResourceTiming {
@@ -82,8 +126,20 @@ pub fn load_with_profile(
     page_url: &str,
     cancelled: impl Fn() -> bool,
 ) -> ResourceLoadProfile {
+    load_with_profile_mode(session, document, page_url, cancelled, false)
+}
+
+pub fn load_with_profile_mode(
+    session: &Session,
+    document: &mut Document,
+    page_url: &str,
+    cancelled: impl Fn() -> bool,
+    interactive: bool,
+) -> ResourceLoadProfile {
+    let policy = Policy::for_mode(interactive);
     let started = Instant::now();
-    let requests = document.stylesheet_requests();
+    document.set_interactive_style_budget(interactive);
+    let requests = document.stylesheet_requests_with_limit(policy.max_sheets + 1);
     document.stylesheets.clear();
     document.resources.clear();
     document.resource_warnings.clear();
@@ -91,23 +147,39 @@ pub fn load_with_profile(
         session,
         page_url,
         cancelled: &cancelled,
+        policy,
         started,
-        deadline: started + RESOURCE_TIMEOUT,
+        deadline: started + policy.timeout,
         requests: 0,
         bytes: 0,
         warnings: Vec::new(),
         omitted_warnings: 0,
         timings: Vec::new(),
+        prefetched: HashMap::new(),
     };
+    if interactive {
+        let linked: Vec<String> = requests
+            .iter()
+            .filter_map(|r| match r {
+                StylesheetRequest::Linked { url, .. } => Some(url.clone()),
+                StylesheetRequest::Inline(_) => None,
+            })
+            .take(policy.max_sheets)
+            .collect();
+        loader.prefetch_urls(&linked, policy.max_css, ResourceKind::Stylesheet);
+    }
     let mut image_urls = Vec::new();
     let mut font_urls = Vec::new();
     let mut css_cache = HashMap::<String, StylesheetSource>::new();
     let mut sheet_limit_warned = false;
     let mut out_sheets = std::mem::take(&mut document.stylesheets);
     for (index, request) in requests.into_iter().enumerate() {
-        if out_sheets.len() >= MAX_SHEETS {
+        if out_sheets.len() >= policy.max_sheets {
             if !sheet_limit_warned {
-                loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+                loader.warn(format!(
+                    "Stylesheet count exceeds {}; remaining styles are skipped",
+                    policy.max_sheets
+                ));
             }
             break;
         }
@@ -116,10 +188,10 @@ pub fn load_with_profile(
         }
         let sheet = match request {
             StylesheetRequest::Inline(sheet) => {
-                if sheet.css.len() > MAX_CSS {
+                if sheet.css.len() > policy.max_css {
                     loader.warn(format!(
-                        "Inline stylesheet exceeds resource size budget: sheet {} at {} has {} bytes, limit {MAX_CSS}",
-                        index + 1, label(&sheet.base_url), sheet.css.len()
+                        "Inline stylesheet exceeds resource size budget: sheet {} at {} has {} bytes, limit {}",
+                        index + 1, label(&sheet.base_url), sheet.css.len(), policy.max_css
                     ));
                     continue;
                 }
@@ -157,9 +229,12 @@ pub fn load_with_profile(
         );
     }
     document.stylesheets = out_sheets;
+    let max_candidates = policy.max_requests * 2;
     for id in document.resource_nodes() {
-        if image_urls.len() == MAX_REQUESTS * 2 {
-            loader.warn("Image candidate count exceeds 64; remaining images are skipped".into());
+        if image_urls.len() == max_candidates {
+            loader.warn(format!(
+                "Image candidate count exceeds {max_candidates}; remaining images are skipped"
+            ));
             break;
         }
         let node = &document.nodes[id];
@@ -169,12 +244,36 @@ pub fn load_with_profile(
             image_urls.push((document.base_url.clone(), src));
         }
         if let Some(style) = node.attr("style") {
-            for value in css_image_urls(style).0 {
-                if image_urls.len() < MAX_REQUESTS * 2 {
+            for value in css_image_urls_for(style, max_candidates, interactive).0 {
+                if image_urls.len() < max_candidates {
                     image_urls.push((document.base_url.clone(), value));
                 }
             }
         }
+    }
+    if interactive {
+        let resolved_fonts: Vec<String> = font_urls
+            .iter()
+            .filter_map(|(b, r)| {
+                let mut u = Url::parse(b).and_then(|b| b.join(r.trim())).ok()?;
+                u.set_fragment(None);
+                Some(u.into())
+            })
+            .collect();
+        loader.prefetch_urls(&resolved_fonts, policy.max_font, ResourceKind::Stylesheet);
+        let resolved_imgs: Vec<String> = image_urls
+            .iter()
+            .filter_map(|(b, r)| {
+                let t = r.trim();
+                if t.len() >= 5 && t.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+                    return None;
+                }
+                let mut u = Url::parse(b).and_then(|b| b.join(t)).ok()?;
+                u.set_fragment(None);
+                Some(u.into())
+            })
+            .collect();
+        loader.prefetch_urls(&resolved_imgs, policy.max_image, ResourceKind::Image);
     }
     let mut seen = HashSet::new();
     for (base, reference) in font_urls {
@@ -194,7 +293,8 @@ pub fn load_with_profile(
         if !seen.insert(url.clone()) {
             continue;
         }
-        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Stylesheet, "font") else {
+        let Some(response) = loader.fetch(&url, policy.max_font, ResourceKind::Stylesheet, "font")
+        else {
             continue;
         };
         if !matches!(
@@ -246,13 +346,27 @@ pub fn load_with_profile(
                     continue;
                 }
             };
-            if let Err(err) = mg_sparkle::images::decode(&bytes, &content_type, None, None) {
-                loader.warn(format!(
-                    "Invalid data image resource: {err}: {}",
-                    label(trimmed)
-                ));
-                continue;
-            }
+            let (content_type, bytes) = if interactive {
+                match mg_sparkle::images::normalize_interactive_image(&bytes, &content_type) {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        loader.warn(format!(
+                            "Invalid data image resource: {err}: {}",
+                            label(trimmed)
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                if let Err(err) = mg_sparkle::images::decode(&bytes, &content_type, None, None) {
+                    loader.warn(format!(
+                        "Invalid data image resource: {err}: {}",
+                        label(trimmed)
+                    ));
+                    continue;
+                }
+                (content_type, bytes)
+            };
             if !loader.admit(bytes.len()) {
                 loader.warn(format!(
                     "Data image resource skipped after total budget rejection: {}",
@@ -282,11 +396,46 @@ pub fn load_with_profile(
         if !seen.insert(url.clone()) {
             continue;
         }
-        let Some(response) = loader.fetch(&url, MAX_IMAGE, ResourceKind::Image, "image") else {
+        let Some(response) = loader.fetch(&url, policy.max_image, ResourceKind::Image, "image")
+        else {
             continue;
         };
+        let raw_mime = mime(&response.content_type);
+        if interactive {
+            let eff_mime = match raw_mime.as_str() {
+                "image/png" | "image/gif" | "image/jpeg" | "image/svg+xml" | "image/webp" => {
+                    Some(raw_mime.as_str())
+                }
+                "image/jpg" => Some("image/jpeg"),
+                "application/binary" | "application/octet-stream" | "" => {
+                    mg_sparkle::images::sniff_image_mime(&response.body)
+                }
+                _ => None,
+            };
+            let Some(eff_mime) = eff_mime else {
+                loader.warn(format!(
+                    "Unsupported page image type: {} at {}",
+                    label(&response.content_type),
+                    label(&url)
+                ));
+                continue;
+            };
+            let Ok((content_type, bytes)) =
+                mg_sparkle::images::normalize_interactive_image(&response.body, eff_mime)
+            else {
+                continue;
+            };
+            document.resources.insert(
+                url,
+                ResourceData {
+                    bytes,
+                    content_type,
+                },
+            );
+            continue;
+        }
         if !matches!(
-            mime(&response.content_type).as_str(),
+            raw_mime.as_str(),
             "image/png" | "image/gif" | "image/jpeg" | "image/svg+xml"
         ) {
             loader.warn(format!(
@@ -316,6 +465,135 @@ pub fn load_with_profile(
     }
 }
 
+pub fn materialize_and_collect_interactive_images(
+    document: &mut Document,
+    seen_net: &mut HashSet<String>,
+) -> Vec<String> {
+    let mut raw_refs = Vec::new();
+    for id in document.resource_nodes() {
+        if raw_refs.len() >= 192 {
+            break;
+        }
+        let node = &document.nodes[id];
+        if matches!(node.tag.as_str(), "img" | "canvas")
+            && let Some(src) = document.effective_image_reference(id, 1280.0, 1.0)
+        {
+            raw_refs.push(src);
+        }
+        if let Some(style) = node.attr("style") {
+            for v in css_image_urls_for(style, 32, true).0 {
+                raw_refs.push(v);
+            }
+        }
+        if node.tag == "style" {
+            let txt: String = node
+                .children
+                .iter()
+                .filter(|&&c| document.nodes[c].tag == "#text")
+                .map(|&c| document.nodes[c].text.as_str())
+                .collect();
+            for v in css_image_urls_for(&txt, 64, true).0 {
+                raw_refs.push(v);
+            }
+        }
+    }
+    let base = Url::parse(&document.base_url).ok();
+    let mut net_urls = Vec::new();
+    for r in raw_refs {
+        let t = r.trim();
+        if t.len() >= 5 && t.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+            if document.resources.len() < 256
+                && !document.resources.contains_key(t)
+                && let Ok((ct, raw)) = mg_sparkle::images::decode_data_url(t)
+                && let Ok((content_type, bytes)) =
+                    mg_sparkle::images::normalize_interactive_image(&raw, &ct)
+            {
+                document.resources.insert(
+                    t.to_owned(),
+                    ResourceData {
+                        bytes,
+                        content_type,
+                    },
+                );
+            }
+        } else if seen_net.len() < 128
+            && net_urls.len() < 32
+            && let Some(b) = &base
+            && let Ok(mut u) = b.join(t)
+        {
+            u.set_fragment(None);
+            let s: String = u.into();
+            if !document.resources.contains_key(&s) && seen_net.insert(s.clone()) {
+                net_urls.push(s);
+            }
+        }
+    }
+    net_urls
+}
+
+pub fn fetch_interactive_images(
+    session: &Session,
+    page_url: &str,
+    urls: &[String],
+) -> Vec<(String, ResourceData)> {
+    if urls.is_empty() {
+        return Vec::new();
+    }
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let idx = AtomicUsize::new(0);
+    let workers = urls.len().min(6);
+    let out: std::sync::Mutex<Vec<(String, ResourceData)>> = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    let i = idx.fetch_add(1, Ordering::Relaxed);
+                    if i >= urls.len() || Instant::now() >= deadline {
+                        break;
+                    }
+                    let url = &urls[i];
+                    let Ok(resp) = session.fetch_resource(
+                        url,
+                        page_url,
+                        4 * 1024 * 1024,
+                        deadline,
+                        ResourceKind::Image,
+                    ) else {
+                        continue;
+                    };
+                    if !(200..300).contains(&resp.status) {
+                        continue;
+                    }
+                    let m = mime(&resp.content_type);
+                    let eff = match m.as_str() {
+                        "image/png" | "image/gif" | "image/jpeg" | "image/svg+xml"
+                        | "image/webp" => Some(m.as_str()),
+                        "image/jpg" => Some("image/jpeg"),
+                        "application/binary" | "application/octet-stream" | "" => {
+                            mg_sparkle::images::sniff_image_mime(&resp.body)
+                        }
+                        _ => None,
+                    };
+                    if let Some(eff) = eff
+                        && let Ok((content_type, bytes)) =
+                            mg_sparkle::images::normalize_interactive_image(&resp.body, eff)
+                        && let Ok(mut g) = out.lock()
+                    {
+                        g.push((
+                            url.clone(),
+                            ResourceData {
+                                bytes,
+                                content_type,
+                            },
+                        ));
+                    }
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap_or_default()
+}
+
 fn inert_script(nodes: &[Node], mut id: usize) -> bool {
     for _ in 0..=256 {
         if matches!(nodes[id].tag.as_str(), "template" | "noscript") {
@@ -333,10 +611,58 @@ fn inert_script(nodes: &[Node], mut id: usize) -> bool {
 /// fixed 1 MiB source, 16 KiB URL and 2 MiB JSON frame admission bounds before
 /// spawning a worker session.
 pub fn script_document_admissible(page_url: &str, raw_html: &str) -> bool {
-    raw_html.len() <= MAX_SOURCE
+    script_document_admissible_for(page_url, raw_html, false)
+}
+
+pub fn script_document_admissible_for(page_url: &str, raw_html: &str, interactive: bool) -> bool {
+    let (max_html, max_wire) = if interactive {
+        (MAX_HTML_INTERACTIVE, MAX_TYPED_REQUEST_BYTES_INTERACTIVE)
+    } else {
+        (MAX_SOURCE, MAX_TYPED_REQUEST_BYTES)
+    };
+    raw_html.len() <= max_html
         && page_url.len() <= MAX_CLASSIC_SOURCE_URL_BYTES
-        && external_request_json_bytes(page_url, raw_html)
-            .is_ok_and(|bytes| bytes <= MAX_TYPED_REQUEST_BYTES)
+        && external_request_json_bytes(page_url, raw_html).is_ok_and(|bytes| bytes <= max_wire)
+}
+
+fn verify_sri(body: &[u8], integrity: &str) -> bool {
+    let mut g256 = Vec::new();
+    let mut g384 = Vec::new();
+    let mut g512 = Vec::new();
+    for tok in integrity.split_ascii_whitespace() {
+        let core = tok.split('?').next().unwrap_or(tok);
+        let Some((alg, b64)) = core.split_once('-') else {
+            continue;
+        };
+        let norm: String = b64
+            .chars()
+            .map(|c| match c {
+                '-' => '+',
+                '_' => '/',
+                _ => c,
+            })
+            .collect();
+        if alg.eq_ignore_ascii_case("sha512") {
+            g512.push(norm);
+        } else if alg.eq_ignore_ascii_case("sha384") {
+            g384.push(norm);
+        } else if alg.eq_ignore_ascii_case("sha256") {
+            g256.push(norm);
+        }
+    }
+    let (group, digest): (&[String], Vec<u8>) = if !g512.is_empty() {
+        (&g512, Sha512::digest(body).to_vec())
+    } else if !g384.is_empty() {
+        (&g384, Sha384::digest(body).to_vec())
+    } else if !g256.is_empty() {
+        (&g256, Sha256::digest(body).to_vec())
+    } else {
+        return true;
+    };
+    group.iter().any(|b64| {
+        mg_sparkle::page_session::platform::base64_decode_forgiving(b64)
+            .is_ok_and(|raw| raw == digest)
+    })
 }
 
 /// Fetch only parser-discovered classic sources under the same resource ledger
@@ -351,6 +677,40 @@ pub fn prepare_script_sources(
     resources: &ResourceLoadProfile,
     mode: SourceWireMode,
 ) -> (Vec<ExternalScriptSource>, ScriptFetchProfile) {
+    prepare_script_sources_for(
+        session, document, raw_html, page_url, cancelled, resources, mode, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_script_sources_for(
+    session: &Session,
+    document: &mut Document,
+    raw_html: &str,
+    page_url: &str,
+    cancelled: impl Fn() -> bool,
+    resources: &ResourceLoadProfile,
+    mode: SourceWireMode,
+    interactive: bool,
+) -> (Vec<ExternalScriptSource>, ScriptFetchProfile) {
+    let policy = Policy::for_mode(interactive);
+    let (max_scripts, max_external, max_source, max_ext_source, max_wire) = if interactive {
+        (
+            MAX_SCRIPTS_INTERACTIVE,
+            MAX_EXTERNAL_SCRIPTS_INTERACTIVE,
+            MAX_SOURCE_INTERACTIVE,
+            MAX_EXTERNAL_SOURCE_INTERACTIVE,
+            MAX_TYPED_REQUEST_BYTES_INTERACTIVE,
+        )
+    } else {
+        (
+            MAX_SCRIPTS,
+            MAX_EXTERNAL_SCRIPTS,
+            MAX_SOURCE,
+            MAX_EXTERNAL_SOURCE,
+            MAX_TYPED_REQUEST_BYTES,
+        )
+    };
     let started = Instant::now();
     let mut profile = ScriptFetchProfile::default();
     let mut entries: Vec<ExternalScriptSource> = Vec::new();
@@ -368,14 +728,43 @@ pub fn prepare_script_sources(
         session,
         page_url,
         cancelled: &cancelled,
+        policy,
         started,
-        deadline: resources.deadline.unwrap_or(started + RESOURCE_TIMEOUT),
+        deadline: resources.deadline.unwrap_or(started + policy.timeout),
         requests: resources.requests,
         bytes: resources.bytes,
         warnings,
         omitted_warnings: resources.omitted_warnings,
         timings: Vec::new(),
+        prefetched: HashMap::new(),
     };
+    if interactive {
+        let base_parsed = Url::parse(&document.base_url).ok();
+        let candidates: Vec<String> = document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(idx, n)| n.tag == "script" && !inert_script(&document.nodes, *idx))
+            .filter_map(|(_, n)| {
+                let kind = n.attr("type").unwrap_or("").trim().to_ascii_lowercase();
+                if kind != "module" && !classic_script_type(&kind) {
+                    return None;
+                }
+                if kind != "module"
+                    && mode == SourceWireMode::Modern
+                    && n.attr("nomodule").is_some()
+                {
+                    return None;
+                }
+                let src = n.attr("src")?.trim();
+                let mut u = base_parsed.as_ref()?.join(src).ok()?;
+                u.set_fragment(None);
+                Some(u.into())
+            })
+            .take(max_external)
+            .collect();
+        loader.prefetch_urls(&candidates, max_ext_source, ResourceKind::Script);
+    }
     // Cache only indexes into admitted sources; no second retained source copy.
     let mut cache = HashMap::<String, usize>::new();
     let mut eligible_count = 0usize;
@@ -393,7 +782,7 @@ pub fn prepare_script_sources(
             continue;
         }
         eligible_count += 1;
-        if eligible_count > MAX_SCRIPTS {
+        if eligible_count > max_scripts {
             break;
         }
         let is_module = kind == "module";
@@ -418,15 +807,16 @@ pub fn prepare_script_sources(
             continue;
         };
         external_count += 1;
-        if external_count > MAX_EXTERNAL_SCRIPTS {
-            loader
-                .warn("External script count limit reached (16); remaining sources skipped".into());
+        if external_count > max_external {
+            loader.warn(format!(
+                "External script count limit reached ({max_external}); remaining sources skipped"
+            ));
             break;
         }
         let unsupported_attr = if is_module {
-            unsupported_module_external_attribute(node)
+            unsupported_module_external_attribute_for(node, interactive)
         } else {
-            unsupported_external_attribute(node)
+            unsupported_external_attribute_for(node, interactive)
         };
         if let Some(attribute) = unsupported_attr {
             loader.warn(format!(
@@ -438,7 +828,7 @@ pub fn prepare_script_sources(
         if loader.stopped() {
             break;
         }
-        if source_bytes >= MAX_SOURCE || wire_bytes >= MAX_TYPED_REQUEST_BYTES {
+        if source_bytes >= max_source || wire_bytes >= max_wire {
             loader.warn("External scripts exceed the 1 MiB combined document/source or 2 MiB wire budget; remaining sources skipped".into());
             break;
         }
@@ -452,7 +842,10 @@ pub fn prepare_script_sources(
             continue;
         };
         resolved.set_fragment(None);
-        if is_module && page_origin.as_ref() != Some(&resolved.origin()) {
+        if is_module
+            && page_origin.as_ref() != Some(&resolved.origin())
+            && !(interactive && resolved.scheme() == "https")
+        {
             loader.warn(format!(
                 "Cross-origin module script blocked by same-origin policy; skipped: {}",
                 label(resolved.as_str())
@@ -463,6 +856,16 @@ pub fn prepare_script_sources(
         if let Some(&previous) = cache.get(&url) {
             let previous = &entries[previous];
             let source = &previous.source;
+            if interactive
+                && let Some(integrity) = node.attr("integrity")
+                && !verify_sri(source.as_bytes(), integrity)
+            {
+                loader.warn(format!(
+                    "External script failed SRI integrity check; skipped: {}",
+                    label(&url)
+                ));
+                continue;
+            }
             let additional_wire = external_source_json_bytes_with_provenance(
                 index,
                 source,
@@ -470,8 +873,8 @@ pub fn prepare_script_sources(
             )
             .unwrap_or(usize::MAX)
             .saturating_add(usize::from(!entries.is_empty()));
-            if source.len() > MAX_SOURCE.saturating_sub(source_bytes)
-                || additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes)
+            if source.len() > max_source.saturating_sub(source_bytes)
+                || additional_wire > max_wire.saturating_sub(wire_bytes)
             {
                 loader.warn(format!(
                     "External script exceeds the combined source/wire budget; skipped: {}",
@@ -495,11 +898,14 @@ pub fn prepare_script_sources(
             });
             continue;
         }
-        let limit = MAX_EXTERNAL_SOURCE.min(MAX_SOURCE.saturating_sub(source_bytes));
+        let limit = max_ext_source.min(max_source.saturating_sub(source_bytes));
         let Some(response) = loader.fetch(&url, limit, ResourceKind::Script, "script") else {
             continue;
         };
-        if is_module && !response.resource_same_origin_chain {
+        if is_module
+            && !response.resource_same_origin_chain
+            && !(interactive && response.url.scheme() == "https")
+        {
             loader.warn(format!(
                 "Module script redirected across origins; skipped: {}",
                 label(&url)
@@ -513,6 +919,16 @@ pub fn prepare_script_sources(
             loader.warn(format!(
                 "External script has unsupported content type: {} at {}",
                 label(&response.content_type),
+                label(&url)
+            ));
+            continue;
+        }
+        if interactive
+            && let Some(integrity) = node.attr("integrity")
+            && !verify_sri(&response.body, integrity)
+        {
+            loader.warn(format!(
+                "External script failed SRI integrity check; skipped: {}",
                 label(&url)
             ));
             continue;
@@ -546,7 +962,7 @@ pub fn prepare_script_sources(
             external_source_json_bytes_with_provenance(index, &source, provenance.as_ref())
                 .unwrap_or(usize::MAX)
                 .saturating_add(usize::from(!entries.is_empty()));
-        if additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes) {
+        if additional_wire > max_wire.saturating_sub(wire_bytes) {
             loader.warn(format!(
                 "External script exceeds the existing 2 MiB wire budget; skipped: {}",
                 label(&url)
@@ -609,7 +1025,32 @@ pub fn prepare_script_sources(
             }
         }
         while let Some((referrer_url, mod_src)) = module_scan_queue.pop_front() {
-            for spec in extract_static_module_specifiers(&mod_src) {
+            let specs = extract_static_module_specifiers(&mod_src);
+            if interactive && specs.len() > 1 {
+                let batch: Vec<String> = specs
+                    .iter()
+                    .filter_map(|spec| {
+                        let u = if let Some(mapped) = importmap.get(spec) {
+                            Url::parse(mapped).ok()
+                        } else {
+                            let t = spec.trim();
+                            if t.starts_with('/') || t.starts_with("./") || t.starts_with("../") {
+                                Url::parse(&referrer_url).and_then(|b| b.join(t)).ok()
+                            } else {
+                                Url::parse(t)
+                                    .ok()
+                                    .filter(|u| matches!(u.scheme(), "http" | "https"))
+                            }
+                        };
+                        let mut u = u?;
+                        u.set_fragment(None);
+                        (!seen_sub_urls.contains(u.as_str())).then(|| u.into())
+                    })
+                    .take(max_external.saturating_sub(external_count))
+                    .collect();
+                loader.prefetch_urls(&batch, max_ext_source, ResourceKind::Script);
+            }
+            for spec in specs {
                 let candidate_url = if let Some(mapped) = importmap.get(&spec) {
                     Url::parse(mapped).ok()
                 } else {
@@ -633,29 +1074,33 @@ pub fn prepare_script_sources(
                 if !seen_sub_urls.insert(url.clone()) {
                     continue;
                 }
-                if page_origin.as_ref() != Some(&resolved.origin()) {
+                if page_origin.as_ref() != Some(&resolved.origin())
+                    && !(interactive && resolved.scheme() == "https")
+                {
                     loader.warn(format!(
                         "Cross-origin module dependency blocked by same-origin policy; skipped: {}",
                         label(&url)
                     ));
                     continue;
                 }
-                if entries.len() >= MAX_EXTERNAL_SCRIPTS
-                    || external_count >= MAX_EXTERNAL_SCRIPTS
+                if entries.len() >= max_external
+                    || external_count >= max_external
                     || loader.stopped()
-                    || source_bytes >= MAX_SOURCE
-                    || wire_bytes >= MAX_TYPED_REQUEST_BYTES
+                    || source_bytes >= max_source
+                    || wire_bytes >= max_wire
                 {
                     break;
                 }
                 external_count += 1;
                 submodule_requested += 1;
-                let limit = MAX_EXTERNAL_SOURCE.min(MAX_SOURCE.saturating_sub(source_bytes));
+                let limit = max_ext_source.min(max_source.saturating_sub(source_bytes));
                 let Some(response) = loader.fetch(&url, limit, ResourceKind::Script, "script")
                 else {
                     continue;
                 };
-                if !response.resource_same_origin_chain {
+                if !response.resource_same_origin_chain
+                    && !(interactive && response.url.scheme() == "https")
+                {
                     loader.warn(format!(
                         "Module dependency redirected across origins; skipped: {}",
                         label(&url)
@@ -681,7 +1126,11 @@ pub fn prepare_script_sources(
                 seen_sub_urls.insert(resp_url.clone());
                 let provenance = Some(ClassicSourceProvenance {
                     response_url: resp_url.clone(),
-                    error_visibility: ClassicErrorVisibility::SameOrigin,
+                    error_visibility: if response.resource_same_origin_chain {
+                        ClassicErrorVisibility::SameOrigin
+                    } else {
+                        ClassicErrorVisibility::Muted
+                    },
                 });
                 let additional_wire = external_source_json_bytes_with_provenance(
                     usize::MAX,
@@ -690,7 +1139,7 @@ pub fn prepare_script_sources(
                 )
                 .unwrap_or(usize::MAX)
                 .saturating_add(usize::from(!entries.is_empty()));
-                if additional_wire > MAX_TYPED_REQUEST_BYTES.saturating_sub(wire_bytes) {
+                if additional_wire > max_wire.saturating_sub(wire_bytes) {
                     continue;
                 }
                 module_scan_queue.push_back((resp_url, source.clone()));
@@ -717,7 +1166,7 @@ pub fn prepare_script_sources(
                 kind == "module" || classic_script_type(&kind)
             }
         })
-        .take(MAX_SCRIPTS)
+        .take(max_scripts)
         .filter(|(_, node)| {
             let is_mod = node
                 .attr("type")
@@ -774,6 +1223,7 @@ struct Loader<'a, F: Fn() -> bool> {
     session: &'a Session,
     page_url: &'a str,
     cancelled: &'a F,
+    policy: Policy,
     started: Instant,
     deadline: Instant,
     requests: usize,
@@ -781,9 +1231,67 @@ struct Loader<'a, F: Fn() -> bool> {
     warnings: Vec<String>,
     omitted_warnings: usize,
     timings: Vec<ResourceTiming>,
+    prefetched: HashMap<String, (f64, f64, Result<Response, String>)>,
 }
 
 impl<F: Fn() -> bool> Loader<'_, F> {
+    fn prefetch_urls(&mut self, urls: &[String], limit: usize, kind: ResourceKind) {
+        if !self.policy.interactive || urls.len() <= 1 || (self.cancelled)() {
+            return;
+        }
+        let now = Instant::now();
+        if now >= self.deadline {
+            return;
+        }
+        let budget_reqs = self.policy.max_requests.saturating_sub(self.requests);
+        let mut unique = Vec::new();
+        let mut seen = HashSet::new();
+        for u in urls {
+            if unique.len() >= budget_reqs {
+                break;
+            }
+            if !self.prefetched.contains_key(u) && seen.insert(u.clone()) {
+                unique.push(u.clone());
+            }
+        }
+        if unique.len() <= 1 {
+            return;
+        }
+        let session = self.session;
+        let page_url = self.page_url;
+        let deadline = self.deadline;
+        let started = self.started;
+        let idx = AtomicUsize::new(0);
+        let workers = unique.len().min(6);
+        let results: std::sync::Mutex<Vec<(String, f64, f64, Result<Response, String>)>> =
+            std::sync::Mutex::new(Vec::with_capacity(unique.len()));
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| {
+                    loop {
+                        let i = idx.fetch_add(1, Ordering::Relaxed);
+                        if i >= unique.len() || Instant::now() >= deadline {
+                            break;
+                        }
+                        let url = &unique[i];
+                        let start_ms = started.elapsed().as_secs_f64() * 1000.0;
+                        let req_start = Instant::now();
+                        let res = session.fetch_resource(url, page_url, limit, deadline, kind);
+                        let dur_ms = req_start.elapsed().as_secs_f64() * 1000.0;
+                        if let Ok(mut guard) = results.lock() {
+                            guard.push((url.clone(), start_ms, dur_ms, res));
+                        }
+                    }
+                });
+            }
+        });
+        if let Ok(items) = results.into_inner() {
+            for (u, s_ms, d_ms, r) in items {
+                self.prefetched.insert(u, (s_ms, d_ms, r));
+            }
+        }
+    }
+
     fn compact_warnings(&mut self) {
         if self.omitted_warnings == 0 {
             return;
@@ -822,8 +1330,11 @@ impl<F: Fn() -> bool> Loader<'_, F> {
     }
 
     fn admit(&mut self, bytes: usize) -> bool {
-        if bytes > MAX_TOTAL.saturating_sub(self.bytes) {
-            self.warn("Page resources exceed the 2 MiB total byte budget".into());
+        if bytes > self.policy.max_total.saturating_sub(self.bytes) {
+            let mib = self.policy.max_total / (1024 * 1024);
+            self.warn(format!(
+                "Page resources exceed the {mib} MiB total byte budget"
+            ));
             false
         } else {
             self.bytes += bytes;
@@ -841,25 +1352,39 @@ impl<F: Fn() -> bool> Loader<'_, F> {
         if self.stopped() {
             return None;
         }
-        if self.requests == MAX_REQUESTS {
-            self.warn("Page resource request limit reached (32)".into());
+        if self.requests == self.policy.max_requests {
+            self.warn(format!(
+                "Page resource request limit reached ({})",
+                self.policy.max_requests
+            ));
             return None;
         }
-        if self.bytes == MAX_TOTAL {
-            self.warn("Page resources exceed the 2 MiB total byte budget".into());
+        if self.bytes >= self.policy.max_total {
+            let mib = self.policy.max_total / (1024 * 1024);
+            self.warn(format!(
+                "Page resources exceed the {mib} MiB total byte budget"
+            ));
             return None;
         }
         self.requests += 1;
-        let start_ms = self.started.elapsed().as_secs_f64() * 1000.0;
-        let req_start = Instant::now();
-        let result = self.session.fetch_resource(
-            url,
-            self.page_url,
-            limit.min(MAX_TOTAL - self.bytes),
-            self.deadline,
-            kind,
-        );
-        let duration_ms = req_start.elapsed().as_secs_f64() * 1000.0;
+        let eff_limit = limit.min(self.policy.max_total - self.bytes);
+        let (start_ms, duration_ms, result) =
+            if let Some((s_ms, d_ms, cached)) = self.prefetched.remove(url) {
+                let checked = match cached {
+                    Ok(resp) if resp.body.len() > eff_limit => {
+                        Err(format!("Response exceeds {eff_limit} byte limit"))
+                    }
+                    other => other,
+                };
+                (s_ms, d_ms, checked)
+            } else {
+                let s_ms = self.started.elapsed().as_secs_f64() * 1000.0;
+                let req_start = Instant::now();
+                let res =
+                    self.session
+                        .fetch_resource(url, self.page_url, eff_limit, self.deadline, kind);
+                (s_ms, req_start.elapsed().as_secs_f64() * 1000.0, res)
+            };
         match result {
             Ok(response) if (200..300).contains(&response.status) => {
                 self.timings.push(ResourceTiming {
@@ -912,7 +1437,7 @@ impl<F: Fn() -> bool> Loader<'_, F> {
                     "Resource unavailable: {} at {} (byte limit {})",
                     label(&error),
                     label(url),
-                    limit.min(MAX_TOTAL - self.bytes)
+                    eff_limit
                 ));
                 None
             }
@@ -924,12 +1449,17 @@ impl<F: Fn() -> bool> Loader<'_, F> {
 /// strings and @import statements. Quoted/unquoted url() tokens support CSS
 /// escapes; malformed tokens are ignored. Computed-style matching still decides
 /// whether a fetched image is painted.
+#[cfg(test)]
 fn css_image_urls(css: &str) -> (Vec<String>, bool) {
+    css_image_urls_for(css, MAX_REQUESTS * 2, false)
+}
+
+fn css_image_urls_for(css: &str, max_urls: usize, interactive: bool) -> (Vec<String>, bool) {
     let mut urls = Vec::new();
     let mut imports = false;
     let mut at = 0;
     let mut declaration = String::new();
-    while at < css.len() && urls.len() < MAX_REQUESTS * 2 {
+    while at < css.len() && urls.len() < max_urls {
         let rest = &css[at..];
         if rest.starts_with("/*") {
             at = rest.find("*/").map_or(css.len(), |end| at + end + 2);
@@ -981,7 +1511,15 @@ fn css_image_urls(css: &str) -> (Vec<String>, bool) {
             if css[start..at].eq_ignore_ascii_case("url") && css[at..].starts_with('(') {
                 at += 1;
                 if let Some(value) = url_token(css, &mut at)
-                    && matches!(declaration.as_str(), "background" | "background-image")
+                    && (matches!(
+                        declaration.as_str(),
+                        "background"
+                            | "background-image"
+                            | "mask"
+                            | "mask-image"
+                            | "-webkit-mask"
+                            | "-webkit-mask-image"
+                    ) || (interactive && declaration.starts_with("--")))
                 {
                     urls.push(value);
                 }
@@ -1014,7 +1552,12 @@ fn fetch_or_clone_linked_sheet<F: Fn() -> bool>(
             media,
         });
     }
-    let response = loader.fetch(url, MAX_CSS, ResourceKind::Stylesheet, "stylesheet")?;
+    let response = loader.fetch(
+        url,
+        loader.policy.max_css,
+        ResourceKind::Stylesheet,
+        "stylesheet",
+    )?;
     if mime(&response.content_type) != "text/css" {
         loader.warn(format!(
             "Stylesheet has unsupported content type: {} at {}",
@@ -1073,17 +1616,21 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
     sheet_limit_warned: &mut bool,
 ) {
     const MAX_IMPORT_DEPTH: usize = 4;
-    let (imports, cleaned_css) = css_leading_imports(&sheet.css);
+    let max_sheets = loader.policy.max_sheets;
+    let max_candidates = loader.policy.max_requests * 2;
+    let (imports, cleaned_css) = css_leading_imports(&sheet.css, max_sheets);
     sheet.css = cleaned_css;
     if !imports.is_empty() && depth < MAX_IMPORT_DEPTH {
         for (href, import_media) in imports {
             if loader.stopped() {
                 break;
             }
-            // Reserve 1 slot for the enclosing stylesheet itself so out_sheets never exceeds MAX_SHEETS.
-            if out_sheets.len() + 1 >= MAX_SHEETS {
+            // Reserve 1 slot for the enclosing stylesheet itself so out_sheets never exceeds max_sheets.
+            if out_sheets.len() + 1 >= max_sheets {
                 if !*sheet_limit_warned {
-                    loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+                    loader.warn(format!(
+                        "Stylesheet count exceeds {max_sheets}; remaining styles are skipped"
+                    ));
                     *sheet_limit_warned = true;
                 }
                 break;
@@ -1124,22 +1671,24 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
             import_stack.pop();
         }
     }
-    if out_sheets.len() >= MAX_SHEETS {
+    if out_sheets.len() >= max_sheets {
         if !*sheet_limit_warned {
-            loader.warn("Stylesheet count exceeds 16; remaining styles are skipped".into());
+            loader.warn(format!(
+                "Stylesheet count exceeds {max_sheets}; remaining styles are skipped"
+            ));
             *sheet_limit_warned = true;
         }
         return;
     }
-    let (urls, _) = css_image_urls(&sheet.css);
+    let (urls, _) = css_image_urls_for(&sheet.css, max_candidates, loader.policy.interactive);
     for value in urls {
-        if image_urls.len() < MAX_REQUESTS * 2 {
+        if image_urls.len() < max_candidates {
             image_urls.push((sheet.base_url.clone(), value));
         }
     }
     for (_, value) in mg_sparkle::document::font_face_base_rules_for_document(&sheet.css, document)
     {
-        if font_urls.len() < MAX_REQUESTS * 2 {
+        if font_urls.len() < max_candidates {
             font_urls.push((sheet.base_url.clone(), value));
         }
     }
@@ -1149,11 +1698,11 @@ fn push_sheet_with_imports<F: Fn() -> bool>(
 /// Extract valid leading `@import` rules (preceded only by whitespace, comments,
 /// `@charset`, or statement `@layer` rules) and blank them out with spaces while
 /// preserving line/column offsets for the remainder of the stylesheet.
-fn css_leading_imports(css: &str) -> (Vec<(String, String)>, String) {
+fn css_leading_imports(css: &str, max_sheets: usize) -> (Vec<(String, String)>, String) {
     let mut imports = Vec::new();
     let mut spans = Vec::new();
     let mut at = 0usize;
-    while at < css.len() && imports.len() < MAX_SHEETS {
+    while at < css.len() && imports.len() < max_sheets {
         css_space(css, &mut at);
         if at >= css.len() {
             break;
@@ -1601,6 +2150,7 @@ mod tests {
             session: &session,
             page_url: "http://127.0.0.1:1/",
             cancelled: &|| false,
+            policy: Policy::for_mode(false),
             started: Instant::now(),
             deadline: Instant::now() - Duration::from_secs(1),
             requests: 0,
@@ -1608,6 +2158,7 @@ mod tests {
             warnings: Vec::new(),
             omitted_warnings: 0,
             timings: Vec::new(),
+            prefetched: HashMap::new(),
         };
         assert!(
             loader
@@ -1754,6 +2305,7 @@ mod tests {
             session: &session,
             page_url: "https://example.test/",
             cancelled: &|| false,
+            policy: Policy::for_mode(false),
             started: Instant::now(),
             deadline: Instant::now(),
             requests: 0,
@@ -1761,6 +2313,7 @@ mod tests {
             warnings: Vec::new(),
             omitted_warnings: 0,
             timings: Vec::new(),
+            prefetched: HashMap::new(),
         };
         let large = "é".repeat(MAX_WARNING_BYTES);
         loader.warn(large.clone());

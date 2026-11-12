@@ -206,8 +206,9 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
     )
     .map_err(|_| "Global CSS failed")?;
 
-    // 3. Install DOM interface constructors, NodeFilter, and Observer stubs
+    // 3. Install DOM interface constructors, NodeFilter, Observer stubs, and Intl
     install_dom_interfaces(&global, context)?;
+    install_intl(&global, context)?;
 
     // 4. Install WindowProperties named-id fallback Proxy in `window`'s prototype chain:
     // global -> Window.prototype -> named_props_proxy -> original_proto (Object.prototype)
@@ -234,6 +235,420 @@ pub(super) fn install_globals(context: &mut Context) -> Result<(), String> {
     Ok(())
 }
 
+fn install_intl(global: &JsObject, context: &mut Context) -> Result<(), String> {
+    use modern::boa_engine::{JsSymbol, object::builtins::JsArray};
+
+    fn ifn(
+        obj: &JsObject,
+        name: &'static str,
+        len: usize,
+        f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+        ctx: &mut Context,
+    ) -> Result<(), String> {
+        def_fn(obj, name, len, false, f, ctx).map_err(|_| String::from("Intl fn failed"))
+    }
+
+    let intl = JsObject::with_object_proto(context.intrinsics());
+    let _ = intl.set(
+        JsSymbol::to_string_tag(),
+        js_string!("Intl"),
+        false,
+        context,
+    );
+    ifn(
+        &intl,
+        "getCanonicalLocales",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let tag = args
+                .first()
+                .filter(|v| !v.is_undefined())
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "en-US".to_owned());
+            Ok(JsArray::from_iter([JsValue::from(js_string!(tag))], ctx).into())
+        },
+        context,
+    )?;
+    ifn(
+        &intl,
+        "supportedValuesOf",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let key = args
+                .first()
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            let items: &[&str] = match key.as_str() {
+                "calendar" => &["gregory"],
+                "collation" => &["default"],
+                "currency" => &["EUR", "GBP", "JPY", "USD"],
+                "numberingSystem" => &["latn"],
+                "timeZone" => &["UTC"],
+                "unit" => &["day", "hour", "minute", "month", "second", "year"],
+                _ => &[],
+            };
+            let vals: Vec<JsValue> = items.iter().map(|s| js_string!(*s).into()).collect();
+            Ok(JsArray::from_iter(vals, ctx).into())
+        },
+        context,
+    )?;
+
+    fn make_resolved(extra: &[(&str, &str)], ctx: &mut Context) -> JsObject {
+        let o = JsObject::with_object_proto(ctx.intrinsics());
+        let _ = o.set(js_string!("locale"), js_string!("en-US"), false, ctx);
+        let _ = o.set(
+            js_string!("numberingSystem"),
+            js_string!("latn"),
+            false,
+            ctx,
+        );
+        for (k, v) in extra {
+            let _ = o.set(js_string!(*k), js_string!(*v), false, ctx);
+        }
+        o
+    }
+
+    fn bind_intl_ctor(
+        intl: &JsObject,
+        name: &'static str,
+        proto: JsObject,
+        allow_call: bool,
+        context: &mut Context,
+    ) -> Result<(), String> {
+        let p_clone = proto.clone();
+        let ctor: JsObject = FunctionObjectBuilder::new(
+            context.realm(),
+            NativeFunction::from_copy_closure_with_captures(
+                move |new_target, args, p, ctx| {
+                    modern::check_context(ctx)?;
+                    if !allow_call && new_target.is_undefined() {
+                        return Err(failure("Intl constructor requires 'new'"));
+                    }
+                    let inst_proto = new_target
+                        .as_object()
+                        .and_then(|o| o.get(js_string!("prototype"), ctx).ok())
+                        .and_then(|v| v.as_object())
+                        .unwrap_or_else(|| p.clone());
+                    let inst = JsObject::from_proto_and_data(inst_proto, ());
+                    if name == "Locale"
+                        && let Some(tag) = args.first()
+                    {
+                        let s = utf8(tag, ctx)?;
+                        let _ = inst.set(js_string!("baseName"), js_string!(s.clone()), false, ctx);
+                        let lang = s.split('-').next().unwrap_or("en");
+                        let _ = inst.set(js_string!("language"), js_string!(lang), false, ctx);
+                    }
+                    Ok(inst.into())
+                },
+                p_clone,
+            ),
+        )
+        .name(js_string!(name))
+        .length(0)
+        .constructor(true)
+        .build()
+        .into();
+        ifn(
+            &ctor,
+            "supportedLocalesOf",
+            1,
+            |_, _, ctx| {
+                modern::check_context(ctx)?;
+                Ok(JsArray::from_iter([JsValue::from(js_string!("en-US"))], ctx).into())
+            },
+            context,
+        )?;
+        link_ctor_global(intl, name, &ctor, &proto, context)
+    }
+
+    let dtf = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &dtf,
+        "format",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let s = match args.first() {
+                Some(v) if !v.is_undefined() => utf8(v, ctx)?,
+                _ => "1970-01-01".to_owned(),
+            };
+            Ok(js_string!(s).into())
+        },
+        context,
+    )?;
+    ifn(
+        &dtf,
+        "formatToParts",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let s = args
+                .first()
+                .filter(|v| !v.is_undefined())
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_else(|| "1970-01-01".to_owned());
+            let part = JsObject::with_object_proto(ctx.intrinsics());
+            let _ = part.set(js_string!("type"), js_string!("literal"), false, ctx);
+            let _ = part.set(js_string!("value"), js_string!(s), false, ctx);
+            Ok(JsArray::from_iter([JsValue::from(part)], ctx).into())
+        },
+        context,
+    )?;
+    ifn(
+        &dtf,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[("calendar", "gregory"), ("timeZone", "UTC")], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "DateTimeFormat", dtf, true, context)?;
+
+    let nf = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &nf,
+        "format",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let n = args
+                .first()
+                .unwrap_or(&JsValue::undefined())
+                .to_number(ctx)?;
+            Ok(js_string!(n.to_string()).into())
+        },
+        context,
+    )?;
+    ifn(
+        &nf,
+        "formatToParts",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let n = args
+                .first()
+                .unwrap_or(&JsValue::undefined())
+                .to_number(ctx)?;
+            let part = JsObject::with_object_proto(ctx.intrinsics());
+            let _ = part.set(js_string!("type"), js_string!("integer"), false, ctx);
+            let _ = part.set(js_string!("value"), js_string!(n.to_string()), false, ctx);
+            Ok(JsArray::from_iter([JsValue::from(part)], ctx).into())
+        },
+        context,
+    )?;
+    ifn(
+        &nf,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[("style", "decimal")], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "NumberFormat", nf, true, context)?;
+
+    let col = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &col,
+        "compare",
+        2,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let a = args
+                .first()
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            let b = args
+                .get(1)
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            let ord = match a.cmp(&b) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            };
+            Ok(JsValue::from(ord))
+        },
+        context,
+    )?;
+    ifn(
+        &col,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[("usage", "sort"), ("sensitivity", "variant")], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "Collator", col, true, context)?;
+
+    let pr = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &pr,
+        "select",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let n = args.first().unwrap_or(&JsValue::from(0)).to_number(ctx)?;
+            Ok(js_string!(if n == 1.0 { "one" } else { "other" }).into())
+        },
+        context,
+    )?;
+    ifn(
+        &pr,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[("type", "cardinal")], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "PluralRules", pr, false, context)?;
+
+    let rtf = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &rtf,
+        "format",
+        2,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let n = args.first().unwrap_or(&JsValue::from(0)).to_number(ctx)?;
+            let unit = args
+                .get(1)
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(js_string!(format!("{n} {unit}")).into())
+        },
+        context,
+    )?;
+    ifn(
+        &rtf,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[("style", "long"), ("numeric", "always")], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "RelativeTimeFormat", rtf, false, context)?;
+
+    let lf = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &lf,
+        "format",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let s = args
+                .first()
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(js_string!(s).into())
+        },
+        context,
+    )?;
+    ifn(
+        &lf,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "ListFormat", lf, false, context)?;
+
+    let dn = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &dn,
+        "of",
+        1,
+        |_, args, ctx| {
+            modern::check_context(ctx)?;
+            let s = args
+                .first()
+                .map(|v| utf8(v, ctx))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(js_string!(s).into())
+        },
+        context,
+    )?;
+    ifn(
+        &dn,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "DisplayNames", dn, false, context)?;
+
+    let seg = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &seg,
+        "segment",
+        1,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(JsArray::new(ctx)?.into())
+        },
+        context,
+    )?;
+    ifn(
+        &seg,
+        "resolvedOptions",
+        0,
+        |_, _, ctx| {
+            modern::check_context(ctx)?;
+            Ok(make_resolved(&[], ctx).into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "Segmenter", seg, false, context)?;
+
+    let loc = JsObject::with_object_proto(context.intrinsics());
+    ifn(
+        &loc,
+        "toString",
+        0,
+        |this, _, ctx| {
+            modern::check_context(ctx)?;
+            if let Some(o) = this.as_object()
+                && let Ok(bn) = o.get(js_string!("baseName"), ctx)
+                && !bn.is_undefined()
+            {
+                return Ok(bn);
+            }
+            Ok(js_string!("en-US").into())
+        },
+        context,
+    )?;
+    bind_intl_ctor(&intl, "Locale", loc, false, context)?;
+
+    def_prop(global, js_string!("Intl"), intl, true, false, true, context)
+        .map_err(|_| String::from("Global Intl failed"))
+}
+
 #[derive(Clone, Copy)]
 enum DomInterfaceKind {
     Window,
@@ -244,6 +659,7 @@ enum DomInterfaceKind {
     History,
     Node,
     Document,
+    DocumentType,
     DocumentFragment,
     ShadowRoot,
     CharacterData,
@@ -394,7 +810,7 @@ fn matches_dom_interface(
     }
     if matches!(
         kind,
-        DomInterfaceKind::ShadowRoot | DomInterfaceKind::Comment
+        DomInterfaceKind::ShadowRoot | DomInterfaceKind::Comment | DomInterfaceKind::DocumentType
     ) {
         return Ok(false);
     }
@@ -454,6 +870,7 @@ fn matches_dom_interface(
         | DomInterfaceKind::Location
         | DomInterfaceKind::History
         | DomInterfaceKind::Document
+        | DomInterfaceKind::DocumentType
         | DomInterfaceKind::ShadowRoot
         | DomInterfaceKind::Comment => Ok(false),
     }
@@ -469,6 +886,7 @@ const DOM_INTERFACES: &[(&str, DomInterfaceKind)] = &[
     ("Node", DomInterfaceKind::Node),
     ("Document", DomInterfaceKind::Document),
     ("HTMLDocument", DomInterfaceKind::Document),
+    ("DocumentType", DomInterfaceKind::DocumentType),
     ("DocumentFragment", DomInterfaceKind::DocumentFragment),
     ("ShadowRoot", DomInterfaceKind::ShadowRoot),
     ("CharacterData", DomInterfaceKind::CharacterData),
@@ -575,7 +993,9 @@ fn install_dom_interfaces(global: &JsObject, context: &mut Context) -> Result<()
         let parent_name = match iface_name {
             "Window" | "Navigator" | "PluginArray" | "MimeTypeArray" | "Location" | "History"
             | "Node" => None,
-            "Document" | "DocumentFragment" | "CharacterData" | "Element" => Some("Node"),
+            "Document" | "DocumentType" | "DocumentFragment" | "CharacterData" | "Element" => {
+                Some("Node")
+            }
             "HTMLDocument" => Some("Document"),
             "ShadowRoot" => Some("DocumentFragment"),
             "Text" | "Comment" => Some("CharacterData"),
@@ -1542,7 +1962,7 @@ fn import_parsed_children(
 }
 
 fn parse_html_into_fragment_children(data: &mut State, html: &str) -> Result<Vec<usize>, String> {
-    if html.len() > MAX_SOURCE {
+    if html.len() > data.host.max_source_bytes() {
         return Err("HTML fragment source limit exceeded".into());
     }
     let parsed_nodes = document::parse_html_fragment(html);
@@ -2274,18 +2694,39 @@ pub(super) fn try_get(
             let m = state(context).borrow().host.document.nodes[id].has("ismap");
             return Ok(Some(m.into()));
         }
-        "naturalWidth" if tag == "img" => {
-            let v = state(context).borrow().host.document.nodes[id]
-                .attr("width")
-                .and_then(parse_non_negative_uint)
-                .unwrap_or(0);
-            return Ok(Some((v as f64).into()));
-        }
-        "naturalHeight" if tag == "img" => {
-            let v = state(context).borrow().host.document.nodes[id]
-                .attr("height")
-                .and_then(parse_non_negative_uint)
-                .unwrap_or(0);
+        "naturalWidth" | "naturalHeight" if tag == "img" => {
+            let is_w = name == "naturalWidth";
+            let v = {
+                let shared = state(context);
+                let data = shared.borrow();
+                let attr_name = if is_w { "width" } else { "height" };
+                let src = data.host.document.nodes[id]
+                    .attr("src")
+                    .map(str::trim)
+                    .unwrap_or("");
+                let from_src =
+                    if src.len() >= 5 && src.as_bytes()[..5].eq_ignore_ascii_case(b"data:") {
+                        crate::images::decode_data_url(src)
+                            .ok()
+                            .and_then(|(ct, b)| crate::images::decode(&b, &ct, None, None).ok())
+                            .map(|img| if is_w { img.width } else { img.height })
+                    } else if !src.is_empty()
+                        && let Ok(mut u) = data.host.base_url().join(src)
+                    {
+                        u.set_fragment(None);
+                        data.image_dimensions
+                            .get(u.as_str())
+                            .map(|&(w, h)| if is_w { w } else { h })
+                    } else {
+                        None
+                    };
+                from_src.unwrap_or_else(|| {
+                    data.host.document.nodes[id]
+                        .attr(attr_name)
+                        .and_then(parse_non_negative_uint)
+                        .unwrap_or(0)
+                })
+            };
             return Ok(Some((v as f64).into()));
         }
         "complete" if tag == "img" => return Ok(Some(true.into())),
@@ -2308,10 +2749,10 @@ pub(super) fn try_get(
             return Ok(Some(JsValue::null()));
         }
         "part" => return build_part_token_list(id, context).map(Some),
-        "outerText" => {
+        "innerText" | "outerText" => {
             let is_svg = is_svg_element(&state(context).borrow().host.document.nodes, id);
             if !is_svg {
-                let t = text_content(&state(context).borrow().host.document.nodes, id);
+                let t = rendered_inner_text(&state(context).borrow(), id);
                 return Ok(Some(JsString::from(t.as_str()).into()));
             }
             return Ok(None);
@@ -6430,6 +6871,100 @@ pub(super) fn css_escape(value: &str) -> String {
             out.push('\\');
             out.push(ch);
         }
+    }
+    out
+}
+
+fn rendered_inner_text(data: &State, root: usize) -> String {
+    let nodes = &data.host.document.nodes;
+    let scripting = data.host.document.scripting_enabled();
+    let max_bytes = data.host.max_dom_bytes();
+    let cached_styles = data.cached_layout.as_ref().and_then(|c| {
+        (c.epoch == data.dom_epoch && c.styles.len() == nodes.len()).then_some(&c.styles)
+    });
+    let mut out = String::new();
+    let mut pending = vec![(root, false)];
+    let mut steps = 0usize;
+    while let Some((id, is_end)) = pending.pop() {
+        steps += 1;
+        if steps > 100_000 || out.len() > max_bytes {
+            break;
+        }
+        let n = &nodes[id];
+        if is_end {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            continue;
+        }
+        if n.tag == "#text" {
+            out.push_str(&n.text);
+            continue;
+        }
+        if matches!(n.tag.as_str(), "script" | "style" | "template")
+            || (scripting && n.tag == "noscript")
+            || (id != root && n.has("hidden"))
+        {
+            continue;
+        }
+        if id != root {
+            if let Some(styles) = cached_styles {
+                if styles[id].display == crate::style::Display::None {
+                    continue;
+                }
+            } else if let Some(st) = n.attr("style")
+                && st.split(';').any(|d| {
+                    d.split_once(':').is_some_and(|(k, v)| {
+                        k.trim().eq_ignore_ascii_case("display")
+                            && v.trim()
+                                .trim_end_matches("!important")
+                                .trim()
+                                .eq_ignore_ascii_case("none")
+                    })
+                })
+            {
+                continue;
+            }
+        }
+        if n.tag == "br" {
+            out.push('\n');
+            continue;
+        }
+        let block_like = id != root
+            && matches!(
+                n.tag.as_str(),
+                "div"
+                    | "p"
+                    | "li"
+                    | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "section"
+                    | "article"
+                    | "header"
+                    | "footer"
+                    | "nav"
+                    | "main"
+                    | "aside"
+                    | "tr"
+                    | "blockquote"
+                    | "pre"
+                    | "ul"
+                    | "ol"
+                    | "dl"
+                    | "dt"
+                    | "dd"
+            );
+        if block_like && !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if block_like {
+            pending.push((id, true));
+        }
+        pending.extend(n.children.iter().rev().map(|&c| (c, false)));
     }
     out
 }

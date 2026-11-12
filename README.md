@@ -2,7 +2,26 @@
 
 <img src="assets/mgbrowser.svg" width="112" alt="Burning magnesium Mg tile">
 
-## Current source preview: v0.9.33
+## Current source preview: v0.9.34
+
+v0.9.34 delivers Top-10 desktop website visual and JavaScript UI parity across
+modern large-bundle sites (`google.com`, `youtube.com`, `wikipedia.org`,
+`yahoo.com`, `bing.com`, `github.com`, `duckduckgo.com`, `news.google.com`, plus
+Shreddit and Amazon storefront fixtures where live automation hits anti-bot
+challenges): pure-Rust WebP image decoding (`image-webp` 0.2.4) with
+`RIFF....WEBP` CDN sniffing and interactive oversize downscaling, CSS
+`mask-image` / `-webkit-mask` alpha-tinted icons, nested `<li>` dropdown
+containment, `<input placeholder>` and author-styled `<button>` rendering,
+credential-free CORS `fetch()`/`XMLHttpRequest`, cross-origin HTTPS ES
+`<script type="module">` loading with regex-aware `import` discovery, Subresource
+Integrity (`sha256`/`sha384`/`sha512`), synthetic `Enter` key/form submission,
+WebIDL `DocumentType` and `Intl` globals, `4,096`-slot CDP event buffering, and
+expanded `boa-interactive-page-v1` script/DOM/resource budgets while keeping
+`boa-page-process-v1`, `558 PASS / 391 FAIL / 62 UNSUPPORTED of 1,011` on WPT
+static reftests, and `16/16` files (`79/79` subtests) on the Window lane
+unchanged. [Release notes](docs/RELEASE-v0.9.34.md).
+
+## Previous release: v0.9.33
 
 v0.9.33 fixes rounded backgrounds, borders and clipping masks growing taller
 while scrolling, including Google News search/sign-in controls and metadata

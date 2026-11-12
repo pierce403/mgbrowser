@@ -469,7 +469,7 @@ impl BrowserHost {
             }
         }
         if self.document.nodes.len().saturating_add(nodes) > MAX_NODES
-            || self.allocated.saturating_add(bytes) > MAX_DOM_BYTES
+            || self.allocated.saturating_add(bytes) > self.max_dom_bytes()
         {
             return Err("Control edit DOM limit exceeded".into());
         }

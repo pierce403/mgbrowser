@@ -58,6 +58,14 @@ impl ScriptRuntime for LinuxScripts {
             SourceWireMode::Modern
         }
     }
+    fn is_interactive(&self) -> bool {
+        self.interactive
+            && !script_worker::legacy_test_mode()
+            && matches!(
+                self.observer,
+                mg_sparkle::page_session::observer::ObserverInit::Disabled
+            )
+    }
     fn set_generation(&self, generation: u64) -> Result<(), String> {
         self.pool.set_generation(generation)
     }

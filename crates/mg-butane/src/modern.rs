@@ -43,8 +43,14 @@ pub const WORKER_CUMULATIVE_LIMIT: u64 = 64 * 1024 * 1024;
 /// Reviewed interactive desktop page profile (see docs/BOA.md).
 pub const INTERACTIVE_PROFILE: &str = "boa-interactive-page-v1";
 pub const INTERACTIVE_OPCODE_LIMIT: usize = 32_000_000;
-pub const INTERACTIVE_WORKER_OUTSTANDING_LIMIT: u64 = 64 * 1024 * 1024;
-pub const INTERACTIVE_WORKER_CUMULATIVE_LIMIT: u64 = 512 * 1024 * 1024;
+pub const INTERACTIVE_SOURCE_LIMIT: usize = 16 * 1024 * 1024;
+pub const INTERACTIVE_CUMULATIVE_SOURCE_LIMIT: usize = 32 * 1024 * 1024;
+pub const INTERACTIVE_PENDING_JOB_LIMIT: usize = 1_024;
+pub const INTERACTIVE_CUMULATIVE_JOB_LIMIT: usize = 16_384;
+pub const INTERACTIVE_RECURSION_LIMIT: usize = 384;
+pub const INTERACTIVE_STACK_LIMIT: usize = 262_144;
+pub const INTERACTIVE_WORKER_OUTSTANDING_LIMIT: u64 = 384 * 1024 * 1024;
+pub const INTERACTIVE_WORKER_CUMULATIVE_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResourceProfile {
@@ -92,6 +98,54 @@ impl ResourceProfile {
         match self {
             Self::PageProcessV1 => WORKER_CUMULATIVE_LIMIT,
             Self::InteractivePageV1 => INTERACTIVE_WORKER_CUMULATIVE_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn source_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => SOURCE_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_SOURCE_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn cumulative_source_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => CUMULATIVE_SOURCE_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_CUMULATIVE_SOURCE_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn pending_job_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => PENDING_JOB_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_PENDING_JOB_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn cumulative_job_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => CUMULATIVE_JOB_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_CUMULATIVE_JOB_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn recursion_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => RECURSION_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_RECURSION_LIMIT,
+        }
+    }
+
+    #[must_use]
+    pub const fn stack_limit(self) -> usize {
+        match self {
+            Self::PageProcessV1 => STACK_LIMIT,
+            Self::InteractivePageV1 => INTERACTIVE_STACK_LIMIT,
         }
     }
 }
@@ -248,11 +302,11 @@ impl ResourceStats {
     pub fn validate_for_profile(&self, profile: ResourceProfile) -> Result<(), &'static str> {
         if self.profile != profile.name()
             || self.opcodes_remaining > profile.opcode_limit()
-            || self.source_bytes > CUMULATIVE_SOURCE_LIMIT
+            || self.source_bytes > profile.cumulative_source_limit()
             || self.source_admissions > self.source_bytes
-            || self.jobs_admitted > CUMULATIVE_JOB_LIMIT
+            || self.jobs_admitted > profile.cumulative_job_limit()
             || self.jobs_executed > self.jobs_admitted
-            || self.pending_jobs > PENDING_JOB_LIMIT
+            || self.pending_jobs > profile.pending_job_limit()
             || self.pending_jobs > self.jobs_admitted - self.jobs_executed
             || (self.opcodes_remaining == 0 && self.fatal_reason.is_none())
             || (self.fatal_reason.is_some() && self.pending_jobs != 0)
@@ -306,6 +360,7 @@ impl ResourceStats {
 
 #[derive(Default)]
 struct State {
+    profile: ResourceProfile,
     source_bytes: usize,
     source_admissions: usize,
     dynamic_compilation_seen: bool,
@@ -333,9 +388,11 @@ impl State {
         }
         // Empty evals also cost admission; no counter can grow without a bound.
         let charged = bytes.max(1);
-        if bytes > SOURCE_LIMIT
-            || charged > CUMULATIVE_SOURCE_LIMIT.saturating_sub(self.source_bytes)
-            || self.source_admissions >= CUMULATIVE_SOURCE_LIMIT
+        let max_src = self.profile.source_limit();
+        let max_cum = self.profile.cumulative_source_limit();
+        if bytes > max_src
+            || charged > max_cum.saturating_sub(self.source_bytes)
+            || self.source_admissions >= max_cum
         {
             self.latch(SOURCE_FAILURE);
             return Err(policy_error());
@@ -386,7 +443,9 @@ fn admit_work(state: &Rc<RefCell<State>>) -> JsResult<WorkPermit> {
         if state.fatal.is_some() {
             return Err(policy_error());
         }
-        if state.pending_work >= PENDING_JOB_LIMIT || state.jobs_admitted >= CUMULATIVE_JOB_LIMIT {
+        if state.pending_work >= state.profile.pending_job_limit()
+            || state.jobs_admitted >= state.profile.cumulative_job_limit()
+        {
             state.latch(JOB_FAILURE);
             return Err(policy_error());
         }
@@ -449,7 +508,10 @@ impl HostHooks for Policy {
     fn max_buffer_size(&self, _context: &mut Context) -> u64 {
         // Bytes, despite the upstream method's misleading "bits" doc sentence.
         // Process allocation admission remains authoritative for all buffers.
-        4 * 1024 * 1024
+        match self.0.borrow().profile {
+            ResourceProfile::PageProcessV1 => 4 * 1024 * 1024,
+            ResourceProfile::InteractivePageV1 => 16 * 1024 * 1024,
+        }
     }
 }
 
@@ -607,7 +669,10 @@ impl Engine {
 
     pub fn with_profile(profile: ResourceProfile) -> Result<Self, Error> {
         let opcode_limit = profile.opcode_limit();
-        let state = Rc::new(RefCell::new(State::default()));
+        let state = Rc::new(RefCell::new(State {
+            profile,
+            ..State::default()
+        }));
         let policy = Policy(state.clone());
         let jobs = Rc::new(Jobs {
             state: state.clone(),
@@ -624,10 +689,10 @@ impl Engine {
         context.insert_data(policy);
         context
             .runtime_limits_mut()
-            .set_recursion_limit(RECURSION_LIMIT);
+            .set_recursion_limit(profile.recursion_limit());
         context
             .runtime_limits_mut()
-            .set_stack_size_limit(STACK_LIMIT);
+            .set_stack_size_limit(profile.stack_limit());
         context
             .runtime_limits_mut()
             .set_loop_iteration_limit(opcode_limit as u64);

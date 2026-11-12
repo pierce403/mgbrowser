@@ -6,6 +6,25 @@ Feature delivery policy: user-facing additions include a versioned GitHub Releas
 and a verified current website installer before handoff. The installer tracks
 GitHub latest. See skills/publish-site/SKILL.md for exact-commit publication gates.
 
+## F-034 : Top-10 desktop website visual & interactive parity, pure-Rust WebP & CORS fetch/ES modules
+
+Stability: stable
+
+### Dependencies
+
+F-003 local document rendering, F-005 styled text and images, F-007 Rust TLS, F-014 Stylo CSS, F-016 JavaScript/DOM worker isolation, F-024 Playwright control, F-026 WPT coverage, F-031 DOM/Web Platform APIs, F-032 real-site compatibility, F-033 CSS visual parity & ES modules.
+
+### Properties
+
+Signed-out desktop visual and JavaScript UI parity across modern large-bundle websites (`google.com`, `youtube.com`, `wikipedia.org`, `yahoo.com`, `bing.com`, `github.com`, `duckduckgo.com`, `news.google.com`, plus local Shreddit and Amazon storefront fixtures where live automation is gated by anti-bot challenges) under `boa-interactive-page-v1` while keeping default `boa-page-process-v1`, WPT runners, and worker isolation (`RLIMIT_NOFILE = 3`, `RLIMIT_FSIZE = 0`, seccomp) unchanged: pure-Rust WebP image decoding (`image = 0.25.10` `webp` / `image-webp = 0.2.4`), `RIFF....WEBP` magic-byte sniffing on `application/binary`/`application/octet-stream` CDN responses, and interactive-mode proportional downscaling into `<= 2048` side / `<= 1,048,576` pixels; CSS `mask-image` / `-webkit-mask` alpha-tinted SVG/raster icon painting, nested `<li>` dropdown subtree containment, `<input placeholder>` text rendering, and author-styled `<button>` backgrounds/borders; interactive subresource policy (`64` stylesheets across `<head>` and `<body>`, `8 MiB` CSS input budget, `192` requests, `4 MiB` per image/font, `16 MiB` decoded script body, `48 MiB` aggregate), Subresource Integrity (`sha256`/`sha384`/`sha512`) verification, credential-free CORS `Access-Control-Allow-Origin` `fetch()`/`XMLHttpRequest`, and cross-origin HTTPS `<script type="module">` resolution with regex-aware static `import` extraction; synthetic `keydown`/`keypress`/`keyup` + implicit single-text-input `<form>` `submit` on `Enter`; WebIDL `DocumentType` and ECMA-402 `Intl` (`DateTimeFormat`, `NumberFormat`, `Collator`, `PluralRules`, `RelativeTimeFormat`, `ListFormat`, `DisplayNames`, `Segmenter`, `Locale`) globals; `4,096`-slot (`<= 16 MiB`) CDP outbound event buffering; and scaled `boa-interactive-page-v1` budgets (`16 MiB` per script / `32 MiB` cumulative, `384` recursion / `262,144` stack, `48 MiB` DOM logical admission, `384 MiB` outstanding / `4 GiB` cumulative worker allocation, `2,560 MiB` `RLIMIT_AS`, `30 CPU s`, `30 s` active wall). Streaming `<video>`/audio playback, account login, and live anti-bot-gated sites (`reddit.com` reCAPTCHA, `amazon.com` AWS WAF PoW) remain outside this increment; F-016, F-025, F-026, F-027, and the formal MVP remain open. See [docs/RELEASE-v0.9.34.md](docs/RELEASE-v0.9.34.md).
+
+### Test criteria
+
+- [x] Pure-Rust WebP decoding, `RIFF....WEBP` sniffing, interactive oversize downscaling, CSS `mask-image`/`-webkit-mask`, nested `<li>` dropdown hiding, `<input placeholder>`/styled `<button>`, `<body link rel="stylesheet">` (> 17 sheets), `8 MiB` interactive CSS budget, cross-origin HTTPS ES modules, regex-literal ES module specifier extraction, `Enter` form submission, `DocumentType`, `Intl`, and `> 4 MiB` interactive DOM `AutomationRequest` roundtrips pass unit and integration suites (`real_site_compat`).
+- [x] Live Chrome vs. `mgbrowser` Playwright visual + interactive audit verifies `google.com`, `youtube.com`, `wikipedia.org`, `yahoo.com`, `bing.com`, `github.com`, `duckduckgo.com`, and `news.google.com` alongside Shreddit/Amazon fixtures without solving or bypassing anti-bot challenges.
+- [x] Default `boa-page-process-v1` limits, WPT static reftests (`558 PASS / 391 FAIL / 62 UNSUPPORTED` of `1,011`), and WPT Window (`16/16` files, `79/79` subtests) pass unchanged.
+- [x] Component boundary, dependency guard, license inventory, no-chrome embedding, workspace/JSPLAN, `< 8 MiB` packaged archive, versioned release, and public installer/updater checks pass.
+
 ## F-033 : CSS visual parity, responsive Grid, HTML5 Canvas 2D, ES modules & desktop session UX
 
 Stability: stable

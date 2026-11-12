@@ -56,6 +56,7 @@ pub struct Document {
     /// Bounded, human-readable resource failures, without discarding the page.
     pub resource_warnings: Vec<String>,
     scripting_enabled: bool,
+    interactive_style_budget: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +180,14 @@ impl Document {
         self.scripting_enabled
     }
 
+    pub fn set_interactive_style_budget(&mut self, enabled: bool) {
+        self.interactive_style_budget = enabled;
+    }
+
+    pub fn interactive_style_budget(&self) -> bool {
+        self.interactive_style_budget
+    }
+
     /// Resolve this exact anchor's own present href against the reconstructed
     /// document base, independently of its text/paint projection. This is URL
     /// data only; callers still own connectedness and navigation policy.
@@ -247,6 +256,11 @@ impl Document {
     /// Discover a bounded number of stylesheet sources without any network work.
     /// One extra entry lets the loader report its sheet-count admission failure.
     pub fn stylesheet_requests(&self) -> Vec<StylesheetRequest> {
+        self.stylesheet_requests_with_limit(17)
+    }
+
+    /// Discover up to `limit` stylesheet sources in document order.
+    pub fn stylesheet_requests_with_limit(&self, limit: usize) -> Vec<StylesheetRequest> {
         self.resource_nodes()
             .into_iter()
             .filter_map(|id| {
@@ -289,7 +303,7 @@ impl Document {
                     _ => None,
                 }
             })
-            .take(17)
+            .take(limit)
             .collect()
     }
 
@@ -1210,6 +1224,7 @@ fn project_arena(nodes: Vec<Node>, page_url: &str, scripting: bool) -> (Document
         resources: HashMap::new(),
         resource_warnings: Vec::new(),
         scripting_enabled: scripting,
+        interactive_style_budget: false,
         refresh: tree_order.iter().find_map(|&id| {
             let node = &nodes[id];
             if node.tag != "meta" || !node.attr("http-equiv")?.eq_ignore_ascii_case("refresh") {
@@ -1443,6 +1458,11 @@ fn build_xml_tree(source: &str) -> Vec<Node> {
                 if attributes.len() < 256
                     && !key.is_empty()
                     && key.len() <= 256
+                    && !key.bytes().any(|c| {
+                        c.is_ascii_control()
+                            || c.is_ascii_whitespace()
+                            || matches!(c, b'=' | b'/' | b'<' | b'>' | b'\'' | b'"')
+                    })
                     && value.len() <= max_attr_len
                     && !attributes.iter().any(|(old, _)| *old == key)
                 {
@@ -1574,9 +1594,42 @@ fn build_tree_inner(source: &str, synthesize_body: bool) -> Vec<Node> {
         }
         if matches!(
             tag.as_str(),
-            "li" | "p" | "a" | "button" | "option" | "optgroup"
+            "li" | "dt" | "dd" | "p" | "a" | "button" | "option" | "optgroup"
         ) {
-            if let Some(index) = stack.iter().rposition(|id| nodes[*id].tag == tag) {
+            let mut close = None;
+            for (index, &id) in stack.iter().enumerate().rev() {
+                let open = nodes[id].tag.as_str();
+                let matches_open = match tag.as_str() {
+                    "dt" | "dd" => matches!(open, "dt" | "dd"),
+                    _ => open == tag,
+                };
+                if matches_open {
+                    close = Some(index);
+                    break;
+                }
+                let barrier = match tag.as_str() {
+                    "li" => matches!(
+                        open,
+                        "ul" | "ol" | "menu" | "dir" | "table" | "td" | "th" | "template"
+                    ),
+                    "dt" | "dd" => {
+                        matches!(open, "dl" | "table" | "td" | "th" | "template")
+                    }
+                    "option" | "optgroup" => matches!(
+                        open,
+                        "select" | "datalist" | "table" | "td" | "th" | "template"
+                    ),
+                    "p" => matches!(open, "button" | "table" | "td" | "th" | "template"),
+                    _ => matches!(
+                        open,
+                        "table" | "td" | "th" | "template" | "svg" | "foreignobject"
+                    ),
+                };
+                if barrier {
+                    break;
+                }
+            }
+            if let Some(index) = close {
                 stack.truncate(index.max(1));
             }
         } else if is_block(&tag) && stack.last().is_some_and(|id| nodes[*id].tag == "p") {
@@ -1783,7 +1836,13 @@ fn attributes(tag: &str, source: &str) -> Vec<(String, String)> {
             MAX_ATTRIBUTE
         };
         if result.len() < 256
+            && !key.is_empty()
             && key.len() <= 256
+            && !key.bytes().any(|c| {
+                c.is_ascii_control()
+                    || c.is_ascii_whitespace()
+                    || matches!(c, b'=' | b'/' | b'<' | b'>' | b'\'' | b'"')
+            })
             && value.len() <= max_attr_len
             && !result.iter().any(|(old, _)| *old == key)
         {

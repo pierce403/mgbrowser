@@ -9,6 +9,7 @@ fn fresh() -> BoaPageRealm {
             url: url::Url::parse("https://example.test/owned").unwrap(),
             navigation: None,
             allocated: html.len(),
+            interactive: false,
             collections: vec![],
             listeners: vec![],
             events: vec![],

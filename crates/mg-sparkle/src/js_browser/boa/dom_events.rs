@@ -108,6 +108,8 @@ pub(super) struct ModernEvent {
     #[unsafe_ignore_trace]
     pub code: String,
     #[unsafe_ignore_trace]
+    pub key_code: u32,
+    #[unsafe_ignore_trace]
     pub ctrl_key: bool,
     #[unsafe_ignore_trace]
     pub shift_key: bool,
@@ -167,6 +169,7 @@ impl ModernEvent {
             new_url: String::new(),
             key: String::new(),
             code: String::new(),
+            key_code: 0,
             ctrl_key: false,
             shift_key: false,
             alt_key: false,
@@ -493,6 +496,12 @@ fn construct_event(
             record.key = str_opt("key", context)?;
             record.code = str_opt("code", context)?;
             record.repeat = b_opt("repeat", context)?;
+            let kc_val = dict.get(js_string!("keyCode"), context)?;
+            record.key_code = if !kc_val.is_undefined() {
+                kc_val.to_u32(context)?
+            } else {
+                default_key_code(&record.key)
+            };
         }
         if matches!(flavor, EventFlavor::MouseEvent | EventFlavor::FocusEvent) {
             let v = dict.get(js_string!("relatedTarget"), context)?;
@@ -933,6 +942,17 @@ fn mevent_get(id: usize, name: &str, context: &mut Context) -> JsResult<Option<J
         "code" if ev.flavor == EventFlavor::KeyboardEvent => {
             Ok(Some(JsString::from(ev.code.as_str()).into()))
         }
+        "keyCode" if ev.flavor == EventFlavor::KeyboardEvent => {
+            Ok(Some((ev.key_code as i32).into()))
+        }
+        "charCode" if ev.flavor == EventFlavor::KeyboardEvent => {
+            let cc = if ev.event_type == "keypress" {
+                ev.key_code as i32
+            } else {
+                0
+            };
+            Ok(Some(cc.into()))
+        }
         "repeat" if ev.flavor == EventFlavor::KeyboardEvent => Ok(Some(ev.repeat.into())),
         "ctrlKey"
             if matches!(
@@ -1008,6 +1028,8 @@ fn mevent_get(id: usize, name: &str, context: &mut Context) -> JsResult<Option<J
                 && (!ev.event_type.is_empty() || ev.button != 0 || ev.buttons != 0)
             {
                 (ev.button as i32) + 1
+            } else if ev.flavor == EventFlavor::KeyboardEvent {
+                ev.key_code as i32
             } else {
                 0
             };
@@ -2658,6 +2680,192 @@ pub(super) fn fire_popstate_and_hashchange(
                 hc.new_url = new_url.to_owned();
                 let hid = alloc_modern_event(hc, ctx)?;
                 dispatch_modern_event(Target::Window, hid, ctx)?;
+            }
+            Ok(())
+        })()
+    };
+    if let Err(err) = res
+        && !realm.engine.is_fatal()
+        && errors.len() < 64
+    {
+        errors.push(super::bounded(&err.to_string(), 512));
+    }
+    realm.checkpoint(errors);
+    flush_async_errors(realm, errors);
+}
+
+fn default_key_code(key: &str) -> u32 {
+    match key {
+        "Backspace" => 8,
+        "Tab" => 9,
+        "Enter" => 13,
+        "Shift" => 16,
+        "Control" => 17,
+        "Alt" => 18,
+        "Escape" => 27,
+        " " => 32,
+        "ArrowLeft" => 37,
+        "ArrowUp" => 38,
+        "ArrowRight" => 39,
+        "ArrowDown" => 40,
+        "Delete" => 46,
+        _ if key.len() == 1 => key.as_bytes()[0].to_ascii_uppercase() as u32,
+        _ => 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fire_key_events(
+    realm: &mut BoaPageRealm,
+    key: &str,
+    code: &str,
+    key_code: u32,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    meta: bool,
+    target_value: Option<(usize, String)>,
+    errors: &mut Vec<String>,
+) {
+    let kc = if key_code != 0 {
+        key_code
+    } else {
+        default_key_code(key)
+    };
+    let res = {
+        let _ingress = super::Ingress::enter(realm.state.clone());
+        let ctx = realm.engine.context_mut();
+        (|| -> JsResult<()> {
+            let mut synced_input = None;
+            if let Some((tn, val)) = target_value {
+                let mut changed = false;
+                {
+                    let shared = state(ctx);
+                    let mut data = shared.borrow_mut();
+                    if tn < data.host.document.nodes.len()
+                        && dom_ops::is_connected_node(&data.host.document.nodes, tn)
+                    {
+                        data.focused_node = Some(tn);
+                        let res = if data.host.document.nodes[tn].tag == "textarea" {
+                            data.host.replace_text(tn, val)
+                        } else {
+                            data.host.attr(tn, "value", val)
+                        };
+                        if res.is_ok() {
+                            data.dom_epoch = data.dom_epoch.wrapping_add(1);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    synced_input = Some(tn);
+                }
+            }
+            if let Some(tn) = synced_input {
+                queue_or_fire_simple_event(tn, "input", true, false, ctx)?;
+                if modern::check_context(ctx).is_err() {
+                    return Ok(());
+                }
+            }
+            let target_node = {
+                let shared = state(ctx);
+                let data = shared.borrow();
+                data.focused_node
+                    .filter(|&id| {
+                        id < data.host.document.nodes.len()
+                            && dom_ops::is_connected_node(&data.host.document.nodes, id)
+                    })
+                    .or_else(|| {
+                        data.host
+                            .document
+                            .nodes
+                            .iter()
+                            .position(|n| n.tag == "body")
+                    })
+                    .unwrap_or(0)
+            };
+            let ts = elapsed_ms(&state(ctx).borrow());
+            let mut down = ModernEvent::simple("keydown", true, true, true, ts);
+            down.flavor = EventFlavor::KeyboardEvent;
+            down.composed = true;
+            down.key = key.to_owned();
+            down.code = code.to_owned();
+            down.key_code = kc;
+            down.shift_key = shift;
+            down.ctrl_key = ctrl;
+            down.alt_key = alt;
+            down.meta_key = meta;
+            let did = alloc_modern_event(down, ctx)?;
+            let not_canceled = dispatch_modern_event(Target::Node(target_node), did, ctx)?;
+            if not_canceled && key == "Enter" && !shift && !modern::check_context(ctx).is_err() {
+                let form_to_submit = {
+                    let shared = state(ctx);
+                    let data = shared.borrow();
+                    if target_node < data.host.document.nodes.len() {
+                        let n = &data.host.document.nodes[target_node];
+                        let is_text_input = n.tag == "input"
+                            && !matches!(
+                                n.attr("type")
+                                    .unwrap_or("text")
+                                    .trim()
+                                    .to_ascii_lowercase()
+                                    .as_str(),
+                                "button"
+                                    | "submit"
+                                    | "reset"
+                                    | "checkbox"
+                                    | "radio"
+                                    | "file"
+                                    | "hidden"
+                            );
+                        let is_single_line_search_ta = n.tag == "textarea"
+                            && (n.attr("rows").is_some_and(|r| r.trim() == "1")
+                                || n.attr("enterkeyhint")
+                                    .is_some_and(|h| h.trim().eq_ignore_ascii_case("search"))
+                                || n.attr("type")
+                                    .is_some_and(|t| t.trim().eq_ignore_ascii_case("search"))
+                                || n.attr("role")
+                                    .is_some_and(|r| r.trim().eq_ignore_ascii_case("combobox")));
+                        if (is_text_input || is_single_line_search_ta)
+                            && data.host.navigation.is_none()
+                        {
+                            data.host.form_owner(target_node)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some(form) = form_to_submit {
+                    let ts2 = elapsed_ms(&state(ctx).borrow());
+                    let sev = ModernEvent::simple("submit", true, true, true, ts2);
+                    let sid = alloc_modern_event(sev, ctx)?;
+                    let submit_ok = dispatch_modern_event(Target::Node(form), sid, ctx)?;
+                    if submit_ok {
+                        let shared = state(ctx);
+                        let mut data = shared.borrow_mut();
+                        if data.host.navigation.is_none() && data.host.connected_path(form).is_ok()
+                        {
+                            submit_form_via_navigation(&mut data, form, None);
+                        }
+                    }
+                }
+            }
+            if !modern::check_context(ctx).is_err() {
+                let ts_up = elapsed_ms(&state(ctx).borrow());
+                let mut up = ModernEvent::simple("keyup", true, true, true, ts_up);
+                up.flavor = EventFlavor::KeyboardEvent;
+                up.composed = true;
+                up.key = key.to_owned();
+                up.code = code.to_owned();
+                up.key_code = kc;
+                up.shift_key = shift;
+                up.ctrl_key = ctrl;
+                up.alt_key = alt;
+                up.meta_key = meta;
+                let uid = alloc_modern_event(up, ctx)?;
+                let _ = dispatch_modern_event(Target::Node(target_node), uid, ctx)?;
             }
             Ok(())
         })()

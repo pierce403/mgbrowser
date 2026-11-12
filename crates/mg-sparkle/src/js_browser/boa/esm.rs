@@ -28,6 +28,8 @@ pub(super) struct EsmState {
     #[unsafe_ignore_trace]
     pub enabled: bool,
     #[unsafe_ignore_trace]
+    pub allow_cross_origin_https: bool,
+    #[unsafe_ignore_trace]
     pub page_url: String,
     #[unsafe_ignore_trace]
     pub importmap: HashMap<String, String>,
@@ -100,7 +102,7 @@ pub(super) fn resolve_module_specifier(
     esm: &EsmState,
 ) -> Result<String, String> {
     if let Some(mapped) = esm.importmap.get(specifier) {
-        return check_same_origin(mapped, &esm.page_url);
+        return check_same_origin(mapped, &esm.page_url, esm.allow_cross_origin_https);
     }
     // Check prefix mappings ending with `/` (longest prefix wins).
     let mut best_prefix: Option<(&str, &str)> = None;
@@ -119,7 +121,7 @@ pub(super) fn resolve_module_specifier(
             && let Ok(mut joined) = base.join(rest)
         {
             joined.set_fragment(None);
-            return check_same_origin(joined.as_str(), &esm.page_url);
+            return check_same_origin(joined.as_str(), &esm.page_url, esm.allow_cross_origin_https);
         }
     }
 
@@ -134,11 +136,18 @@ pub(super) fn resolve_module_specifier(
             "Failed to resolve module specifier \"{specifier}\". Relative references must start with either \"/\", \"./\", or \"../\"."
         ));
     };
-    check_same_origin(&resolved, &esm.page_url)
+    check_same_origin(&resolved, &esm.page_url, esm.allow_cross_origin_https)
 }
 
-fn check_same_origin(resolved_url: &str, page_url: &str) -> Result<String, String> {
+fn check_same_origin(
+    resolved_url: &str,
+    page_url: &str,
+    allow_cross_origin_https: bool,
+) -> Result<String, String> {
     let resolved = url::Url::parse(resolved_url).map_err(|e| e.to_string())?;
+    if allow_cross_origin_https && resolved.scheme() == "https" {
+        return Ok(resolved_url.to_owned());
+    }
     if let Ok(page) = url::Url::parse(page_url)
         && matches!(page.scheme(), "http" | "https")
         && resolved.origin() != page.origin()
@@ -2003,6 +2012,10 @@ fn transform_esm_source(src: &str) -> Result<TransformedModule, String> {
         has_top_level_await,
         mutable_exports,
     })
+}
+
+pub fn extract_module_dependencies(source: &str) -> Option<Vec<String>> {
+    transform_esm_source(source).ok().map(|m| m.dependencies)
 }
 
 #[cfg(test)]

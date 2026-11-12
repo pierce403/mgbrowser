@@ -70,6 +70,10 @@ pub trait ScriptRuntime: Send + Sync {
     fn source_wire_mode(&self) -> SourceWireMode {
         SourceWireMode::Modern
     }
+    /// Trusted host-selected interactive desktop profile (`boa-interactive-page-v1`).
+    fn is_interactive(&self) -> bool {
+        false
+    }
     /// Fence requests belonging to superseded documents before starting a job.
     fn set_generation(&self, generation: u64) -> Result<(), String>;
     fn start(

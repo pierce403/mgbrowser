@@ -38,8 +38,22 @@ fn enabled_rust_image_codecs_decode_and_other_codecs_remain_disabled() {
         image::load_from_memory_with_format(b"invalid JPEG", image::ImageFormat::Jpeg),
         Err(image::ImageError::Decoding(_))
     ));
+    // WebP is deliberately enabled through the reviewed pure-Rust image-webp decoder.
+    let mut webp = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(pixels.clone())
+        .write_to(&mut webp, image::ImageFormat::WebP)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory_with_format(webp.get_ref(), image::ImageFormat::WebP)
+            .unwrap()
+            .into_rgba8(),
+        pixels
+    );
+    assert!(matches!(
+        image::load_from_memory_with_format(b"invalid WebP", image::ImageFormat::WebP),
+        Err(image::ImageError::Decoding(_))
+    ));
     for format in [
-        image::ImageFormat::WebP,
         image::ImageFormat::Tiff,
         image::ImageFormat::Avif,
         image::ImageFormat::Bmp,

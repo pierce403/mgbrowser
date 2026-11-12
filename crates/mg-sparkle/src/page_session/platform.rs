@@ -74,6 +74,10 @@ pub struct PlatformInit {
     pub time_origin_ms: f64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automation_only: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stylesheets: Vec<(String, String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_dimensions: Vec<(String, u32, u32)>,
 }
 
 impl PlatformInit {
@@ -105,6 +109,25 @@ impl PlatformInit {
             .is_some_and(|s| s.len() > MAX_HISTORY_STATE_BYTES)
         {
             return Err("Initial history state exceeds limit".into());
+        }
+        if self.stylesheets.len() > 64 {
+            return Err("Initial stylesheet count exceeds limit".into());
+        }
+        let css_bytes: usize = self
+            .stylesheets
+            .iter()
+            .map(|(c, b, m)| c.len().saturating_add(b.len()).saturating_add(m.len()))
+            .sum();
+        if css_bytes > 8 * 1024 * 1024 {
+            return Err("Initial stylesheet bytes exceed limit".into());
+        }
+        if self.image_dimensions.len() > 512
+            || self
+                .image_dimensions
+                .iter()
+                .any(|(u, _, _)| u.len() > MAX_FETCH_URL_BYTES)
+        {
+            return Err("Initial image dimensions exceed limit".into());
         }
         Ok(())
     }
@@ -414,6 +437,22 @@ pub enum PlatformCommand {
         select_node: usize,
         selected_index: i32,
     },
+    KeyInput {
+        key: String,
+        code: String,
+        #[serde(default)]
+        key_code: u32,
+        #[serde(default)]
+        shift: bool,
+        #[serde(default)]
+        ctrl: bool,
+        #[serde(default)]
+        alt: bool,
+        #[serde(default)]
+        meta: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_value: Option<(usize, String)>,
+    },
 }
 
 impl PlatformCommand {
@@ -438,6 +477,20 @@ impl PlatformCommand {
             Self::SelectOption { selected_index, .. } => {
                 if *selected_index < -1 || *selected_index > 100_000 {
                     return Err("Select option index out of bounds".into());
+                }
+                Ok(())
+            }
+            Self::KeyInput {
+                key,
+                code,
+                target_value,
+                ..
+            } => {
+                if key.len() > 64 || code.len() > 64 {
+                    return Err("Key input string exceeds limit".into());
+                }
+                if target_value.as_ref().is_some_and(|(_, v)| v.len() > 8192) {
+                    return Err("Key input target value exceeds limit".into());
                 }
                 Ok(())
             }

@@ -4,7 +4,7 @@ use std::io;
 
 const MEMORY_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
 #[allow(dead_code)]
-const INTERACTIVE_MEMORY_LIMIT: libc::rlim_t = 768 * 1024 * 1024;
+const INTERACTIVE_MEMORY_LIMIT: libc::rlim_t = 2560 * 1024 * 1024;
 
 fn set_limit(resource: u32, value: libc::rlim_t) -> Result<(), String> {
     let limit = libc::rlimit {
@@ -26,7 +26,7 @@ pub(super) fn install_isolation() -> Result<(), String> {
 
 #[allow(dead_code)]
 pub(super) fn install_interactive_isolation() -> Result<(), String> {
-    install_isolation_with_limits(INTERACTIVE_MEMORY_LIMIT, 5)
+    install_isolation_with_limits(INTERACTIVE_MEMORY_LIMIT, 30)
 }
 
 fn install_isolation_with_limits(

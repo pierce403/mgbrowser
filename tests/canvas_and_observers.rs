@@ -2,7 +2,6 @@
 //! DOM Observers (`MutationObserver`, `ResizeObserver`, `IntersectionObserver`),
 //! Custom Elements v1 (`window.customElements`), Web Animations (`Element.animate`,
 //! `getAnimations`), and `window.visualViewport`.
-#![cfg(feature = "modern")]
 
 use mg_sparkle::{
     document, images,

@@ -427,6 +427,9 @@ pub struct Browser {
     script_fetch_tx: mpsc::Sender<(u64, u64, ScriptFetchResponse)>,
     script_fetch_rx: mpsc::Receiver<(u64, u64, ScriptFetchResponse)>,
     script_fetch_inflight: usize,
+    dynamic_img_tx: mpsc::Sender<(u64, Vec<(String, document::ResourceData)>)>,
+    dynamic_img_rx: mpsc::Receiver<(u64, Vec<(String, document::ResourceData)>)>,
+    dynamic_images_seen: HashSet<String>,
     task_wake: Option<ScheduledTaskWake>,
     last_task_wake_token: u64,
     script_blocked: bool,
@@ -1009,6 +1012,7 @@ impl Browser {
         let (tx, rx) = mpsc::channel();
         let (dl_tx, dl_rx) = mpsc::channel();
         let (script_fetch_tx, script_fetch_rx) = mpsc::channel();
+        let (dynamic_img_tx, dynamic_img_rx) = mpsc::channel();
         Self {
             devtools: devtools::State::default(),
             selection: clipboard::SelectionState::default(),
@@ -1113,6 +1117,9 @@ impl Browser {
             script_fetch_tx,
             script_fetch_rx,
             script_fetch_inflight: 0,
+            dynamic_img_tx,
+            dynamic_img_rx,
+            dynamic_images_seen: HashSet::new(),
             task_wake: None,
             last_task_wake_token: 0,
             script_blocked: false,
@@ -1271,6 +1278,7 @@ impl Browser {
         self.console_detached_dom = false;
         self.queued_console.clear();
         self.queued_platform.clear();
+        self.dynamic_images_seen.clear();
         self.task_wake = None;
         self.last_task_wake_token = 0;
         self.pointer_press = None;
@@ -1350,7 +1358,10 @@ impl Browser {
                 pool.observer_expectation(),
                 mg_sparkle::page_session::observer::ObserverExpectation::WindowHarness { .. }
             );
+            let interactive = pool.is_interactive();
             let mut decoded_script_html = None;
+            let mut init_stylesheets = Vec::new();
+            let mut init_img_dims = Vec::new();
             let document = result
                 .as_ref()
                 .ok()
@@ -1361,20 +1372,25 @@ impl Browser {
                     let html = decode_text(&response.body, &response.content_type);
                     let run_scripts = scripts_enabled
                         && (observer_active
-                            || resources::script_document_admissible(response.url.as_str(), &html));
+                            || resources::script_document_admissible_for(
+                                response.url.as_str(),
+                                &html,
+                                interactive,
+                            ));
                     let parse_started = Instant::now();
                     let mut document =
                         document::parse_with_scripting(&html, response.url.as_str(), run_scripts);
                     parse_html_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
                     let cancel = || resource_generation.load(Ordering::Relaxed) != generation;
-                    resource_profile = resources::load_with_profile(
+                    resource_profile = resources::load_with_profile_mode(
                         &session,
                         &mut document,
                         response.url.as_str(),
                         cancel,
+                        interactive,
                     );
                     if run_scripts {
-                        let (sources, profile) = resources::prepare_script_sources(
+                        let (sources, profile) = resources::prepare_script_sources_for(
                             &session,
                             &mut document,
                             &html,
@@ -1382,7 +1398,46 @@ impl Browser {
                             cancel,
                             &resource_profile,
                             source_wire_mode,
+                            interactive,
                         );
+                        if source_wire_mode == scripts::SourceWireMode::Modern && !observer_active {
+                            let css_bytes: usize = document
+                                .stylesheets
+                                .iter()
+                                .map(|s| s.css.len() + s.base_url.len() + s.media.len())
+                                .sum();
+                            let pass_sheets = if interactive {
+                                css_bytes <= 8 * 1024 * 1024 && document.stylesheets.len() <= 64
+                            } else {
+                                css_bytes <= 64 * 1024
+                                    && html.len() <= 256 * 1024
+                                    && document.stylesheets.len() <= 16
+                            };
+                            if pass_sheets {
+                                init_stylesheets = document
+                                    .stylesheets
+                                    .iter()
+                                    .map(|s| (s.css.clone(), s.base_url.clone(), s.media.clone()))
+                                    .collect();
+                            }
+                            if interactive {
+                                init_img_dims = document
+                                    .resources
+                                    .iter()
+                                    .take(512)
+                                    .filter_map(|(u, r)| {
+                                        mg_sparkle::images::decode(
+                                            &r.bytes,
+                                            &r.content_type,
+                                            None,
+                                            None,
+                                        )
+                                        .ok()
+                                        .map(|i| (u.clone(), i.width, i.height))
+                                    })
+                                    .collect();
+                            }
+                        }
                         external_scripts = Some(sources);
                         script_fetch_profile = profile;
                         decoded_script_html = Some(html);
@@ -1413,6 +1468,8 @@ impl Browser {
                                 .map(|d| d.as_secs_f64() * 1000.0)
                                 .unwrap_or(0.0),
                             automation_only: false,
+                            stylesheets: init_stylesheets,
+                            image_dimensions: init_img_dims,
                         }
                     } else {
                         PlatformInit::default()
@@ -1657,7 +1714,12 @@ impl Browser {
                     let source = decode_text(&response.body, &response.content_type);
                     self.devtools.set_page_source(&source);
                     if response.content_type.contains("html") || response.content_type.is_empty() {
-                        if source.len() <= mg_sparkle::js_browser::MAX_SOURCE {
+                        let html_cap = if self.child_pool.is_interactive() {
+                            mg_sparkle::js_browser::MAX_HTML_INTERACTIVE
+                        } else {
+                            mg_sparkle::js_browser::MAX_SOURCE
+                        };
+                        if source.len() <= html_cap {
                             self.raw_page_html = source.clone();
                         } else {
                             self.raw_page_html.clear();
@@ -1695,6 +1757,7 @@ impl Browser {
                                                 &mut startup.reply,
                                                 &self.address,
                                                 None,
+                                                self.child_pool.is_interactive(),
                                             )
                                             .map(|document| (Some(document), wake, lifecycle))
                                         }
@@ -1907,6 +1970,7 @@ impl Browser {
             }
             self.page_url = self.address.clone();
             self.page_loader = loaded.generation;
+            self.sync_interactive_images();
             let mut startup_history_go = None;
             if let Some((sid, mut init_reply)) = startup_platform_reply {
                 let mut vp = self.current_viewport_state();
@@ -1983,6 +2047,7 @@ impl Browser {
         }
         self.poll_page_session();
         self.poll_script_fetches();
+        self.poll_dynamic_images();
         // Let initial-load consumers observe the accepted load milestone
         // before starting unrelated load-created zero-delay work. Ordinary
         // native polling resumes it on the next tick, including hidden tabs.
@@ -2064,11 +2129,17 @@ impl Browser {
         reply: &mut SessionReply,
         url: &str,
         previous: Option<&Document>,
+        interactive: bool,
     ) -> Result<Document, String> {
-        if reply.errors.len() > 64
-            || reply.errors.iter().any(|error| error.len() > 4096)
-            || reply.scripts_executed > 32
-            || reply.acknowledgements.len() > 128
+        let (max_errors, max_error_len, max_scripts, max_acks) = if interactive {
+            (256, 16_384, 256, 512)
+        } else {
+            (64, 4096, 32, 128)
+        };
+        if reply.errors.len() > max_errors
+            || reply.errors.iter().any(|error| error.len() > max_error_len)
+            || reply.scripts_executed > max_scripts
+            || reply.acknowledgements.len() > max_acks
             || !reply.accounting_valid()
         {
             return Err("Invalid script session report limits".into());
@@ -2100,13 +2171,20 @@ impl Browser {
         }) {
             return Err("Script snapshot reused or removed stable arena identities".into());
         }
-        document::project_nodes(snapshot.nodes, url)
+        let mut projected = document::project_nodes(snapshot.nodes, url)?;
+        projected.set_interactive_style_budget(interactive);
+        Ok(projected)
     }
-    fn validate_detached_reply(reply: &mut SessionReply) -> Result<(), String> {
-        if reply.errors.len() > 64
-            || reply.errors.iter().any(|error| error.len() > 4096)
-            || reply.scripts_executed > 32
-            || reply.acknowledgements.len() > 128
+    fn validate_detached_reply(reply: &mut SessionReply, interactive: bool) -> Result<(), String> {
+        let (max_errors, max_error_len, max_scripts, max_acks) = if interactive {
+            (256, 16_384, 256, 512)
+        } else {
+            (64, 4096, 32, 128)
+        };
+        if reply.errors.len() > max_errors
+            || reply.errors.iter().any(|error| error.len() > max_error_len)
+            || reply.scripts_executed > max_scripts
+            || reply.acknowledgements.len() > max_acks
             || !reply.accounting_valid()
         {
             return Err("Invalid script session report limits".into());
@@ -2481,6 +2559,7 @@ impl Browser {
         self.pending_transaction = None;
         self.queued_console.clear();
         self.queued_platform.clear();
+        self.dynamic_images_seen.clear();
         self.task_wake = None;
         self.script_blocked = true;
         self.fetching = false;
@@ -2754,6 +2833,41 @@ impl Browser {
             self.dirty = true;
         }
     }
+    fn sync_interactive_images(&mut self) {
+        if !self.child_pool.is_interactive() {
+            return;
+        }
+        let urls = resources::materialize_and_collect_interactive_images(
+            &mut self.document,
+            &mut self.dynamic_images_seen,
+        );
+        if urls.is_empty() || self.page_url.is_empty() {
+            return;
+        }
+        let session = self.session.clone();
+        let page_url = self.page_url.clone();
+        let tx = self.dynamic_img_tx.clone();
+        let generation = self.generation;
+        thread::spawn(move || {
+            let imgs = resources::fetch_interactive_images(&session, &page_url, &urls);
+            if !imgs.is_empty() {
+                let _ = tx.send((generation, imgs));
+            }
+        });
+    }
+    fn poll_dynamic_images(&mut self) {
+        while let Ok((rx_gen, imgs)) = self.dynamic_img_rx.try_recv() {
+            if rx_gen == self.generation && !imgs.is_empty() {
+                for (url, res) in imgs {
+                    if self.document.resources.len() < 384 {
+                        self.document.resources.insert(url, res);
+                    }
+                }
+                self.frame_cache = None;
+                self.dirty = true;
+            }
+        }
+    }
     fn apply_platform_deltas(&mut self, session_id: u64, reply: &mut SessionReply) -> Option<i32> {
         if !reply.local_storage_ops.is_empty() {
             self.session
@@ -2939,8 +3053,13 @@ impl Browser {
                     let page_url = self.page_url.clone();
                     let tx = self.script_fetch_tx.clone();
                     let generation = self.generation;
+                    let interactive = self.child_pool.is_interactive();
                     thread::spawn(move || {
-                        let resp = session.fetch_script_same_origin(&page_url, req);
+                        let resp = if interactive {
+                            session.fetch_script_interactive(&page_url, req)
+                        } else {
+                            session.fetch_script_same_origin(&page_url, req)
+                        };
                         let _ = tx.send((generation, session_id, resp));
                     });
                 }
@@ -3252,14 +3371,16 @@ impl Browser {
                     "Script session cumulative accounting moved backward or changed profile".into(),
                 );
             }
+            let interactive = self.child_pool.is_interactive();
             let document = if self.console_detached_dom {
-                Self::validate_detached_reply(&mut reply)?;
+                Self::validate_detached_reply(&mut reply, interactive)?;
                 None
             } else {
                 Some(Self::project_reply(
                     &mut reply,
                     &self.page_url,
                     Some(&self.document),
+                    interactive,
                 )?)
             };
             let default = match (&activation, &document) {
@@ -3547,6 +3668,7 @@ impl Browser {
         document.materialize_inline_canvas_resources();
         document.resource_warnings = std::mem::take(&mut self.document.resource_warnings);
         self.document = document;
+        self.sync_interactive_images();
         for &(node, version) in ack {
             if self.edit_versions.get(&node) == Some(&version) {
                 self.edit_versions.remove(&node);
@@ -4692,24 +4814,48 @@ impl Browser {
                 self.step_find_match(true);
             }
             Focus::Input(node) => {
-                if self
-                    .document
-                    .nodes
-                    .get(node)
-                    .is_some_and(|n| n.tag == "textarea")
-                {
+                let is_multiline_textarea = self.document.nodes.get(node).is_some_and(|n| {
+                    n.tag == "textarea"
+                        && n.attr("rows").map(str::trim) != Some("1")
+                        && !n
+                            .attr("enterkeyhint")
+                            .is_some_and(|v| v.trim().eq_ignore_ascii_case("search"))
+                        && !n
+                            .attr("type")
+                            .is_some_and(|v| v.trim().eq_ignore_ascii_case("search"))
+                        && !n
+                            .attr("role")
+                            .is_some_and(|v| v.trim().eq_ignore_ascii_case("combobox"))
+                });
+                if is_multiline_textarea {
                     self.type_text("\n");
-                } else if let Some(i) = self.input_item(node) {
-                    if let Some(Item::Input {
+                } else if self.child_pool.is_interactive()
+                    && self.can_use_platform_commands()
+                    && !self.automation_only_session
+                {
+                    let val = self.current_input_value(node).unwrap_or_default();
+                    self.edit_versions.remove(&node);
+                    self.enqueue_platform_command(scripts::PlatformCommand::KeyInput {
+                        target_value: Some((node, val)),
+                        key: "Enter".into(),
+                        code: "Enter".into(),
+                        key_code: 13,
+                        shift: false,
+                        ctrl: false,
+                        alt: false,
+                        meta: false,
+                    });
+                } else if let Some(i) = self.input_item(node)
+                    && let Some(Item::Input {
                         form: Some(form), ..
                     }) = self.document.items.get(i)
-                    {
-                        let form = *form;
-                        let button = self.document.items.iter().position(
+                {
+                    let form = *form;
+                    let button =
+                        self.document.items.iter().position(
                             |item| matches!(item, Item::Submit {form:f, ..} if *f == form),
                         );
-                        self.submit(form, button)?;
-                    }
+                    self.submit(form, button)?;
                 }
             }
             Focus::Page | Focus::DevTools | Focus::ConsoleInput | Focus::DevToolsField(_) => {}
@@ -4990,6 +5136,23 @@ impl Browser {
             }
             if self.loading {
                 self.activate(Action::StopLoading);
+                return;
+            }
+            if self.child_pool.is_interactive()
+                && self.can_use_platform_commands()
+                && !self.automation_only_session
+                && matches!(self.focus, Focus::Page | Focus::Input(_))
+            {
+                self.enqueue_platform_command(scripts::PlatformCommand::KeyInput {
+                    target_value: None,
+                    key: "Escape".into(),
+                    code: "Escape".into(),
+                    key_code: 27,
+                    shift: false,
+                    ctrl: false,
+                    alt: false,
+                    meta: false,
+                });
                 return;
             }
         }
@@ -7271,6 +7434,7 @@ impl Browser {
                     .map(|d| d.as_secs_f64() * 1000.0)
                     .unwrap_or(0.0),
                 automation_only,
+                ..PlatformInit::default()
             };
             let (mut session, mut reply) = self.child_pool.start_with_platform(
                 mg_sparkle::js_browser::Request {
@@ -7307,14 +7471,16 @@ impl Browser {
                             .zip(&snapshot.nodes)
                             .all(|(a, b)| a.tag == b.tag)
                 });
+                let interactive = self.child_pool.is_interactive();
                 let document = if use_synthesized && (synthesized_truncated || !matches_arena) {
-                    Self::validate_detached_reply(&mut reply)?;
+                    Self::validate_detached_reply(&mut reply, interactive)?;
                     None
                 } else {
                     Some(Self::project_reply(
                         &mut reply,
                         &self.page_url,
                         Some(&self.document),
+                        interactive,
                     )?)
                 };
                 reply

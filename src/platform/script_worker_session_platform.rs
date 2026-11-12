@@ -39,7 +39,11 @@ fn wire_version() -> u8 {
 }
 const LIFETIME: Duration = Duration::from_secs(300);
 const TRANSACTIONS: u64 = 64;
+const INTERACTIVE_TRANSACTIONS: u64 = 256;
+const INTERACTIVE_INPUT_LIMIT: usize = 48 * 1024 * 1024;
+const INTERACTIVE_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 const WIRE_LIMIT: usize = 32 * 1024 * 1024;
+const INTERACTIVE_WIRE_LIMIT: usize = 128 * 1024 * 1024;
 const TICK: Duration = Duration::from_millis(2);
 const IDLE_TICK: Duration = Duration::from_millis(25);
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -469,11 +473,22 @@ fn decode_reply_frame(payload: &[u8], legacy: bool) -> Result<ReplyFrame, String
     }
 }
 
+#[cfg(test)]
 fn write_reply_frame(
     writer: &mut impl Write,
     frame: &ReplyFrame,
     total: &mut usize,
     legacy: bool,
+) -> Result<(), String> {
+    write_reply_frame_for(writer, frame, total, legacy, false)
+}
+
+fn write_reply_frame_for(
+    writer: &mut impl Write,
+    frame: &ReplyFrame,
+    total: &mut usize,
+    legacy: bool,
+    interactive: bool,
 ) -> Result<(), String> {
     if !legacy {
         if frame.reply.lifecycle.is_none() || frame.reply.observer.is_none() {
@@ -492,7 +507,7 @@ fn write_reply_frame(
         for entry in &frame.console {
             entry.validate()?;
         }
-        return write_frame(
+        return write_frame_for(
             writer,
             &ModernReplyFrame {
                 version: frame.version,
@@ -505,6 +520,7 @@ fn write_reply_frame(
                 console: frame.console.as_slice(),
             },
             total,
+            interactive,
         );
     }
     let reply = &frame.reply;
@@ -516,7 +532,7 @@ fn write_reply_frame(
     {
         return Err("Legacy v1 reply forbids lifecycle and observer progress".into());
     }
-    write_frame(
+    write_frame_for(
         writer,
         &LegacyReplyFrame {
             version: frame.version,
@@ -540,6 +556,7 @@ fn write_reply_frame(
             },
         },
         total,
+        interactive,
     )
 }
 
@@ -701,6 +718,7 @@ pub struct Session {
     manager: Option<JoinHandle<()>>,
     pool: ChildPool,
     automation_enabled: bool,
+    interactive: bool,
     lifecycle: Option<LifecycleProgress>,
     pending_console: Vec<ConsoleWireEntry>,
     last_console_result: Option<ConsoleResult>,
@@ -806,6 +824,7 @@ impl Session {
             manager: Some(manager),
             pool,
             automation_enabled,
+            interactive,
             lifecycle: None,
             pending_console: Vec::new(),
             last_console_result: None,
@@ -957,10 +976,18 @@ impl Session {
             self.cancel();
             return Err(error);
         }
-        if self.next_sequence >= TRANSACTIONS {
-            let error = self
-                .shared
-                .fail("Script session reached its 64-transaction limit".into());
+        let tx_limit = if self.interactive {
+            INTERACTIVE_TRANSACTIONS
+        } else {
+            TRANSACTIONS
+        };
+        if self.next_sequence >= tx_limit {
+            let msg = if self.interactive {
+                "Script session reached its 256-transaction limit"
+            } else {
+                "Script session reached its 64-transaction limit"
+            };
+            let error = self.shared.fail(msg.into());
             self.cancel();
             return Err(error);
         }
@@ -1172,7 +1199,7 @@ impl Worker {
         Ok(())
     }
     fn add_wire(&mut self, bytes: usize) -> Result<(), String> {
-        add_wire(&mut self.wire, bytes)
+        add_wire_for(&mut self.wire, bytes, self.interactive)
     }
     fn idle(&mut self, shared: &Shared) -> Result<(), String> {
         self.check(shared, None)?;
@@ -1224,8 +1251,28 @@ impl Worker {
         let deadline = started
             .checked_add(shared.remaining()?)
             .ok_or("Script active deadline exceeds the monotonic clock range")?;
+        let in_limit = if self.interactive {
+            INTERACTIVE_INPUT_LIMIT
+        } else {
+            INPUT_LIMIT
+        };
+        let out_limit = if self.interactive {
+            INTERACTIVE_OUTPUT_LIMIT
+        } else {
+            OUTPUT_LIMIT
+        };
+        let wire_limit = if self.interactive {
+            INTERACTIVE_WIRE_LIMIT
+        } else {
+            WIRE_LIMIT
+        };
+        let tx_limit = if self.interactive {
+            INTERACTIVE_TRANSACTIONS
+        } else {
+            TRANSACTIONS
+        };
         let limit = match request.command {
-            FrameCommand::Init(_) | FrameCommand::Platform(_) => INPUT_LIMIT,
+            FrameCommand::Init(_) | FrameCommand::Platform(_) => in_limit,
             FrameCommand::Automation(_) => MAX_AUTOMATION_FRAME_BYTES,
             _ => MAX_EVENT_BYTES,
         };
@@ -1242,7 +1289,7 @@ impl Worker {
             &init_seed,
         )
         .map_err(|error| format!("Script-session request rejected: {error}"))?;
-        if input.len().saturating_add(4) > WIRE_LIMIT.saturating_sub(self.wire) {
+        if input.len().saturating_add(4) > wire_limit.saturating_sub(self.wire) {
             return Err("Script session exceeded its 32 MiB combined wire limit".into());
         }
         let header = (input.len() as u32).to_be_bytes();
@@ -1297,7 +1344,7 @@ impl Worker {
                         header_read += bytes;
                         if header_read == 4 {
                             expected = u32::from_be_bytes(received_header) as usize;
-                            check_payload(expected, OUTPUT_LIMIT, self.wire)?;
+                            check_payload_for(expected, out_limit, self.wire, self.interactive)?;
                             output = Some(Vec::with_capacity(expected));
                         }
                     } else {
@@ -1319,7 +1366,7 @@ impl Worker {
                 }
                 let frame = decode_reply_frame(output, self.legacy)
                     .map_err(|error| format!("Invalid script-session reply: {error}"))?;
-                validate_reply(request, &frame)?;
+                validate_reply_for(request, &frame, self.interactive)?;
                 validate_observer_mode(&self.observer, &frame.reply, self.legacy)?;
                 let lifecycle = if matches!(request.command, FrameCommand::Init(_)) {
                     frame.reply.validate_lifecycle_initial()?
@@ -1355,7 +1402,7 @@ impl Worker {
                 match self.stdout.read(&mut extra) {
                     Ok(0)
                         if frame.reply.state != RealmState::Ready
-                            || request.sequence + 1 == TRANSACTIONS => {}
+                            || request.sequence + 1 == tx_limit => {}
                     Ok(0) => return Err("Ready script-session output closed unexpectedly".into()),
                     Ok(_) => return Err("Extra data after script-session reply".into()),
                     Err(error)
@@ -1520,9 +1567,14 @@ fn manage(
                 command,
                 started,
             }) => {
+                let tx_limit = if interactive {
+                    INTERACTIVE_TRANSACTIONS
+                } else {
+                    TRANSACTIONS
+                };
                 let result = (|| {
                     if sequence != next_sequence
-                        || sequence >= TRANSACTIONS
+                        || sequence >= tx_limit
                         || expected_revision != revision
                     {
                         return Err(
@@ -1555,8 +1607,7 @@ fn manage(
                     Ok((reply, automation, console, console_result)) => {
                         next_sequence += 1;
                         revision = reply.revision;
-                        let terminal =
-                            reply.state != RealmState::Ready || sequence + 1 == TRANSACTIONS;
+                        let terminal = reply.state != RealmState::Ready || sequence + 1 == tx_limit;
                         if terminal && !worker.stop() {
                             let error = shared
                                 .close("Terminal script child reaping was not confirmed".into());
@@ -1636,7 +1687,15 @@ fn validate_command(command: &TransactionCommand) -> Result<(), String> {
         TransactionCommand::Platform(command) => command.validate(),
     }
 }
+#[cfg(test)]
 fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), String> {
+    validate_reply_for(request, frame, false)
+}
+fn validate_reply_for(
+    request: &RequestFrame,
+    frame: &ReplyFrame,
+    interactive: bool,
+) -> Result<(), String> {
     if !matches!(request.version, 1 | VERSION) {
         return Err("Unsupported script-session protocol version".into());
     }
@@ -1709,10 +1768,15 @@ fn validate_reply(request: &RequestFrame, frame: &ReplyFrame) -> Result<(), Stri
     let rejected_input = !initial
         && reply.state == RealmState::Closed
         && reply.revision == request.expected_revision;
+    let (max_scripts, max_errors, max_error_len) = if interactive {
+        (256, 256, 16_384)
+    } else {
+        (32, 64, 4096)
+    };
     if (!rejected_input && reply.revision != expected)
-        || reply.errors.len() > 64
-        || reply.errors.iter().any(|error| error.len() > 4096)
-        || reply.scripts_executed > 32
+        || reply.errors.len() > max_errors
+        || reply.errors.iter().any(|error| error.len() > max_error_len)
+        || reply.scripts_executed > max_scripts
         || reply.acknowledgements.len() > MAX_EDITS
     {
         return Err("Invalid script-session reply metadata".into());
@@ -1932,26 +1996,58 @@ fn validate_cumulative(
     }
     Ok(())
 }
+#[cfg(test)]
 fn add_wire(total: &mut usize, bytes: usize) -> Result<(), String> {
+    add_wire_for(total, bytes, false)
+}
+fn add_wire_for(total: &mut usize, bytes: usize, interactive: bool) -> Result<(), String> {
+    let wl = if interactive {
+        INTERACTIVE_WIRE_LIMIT
+    } else {
+        WIRE_LIMIT
+    };
     *total = total
         .checked_add(bytes)
-        .filter(|total| *total <= WIRE_LIMIT)
+        .filter(|total| *total <= wl)
         .ok_or("Script session exceeded its 32 MiB combined wire limit")?;
     Ok(())
 }
+#[cfg(test)]
 fn check_payload(length: usize, limit: usize, total: usize) -> Result<(), String> {
+    check_payload_for(length, limit, total, false)
+}
+fn check_payload_for(
+    length: usize,
+    limit: usize,
+    total: usize,
+    interactive: bool,
+) -> Result<(), String> {
     if length == 0 || length > limit {
         return Err("Script-session frame payload exceeds its limit or is empty".into());
     }
-    if length > WIRE_LIMIT.saturating_sub(total) {
+    let wl = if interactive {
+        INTERACTIVE_WIRE_LIMIT
+    } else {
+        WIRE_LIMIT
+    };
+    if length > wl.saturating_sub(total) {
         return Err("Script session exceeded its 32 MiB combined wire limit".into());
     }
     Ok(())
 }
+#[cfg(test)]
 fn read_frame(
     reader: &mut impl Read,
     total: &mut usize,
     limit: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    read_frame_for(reader, total, limit, false)
+}
+fn read_frame_for(
+    reader: &mut impl Read,
+    total: &mut usize,
+    limit: usize,
+    interactive: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     let mut header = [0; 4];
     let mut filled = 0;
@@ -1960,7 +2056,7 @@ fn read_frame(
             Ok(0) if filled == 0 => return Ok(None),
             Ok(0) => return Err("Truncated script-session request header".into()),
             Ok(bytes) => {
-                add_wire(total, bytes)?;
+                add_wire_for(total, bytes, interactive)?;
                 filled += bytes;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -1968,21 +2064,40 @@ fn read_frame(
         }
     }
     let length = u32::from_be_bytes(header) as usize;
-    check_payload(length, limit, *total)?;
+    check_payload_for(length, limit, *total, interactive)?;
     let mut payload = vec![0; length];
     reader
         .read_exact(&mut payload)
         .map_err(|_| "Truncated script-session request payload")?;
-    add_wire(total, length)?;
+    add_wire_for(total, length, interactive)?;
     Ok(Some(payload))
 }
+#[cfg(test)]
 fn write_frame(
     writer: &mut impl Write,
     value: &impl Serialize,
     total: &mut usize,
 ) -> Result<(), String> {
-    let output = encode(value, OUTPUT_LIMIT)?;
-    if output.len().saturating_add(4) > WIRE_LIMIT.saturating_sub(*total) {
+    write_frame_for(writer, value, total, false)
+}
+fn write_frame_for(
+    writer: &mut impl Write,
+    value: &impl Serialize,
+    total: &mut usize,
+    interactive: bool,
+) -> Result<(), String> {
+    let out_limit = if interactive {
+        INTERACTIVE_OUTPUT_LIMIT
+    } else {
+        OUTPUT_LIMIT
+    };
+    let wl = if interactive {
+        INTERACTIVE_WIRE_LIMIT
+    } else {
+        WIRE_LIMIT
+    };
+    let output = encode(value, out_limit)?;
+    if output.len().saturating_add(4) > wl.saturating_sub(*total) {
         return Err("Script session exceeded its 32 MiB combined wire limit".into());
     }
     writer
@@ -1992,7 +2107,7 @@ fn write_frame(
         .write_all(&output)
         .map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
-    add_wire(total, output.len() + 4)
+    add_wire_for(total, output.len() + 4, interactive)
 }
 
 /// Early executable entrypoint, before fonts/display/network are initialized.
@@ -2151,9 +2266,20 @@ fn child_loop_for_profile(
     legacy: bool,
     profile: mg_butane::modern::ResourceProfile,
 ) -> Result<(), String> {
+    let interactive = profile == mg_butane::modern::ResourceProfile::InteractivePageV1;
+    let in_limit = if interactive {
+        INTERACTIVE_INPUT_LIMIT
+    } else {
+        INPUT_LIMIT
+    };
+    let tx_limit = if interactive {
+        INTERACTIVE_TRANSACTIONS
+    } else {
+        TRANSACTIONS
+    };
     let version = if legacy { 1 } else { VERSION };
     let mut wire = 0;
-    let Some(payload) = read_frame(reader, &mut wire, INPUT_LIMIT)? else {
+    let Some(payload) = read_frame_for(reader, &mut wire, in_limit, interactive)? else {
         return Err("Session initialization missing".into());
     };
     let (request, observer, platform, crypto_seed) = decode_request_frame_full(&payload, legacy)?;
@@ -2182,7 +2308,7 @@ fn child_loop_for_profile(
     let mut revision = reply.revision;
     let mut lifecycle = reply.lifecycle;
     let mut terminal = reply.state != RealmState::Ready;
-    write_reply_frame(
+    write_reply_frame_for(
         writer,
         &ReplyFrame {
             version,
@@ -2196,22 +2322,23 @@ fn child_loop_for_profile(
         },
         &mut wire,
         legacy,
+        interactive,
     )?;
-    for sequence in 1..TRANSACTIONS {
+    for sequence in 1..tx_limit {
         if terminal {
             return Ok(());
         }
         let frame_limit = if automation_enabled {
-            INPUT_LIMIT
+            in_limit
         } else {
             MAX_EVENT_BYTES
         };
-        let Some(payload) = read_frame(reader, &mut wire, frame_limit)? else {
+        let Some(payload) = read_frame_for(reader, &mut wire, frame_limit, interactive)? else {
             return Ok(());
         };
         let (event, _, _, _) = decode_request_frame_full(&payload, legacy)?;
         let event_limit = match event.command {
-            FrameCommand::Platform(_) => INPUT_LIMIT,
+            FrameCommand::Platform(_) => in_limit,
             FrameCommand::Automation(_) if automation_enabled => MAX_AUTOMATION_FRAME_BYTES,
             _ => MAX_EVENT_BYTES,
         };
@@ -2273,7 +2400,7 @@ fn child_loop_for_profile(
         revision = reply.revision;
         lifecycle = reply.lifecycle;
         terminal = reply.state != RealmState::Ready;
-        write_reply_frame(
+        write_reply_frame_for(
             writer,
             &ReplyFrame {
                 version,
@@ -2287,6 +2414,7 @@ fn child_loop_for_profile(
             },
             &mut wire,
             legacy,
+            interactive,
         )?;
     }
     // Reaching the fixed transaction budget ends the original realm, never resets it.

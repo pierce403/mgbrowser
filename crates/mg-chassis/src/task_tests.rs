@@ -1688,7 +1688,7 @@ mod link_default_receipts {
             }
             assert!(response.accounting_valid());
             assert!(
-                Browser::project_reply(&mut response, PAGE, Some(&app.document)).is_err(),
+                Browser::project_reply(&mut response, PAGE, Some(&app.document), false).is_err(),
                 "{condition}"
             );
         }

@@ -269,7 +269,11 @@ pub(super) fn register(context: &mut Context) -> Result<(), String> {
 
 fn collect_live_stylesheets(data: &State) -> Vec<StylesheetSource> {
     const MAX_LIVE_SHEETS: usize = 64;
-    const MAX_LIVE_SHEET_BYTES: usize = 2 * 1024 * 1024;
+    let max_live_sheet_bytes: usize = if data.host.interactive {
+        8 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    };
 
     let mut sheets = data.host.document.stylesheets.clone();
     let base_url = if data.host.document.base_url.is_empty() {
@@ -335,7 +339,7 @@ fn collect_live_stylesheets(data: &State) -> Vec<StylesheetSource> {
         else {
             break;
         };
-        if next_bytes > MAX_LIVE_SHEET_BYTES {
+        if next_bytes > max_live_sheet_bytes {
             break;
         }
         used_bytes = next_bytes;

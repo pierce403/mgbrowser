@@ -31,7 +31,7 @@ pub fn decode_data_url(url: &str) -> Result<(String, Vec<u8>), String> {
     let mut parts = meta.split(';');
     let raw_mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
     let content_type = match raw_mime.as_str() {
-        "image/png" | "image/jpeg" | "image/gif" | "image/svg+xml" => raw_mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/svg+xml" => raw_mime,
         "image/jpg" => "image/jpeg".to_owned(),
         _ => return Err("Unsupported data: image MIME type".into()),
     };
@@ -187,9 +187,12 @@ pub fn decode(
     let format = image::guess_format(bytes).map_err(|e| format!("Unsupported image: {e}"))?;
     if !matches!(
         format,
-        image::ImageFormat::Png | image::ImageFormat::Gif | image::ImageFormat::Jpeg
+        image::ImageFormat::Png
+            | image::ImageFormat::Gif
+            | image::ImageFormat::Jpeg
+            | image::ImageFormat::WebP
     ) {
-        return Err("Only PNG, JPEG, GIF and simple SVG page images are supported".into());
+        return Err("Only PNG, JPEG, GIF, WebP and simple SVG page images are supported".into());
     }
     let reader = || {
         let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
@@ -308,6 +311,99 @@ fn svg_target_size(
     };
     check_size(w, h)?;
     Ok((w, h))
+}
+
+pub fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if let Ok(fmt) = image::guess_format(bytes) {
+        return match fmt {
+            image::ImageFormat::Png => Some("image/png"),
+            image::ImageFormat::Jpeg => Some("image/jpeg"),
+            image::ImageFormat::Gif => Some("image/gif"),
+            image::ImageFormat::WebP => Some("image/webp"),
+            _ => None,
+        };
+    }
+    let head = &bytes[..bytes.len().min(512)];
+    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let trimmed = head.trim_ascii_start();
+    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case(b"<svg") {
+        return Some("image/svg+xml");
+    }
+    if (trimmed.starts_with(b"<?xml")
+        || trimmed.len() >= 9 && trimmed[..9].eq_ignore_ascii_case(b"<!doctype"))
+        && trimmed.windows(4).any(|w| w.eq_ignore_ascii_case(b"<svg"))
+    {
+        return Some("image/svg+xml");
+    }
+    None
+}
+
+/// Normalize an interactive-profile raster image (`<= 4 MiB`, `<= 4096x4096`) into
+/// the standard `decode` budget while preserving aspect ratio.
+pub fn normalize_interactive_image(
+    bytes: &[u8],
+    content_type: &str,
+) -> Result<(String, Vec<u8>), String> {
+    if decode(bytes, content_type, None, None).is_ok() {
+        return Ok((content_type.to_owned(), bytes.to_vec()));
+    }
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("Interactive image source exceeds 4 MiB".into());
+    }
+    let format = image::guess_format(bytes).map_err(|e| format!("Unsupported image: {e}"))?;
+    if !matches!(
+        format,
+        image::ImageFormat::Png
+            | image::ImageFormat::Gif
+            | image::ImageFormat::Jpeg
+            | image::ImageFormat::WebP
+    ) {
+        return Err("Only PNG, JPEG, GIF, WebP and simple SVG page images are supported".into());
+    }
+    let reader = || {
+        let mut r = image::ImageReader::with_format(Cursor::new(bytes), format);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(4096);
+        limits.max_image_height = Some(4096);
+        limits.max_alloc = Some(64 * 1024 * 1024);
+        r.limits(limits);
+        r
+    };
+    let (nw, nh) = reader().into_dimensions().map_err(|e| e.to_string())?;
+    if nw == 0 || nh == 0 || nw > 4096 || nh > 4096 {
+        return Err("Interactive image dimensions exceed 4096px".into());
+    }
+    let rgba = reader().decode().map_err(|e| e.to_string())?.into_rgba8();
+    let opaque = rgba.pixels().all(|p| p.0[3] == 255);
+    for max_px in [MAX_PIXELS, 512 * 1024, 256 * 1024] {
+        let side_scale =
+            (f64::from(MAX_SIDE) / f64::from(nw)).min(f64::from(MAX_SIDE) / f64::from(nh));
+        let area_scale = ((max_px as f64) / (f64::from(nw) * f64::from(nh))).sqrt();
+        let scale = side_scale.min(area_scale).min(1.0);
+        let sw = ((f64::from(nw) * scale).floor() as u32).max(1);
+        let sh = ((f64::from(nh) * scale).floor() as u32).max(1);
+        let scaled = if (sw, sh) == (nw, nh) {
+            rgba.clone()
+        } else {
+            image::imageops::resize(&rgba, sw, sh, image::imageops::FilterType::Triangle)
+        };
+        let mut out = Vec::new();
+        let out_mime = if opaque {
+            let rgb = image::DynamicImage::ImageRgba8(scaled).into_rgb8();
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85);
+            enc.encode_image(&rgb).map_err(|e| e.to_string())?;
+            "image/jpeg"
+        } else {
+            scaled
+                .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            "image/png"
+        };
+        if out.len() <= MAX_SOURCE {
+            return Ok((out_mime.to_owned(), out));
+        }
+    }
+    Err("Interactive image re-encode exceeded 512 KiB".into())
 }
 
 pub(crate) fn svg_is_aspect_ratio_only(bytes: &[u8], content_type: &str) -> bool {
@@ -933,7 +1029,15 @@ mod tests {
         let decoded = decode(&bytes, &mime, None, None).unwrap();
         assert_eq!(&decoded.pixels[..4], &[10, 200, 30, 255]);
 
-        assert!(decode_data_url("data:image/webp;base64,AAAA").is_err());
+        let mut webp = Cursor::new(Vec::new());
+        pixels
+            .write_to(&mut webp, image::ImageFormat::WebP)
+            .unwrap();
+        let webp_img = decode(webp.get_ref(), "image/webp", None, None).unwrap();
+        assert_eq!((webp_img.width, webp_img.height), (2, 2));
+        assert_eq!(&webp_img.pixels[..4], &[10, 200, 30, 255]);
+
+        assert!(decode_data_url("data:image/bmp;base64,AAAA").is_err());
         assert!(decode_data_url("https://example.org/a.png").is_err());
     }
 }

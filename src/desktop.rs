@@ -28,6 +28,7 @@ pub struct Options {
     pub previous_session: Vec<mg_chassis::SessionTab>,
     pub executable: PathBuf,
     pub scripts: bool,
+    pub interactive_scripts: bool,
     pub auto_update: bool,
     pub debug_port: Option<u16>,
     pub remote_debugging_pipe: bool,
@@ -113,6 +114,7 @@ struct Desktop {
     system_theme: ColorScheme,
     system_scale: u16,
     scripts: bool,
+    interactive_scripts: bool,
     session: mg_chassis::net::Session,
     notice: Option<(String, Instant)>,
     titles: BTreeMap<TabId, String>,
@@ -540,7 +542,11 @@ impl Desktop {
             .active_tab()
             .and_then(|tab| self.space.get(tab))
             .ok_or("No active native tab")?;
-        let scripts = std::sync::Arc::new(platform::LinuxScripts::default());
+        let scripts = std::sync::Arc::new(if self.interactive_scripts {
+            platform::LinuxScripts::interactive()
+        } else {
+            platform::LinuxScripts::default()
+        });
         let mut app = if blank {
             App::new_blank_with_session(fonts, scripts, self.session.clone())
         } else {
@@ -1753,6 +1759,7 @@ struct HeadlessRuntime {
     has_initial_url: bool,
     restore_tabs: Vec<String>,
     scripts: bool,
+    interactive_scripts: bool,
     cdp: Option<BrowserCdp>,
     remote_debugging_pipe: bool,
     no_startup_window: bool,
@@ -1766,11 +1773,16 @@ fn new_headless_page(
     session: &mg_chassis::net::Session,
     bookmarks: &crate::bookmarks::BookmarkStore,
     scripts: bool,
+    interactive_scripts: bool,
     debugging: bool,
     blank: bool,
 ) -> Result<App, String> {
     let fonts = platform::load_fonts().map_err(|error| error.to_string())?;
-    let runtime = std::sync::Arc::new(platform::LinuxScripts::default());
+    let runtime = std::sync::Arc::new(if interactive_scripts {
+        platform::LinuxScripts::interactive()
+    } else {
+        platform::LinuxScripts::default()
+    });
     let mut page = if blank {
         App::new_blank_with_session(fonts, runtime, session.clone())
     } else {
@@ -1805,7 +1817,14 @@ fn run_headless(mut initial_app: App, mut rt: HeadlessRuntime) -> Result<(), Box
         if pages.len() >= Limits::default().tabs {
             break;
         }
-        let mut page = new_headless_page(&rt.session, &rt.bookmarks, rt.scripts, debugging, false)?;
+        let mut page = new_headless_page(
+            &rt.session,
+            &rt.bookmarks,
+            rt.scripts,
+            rt.interactive_scripts,
+            debugging,
+            false,
+        )?;
         page.navigate(url, None, true);
         let id = next_id;
         next_id += 1;
@@ -1820,8 +1839,14 @@ fn run_headless(mut initial_app: App, mut rt: HeadlessRuntime) -> Result<(), Box
             let new_tab = pages.get_mut(&id).and_then(App::take_new_tab_request_full);
             if let Some(req) = new_tab
                 && pages.len() < Limits::default().tabs
-                && let Ok(mut page) =
-                    new_headless_page(&rt.session, &rt.bookmarks, rt.scripts, debugging, false)
+                && let Ok(mut page) = new_headless_page(
+                    &rt.session,
+                    &rt.bookmarks,
+                    rt.scripts,
+                    rt.interactive_scripts,
+                    debugging,
+                    false,
+                )
             {
                 page.navigate(req.url, None, true);
                 let new_id = next_id;
@@ -1882,6 +1907,7 @@ fn run_headless(mut initial_app: App, mut rt: HeadlessRuntime) -> Result<(), Box
                                 &rt.session,
                                 &rt.bookmarks,
                                 rt.scripts,
+                                rt.interactive_scripts,
                                 true,
                                 true,
                             ) {
@@ -1960,6 +1986,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         previous_session,
         executable,
         scripts: restart_scripts,
+        interactive_scripts,
         auto_update,
         debug_port,
         remote_debugging_pipe,
@@ -2023,6 +2050,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
                 has_initial_url,
                 restore_tabs,
                 scripts: restart_scripts,
+                interactive_scripts,
                 cdp,
                 remote_debugging_pipe,
                 no_startup_window,
@@ -2194,6 +2222,7 @@ pub fn run(mut app: App, options: Options) -> Result<(), Box<dyn Error>> {
         system_theme: ColorScheme::Light,
         system_scale,
         scripts: restart_scripts,
+        interactive_scripts,
         session,
         notice: None,
         titles: BTreeMap::new(),
@@ -2848,6 +2877,7 @@ mod display_coordinate_tests {
             system_theme: ColorScheme::Light,
             system_scale: 100,
             scripts: false,
+            interactive_scripts: false,
             session: mg_chassis::net::Session::default(),
             notice: None,
             titles: BTreeMap::new(),

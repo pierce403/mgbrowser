@@ -1,4 +1,3 @@
-#![cfg(feature = "modern")]
 //! Milestone 2 DOM, CSS3 Selectors, Events, Interactive Forms, Geometry, and Web Platform APIs.
 use mg_sparkle::{
     document::{self, Document, Item},

@@ -160,6 +160,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | idna | 1.1.0 | MIT OR Apache-2.0 |
 | idna_adapter | 1.2.2 | Apache-2.0 OR MIT |
 | image | 0.25.10 | MIT OR Apache-2.0 |
+| image-webp | 0.2.4 | MIT OR Apache-2.0 |
 | imagesize | 0.13.0 | MIT |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
 | inout | 0.2.2 | MIT OR Apache-2.0 |
@@ -176,10 +177,10 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | malloc_size_of_derive | 0.1.3 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mg-browser | 0.9.33 | Apache-2.0 |
-| mg-butane | 0.9.33 | Apache-2.0 |
-| mg-chassis | 0.9.33 | Apache-2.0 |
-| mg-sparkle | 0.9.33 | Apache-2.0 |
+| mg-browser | 0.9.34 | Apache-2.0 |
+| mg-butane | 0.9.34 | Apache-2.0 |
+| mg-chassis | 0.9.34 | Apache-2.0 |
+| mg-sparkle | 0.9.34 | Apache-2.0 |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
@@ -242,6 +243,7 @@ texts are preserved in the release archive's THIRD_PARTY_LICENSES.txt.
 | psl | 2.1.231 | MIT/Apache-2.0 |
 | psl-types | 2.0.11 | MIT/Apache-2.0 |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 |
+| quick-error | 2.0.1 | MIT/Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | rand | 0.10.2 | MIT OR Apache-2.0 |
 | rand | 0.9.5 | MIT OR Apache-2.0 |

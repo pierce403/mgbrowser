@@ -236,7 +236,7 @@ measure different things and must not be presented as equivalent budgets.
 | Parent active time / absolute lifetime | Two seconds total / 300 seconds |
 | Session transactions / aggregate wire | 64 including initialization / 32 MiB |
 
-### Interactive desktop profile (`boa-interactive-page-v1`, v0.9.32)
+### Interactive desktop profile (`boa-interactive-page-v1`, v0.9.32 / updated v0.9.34)
 
 Normal interactive desktop launches (`mgbrowser` without headless/CDP/WPT/smoke
 automation flags, or with explicit `--interactive-script-profile`) select
@@ -247,10 +247,14 @@ automation flags, or with explicit `--interactive-script-profile`) select
 | Resource | `boa-page-process-v1` (default/CI/WPT) | `boa-interactive-page-v1` (interactive desktop) |
 | --- | --- | --- |
 | VM opcode work | 1,000,000 instructions | 32,000,000 instructions |
-| Source admission | 1 MiB per source, 4 MiB cumulative | 1 MiB per source, 16 MiB cumulative |
-| Requested System allocation | 32 MiB outstanding, 64 MiB cumulative | 64 MiB outstanding, 512 MiB cumulative |
-| OS CPU / address space | 1 CPU second / 256 MiB | 5 CPU seconds / 768 MiB |
-| Parent active time / lifetime | 2 seconds total / 300 seconds | 10 seconds total / 300 seconds |
+| Recursion / VM stack | 64 / 65,536 entries | 384 / 262,144 entries |
+| Source admission | 1 MiB per source, 4 MiB cumulative | 16 MiB per source, 32 MiB cumulative |
+| ArrayBuffer / DOM logical admission | 4 MiB / 4 MiB | 16 MiB / 48 MiB |
+| Script document / eligible scripts | 1 MiB / 32 inline, 16 external | 8 MiB / 256 scripts, 128 external |
+| Requested System allocation | 32 MiB outstanding, 64 MiB cumulative | 384 MiB outstanding, 4 GiB cumulative |
+| OS CPU / address space | 1 CPU second / 256 MiB | 30 CPU seconds / 2,560 MiB |
+| Parent active time / lifetime | 2 seconds total / 300 seconds | 30 seconds total / 300 seconds |
+| Session transactions / wire | 64 / 32 MiB (10 MiB input, 8 MiB output) | 256 / 128 MiB (48 MiB input, 32 MiB output) |
 | Seccomp / `RLIMIT_NOFILE` / `RLIMIT_FSIZE` | Enforced (`NOFILE = 3`, `FSIZE = 0`) | Identical (`NOFILE = 3`, `FSIZE = 0`) |
 
 Static source admission counts UTF-8 bytes; dynamic compilation conservatively

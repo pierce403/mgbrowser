@@ -1,7 +1,6 @@
 //! Regression coverage for real-site CSS, SVG, layout, and classic-script compatibility
 //! uncovered during live multi-site audits (`slashdot.org`, `lobste.rs`, `en.wikipedia.org`,
 //! `reddit.com`, and Cloudflare-protected sites).
-#![cfg(feature = "modern")]
 
 use mg_sparkle::{
     document::{self, Document, parse},
@@ -911,4 +910,558 @@ fn worker_layout_cache_handles_over_sixty_four_inline_stylesheets_without_zero_r
     assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
     let doc = parse(&out.html, "https://www.google.com/search?q=ninjas");
     assert_eq!(doc.title, "241x36");
+}
+
+#[test]
+fn nested_list_dropdown_keeps_submenu_inside_parent_li_so_display_none_hides_overflow_menu() {
+    let html = r##"<!doctype html><html><head><style>
+        body { margin: 0; background: #ffffff; }
+        ul { list-style: none; margin: 0; padding: 0; }
+        .overflow_menu { display: none; background: #ff0000; width: 200px; height: 120px; }
+    </style></head><body>
+        <ul class="scopes">
+            <li id="images"><a href="/images">Images</a>
+            <li id="dots">
+                <a href="#">More</a>
+                <ul class="overflow_menu">
+                    <li id="translate"><a href="/translator">Translate</a>
+                    <li id="travel"><a href="/travel">Travel</a>
+                </ul>
+            <li id="news"><a href="/news">News</a>
+        </ul>
+    </body></html>"##;
+    let doc = parse(html, "https://www.bing.com/");
+    let dots = doc
+        .nodes
+        .iter()
+        .position(|n| n.attr("id") == Some("dots"))
+        .expect("#dots");
+    let menu = doc
+        .nodes
+        .iter()
+        .position(|n| n.attr("class") == Some("overflow_menu"))
+        .expect(".overflow_menu");
+    let translate = doc
+        .nodes
+        .iter()
+        .position(|n| n.attr("id") == Some("translate"))
+        .expect("#translate");
+    assert_eq!(
+        doc.nodes[menu].parent, dots,
+        "nested ul.overflow_menu must stay inside #dots li"
+    );
+    assert_eq!(
+        doc.nodes[translate].parent, menu,
+        "nested li#translate must stay inside ul.overflow_menu"
+    );
+    let frame = render_doc(&doc);
+    assert!(
+        !frame.canvas.pixels.contains(&0xff0000),
+        "display:none submenu must not paint leaked list items"
+    );
+}
+
+#[test]
+fn css_mask_image_and_webkit_mask_paint_tinted_alpha_icon() {
+    let mask_svg = r##"data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="4" y="4" width="12" height="12" fill="black"/></svg>"##;
+    let html = format!(
+        r##"<!doctype html><html><head><style>
+        body {{ margin: 0; background: #ffffff; }}
+        #icon {{
+            width: 20px;
+            height: 20px;
+            background-color: #1a73e8;
+            -webkit-mask-image: url('{mask_svg}');
+            -webkit-mask-size: 20px 20px;
+        }}
+    </style></head><body><div id="icon"></div></body></html>"##
+    );
+    let mut doc = parse(&html, "https://duckduckgo.com/");
+    let (ct, raw) = images::decode_data_url(mask_svg).expect("decode mask svg");
+    doc.resources.insert(
+        mask_svg.to_owned(),
+        document::ResourceData {
+            bytes: raw,
+            content_type: ct,
+        },
+    );
+    let frame = render_doc(&doc);
+    assert_eq!(
+        frame.canvas.pixels[0], 0xffffff,
+        "transparent outer mask ring must stay white"
+    );
+    let center = frame.canvas.pixels[10 * (frame.canvas.width as usize) + 10];
+    assert_eq!(
+        center, 0x1a73e8,
+        "opaque mask interior must tint with background-color"
+    );
+}
+
+#[test]
+fn webp_sniff_and_large_interactive_image_normalize_into_renderable_bounds() {
+    // Minimal lossless VP8L 2x2 green WebP container.
+    let webp_2x2: [u8; 36] = [
+        82, 73, 70, 70, 28, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 76, 16, 0, 0, 0, 47, 1, 64, 0, 0,
+        7, 80, 213, 40, 81, 255, 3, 17, 209, 255, 0,
+    ];
+    assert_eq!(images::sniff_image_mime(&webp_2x2), Some("image/webp"));
+    assert_eq!(
+        images::sniff_image_mime(b"\x89PNG\r\n\x1a\nrest"),
+        Some("image/png")
+    );
+    assert_eq!(
+        images::sniff_image_mime(b"\xff\xd8\xff\xe0rest"),
+        Some("image/jpeg")
+    );
+    let decoded = images::decode(&webp_2x2, "image/webp", None, None).expect("decode 2x2 webp");
+    assert_eq!((decoded.width, decoded.height), (2, 2));
+
+    // Oversized SVG viewBox or raster normalizes cleanly in interactive mode.
+    let big_svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#00aa44"/></svg>"##;
+    assert_eq!(images::sniff_image_mime(big_svg), Some("image/svg+xml"));
+    let (norm_ct, norm_bytes) =
+        images::normalize_interactive_image(big_svg, "image/svg+xml").expect("normalize svg");
+    let img = images::decode(&norm_bytes, &norm_ct, None, None).expect("decode normalized");
+    assert_eq!((img.width, img.height), (120, 60));
+}
+
+#[test]
+fn input_placeholder_and_author_styled_button_render_cleanly() {
+    let html = r##"<!doctype html><html><head><style>
+        body { margin: 8px; background: #ffffff; }
+        input { width: 220px; height: 32px; background: #ffffff; border: 1px solid #dfe1e5; padding: 4px 8px; }
+        button { width: 120px; height: 34px; background: #0969da; color: #ffffff; border: none; border-radius: 6px; }
+    </style></head><body>
+        <input id="q" placeholder="Search Google or type a URL">
+        <button id="go">Google Search</button>
+    </body></html>"##;
+    let doc = parse(html, "https://www.google.com/");
+    let frame = render_doc(&doc);
+    let has_blue = frame.canvas.pixels.iter().any(|&px| {
+        let r = (px >> 16) & 0xff;
+        let g = (px >> 8) & 0xff;
+        let b = px & 0xff;
+        r < 30 && g > 80 && b > 190
+    });
+    assert!(has_blue, "author button background #0969da must paint");
+}
+
+#[test]
+fn inner_text_excludes_script_style_and_hidden_subtrees() {
+    let html = r#"<!doctype html><html><body>
+        <div id="card">
+            <style>.x { color: red; }</style>
+            <script>var secretToken = 12345;</script>
+            <span style="display: none">Hidden menu</span>
+            <span hidden>Hidden attr</span>
+            <span>Visible Headline</span>
+        </div>
+        <script>
+            var el = document.getElementById("card");
+            document.title = el.innerText.trim() + "|" + (el.textContent.indexOf("secretToken") >= 0);
+        </script>
+    </body></html>"#;
+    let out = execute(Request {
+        url: "https://www.bing.com/".into(),
+        html: html.into(),
+        external_scripts: None,
+    });
+    assert!(out.errors.is_empty(), "errors: {:?}", out.errors);
+    let doc = parse(&out.html, "https://www.bing.com/");
+    assert_eq!(doc.title, "Visible Headline|true");
+}
+
+#[test]
+fn boa_platform_init_stylesheets_and_image_dimensions_drive_layout_and_hit_testing() {
+    use mg_butane::modern::ResourceProfile;
+    use mg_sparkle::page_session::{
+        observer::ObserverInit,
+        platform::{PlatformInit, ViewportState},
+    };
+    let html = r#"<!doctype html><html><head>
+        <link rel="stylesheet" href="https://github.com/assets/app.css">
+    </head><body>
+        <div id="ghost" class="sr-only">Overlay</div>
+        <button id="action" class="btn">Star</button>
+        <img id="thumb" src="https://i.ytimg.com/vi/abc/hq720.jpg">
+        <script>
+            var hit = document.elementFromPoint(40, 20);
+            var img = document.getElementById("thumb");
+            document.title = [
+                hit ? hit.id : "none",
+                img.complete,
+                img.naturalWidth + "x" + img.naturalHeight
+            ].join("|");
+        </script>
+    </body></html>"#;
+    let init = PlatformInit {
+        viewport: ViewportState {
+            inner_width: 1280,
+            inner_height: 800,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            device_pixel_ratio: 1.0,
+        },
+        stylesheets: vec![(
+            "body { margin: 0; } .sr-only { display: none; } .btn { display: block; width: 100px; height: 40px; }".into(),
+            "https://github.com/assets/app.css".into(),
+            String::new(),
+        )],
+        image_dimensions: vec![(
+            "https://i.ytimg.com/vi/abc/hq720.jpg".into(),
+            1280,
+            720,
+        )],
+        ..PlatformInit::default()
+    };
+    let (realm, reply) = BoaPageRealm::start_with_platform_and_profile(
+        Request {
+            url: "https://github.com/rust-lang/rust".into(),
+            html: html.into(),
+            external_scripts: None,
+        },
+        ObserverInit::Disabled,
+        init,
+        [0x11; 32],
+        ResourceProfile::InteractivePageV1,
+    );
+    assert!(realm.is_some());
+    assert_eq!(reply.state, RealmState::Ready, "errors: {:?}", reply.errors);
+    let doc = document::project_nodes(
+        reply.snapshot.as_ref().expect("snapshot").nodes.clone(),
+        "https://github.com/rust-lang/rust",
+    )
+    .expect("projected doc");
+    assert_eq!(doc.title, "action|true|1280x720");
+}
+
+#[test]
+fn key_input_enter_syncs_value_fires_keydown_submit_and_navigates_search_form() {
+    use mg_butane::modern::ResourceProfile;
+    use mg_sparkle::page_session::{
+        observer::ObserverInit,
+        platform::{PlatformCommand, PlatformInit},
+    };
+    let html = r#"<!doctype html><html><body>
+        <form id="sf" action="/search" method="GET">
+            <textarea id="q" name="q" rows="1" enterkeyhint="search"></textarea>
+        </form>
+        <script>
+            window.__events = [];
+            var q = document.getElementById("q");
+            q.addEventListener("input", function() { window.__events.push("input:" + q.value); });
+            q.addEventListener("keydown", function(e) { window.__events.push("key:" + e.key); });
+            document.getElementById("sf").addEventListener("submit", function() {
+                window.__events.push("submit");
+                document.title = window.__events.join(",");
+            });
+        </script>
+    </body></html>"#;
+    let parsed = parse(html, "https://www.google.com/");
+    let q_node = parsed
+        .nodes
+        .iter()
+        .position(|n| n.attr("id") == Some("q"))
+        .expect("#q node");
+    let (realm, init_reply) = BoaPageRealm::start_with_platform_and_profile(
+        Request {
+            url: "https://www.google.com/".into(),
+            html: html.into(),
+            external_scripts: None,
+        },
+        ObserverInit::Disabled,
+        PlatformInit::default(),
+        [0x22; 32],
+        ResourceProfile::InteractivePageV1,
+    );
+    let mut realm = realm.expect("interactive realm");
+    assert_eq!(init_reply.state, RealmState::Ready);
+    let reply = realm.platform_command(PlatformCommand::KeyInput {
+        key: "Enter".into(),
+        code: "Enter".into(),
+        key_code: 13,
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+        target_value: Some((q_node, "rust programming".into())),
+    });
+    assert_eq!(
+        reply.navigation.as_deref(),
+        Some("https://www.google.com/search?q=rust+programming")
+    );
+    let out_doc = document::project_nodes(
+        reply.snapshot.as_ref().expect("snapshot").nodes.clone(),
+        "https://www.google.com/",
+    )
+    .expect("projected doc");
+    assert_eq!(out_doc.title, "input:rust programming,key:Enter,submit");
+}
+
+#[test]
+fn shreddit_and_amazon_storefront_fixtures_render_and_interact_cleanly() {
+    use mg_butane::modern::ResourceProfile;
+    use mg_sparkle::page_session::{
+        InputKind, SessionInput, observer::ObserverInit, platform::PlatformInit,
+    };
+    let html = r##"<!doctype html><html><head><style>
+        body { margin: 0; font-family: sans-serif; background: #0e1113; color: #eef1f3; }
+        header { display: flex; align-items: center; padding: 8px 16px; background: #131f23; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
+        shreddit-post, .s-result-item { display: block; padding: 12px; background: #1a282d; border-radius: 8px; }
+    </style></head><body>
+        <header><input id="twotabsearchtextbox" placeholder="Search Reddit & Storefront"></header>
+        <main class="grid">
+            <shreddit-post id="p1" post-title="Rust 2026 Release"><button id="upvote">Upvote (10)</button></shreddit-post>
+            <div class="s-result-item" id="a1"><span>Mechanical Keyboard</span></div>
+        </main>
+        <script>
+            customElements.define("shreddit-post", class extends HTMLElement {
+                connectedCallback() { this.setAttribute("data-hydrated", "1"); }
+            });
+            document.getElementById("upvote").addEventListener("click", function(e) {
+                e.target.textContent = "Upvoted (11)";
+                document.title = "hydrated=" + document.getElementById("p1").getAttribute("data-hydrated") + "|upvoted";
+            });
+        </script>
+    </body></html>"##;
+    let (realm, reply) = BoaPageRealm::start_with_platform_and_profile(
+        Request {
+            url: "https://www.reddit.com/r/rust/".into(),
+            html: html.into(),
+            external_scripts: None,
+        },
+        ObserverInit::Disabled,
+        PlatformInit::default(),
+        [0x33; 32],
+        ResourceProfile::InteractivePageV1,
+    );
+    let mut realm = realm.expect("shreddit interactive realm");
+    assert_eq!(reply.state, RealmState::Ready, "errors: {:?}", reply.errors);
+    let doc0 = document::project_nodes(
+        reply.snapshot.as_ref().expect("snapshot").nodes.clone(),
+        "https://www.reddit.com/r/rust/",
+    )
+    .expect("projected doc0");
+    let btn = doc0
+        .nodes
+        .iter()
+        .position(|n| n.attr("id") == Some("upvote"))
+        .expect("#upvote");
+    let click_reply = realm.dispatch(SessionInput {
+        kind: InputKind::Click { target: btn },
+        edits: Vec::new(),
+    });
+    let doc1 = document::project_nodes(
+        click_reply
+            .snapshot
+            .as_ref()
+            .expect("snapshot")
+            .nodes
+            .clone(),
+        "https://www.reddit.com/r/rust/",
+    )
+    .expect("projected doc1");
+    assert_eq!(doc1.title, "hydrated=1|upvoted");
+    let frame = render_doc(&doc1);
+    assert!(frame.canvas.width > 0 && frame.canvas.height > 0);
+}
+
+#[test]
+fn body_stylesheet_links_beyond_17_and_interactive_style_budget_work_without_widening_default() {
+    let mut links = String::new();
+    for i in 0..22 {
+        if i == 10 {
+            links.push_str("</head><body>");
+        }
+        links.push_str(&format!(
+            r#"<link rel="stylesheet" href="https://github.githubassets.com/assets/chunk-{i}.css">"#
+        ));
+    }
+    let html = format!("<!doctype html><html><head>{links}<h2 class=\"vh\">Nav</h2></body></html>");
+    let mut doc = parse(&html, "https://github.com/rust-lang/rust");
+    assert_eq!(doc.stylesheet_requests().len(), 17);
+    let interactive_reqs = doc.stylesheet_requests_with_limit(65);
+    assert_eq!(interactive_reqs.len(), 22);
+
+    let three_mib_sheet = mg_sparkle::document::StylesheetSource {
+        css: format!(
+            "{} .vh {{ position: absolute; width: 1px; height: 1px; overflow: hidden; }}",
+            " ".repeat(3 * 1024 * 1024)
+        ),
+        base_url: "https://github.githubassets.com/assets/marketing-header.css".into(),
+        media: String::new(),
+    };
+    assert!(
+        mg_sparkle::style::compute_styles(
+            &doc,
+            std::slice::from_ref(&three_mib_sheet),
+            (1280.0, 800.0)
+        )
+        .is_err(),
+        "default non-interactive style budget must still reject > 2 MiB"
+    );
+    doc.set_interactive_style_budget(true);
+    let styles = mg_sparkle::style::compute_styles(&doc, &[three_mib_sheet], (1280.0, 800.0))
+        .expect("8 MiB interactive style budget");
+    assert!(!styles.is_empty());
+}
+
+#[test]
+fn interactive_cross_origin_https_esm_deep_recursion_and_malformed_attr_keys_roundtrip() {
+    use mg_butane::modern::ResourceProfile;
+    use mg_sparkle::js_browser::{
+        ClassicErrorVisibility, ClassicSourceProvenance, ExternalScriptSource,
+    };
+    use mg_sparkle::page_session::{observer::ObserverInit, platform::PlatformInit};
+
+    // Malformed adjacent quote attribute `data-a="1"bad="2"` must not poison ArenaSnapshot projection.
+    let html = r#"<!doctype html><html><body>
+        <div id="probe" data-a="1"bad="2">hello</div>
+        <script type="module" src="https://github.githubassets.com/assets/entry.js"></script>
+    </body></html>"#;
+    let parsed = parse(html, "https://github.com/rust-lang/rust");
+    let script_node = parsed
+        .nodes
+        .iter()
+        .position(|n| n.tag == "script")
+        .expect("module script node");
+
+    let make_req = || Request {
+        url: "https://github.com/rust-lang/rust".into(),
+        html: html.into(),
+        external_scripts: Some(vec![
+            ExternalScriptSource {
+                node: script_node,
+                source: r#"
+                    import { version } from "https://github.githubassets.com/assets/dep.js";
+                    function sumDepth(n) { return n <= 0 ? 0 : 1 + sumDepth(n - 1); }
+                    document.title = version + ":" + sumDepth(180);
+                "#
+                .into(),
+                provenance: Some(ClassicSourceProvenance {
+                    response_url: "https://github.githubassets.com/assets/entry.js".into(),
+                    error_visibility: ClassicErrorVisibility::Muted,
+                }),
+            },
+            ExternalScriptSource {
+                node: usize::MAX,
+                source: r#"export const version = "gh-esm-ok";"#.into(),
+                provenance: Some(ClassicSourceProvenance {
+                    response_url: "https://github.githubassets.com/assets/dep.js".into(),
+                    error_visibility: ClassicErrorVisibility::Muted,
+                }),
+            },
+        ]),
+    };
+    let make_init = PlatformInit::default;
+
+    // Default PageProcessV1 keeps same-origin module restriction and 64 recursion limit.
+    let (default_realm, default_reply) = BoaPageRealm::start_with_platform_and_profile(
+        make_req(),
+        ObserverInit::Disabled,
+        make_init(),
+        [0x44; 32],
+        ResourceProfile::PageProcessV1,
+    );
+    assert!(default_realm.is_none());
+    assert!(
+        default_reply.errors.iter().any(|e| {
+            e.contains("Invalid or contradictory classic source provenance")
+                || e.contains("Cross-origin module import is not allowed")
+        }),
+        "expected cross-origin rejection in PageProcessV1, got {:?}",
+        default_reply.errors
+    );
+
+    // InteractivePageV1 admits HTTPS CORS-fetched modules, deep recursion (180 frames), and clean snapshot projection.
+    let (interactive_realm, interactive_reply) = BoaPageRealm::start_with_platform_and_profile(
+        make_req(),
+        ObserverInit::Disabled,
+        make_init(),
+        [0x55; 32],
+        ResourceProfile::InteractivePageV1,
+    );
+    assert!(interactive_realm.is_some());
+    assert_eq!(
+        interactive_reply.state,
+        RealmState::Ready,
+        "errors: {:?}",
+        interactive_reply.errors
+    );
+    assert!(
+        interactive_reply.errors.is_empty(),
+        "unexpected errors: {:?}",
+        interactive_reply.errors
+    );
+    let projected = document::project_nodes(
+        interactive_reply
+            .snapshot
+            .as_ref()
+            .expect("snapshot")
+            .nodes
+            .clone(),
+        "https://github.com/rust-lang/rust",
+    )
+    .expect("clean ArenaSnapshot projection despite malformed HTML attr token");
+    assert_eq!(projected.title, "gh-esm-ok:180");
+
+    // Regex containing `{` must not mask subsequent static ES module imports.
+    let regex_mod = r#"function f(){return /\{/;} import * as p from "./primer-react.js";"#;
+    assert_eq!(
+        mg_sparkle::js_browser::extract_static_module_specifiers(regex_mod),
+        vec!["./primer-react.js".to_string()]
+    );
+
+    // InteractivePageV1 must allow AutomationRequest after > 4 MiB DOM allocation,
+    // and expose `window.DocumentType` without throwing ReferenceError.
+    let mut realm = interactive_realm.unwrap();
+    let mut reply = interactive_reply;
+    while let Some(wake) = reply.task_wake {
+        reply = realm.pump_tasks(mg_sparkle::page_session::TaskPump {
+            wake_token: wake.token,
+        });
+    }
+    let prev_rev = reply.revision;
+    let (auto_reply, auto_res) = realm.automation(
+        mg_sparkle::page_session::automation::AutomationRequest {
+            owner: 1,
+            operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                source: "const big = 'x'.repeat(5 * 1024 * 1024); const d = document.createElement('div'); d.textContent = big; document.body.appendChild(d); typeof DocumentType === 'function' && !(document instanceof DocumentType)".into(),
+                return_by_value: true,
+                group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        },
+    );
+    assert_eq!(auto_reply.revision, prev_rev + 1);
+    assert!(matches!(
+        auto_res,
+        mg_sparkle::page_session::automation::AutomationResult::Value(
+            mg_sparkle::page_session::automation::RemoteValue::Boolean(true)
+        )
+    ));
+    let (auto_reply2, auto_res2) =
+        realm.automation(mg_sparkle::page_session::automation::AutomationRequest {
+            owner: 1,
+            operation: mg_sparkle::page_session::automation::Operation::Evaluate {
+                source: "document.body.children.length > 0 && Intl.DateTimeFormat().resolvedOptions().timeZone === 'UTC' && new Intl.NumberFormat('en-US').format(42) === '42' && new Intl.PluralRules('en-US').select(1) === 'one' && Intl.Collator().compare('a', 'b') < 0 && new Intl.Locale('en-US').language === 'en'".into(),
+                return_by_value: true,
+                group: None,
+                world: None,
+                await_promise: false,
+                user_gesture: false,
+            },
+            edits: vec![],
+        });
+    assert_eq!(auto_reply2.revision, prev_rev + 2);
+    assert!(matches!(
+        auto_res2,
+        mg_sparkle::page_session::automation::AutomationResult::Value(
+            mg_sparkle::page_session::automation::RemoteValue::Boolean(true)
+        )
+    ));
 }

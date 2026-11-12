@@ -77,7 +77,7 @@ mod linux {
     pub(super) const INPUT_LIMIT: usize = 2 * 1024 * 1024;
     pub(super) const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
     pub(super) const WALL_LIMIT: Duration = Duration::from_secs(2);
-    pub(super) const INTERACTIVE_WALL_LIMIT: Duration = Duration::from_secs(5);
+    pub(super) const INTERACTIVE_WALL_LIMIT: Duration = Duration::from_secs(30);
     #[cfg(test)]
     use super::isolation::filter;
     pub(super) use super::isolation::{install_interactive_isolation, install_isolation};

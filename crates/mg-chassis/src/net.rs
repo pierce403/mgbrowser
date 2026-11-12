@@ -21,6 +21,7 @@ use mg_sparkle::page_session::platform::{
 use url::Url;
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
+const MAX_RESOURCE_BODY: usize = 16 * 1024 * 1024;
 const MAX_HEADERS: usize = 64 * 1024;
 const MAX_REQUEST: usize = 64 * 1024;
 const MAX_REDIRECTS: usize = 8;
@@ -332,6 +333,23 @@ impl Session {
         page_url: &str,
         req: ScriptFetchRequest,
     ) -> ScriptFetchResponse {
+        self.fetch_script_inner(page_url, req, false)
+    }
+
+    pub fn fetch_script_interactive(
+        &self,
+        page_url: &str,
+        req: ScriptFetchRequest,
+    ) -> ScriptFetchResponse {
+        self.fetch_script_inner(page_url, req, true)
+    }
+
+    fn fetch_script_inner(
+        &self,
+        page_url: &str,
+        req: ScriptFetchRequest,
+        interactive: bool,
+    ) -> ScriptFetchResponse {
         let req_id = req.request_id.max(1);
         if let Err(err) = req.validate() {
             return ScriptFetchResponse::network_error(req_id, err);
@@ -348,7 +366,7 @@ impl Session {
         if let Err(err) = validate_url(&url) {
             return ScriptFetchResponse::network_error(req_id, err);
         }
-        if origin.origin() != url.origin() {
+        if !interactive && origin.origin() != url.origin() {
             return ScriptFetchResponse::network_error(req_id, "Same-origin policy violation");
         }
         let mut method = req.method.trim().to_owned();
@@ -418,24 +436,49 @@ impl Session {
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         let config = Arc::new(config);
         let deadline = Instant::now() + Duration::from_secs(15);
-        let max_body: usize = 1024 * 1024;
+        let max_body: usize = if interactive {
+            4 * 1024 * 1024
+        } else {
+            1024 * 1024
+        };
         let no_cache = self.cache_disabled();
+        let origin_serial = origin.origin().ascii_serialization();
+        let mut same_origin_chain = origin.origin() == url.origin();
+        let mut visited_https = origin.scheme() == "https" || url.scheme() == "https";
 
         for redirects in 0..=5 {
             if let Err(err) = validate_url(&url) {
                 return ScriptFetchResponse::network_error(req_id, err);
             }
-            if origin.origin() != url.origin() {
+            same_origin_chain &= origin.origin() == url.origin();
+            if !interactive && !same_origin_chain {
                 return ScriptFetchResponse::network_error(req_id, "Same-origin policy violation");
             }
-            let cookie_header = match self.cookies.lock() {
-                Ok(mut jar) => jar.header(&url),
-                Err(_) => return ScriptFetchResponse::network_error(req_id, "Cookie lock failed"),
+            if !same_origin_chain && visited_https && url.scheme() != "https" {
+                return ScriptFetchResponse::network_error(
+                    req_id,
+                    "Mixed-content cross-origin fetch blocked",
+                );
+            }
+            visited_https |= url.scheme() == "https";
+            let cookie_header = if same_origin_chain {
+                match self.cookies.lock() {
+                    Ok(mut jar) => jar.header(&url),
+                    Err(_) => {
+                        return ScriptFetchResponse::network_error(req_id, "Cookie lock failed");
+                    }
+                }
+            } else {
+                String::new()
             };
+            let mut hop_headers = custom_headers.clone();
+            if !same_origin_chain && !hop_headers.iter().any(|(k, _)| k == "origin") {
+                hop_headers.push(("origin".into(), origin_serial.clone()));
+            }
             let req_wire = match script_request_bytes(
                 &method,
                 &url,
-                &custom_headers,
+                &hop_headers,
                 body_bytes.as_deref(),
                 &cookie_header,
                 no_cache,
@@ -560,7 +603,7 @@ impl Session {
                 });
             }
 
-            if let Ok(mut jar) = self.cookies.lock() {
+            if same_origin_chain && let Ok(mut jar) = self.cookies.lock() {
                 for (_, value) in head.headers.iter().filter(|(name, _)| name == "set-cookie") {
                     jar.store(&url, value);
                 }
@@ -581,7 +624,7 @@ impl Session {
                 if let Err(err) = validate_url(&next) {
                     return ScriptFetchResponse::network_error(req_id, err);
                 }
-                if origin.origin() != next.origin() {
+                if !interactive && origin.origin() != next.origin() {
                     return ScriptFetchResponse::network_error(
                         req_id,
                         "Cross-origin redirect blocked by same-origin policy",
@@ -601,6 +644,19 @@ impl Session {
                 }
                 url = next;
                 continue;
+            }
+
+            if !same_origin_chain {
+                let acao = head
+                    .header("access-control-allow-origin")
+                    .map(str::trim)
+                    .unwrap_or("");
+                if acao != "*" && !acao.eq_ignore_ascii_case(&origin_serial) {
+                    return ScriptFetchResponse::network_error(
+                        req_id,
+                        "CORS policy blocked cross-origin response",
+                    );
+                }
             }
 
             let decoded = if is_head || raw_bytes.is_empty() {
@@ -721,7 +777,7 @@ impl Session {
                 https_only: false,
                 origin: Some(origin),
                 resource_kind: kind,
-                max_body: max_body.min(MAX_BODY),
+                max_body: max_body.min(MAX_RESOURCE_BODY),
                 deadline,
             },
             Some(&self.exchanges),

@@ -43,7 +43,7 @@ mod cssom;
 mod dom_events;
 mod dom_exception;
 mod dom_ops;
-mod esm;
+pub(super) mod esm;
 mod fetch_xhr;
 mod geometry_style;
 #[cfg(test)]
@@ -361,6 +361,8 @@ struct State {
     window_status: String,
     #[unsafe_ignore_trace]
     iframe_documents: HashMap<usize, usize>,
+    #[unsafe_ignore_trace]
+    image_dimensions: HashMap<String, (u32, u32)>,
     #[unsafe_ignore_trace]
     automation_only: bool,
     #[unsafe_ignore_trace]
@@ -2352,7 +2354,13 @@ impl BoaPageRealm {
                 .push("Invalid Window harness observer configuration".into());
             return (None, reply);
         }
-        if request.html.len() > MAX_SOURCE || request.url.len() > 16_384 {
+        let interactive = resource_profile == modern::ResourceProfile::InteractivePageV1;
+        let max_html = if interactive {
+            8 * 1024 * 1024
+        } else {
+            MAX_SOURCE
+        };
+        if request.html.len() > max_html || request.url.len() > 16_384 {
             reply
                 .errors
                 .push("Script document exceeds the source/URL limit".into());
@@ -2371,14 +2379,27 @@ impl BoaPageRealm {
                 return (None, reply);
             }
         };
-        let document = document::parse_with_scripting(
+        let mut document = document::parse_with_scripting(
             &request.html,
             url.as_str(),
             !platform_init.automation_only,
         );
-        let allocated = match request
-            .validate_modern_external_sources_with_modules(&document, modules_enabled)
-        {
+        if !platform_init.stylesheets.is_empty() {
+            document.stylesheets = platform_init
+                .stylesheets
+                .iter()
+                .map(|(css, base_url, media)| crate::style::StylesheetSource {
+                    css: css.clone(),
+                    base_url: base_url.clone(),
+                    media: media.clone(),
+                })
+                .collect();
+        }
+        let allocated = match request.validate_modern_external_sources_with_modules(
+            &document,
+            modules_enabled,
+            interactive,
+        ) {
             Ok(bytes) => bytes,
             Err(error) => {
                 reply.errors.push(error);
@@ -2474,7 +2495,8 @@ impl BoaPageRealm {
                 continue;
             }
             count += 1;
-            if count > 32 {
+            let max_scripts = if interactive { 256 } else { 32 };
+            if count > max_scripts {
                 reply.errors.push("Script count limit reached".into());
                 break;
             }
@@ -2528,7 +2550,8 @@ impl BoaPageRealm {
             }
             if node.attr("src").is_some() {
                 if let Some(source) = request.external_source(index) {
-                    if node.attr("defer").is_some() {
+                    if node.attr("defer").is_some() || (interactive && node.attr("async").is_some())
+                    {
                         deferred.push(PageSource {
                             node: index,
                             external: true,
@@ -2588,11 +2611,14 @@ impl BoaPageRealm {
                 Some((node, contract))
             }
         };
+        let mut document = document;
+        document.set_interactive_style_budget(interactive);
         let host = BrowserHost {
             document,
             url,
             navigation: None,
             allocated,
+            interactive,
             collections: Vec::new(),
             listeners: Vec::new(),
             events: Vec::new(),
@@ -2616,6 +2642,8 @@ impl BoaPageRealm {
             let mut data = realm.state.borrow_mut();
             data.max_listeners = dom_events::MAX_BROWSER_LISTENERS;
             data.esm.enabled = true;
+            data.esm.allow_cross_origin_https =
+                resource_profile == modern::ResourceProfile::InteractivePageV1;
             data.esm.page_url = doc_base_url;
             data.esm.importmap = esm_importmap;
             data.esm.sources = esm_sources;
@@ -2758,6 +2786,11 @@ impl BoaPageRealm {
         };
         let initial_history_json = platform_init.history_state_json;
         let cookie_entries = web_apis::parse_initial_cookies(&platform_init.initial_cookies);
+        let image_dimensions: HashMap<String, (u32, u32)> = platform_init
+            .image_dimensions
+            .into_iter()
+            .map(|(u, w, h)| (u, (w, h)))
+            .collect();
         let shared = Gc::new(GcRefCell::new(State {
             host,
             realm: NEXT_REALM.fetch_add(1, Ordering::Relaxed),
@@ -2839,6 +2872,7 @@ impl BoaPageRealm {
             window_name: String::new(),
             window_status: String::new(),
             iframe_documents: HashMap::new(),
+            image_dimensions,
             automation_only: platform_init.automation_only,
             enable_network,
             active_world: 0,
@@ -4262,6 +4296,16 @@ impl BoaPageRealm {
             reply.lifecycle = Some(self.lifecycle);
             reply.boa = Some(self.engine.stats());
         }
+        reply.errors.truncate(64);
+        for error in &mut reply.errors {
+            if error.len() > 4096 {
+                let mut end = 4096;
+                while !error.is_char_boundary(end) {
+                    end -= 1;
+                }
+                error.truncate(end);
+            }
+        }
     }
 
     fn advertise_wake(&mut self, reply: &mut SessionReply) -> Result<(), String> {
@@ -4868,6 +4912,29 @@ impl BoaPageRealm {
                         reply.errors.push(err);
                     }
                 }
+            }
+            page_session::platform::PlatformCommand::KeyInput {
+                key,
+                code,
+                key_code,
+                shift,
+                ctrl,
+                alt,
+                meta,
+                target_value,
+            } => {
+                dom_events::fire_key_events(
+                    self,
+                    &key,
+                    &code,
+                    key_code,
+                    shift,
+                    ctrl,
+                    alt,
+                    meta,
+                    target_value,
+                    &mut reply.errors,
+                );
             }
         }
         self.snapshot(&mut reply);

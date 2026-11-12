@@ -20,6 +20,7 @@ fn fresh(enabled: bool) -> BoaPageRealm {
             url: url::Url::parse("https://observer.example.test/private").unwrap(),
             navigation: None,
             allocated: html.len(),
+            interactive: false,
             collections: vec![],
             listeners: vec![],
             events: vec![],

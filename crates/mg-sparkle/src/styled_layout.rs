@@ -898,28 +898,45 @@ pub(crate) fn render_scaled_profiled(
                     style.border_width[3] * sx,
                 ];
                 let area = |kind| background_box(*rect, bw, *padding, kind);
-                if let Some(color_box) = area(style.background_clip) {
-                    paint_rect(
-                        &mut canvas,
-                        color_box,
-                        Color {
-                            rgb: style.background_color.rgb,
-                            alpha: style.background_color.alpha * opacity,
-                        },
-                        viewport.scroll,
-                    );
-                }
-                if let Some(gradient) = style.background_gradient.as_deref()
-                    && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
-                {
-                    crate::gradient::paint_with_opacity(
-                        &mut canvas,
-                        [origin.x, origin.y, origin.w, origin.h],
-                        [clip.x, clip.y, clip.w, clip.h],
-                        gradient,
-                        opacity,
-                        viewport.scroll,
-                    );
+                if let Some(mask) = style.mask_image.as_deref() {
+                    if let Some(color_box) = area(style.background_clip) {
+                        paint_masked_box(
+                            &mut canvas,
+                            document,
+                            *rect,
+                            color_box,
+                            None,
+                            mask,
+                            style.background_color,
+                            opacity,
+                            viewport.scroll,
+                        );
+                    }
+                } else {
+                    if let Some(color_box) = area(style.background_clip) {
+                        paint_rect(
+                            &mut canvas,
+                            color_box,
+                            Color {
+                                rgb: style.background_color.rgb,
+                                alpha: style.background_color.alpha * opacity,
+                            },
+                            viewport.scroll,
+                        );
+                    }
+                    if let Some(gradient) = style.background_gradient.as_deref()
+                        && let (Some(origin), Some(clip)) =
+                            (area(gradient.origin), area(gradient.clip))
+                    {
+                        crate::gradient::paint_with_opacity(
+                            &mut canvas,
+                            [origin.x, origin.y, origin.w, origin.h],
+                            [clip.x, clip.y, clip.w, clip.h],
+                            gradient,
+                            opacity,
+                            viewport.scroll,
+                        );
+                    }
                 }
             }
             Paint::RoundedDecoration(rect, node, padding) => {
@@ -945,17 +962,35 @@ pub(crate) fn render_scaled_profiled(
                     rounded_background_box(outer_logical, bw, *padding, style.background_clip);
                 let outer_phys = outer_logical.to_physical(&canvas, viewport.scroll);
                 let inner_phys = inner_logical.to_physical(&canvas, viewport.scroll);
-                let bg_phys = bg_logical.map(|b| {
-                    (
-                        b.to_physical(&canvas, viewport.scroll),
-                        style.background_color.rgb,
-                        style.background_color.alpha * opacity,
-                    )
-                });
+                let bg_phys = if style.mask_image.is_some() {
+                    None
+                } else {
+                    bg_logical.map(|b| {
+                        (
+                            b.to_physical(&canvas, viewport.scroll),
+                            style.background_color.rgb,
+                            style.background_color.alpha * opacity,
+                        )
+                    })
+                };
                 let borders = style.border_color.map(|c| (c.rgb, c.alpha * opacity));
                 canvas.paint_rounded_decoration(outer_phys, inner_phys, bg_phys, borders);
                 let area = |kind| background_box(*rect, bw, *padding, kind);
-                if let Some(gradient) = style.background_gradient.as_deref()
+                if let Some(mask) = style.mask_image.as_deref() {
+                    if let Some(color_box) = area(style.background_clip) {
+                        paint_masked_box(
+                            &mut canvas,
+                            document,
+                            *rect,
+                            color_box,
+                            bg_logical,
+                            mask,
+                            style.background_color,
+                            opacity,
+                            viewport.scroll,
+                        );
+                    }
+                } else if let Some(gradient) = style.background_gradient.as_deref()
                     && let (Some(origin), Some(clip)) = (area(gradient.origin), area(gradient.clip))
                 {
                     if let Some(grad_rr) =
@@ -1267,11 +1302,18 @@ pub(crate) fn render_scaled_profiled(
                                 ..
                             }
                         );
-                        let borderless = !focused
-                            && !submit
-                            && (style.border_width == [0.0; 4]
-                                || style.border_color.iter().all(|c| c.alpha == 0.0));
-                        if !borderless {
+                        let ua_default_chrome = style.background_color.alpha == 0.0
+                            && style.background_gradient.is_none()
+                            && style.background_images.is_empty()
+                            && style.border_width == [2.0; 4]
+                            && style
+                                .border_color
+                                .iter()
+                                .all(|c| c.rgb == 0x888888 && c.alpha == 1.0)
+                            && !has_nonzero_border_radius(style);
+                        let draw_ua_box = ua_default_chrome
+                            || (focused && !submit && style.border_width == [0.0; 4]);
+                        if draw_ua_box && ua_default_chrome {
                             canvas.rect(rx, y, rw, rh, if focused { 0x277453 } else { 0x888888 });
                             canvas.rect(
                                 rx + 1,
@@ -1281,35 +1323,9 @@ pub(crate) fn render_scaled_profiled(
                                 if submit { 0xeeeeee } else { 0xffffff },
                             );
                         }
-                        let avail = rect.w - if borderless { 0.0 } else { 8.0 };
-                        if is_multiline && text.contains('\n') && !focused {
-                            let lh = layout
-                                .fonts
-                                .select_family(&style.font_families)
-                                .line_height(style.font_size)
-                                .max(1);
-                            let mut ly = y + 2;
-                            for line_str in text.split('\n').take(16) {
-                                if ly + lh > y + rh as i32 {
-                                    break;
-                                }
-                                let shown = super::render::fit_tail(
-                                    layout.fonts,
-                                    line_str,
-                                    style.font_size,
-                                    avail,
-                                );
-                                canvas.text_weight(
-                                    layout.fonts,
-                                    (rx + if borderless { 0 } else { 3 }, ly),
-                                    &shown,
-                                    style.font_size,
-                                    style.color.rgb,
-                                    style.font_weight >= 600,
-                                );
-                                ly += lh;
-                            }
-                        } else {
+                        if submit {
+                            let avail =
+                                (rect.w - if ua_default_chrome { 4.0 } else { 0.0 }).max(0.0);
                             let single_text;
                             let display_text = if text.contains('\n') {
                                 single_text = text.replace('\n', " ");
@@ -1317,84 +1333,192 @@ pub(crate) fn render_scaled_profiled(
                             } else {
                                 text.as_str()
                             };
-                            let (shown, caret_x) = if focused
-                                && !submit
-                                && let Some((sa, sb, caret)) = controls.input_selection
-                            {
-                                let (shown, sx0, sx1, cx) = super::render::slice_visible_input(
-                                    layout.fonts,
-                                    display_text,
-                                    style.font_size,
-                                    avail,
-                                    sa,
-                                    sb,
-                                    caret,
-                                );
-                                if sx1 > sx0 {
-                                    canvas.rect(
-                                        rx + if borderless { 0 } else { 3 } + sx0,
-                                        y + 2,
-                                        (sx1 - sx0) as u32 + 1,
-                                        (rect.h - 4.0).max(0.0) as u32,
-                                        0xc6dfed,
-                                    );
-                                }
-                                (shown, Some(cx))
+                            let bold = style.font_weight >= 600;
+                            let shown = fit_head_styled(
+                                layout.fonts,
+                                &style.font_families,
+                                display_text,
+                                style.font_size,
+                                bold,
+                                avail,
+                            );
+                            let fam = layout.fonts.select_family(&style.font_families);
+                            let line_h = fam.line_height(style.font_size) as f32;
+                            let tw = fam.width_weight(&shown, style.font_size, bold);
+                            let tx = rx + ((rect.w - tw).max(0.0) / 2.0).round() as i32;
+                            let ty = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
+                            canvas.text_styled_alpha(
+                                layout.fonts.select_family(&style.font_families),
+                                (tx, ty),
+                                &shown,
+                                style.font_size,
+                                style.color.rgb,
+                                bold,
+                                style.italic,
+                                style.color.alpha * opacity,
+                            );
+                        } else {
+                            let borderless = !ua_default_chrome;
+                            let pad_x = if borderless { 4 } else { 3 };
+                            let avail = (rect.w - (pad_x * 2) as f32).max(0.0);
+                            let placeholder = if text.is_empty() && !focused {
+                                document
+                                    .nodes
+                                    .get(*node)
+                                    .and_then(|n| n.attr("placeholder"))
+                                    .unwrap_or("")
                             } else {
-                                let shown = super::render::fit_tail(
+                                ""
+                            };
+                            if !placeholder.is_empty() {
+                                let bold = style.font_weight >= 600;
+                                let shown = fit_head_styled(
                                     layout.fonts,
-                                    display_text,
+                                    &style.font_families,
+                                    placeholder,
                                     style.font_size,
+                                    bold,
                                     avail,
                                 );
-                                if focused && controls.select_all {
-                                    canvas.rect(
-                                        rx + 3,
-                                        y + 2,
-                                        layout.fonts.width(&shown, style.font_size).ceil() as u32,
-                                        (rect.h - 4.0).max(0.0) as u32,
-                                        0xc6dfed,
-                                    );
-                                }
-                                (shown, None)
-                            };
-                            if borderless {
                                 let line_h = layout
                                     .fonts
                                     .select_family(&style.font_families)
                                     .line_height(style.font_size)
                                     as f32;
-                                let text_y = y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
+                                let rows_one = document
+                                    .nodes
+                                    .get(*node)
+                                    .and_then(|n| n.attr("rows"))
+                                    .is_some_and(|r| r.trim() == "1");
+                                let ty = if !is_multiline || rows_one {
+                                    y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32
+                                } else {
+                                    y + 3
+                                };
                                 canvas.text_styled_alpha(
                                     layout.fonts.select_family(&style.font_families),
-                                    (rx, text_y),
+                                    (rx + pad_x, ty),
                                     &shown,
                                     style.font_size,
-                                    style.color.rgb,
-                                    style.font_weight >= 600,
+                                    0x757575,
+                                    false,
                                     style.italic,
-                                    opacity,
+                                    opacity * 0.9,
                                 );
+                            } else if is_multiline && text.contains('\n') && !focused {
+                                let lh = layout
+                                    .fonts
+                                    .select_family(&style.font_families)
+                                    .line_height(style.font_size)
+                                    .max(1);
+                                let mut ly = y + 2;
+                                for line_str in text.split('\n').take(16) {
+                                    if ly + lh > y + rh as i32 {
+                                        break;
+                                    }
+                                    let shown = super::render::fit_tail(
+                                        layout.fonts,
+                                        line_str,
+                                        style.font_size,
+                                        avail,
+                                    );
+                                    canvas.text_weight(
+                                        layout.fonts,
+                                        (rx + pad_x, ly),
+                                        &shown,
+                                        style.font_size,
+                                        style.color.rgb,
+                                        style.font_weight >= 600,
+                                    );
+                                    ly += lh;
+                                }
                             } else {
-                                canvas.text_weight(
-                                    layout.fonts,
-                                    (rx + 3, y + 2),
-                                    &shown,
-                                    style.font_size,
-                                    style.color.rgb,
-                                    style.font_weight >= 600,
-                                );
-                            }
-                            if let Some(cx) = caret_x {
-                                let base_x = rx + if borderless { 0 } else { 3 };
-                                let draw_x = (base_x + cx).min(rx + rw as i32 - 3);
-                                canvas.rect(
-                                    draw_x,
-                                    y + 2,
-                                    2,
-                                    (rect.h - 4.0).max(2.0) as u32,
-                                    0x277453,
-                                );
+                                let single_text;
+                                let display_text = if text.contains('\n') {
+                                    single_text = text.replace('\n', " ");
+                                    single_text.as_str()
+                                } else {
+                                    text.as_str()
+                                };
+                                let (shown, caret_x) = if focused
+                                    && let Some((sa, sb, caret)) = controls.input_selection
+                                {
+                                    let (shown, sx0, sx1, cx) = super::render::slice_visible_input(
+                                        layout.fonts,
+                                        display_text,
+                                        style.font_size,
+                                        avail,
+                                        sa,
+                                        sb,
+                                        caret,
+                                    );
+                                    if sx1 > sx0 {
+                                        canvas.rect(
+                                            rx + pad_x + sx0,
+                                            y + 2,
+                                            (sx1 - sx0) as u32 + 1,
+                                            (rect.h - 4.0).max(0.0) as u32,
+                                            0xc6dfed,
+                                        );
+                                    }
+                                    (shown, Some(cx))
+                                } else {
+                                    let shown = super::render::fit_tail(
+                                        layout.fonts,
+                                        display_text,
+                                        style.font_size,
+                                        avail,
+                                    );
+                                    if focused && controls.select_all {
+                                        canvas.rect(
+                                            rx + pad_x,
+                                            y + 2,
+                                            layout.fonts.width(&shown, style.font_size).ceil()
+                                                as u32,
+                                            (rect.h - 4.0).max(0.0) as u32,
+                                            0xc6dfed,
+                                        );
+                                    }
+                                    (shown, None)
+                                };
+                                if borderless {
+                                    let line_h = layout
+                                        .fonts
+                                        .select_family(&style.font_families)
+                                        .line_height(style.font_size)
+                                        as f32;
+                                    let text_y =
+                                        y + ((rect.h - line_h).max(0.0) / 2.0).round() as i32;
+                                    canvas.text_styled_alpha(
+                                        layout.fonts.select_family(&style.font_families),
+                                        (rx + pad_x, text_y),
+                                        &shown,
+                                        style.font_size,
+                                        style.color.rgb,
+                                        style.font_weight >= 600,
+                                        style.italic,
+                                        style.color.alpha * opacity,
+                                    );
+                                } else {
+                                    canvas.text_weight(
+                                        layout.fonts,
+                                        (rx + 3, y + 2),
+                                        &shown,
+                                        style.font_size,
+                                        style.color.rgb,
+                                        style.font_weight >= 600,
+                                    );
+                                }
+                                if let Some(cx) = caret_x {
+                                    let draw_x = (rx + pad_x + cx).min(rx + rw as i32 - 3);
+                                    canvas.rect(
+                                        draw_x,
+                                        y + 2,
+                                        2,
+                                        (rect.h - 4.0).max(2.0) as u32,
+                                        0x277453,
+                                    );
+                                }
                             }
                         }
                     }
@@ -1479,6 +1603,133 @@ fn resolve_layout_image_url(base_url: &str, reference: &str) -> Option<String> {
             url.set_fragment(None);
             url.into()
         })
+}
+
+fn fit_head_styled(
+    fonts: &mut Fonts,
+    families: &[String],
+    text: &str,
+    size: f32,
+    bold: bool,
+    width: f32,
+) -> String {
+    let fam = fonts.select_family(families);
+    if fam.width_weight(text, size, bold) <= width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().take(512).collect();
+    let mut low = 0usize;
+    let mut high = chars.len();
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect();
+        if fam.width_weight(&candidate, size, bold) <= width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    chars[..low].iter().collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_masked_box(
+    canvas: &mut Canvas,
+    document: &Document,
+    box_rect: Rect,
+    clip_box: Rect,
+    rounded_clip: Option<crate::paint::RoundedRect>,
+    mask: &crate::style::BackgroundImage,
+    color: Color,
+    opacity: f32,
+    scroll: i32,
+) {
+    let alpha = (color.alpha * opacity).clamp(0.0, 1.0);
+    if alpha <= 0.0 || box_rect.w <= 0.0 || box_rect.h <= 0.0 {
+        return;
+    }
+    let Some(url) = resolve_layout_image_url(&document.base_url, &mask.url) else {
+        return;
+    };
+    let inline_data = if !document.resources.contains_key(&url) {
+        crate::images::decode_data_url(&url).ok()
+    } else {
+        None
+    };
+    let Some((bytes, mime)) = document
+        .resources
+        .get(&url)
+        .map(|r| (r.bytes.as_slice(), r.content_type.as_str()))
+        .or_else(|| {
+            inline_data
+                .as_ref()
+                .map(|(ct, b)| (b.as_slice(), ct.as_str()))
+        })
+    else {
+        return;
+    };
+    let natural = if matches!(mask.width, crate::style::Length::Auto)
+        || matches!(mask.height, crate::style::Length::Auto)
+    {
+        crate::images::decode(bytes, mime, None, None)
+            .ok()
+            .map(|img| (img.width as f32, img.height as f32))
+            .filter(|&(nw, nh)| nw > 0.0 && nh > 0.0)
+    } else {
+        None
+    };
+    let (w, h) = match (
+        mask.width.resolve(box_rect.w),
+        mask.height.resolve(box_rect.h),
+    ) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, natural.map_or(w, |(nw, nh)| w * nh / nw)),
+        (None, Some(h)) => (natural.map_or(h, |(nw, nh)| h * nw / nh), h),
+        (None, None) => natural.unwrap_or((box_rect.w, box_rect.h)),
+    };
+    let tw = w.ceil().clamp(0.0, 2048.0) as u32;
+    let th = h.ceil().clamp(0.0, 2048.0) as u32;
+    if tw == 0 || th == 0 {
+        return;
+    }
+    let Ok(mut img) = crate::images::decode(bytes, mime, Some(tw), Some(th)) else {
+        return;
+    };
+    let resolve_pos = |pos: crate::style::Length, rem: f32| match pos {
+        crate::style::Length::Px(v) => v,
+        crate::style::Length::Percent(p) => rem * p,
+        crate::style::Length::Calc { px, percent, .. } => px + rem * percent,
+        crate::style::Length::Auto => 0.0,
+    };
+    let dx = resolve_pos(mask.pos_x, box_rect.w - w);
+    let dy = resolve_pos(mask.pos_y, box_rect.h - h);
+    let cr = ((color.rgb >> 16) & 255) as u8;
+    let cg = ((color.rgb >> 8) & 255) as u8;
+    let cb = (color.rgb & 255) as u8;
+    let fill_a = (alpha * 255.0).round() as u32;
+    for px in img.pixels.chunks_exact_mut(4) {
+        let ma = u32::from(px[3]);
+        px[0] = cr;
+        px[1] = cg;
+        px[2] = cb;
+        px[3] = ((ma * fill_a + 127) / 255) as u8;
+    }
+    let saved_clip = canvas.intersect_clip(
+        clip_box.x.floor() as i32,
+        clip_box.y.floor() as i32 - scroll,
+        clip_box.w.ceil().max(0.0) as u32,
+        clip_box.h.ceil().max(0.0) as u32,
+    );
+    if let Some(rr) = rounded_clip {
+        canvas.intersect_rounded_clip(rr.to_physical(canvas, scroll));
+    }
+    crate::images::blit(
+        canvas,
+        &img,
+        (box_rect.x + dx).round() as i32,
+        (box_rect.y + dy).round() as i32 - scroll,
+    );
+    canvas.restore_clip(saved_clip);
 }
 
 fn image_cache_admits(width: u32, height: u32, bytes: usize, entries: usize) -> bool {
