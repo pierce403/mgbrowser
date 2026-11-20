@@ -1134,12 +1134,19 @@ Stability: stable
 
 Public source, readable MVP plan, and an HTTPS project site at mgbrowser.org. Every main push validates and deploys the site; public readiness follows this file and the latest work-log date.
 
+The homepage supplies static Open Graph and Twitter large-image sharing
+metadata with an evergreen 1200 x 630 PNG, the original burning-magnesium
+identity and an explicit Experimental Preview label. Self-contained SVG source
+is retained; social crawlers require no JavaScript or rendering dependencies.
+
 ### Test Criteria
 
 - [x] GitHub repository exists and matches the published commit.
 - [x] Pages deploys the intended commit; live HTML matches local bytes.
 - [x] Custom-domain TLS is valid and HTTPS enforcement is enabled.
 - [x] Generated website status passes the Rust tool's `--check`.
+- [x] Sharing metadata, PNG dimensions/integrity and strict public asset staging
+  pass local checks; CI requires both source-bound WPT lanes before publication.
 
 Evidence: 2026-09-07 initial Pages run 34120255103 succeeded for aed2386; live HTTPS HTML matched byte-for-byte, certificate approved and HTTPS enforcement confirmed by API. See daily log for subsequent publication checks. Visual browser QA is not yet available.
 

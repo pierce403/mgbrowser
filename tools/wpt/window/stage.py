@@ -26,7 +26,8 @@ METADATA_LIMIT = 4 * 1024 * 1024
 TOTAL_LIMIT = 128 * 1024 * 1024
 STAGE_SECONDS = 120
 STATIC = ("index.html", "CNAME", ".nojekyll", "install.sh",
-          "assets/mgbrowser.svg", "assets/mgbrowser-32.png", "assets/mgbrowser-256.png")
+          "assets/mgbrowser.svg", "assets/mgbrowser-32.png", "assets/mgbrowser-256.png",
+          "assets/og-preview.png", "assets/og-preview.svg")
 
 
 def require(condition, message):

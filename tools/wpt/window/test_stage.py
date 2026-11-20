@@ -204,9 +204,22 @@ class FilesystemTests(unittest.TestCase):
             output = root / "tmp/public"
             names = {str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()}
             self.assertEqual(names, set(stage.STATIC) | {"wpt-results.json", "wpt-window-results.json"})
-            self.assertEqual(result["files"], 9)
+            self.assertEqual(result["files"], 11)
             self.assertEqual((output / "wpt-results.json").read_bytes(), (root / "tmp/static-report/report.json").read_bytes())
             self.assertEqual((output / "wpt-window-results.json").read_bytes(), (root / "tmp/window-report/report.json").read_bytes())
+            for name in ("assets/og-preview.png", "assets/og-preview.svg"):
+                with self.subTest(asset=name):
+                    self.assertEqual((output / name).read_bytes(), (root / name).read_bytes())
+
+    def test_missing_social_preview_assets_stop_staging_before_output_creation(self):
+        for name in ("assets/og-preview.png", "assets/og-preview.svg"):
+            with self.subTest(asset=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                filesystem(root)
+                (root / name).unlink()
+                with self.assertRaises(ValueError):
+                    stage.stage(root, COMMIT)
+                self.assertFalse((root / "tmp/public").exists())
 
     def test_raw_file_or_directory_inside_report_artifact_is_rejected(self):
         for directory in (False, True):
@@ -233,7 +246,8 @@ class FilesystemTests(unittest.TestCase):
                 stage.report_bytes(root, time.monotonic() + 10)
 
     def test_symlink_report_or_asset_rejected_and_existing_output_never_overwritten(self):
-        for target in ("tmp/window-report/report.json", "assets/mgbrowser.svg"):
+        for target in ("tmp/window-report/report.json", "assets/mgbrowser.svg",
+                       "assets/og-preview.png", "assets/og-preview.svg"):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 filesystem(root)

@@ -103,6 +103,7 @@ jobs:
       - name: Validate generated status
         run: |
           mkdir -p tmp
+          python3 -B tools/test_social_card.py
           rustc +1.91.1 --edition=2024 tools/site.rs -o tmp/site
           tmp/site --check
           git diff --check
