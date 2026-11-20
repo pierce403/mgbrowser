@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">mgbrowser: a browser written from the ground up in Rust</title>
+  <desc id="description">Experimental Preview. The original burning-magnesium Mg tile on a dark laboratory-inspired background.</desc>
+  <defs>
+    <radialGradient id="atmosphere" cx=".86" cy=".3" r=".68">
+      <stop stop-color="#ffd398" stop-opacity=".17"/>
+      <stop offset=".55" stop-color="#27313e" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#0d1119" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="divider"><stop stop-color="#807058"/><stop offset="1" stop-color="#353b46"/></linearGradient>
+    <!-- Original application artwork from assets/mgbrowser.svg, kept inline
+         so this source and the generated PNG have no external dependencies. -->
+    <linearGradient id="tile" x2="1" y2="1"><stop stop-color="#29323d"/><stop offset="1" stop-color="#080c13"/></linearGradient>
+    <radialGradient id="heat" cx=".84" cy=".19" r=".85"><stop stop-color="#fff"/><stop offset=".12" stop-color="#fff8d9"/><stop offset=".28" stop-color="#ffc66b" stop-opacity=".6"/><stop offset="1" stop-color="#f98323" stop-opacity="0"/></radialGradient>
+    <linearGradient id="edge" x2="1" y2="0"><stop stop-color="#748698"/><stop offset=".7" stop-color="#ffd398"/><stop offset="1" stop-color="#fff"/></linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0d1119"/>
+  <rect width="1200" height="630" fill="url(#atmosphere)"/>
+  <g stroke="#b8bcc5" stroke-opacity=".045">
+    <path d="M720 48V466M816 48V466M912 48V466M1008 48V466M1104 48V466M720 82H1152M720 178H1152M720 274H1152M720 370H1152M720 466H1152"/>
+  </g>
+  <rect x="24.5" y="24.5" width="1151" height="581" rx="18" fill="none" stroke="#353b46"/>
+  <rect x="72" y="90" width="270" height="38" rx="19" fill="#1c2027" stroke="#807058"/>
+  <g font-family="DejaVu Sans, sans-serif">
+    <text x="93" y="115" fill="#ffd398" font-size="14" font-weight="600" letter-spacing="2">EXPERIMENTAL PREVIEW</text>
+    <text x="68" y="267" fill="#fff8e9" font-size="86" font-weight="700" letter-spacing="-4">mgbrowser</text>
+    <g fill="#b8bcc5" font-size="32">
+      <text x="72" y="330">A browser written from the</text>
+      <text x="72" y="375">ground up in <tspan fill="#ffd398">Rust.</tspan></text>
+    </g>
+  </g>
+  <g transform="translate(775 112) scale(1.35)">
+    <rect x="12" y="12" width="232" height="232" rx="22" fill="url(#tile)"/>
+    <rect x="12" y="12" width="232" height="232" rx="22" fill="url(#heat)"/>
+    <rect x="19" y="19" width="218" height="218" rx="16" fill="none" stroke="url(#edge)" stroke-width="3"/>
+    <g fill="#fff8e9" font-family="DejaVu Sans, sans-serif">
+      <text x="35" y="61" font-size="28" font-weight="600">12</text>
+      <text x="29" y="166" font-size="104" font-weight="bold" letter-spacing="-8">Mg</text>
+      <text x="36" y="213" font-size="23" letter-spacing="2">24.305</text>
+    </g>
+    <path d="M207 3 212 37 250 48 215 53 205 89 201 55 168 45 201 40Z" fill="#fff"/>
+    <g stroke="#fff6d6" stroke-linecap="round"><path d="m175 16 9 14m49 45 12 9m-71-4-13 10m72-70 7-9" stroke-width="3"/><path d="m39 236-7 12m189-127 7 13" stroke-width="2"/></g>
+    <g fill="#ffcf83"><circle cx="160" cy="17" r="2"/><circle cx="241" cy="101" r="2"/><circle cx="183" cy="92" r="2"/></g>
+  </g>
+  <path d="M72 486H1128" stroke="url(#divider)"/>
+  <text x="72" y="552" fill="#fff8e9" font-family="DejaVu Sans Mono, monospace" font-size="24">mgbrowser.org</text>
+  <text x="1128" y="552" text-anchor="end" fill="#b8bcc5" font-family="DejaVu Sans, sans-serif" font-size="18">Linux x86_64 · X11 / XWayland</text>
+</svg>
